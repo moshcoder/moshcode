@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { compile, run } from "../src/interpreter.mjs";
 import { defaultCommands } from "../src/commands.mjs";
+import { ENGINES, engineList } from "../src/engines.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = path.join(HERE, "..", "examples", "alive.mosh");
@@ -28,8 +30,13 @@ usage:
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
-  moshcode commands                    list built-in commands
+  moshcode install <engine>            install an agentic-coding engine
+  moshcode engines                     list installable engines
+  moshcode commands                    list built-in moshscript commands
   moshcode help                        this
+
+engines (moshcode is a wrapper — it installs/drives these):
+${engineList()}
 
 moshscript looks like this:
 ${DEFAULT_SCRIPT}
@@ -45,8 +52,28 @@ env: MOSHCODE_API (default https://moshcoding.com), MOSHCODE_WEBHOOK_URL,
 async function main() {
   const [, , cmd, ...rest] = process.argv;
 
+  if (cmd === "engines") {
+    console.log("installable engines:\n" + engineList());
+    return;
+  }
+  if (cmd === "install") {
+    const engine = rest.find((a) => !a.startsWith("-"));
+    if (!engine || !ENGINES[engine]) {
+      console.error(`usage: moshcode install <engine>\nengines:\n${engineList()}`);
+      process.exit(engine ? 1 : 0);
+    }
+    const { install, desc, bin } = ENGINES[engine];
+    console.log(`🎸 installing ${engine} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
+    const child = spawn(install.cmd, install.args, { stdio: "inherit" });
+    child.on("error", (e) => { console.error(`install failed: ${e.message}`); process.exit(1); });
+    child.on("exit", (code) => {
+      if (code === 0) console.log(`\n✓ ${engine} installed. run it with \`${bin}\`. 🤘`);
+      process.exit(code ?? 0);
+    });
+    return;
+  }
   if (cmd === "commands") {
-    console.log("built-in commands:\n  " + Object.keys(defaultCommands()).map((c) => `${c}()`).join("  "));
+    console.log("built-in moshscript commands:\n  " + Object.keys(defaultCommands()).map((c) => `${c}()`).join("  "));
     return;
   }
   if (cmd === "run") {

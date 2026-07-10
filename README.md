@@ -1,5 +1,20 @@
 # moshcode 🤘
 
+A metal wrapper CLI for agentic coding. moshcode doesn't reinvent the agent — it
+**installs and drives** existing ones (opencode, Claude Code, codex) and adds a
+tiny scripting toolkit (moshscript) on top.
+
+## Engines
+
+```sh
+moshcode engines            # list installable engines
+moshcode install opencode   # install opencode (curl … | bash)
+moshcode install claude     # npm i -g @anthropic-ai/claude-code
+moshcode install codex      # npm i -g @openai/codex
+```
+
+## moshscript
+
 A metal scripting toolkit. Paste dead-simple, readable scripts and run them.
 
 ```
