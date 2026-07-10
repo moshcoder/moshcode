@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node bin/moshcode.mjs",
-    "demo": "node bin/moshcode.mjs run examples/alive.mosh"
+    "demo": "node bin/moshcode.mjs run examples/alive.mosh",
+    "test": "node --test"
   },
   "files": ["bin", "src", "examples", "install.sh", "README.md"],
   "license": "MIT"
