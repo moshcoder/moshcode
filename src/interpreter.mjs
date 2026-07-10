@@ -15,13 +15,21 @@ export function tokenize(src) {
   const re = /("(?:[^"\\]|\\.)*")|(\/\/[^\n]*)|(\d+(?:\.\d+)?)|([A-Za-z_]\w*)|([(){};,])|(\s+)/g;
   const tokens = [];
   let m;
+  let lastIndex = 0;
   while ((m = re.exec(src)) !== null) {
+    if (m.index !== lastIndex) {
+      throw new Error(`moshscript: unexpected character near "${src.slice(lastIndex, lastIndex + 12)}"`);
+    }
+    lastIndex = re.lastIndex;
     if (m[2] || m[6]) continue; // comment or whitespace
     if (m[1]) tokens.push({ t: "str", v: JSON.parse(m[1]) });
     else if (m[3]) tokens.push({ t: "num", v: Number(m[3]) });
     else if (m[4]) tokens.push({ t: "id", v: m[4] });
     else if (m[5]) tokens.push({ t: "punc", v: m[5] });
     else throw new Error(`moshscript: unexpected character near "${src.slice(m.index, m.index + 12)}"`);
+  }
+  if (lastIndex !== src.length) {
+    throw new Error(`moshscript: unexpected character near "${src.slice(lastIndex, lastIndex + 12)}"`);
   }
   return tokens;
 }
