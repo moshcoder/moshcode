@@ -23,6 +23,15 @@ function readScript(arg) {
   return fs.readFileSync(arg, "utf8");
 }
 
+function parseMax(value) {
+  if (value === undefined) throw new Error("moshcode run: --max requires a positive integer");
+  const max = Number(value);
+  if (!Number.isInteger(max) || max < 1) {
+    throw new Error(`moshcode run: --max must be a positive integer, got ${JSON.stringify(value)}`);
+  }
+  return max;
+}
+
 function help() {
   console.log(`moshcode — metal scripting toolkit 🤘
 
@@ -80,7 +89,10 @@ async function main() {
     let max = 3, dryRun = false, file = null;
     for (let k = 0; k < rest.length; k++) {
       const a = rest[k];
-      if (a === "--max" || a === "-n") max = Number(rest[++k]);
+      if (a === "--max" || a === "-n") {
+        try { max = parseMax(rest[++k]); }
+        catch (e) { console.error(String(e.message || e)); process.exit(1); }
+      }
       else if (a === "--dry-run") dryRun = true;
       else file = a;
     }
@@ -92,7 +104,7 @@ async function main() {
     const ctx = {
       vars: { alive: true },
       iter: 0,
-      maxIterations: Number.isFinite(max) && max > 0 ? max : 3,
+      maxIterations: max,
       dryRun,
       out: (s) => console.log(s),
       commands: defaultCommands(),
