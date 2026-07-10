@@ -5,13 +5,53 @@
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
-const mkrl = () => readline.createInterface({ input: process.stdin, output: process.stdout });
+
+// Command history for ↑/↓ recall. We recreate the readline interface around
+// every engine session/install (a passthrough child owns the terminal), which
+// would otherwise reset readline's own history each time — so we keep one shared
+// array (newest-first, the order readline maintains) and persist it between runs.
+const HISTORY_FILE = path.join(os.homedir(), ".moshcode_history");
+const HISTORY_MAX = 500;
+const history = loadHistory();
+
+function loadHistory() {
+  try {
+    return fs.readFileSync(HISTORY_FILE, "utf8").split("\n").filter(Boolean).slice(0, HISTORY_MAX);
+  } catch {
+    return [];
+  }
+}
+function saveHistory() {
+  try {
+    fs.writeFileSync(HISTORY_FILE, history.slice(0, HISTORY_MAX).join("\n") + "\n");
+  } catch {
+    /* best effort — history is a convenience, never fatal */
+  }
+}
+
+const mkrl = () => {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    // Enable line-editing/history only with a real TTY (arrow keys need raw
+    // mode); piped input has no raw mode and would throw.
+    terminal: Boolean(process.stdin.isTTY),
+    historySize: HISTORY_MAX,
+    removeHistoryDuplicates: true,
+  });
+  // Share the persistent array so ↑/↓ recalls earlier commands even after the
+  // interface was torn down and rebuilt around an engine session.
+  rl.history = history;
+  return rl;
+};
 const ask = (rl) => new Promise((res) => rl.question(PROMPT(), res));
 
 function printEngines() {
@@ -91,6 +131,7 @@ export async function tui() {
     if (line == null) break; // Ctrl-D
     line = line.trim();
     if (!line) continue;
+    saveHistory(); // readline just recorded this line into the shared history
 
     const [raw, ...rest] = line.split(/\s+/);
     const cmd = raw.toLowerCase().replace(/^\//, "");
@@ -132,5 +173,6 @@ export async function tui() {
   }
 
   try { rl.close(); } catch { /* noop */ }
+  saveHistory();
   console.log("\n" + ash("code hard, mosh harder. 🤘"));
 }
