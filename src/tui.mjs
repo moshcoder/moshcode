@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
+import { runSpec } from "./spec.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
@@ -68,6 +69,7 @@ function printHelp() {
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
     `   ${acid("/install <name>")}    install an engine`,
+    `   ${acid("/spec [init|…]")}     spec-driven dev — writes openspec/ to your repo (OpenSpec)`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
@@ -103,6 +105,20 @@ function installEngine(key) {
     child.on("error", (e) => { console.log(hr()); console.log(err(`install failed: ${e.message}`)); resolve(); });
     child.on("exit", (code) => { console.log(hr()); console.log(code === 0 ? ok(`${key} installed. 🤘`) : err(`install exited ${code}`)); resolve(); });
   });
+}
+
+async function openSpec(args) {
+  console.log(info(`openspec — spec-driven dev, saved to ${bone("openspec/")} in your repo. hand-off to its CLI…`));
+  console.log(hr());
+  const r = await runSpec(args);
+  console.log(hr());
+  if (!r.ok) {
+    console.log(r.error?.code === "ENOENT"
+      ? err("couldn't run openspec — need `openspec` on PATH or npx available.")
+      : err(`couldn't run openspec: ${r.error?.message || r.error}`));
+  } else {
+    console.log(info(`openspec exited${r.code != null ? ` (code ${r.code})` : ""}. back in the pit.`));
+  }
 }
 
 async function runFile(file) {
@@ -147,6 +163,12 @@ export async function tui() {
       if (!rest[0]) { console.log(err("usage: /install <engine>")); continue; }
       rl.close();
       await installEngine(rest[0].toLowerCase());
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "spec") {
+      rl.close();
+      await openSpec(rest);
       rl = mkrl();
       continue;
     }

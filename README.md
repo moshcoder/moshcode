@@ -4,6 +4,15 @@ A metal wrapper CLI for agentic coding. moshcode doesn't reinvent the agent — 
 **installs and drives** existing ones (opencode, Claude Code, codex) and adds a
 tiny scripting toolkit (moshscript) on top.
 
+## Install
+
+```sh
+curl -fsSL https://moshcode.sh/install.sh | sh
+```
+
+Zero-dependency ESM — all it needs is Node.js 18+. Later: `… | sh -s -- update`
+to upgrade, `… | sh -s -- remove` to uninstall.
+
 ## Engines
 
 ```sh
@@ -12,6 +21,30 @@ moshcode install opencode   # install opencode (curl … | bash)
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 ```
+
+## Spec — plan before you mosh
+
+Spec-driven development, powered by [OpenSpec](https://github.com/Fission-AI/OpenSpec).
+`moshcode spec` is a passthrough to the `openspec` CLI: agree on the requirements
+*first*, commit them to your repo, then let your coding agents build to the spec.
+
+```sh
+moshcode spec init          # write an openspec/ folder (specs/ + changes/) to the repo
+moshcode spec list          # list current specs / changes
+moshcode spec update        # refresh agent guidance + slash commands
+moshcode spec validate      # check specs are well-formed
+```
+
+The `openspec/` folder is a committed plan layer your agents read before writing
+code. moshcode stays a conductor — it doesn't fork OpenSpec, it drives it: if
+`openspec` isn't installed it runs via `npx -y @fission-ai/openspec@latest`, so
+there's nothing to set up. Install it globally for speed:
+
+```sh
+npm install -g @fission-ai/openspec@latest
+```
+
+In the TUI shell it's `/spec [init|update|list|…]`.
 
 ## moshscript
 

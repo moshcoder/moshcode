@@ -6,6 +6,7 @@ import path from "node:path";
 import { compile, run } from "../src/interpreter.mjs";
 import { defaultCommands } from "../src/commands.mjs";
 import { ENGINES, engineList, engineStatus, resolveEngine, openSession } from "../src/engines.mjs";
+import { runSpec, OPENSPEC } from "../src/spec.mjs";
 import { tui } from "../src/tui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -43,6 +44,9 @@ usage:
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
   moshcode install <engine>            install an agentic-coding engine
+  moshcode spec [init|update|list|…]   spec-driven dev via OpenSpec — writes an
+                                       openspec/ folder to your repo (passthrough
+                                       to the openspec CLI; npx if not installed)
   moshcode agents                      list engines + install status
   moshcode engines                     (alias of agents)
   moshcode commands                    list built-in moshscript commands
@@ -123,6 +127,17 @@ async function main() {
     catch (e) { console.error("\n" + String(e.message || e)); process.exit(1); }
     console.log(`\n✓ ${ctx.iter} loop(s) — no bugs, only features. 🤘`);
     return;
+  }
+
+  if (cmd === "spec") {
+    const r = await runSpec(rest);
+    if (!r.ok) {
+      console.error(r.error?.code === "ENOENT"
+        ? `couldn't run openspec — need \`${OPENSPEC.bin}\` on PATH or npx available. install: ${OPENSPEC.install.cmd} ${OPENSPEC.install.args.join(" ")}`
+        : `openspec failed: ${r.error?.message || r.error}`);
+      process.exit(1);
+    }
+    process.exit(r.code ?? 0);
   }
 
   // `moshcode <engine> [args…]` → open a passthrough session directly.
