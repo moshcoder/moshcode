@@ -1,0 +1,15 @@
+{
+  "name": "moshcode",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "moshcode — a metal scripting toolkit (moshscript) + agent-wrapper CLI",
+  "bin": {
+    "moshcode": "./bin/moshcode.mjs"
+  },
+  "scripts": {
+    "start": "node bin/moshcode.mjs",
+    "demo": "node bin/moshcode.mjs run examples/alive.mosh"
+  },
+  "files": ["bin", "src", "examples", "README.md"],
+  "license": "MIT"
+}

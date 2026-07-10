@@ -1,0 +1,6 @@
+while (alive) {
+  code();
+  mosh();
+  notify();
+  repeat();
+} // no bugs, only features
