@@ -7,6 +7,8 @@
 import { spawn } from "node:child_process";
 import { isInstalled } from "./engines.mjs";
 
+export { isInstalled };
+
 export const OPENSPEC = {
   pkg: "@fission-ai/openspec",
   bin: "openspec",
@@ -23,6 +25,26 @@ export const OPENSPEC = {
 export function resolveSpec(args = []) {
   if (isInstalled(OPENSPEC.bin)) return { cmd: OPENSPEC.bin, args, viaNpx: false };
   return { cmd: "npx", args: ["-y", `${OPENSPEC.pkg}@latest`, ...args], viaNpx: true };
+}
+
+/** True when the `openspec` binary is resolvable on PATH. */
+export function isSpecInstalled() {
+  return isInstalled(OPENSPEC.bin);
+}
+
+/**
+ * Install the OpenSpec CLI globally (same deal as engines — we drive it, don't
+ * vendor it). stdio inherited so npm's own progress owns the terminal. Resolves
+ * { ok, code } | { ok:false, error }.
+ */
+export function installSpec() {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn(OPENSPEC.install.cmd, OPENSPEC.install.args, { stdio: "inherit" }); }
+    catch (e) { resolve({ ok: false, error: e }); return; }
+    child.on("error", (e) => resolve({ ok: false, error: e }));
+    child.on("exit", (code) => resolve({ ok: true, code }));
+  });
 }
 
 /**

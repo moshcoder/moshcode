@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
-import { runSpec } from "./spec.mjs";
+import { runSpec, installSpec, isSpecInstalled, OPENSPEC } from "./spec.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
@@ -68,8 +68,9 @@ function printHelp() {
     bone("  commands"),
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
-    `   ${acid("/install <name>")}    install an engine`,
-    `   ${acid("/spec [init|…]")}     spec-driven dev — writes openspec/ to your repo (OpenSpec)`,
+    `   ${acid("/install <name>")}    install an engine (or ${bone("openspec")})`,
+    `   ${acid("/spec [init|…]")}     spec-driven dev — writes openspec/ to your repo (OpenSpec)` +
+      ash(isSpecInstalled() ? "  ●" : "  ○ /install openspec"),
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
@@ -105,6 +106,16 @@ function installEngine(key) {
     child.on("error", (e) => { console.log(hr()); console.log(err(`install failed: ${e.message}`)); resolve(); });
     child.on("exit", (code) => { console.log(hr()); console.log(code === 0 ? ok(`${key} installed. 🤘`) : err(`install exited ${code}`)); resolve(); });
   });
+}
+
+async function installOpenSpec() {
+  if (isSpecInstalled()) { console.log(ok("openspec already installed. 🤘  try /spec init")); return; }
+  console.log(info(`installing openspec: ${OPENSPEC.install.cmd} ${OPENSPEC.install.args.join(" ")}`));
+  console.log(hr());
+  const r = await installSpec();
+  console.log(hr());
+  if (!r.ok) { console.log(err(`install failed: ${r.error?.message || r.error}`)); return; }
+  console.log(r.code === 0 ? ok("openspec installed. 🤘  try /spec init") : err(`install exited ${r.code}`));
 }
 
 async function openSpec(args) {
@@ -160,9 +171,11 @@ export async function tui() {
       continue;
     }
     if (cmd === "install") {
-      if (!rest[0]) { console.log(err("usage: /install <engine>")); continue; }
+      if (!rest[0]) { console.log(err("usage: /install <engine|openspec>")); continue; }
+      const target = rest[0].toLowerCase();
       rl.close();
-      await installEngine(rest[0].toLowerCase());
+      if (target === "openspec" || target === "spec") await installOpenSpec();
+      else await installEngine(target);
       rl = mkrl();
       continue;
     }

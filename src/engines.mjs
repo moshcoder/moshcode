@@ -16,6 +16,17 @@ export const ENGINES = {
     desc: "Claude Code — Anthropic's agentic CLI",
     bin: "claude",
     install: { cmd: "npm", args: ["install", "-g", "@anthropic-ai/claude-code"] },
+    // Claude Code authenticates via its own stored login (~/.claude). An
+    // inherited ANTHROPIC_API_KEY hijacks that subscription auth — and if the
+    // key can't serve the models, Claude Code shows an "enable models" screen
+    // and exits straight back to the mosh prompt. Nested-session markers make a
+    // fresh launch think it's running inside another Claude. Drop both so the
+    // passthrough session starts clean on its own auth. (opencode/aider legitimately
+    // use ANTHROPIC_API_KEY as a provider key, so we only scrub it for claude.)
+    stripEnv: [
+      "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+    ],
   },
   codex: {
     desc: "Codex — OpenAI's coding CLI",
@@ -72,8 +83,13 @@ export function engineList() {
  */
 export function openSession(engine, args = []) {
   return new Promise((resolve) => {
+    let env = process.env;
+    if (engine.stripEnv?.length) {
+      env = { ...process.env };
+      for (const k of engine.stripEnv) delete env[k];
+    }
     let child;
-    try { child = spawn(engine.bin, args, { stdio: "inherit" }); }
+    try { child = spawn(engine.bin, args, { stdio: "inherit", env }); }
     catch (e) { resolve({ ok: false, error: e }); return; }
     child.on("error", (e) => resolve({ ok: false, error: e }));
     child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
