@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { compile, run } from "../src/interpreter.mjs";
 import { defaultCommands } from "../src/commands.mjs";
-import { ENGINES, engineList } from "../src/engines.mjs";
+import { ENGINES, engineList, engineStatus, resolveEngine, openSession } from "../src/engines.mjs";
+import { tui } from "../src/tui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = path.join(HERE, "..", "examples", "alive.mosh");
@@ -36,11 +37,14 @@ function help() {
   console.log(`moshcode — metal scripting toolkit 🤘
 
 usage:
+  moshcode                             open the TUI shell (then /agents <engine>)
+  moshcode <engine> [args…]            open a passthrough session on an engine
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
   moshcode install <engine>            install an agentic-coding engine
-  moshcode engines                     list installable engines
+  moshcode agents                      list engines + install status
+  moshcode engines                     (alias of agents)
   moshcode commands                    list built-in moshscript commands
   moshcode help                        this
 
@@ -61,8 +65,13 @@ env: MOSHCODE_API (default https://moshcoding.com), MOSHCODE_WEBHOOK_URL,
 async function main() {
   const [, , cmd, ...rest] = process.argv;
 
-  if (cmd === "engines") {
-    console.log("installable engines:\n" + engineList());
+  // No args → open the interactive TUI shell (/agents <engine>, etc.).
+  if (cmd === undefined) return tui();
+
+  if (cmd === "engines" || cmd === "agents") {
+    for (const e of engineStatus()) {
+      console.log(`${e.installed ? "●" : "○"} ${e.key.padEnd(10)} ${e.desc}`);
+    }
     return;
   }
   if (cmd === "install") {
@@ -116,8 +125,22 @@ async function main() {
     return;
   }
 
+  // `moshcode <engine> [args…]` → open a passthrough session directly.
+  const resolved = resolveEngine(cmd);
+  if (resolved) {
+    const [key, engine] = resolved;
+    const r = await openSession(engine, rest);
+    if (!r.ok) {
+      console.error(r.error?.code === "ENOENT"
+        ? `${key} isn't installed (\`${engine.bin}\`). run: moshcode install ${key}`
+        : `launch failed: ${r.error?.message || r.error}`);
+      process.exit(1);
+    }
+    process.exit(r.code ?? 0);
+  }
+
   help();
-  if (cmd && cmd !== "help") process.exit(cmd === undefined ? 0 : 1);
+  if (cmd && cmd !== "help") process.exit(1);
 }
 
 main();
