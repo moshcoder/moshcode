@@ -65,7 +65,11 @@ export function defaultCommands() {
     // handy extras
     say: (ctx, args) => ctx.out(`  💬 ${args.join(" ")}`),
     sleep: async (_ctx, args) => {
-      const ms = Number(args[0] || 0);
+      const raw = args[0] ?? 0;
+      const ms = Number(raw);
+      if (!Number.isFinite(ms) || ms < 0) {
+        throw new Error(`moshscript: sleep(ms) requires a finite non-negative number, got ${JSON.stringify(raw)}`);
+      }
       if (ms > 0) await new Promise((r) => setTimeout(r, ms));
     },
     stop: (ctx, args) => {

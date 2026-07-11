@@ -34,3 +34,15 @@ test("notify() still accepts message arguments", async () => {
   assert.equal(ctx.lines.length, 1);
   assert.match(ctx.lines[0], /hello there/);
 });
+
+test("sleep accepts zero milliseconds", async () => {
+  await defaultCommands().sleep({}, [0]);
+});
+
+test("sleep rejects non-finite and negative durations", async () => {
+  const sleep = defaultCommands().sleep;
+
+  await assert.rejects(() => sleep({}, ["forever"]), /finite non-negative number/);
+  await assert.rejects(() => sleep({}, ["Infinity"]), /finite non-negative number/);
+  await assert.rejects(() => sleep({}, [-1]), /finite non-negative number/);
+});
