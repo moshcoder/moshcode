@@ -14,3 +14,15 @@ test("compile preserves valid moshscript behavior", () => {
     args: ["hi"],
   });
 });
+
+test("compile requires commas between call arguments", () => {
+  assert.throws(() => compile("say(\"one\" \"two\");"), /expected comma/);
+  assert.throws(() => compile("say(\"one\",);"), /expected argument after comma/);
+  assert.throws(() => compile("say(,\"one\");"), /expected argument before comma/);
+
+  assert.deepEqual(compile("say(\"one\", \"two\");").body[0], {
+    type: "call",
+    name: "say",
+    args: ["one", "two"],
+  });
+});

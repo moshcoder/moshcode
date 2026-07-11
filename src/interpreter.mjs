@@ -66,11 +66,20 @@ export function parse(tokens) {
     const name = expect("id").v;
     expect("punc", "(");
     const args = [];
+    let expectArg = true;
     while (peek() && !(peek().t === "punc" && peek().v === ")")) {
       const a = next();
-      if (a.t === "punc" && a.v === ",") continue;
+      if (a.t === "punc" && a.v === ",") {
+        if (expectArg) throw new Error("moshscript: expected argument before comma");
+        expectArg = true;
+        continue;
+      }
+      if (!expectArg) throw new Error("moshscript: expected comma between arguments");
+      if (a.t === "punc") throw new Error(`moshscript: unexpected ${JSON.stringify(a.v)}`);
       args.push(a.v);
+      expectArg = false;
     }
+    if (expectArg && args.length) throw new Error("moshscript: expected argument after comma");
     expect("punc", ")");
     if (peek() && peek().t === "punc" && peek().v === ";") next(); // optional ;
     return { type: "call", name, args };
