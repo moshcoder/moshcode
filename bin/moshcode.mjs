@@ -34,6 +34,17 @@ function parseMax(value) {
   return max;
 }
 
+// After a hand-off subcommand/engine session ends, capture its exit and drop
+// back into the mosh shell instead of quitting to the OS shell — but only when
+// interactive. Piped / non-TTY invocations (scripts, CI, `… | moshcode run -`)
+// keep the old behaviour: exit with the child's code.
+function backToPit(label, code, signal) {
+  if (!process.stdin.isTTY) process.exit(code ?? 0);
+  const how = signal ? ` (${signal})` : code != null ? ` (code ${code})` : "";
+  console.log(`\n↩ ${label} exited${how} — back in the mosh pit. /quit to leave.\n`);
+  return tui();
+}
+
 function help() {
   console.log(`moshcode — metal scripting toolkit 🤘
 
@@ -90,7 +101,7 @@ async function main() {
     child.on("error", (e) => { console.error(`install failed: ${e.message}`); process.exit(1); });
     child.on("exit", (code) => {
       if (code === 0) console.log(`\n✓ ${engine} installed. run it with \`${bin}\`. 🤘`);
-      process.exit(code ?? 0);
+      backToPit(`install ${engine}`, code);
     });
     return;
   }
@@ -134,7 +145,7 @@ async function main() {
     try { await run(ast, ctx); }
     catch (e) { console.error("\n" + String(e.message || e)); process.exit(1); }
     console.log(`\n✓ ${ctx.iter} loop(s) — no bugs, only features. 🤘`);
-    return;
+    return backToPit("moshscript", 0);
   }
 
   if (cmd === "prd") {
@@ -154,7 +165,7 @@ async function main() {
     if (!chosen) { console.log("open an engine to author it — run: moshcode install claude"); return; }
     console.log(`handing ${slug} to ${chosen.key} to author…`);
     const r = await openSession(ENGINES[chosen.key], [authoringPrompt({ path: file, idea: existed ? "" : idea })]);
-    process.exit(r.code ?? 0);
+    return backToPit(chosen.key, r.code, r.signal);
   }
 
   // `moshcode <engine> [args…]` → open a passthrough session directly.
@@ -166,9 +177,12 @@ async function main() {
       console.error(r.error?.code === "ENOENT"
         ? `${key} isn't installed (\`${engine.bin}\`). run: moshcode install ${key}`
         : `launch failed: ${r.error?.message || r.error}`);
-      process.exit(1);
+      // Couldn't even launch — drop into the pit (so you can /install it) when
+      // interactive; otherwise exit non-zero for scripts/CI.
+      if (!process.stdin.isTTY) process.exit(1);
+      return tui();
     }
-    process.exit(r.code ?? 0);
+    return backToPit(key, r.code, r.signal);
   }
 
   help();
