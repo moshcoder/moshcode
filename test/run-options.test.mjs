@@ -33,3 +33,12 @@ test("run rejects multiple script files", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /moshcode run: expected one script file/);
 });
+
+test("run rejects non-decimal max values", () => {
+  for (const value of ["0x10", "1e2", "3.5"]) {
+    const result = run(["--max", value, "--dry-run"]);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /moshcode run: --max must be a positive integer/);
+  }
+});

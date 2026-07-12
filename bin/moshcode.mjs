@@ -28,6 +28,9 @@ function readScript(arg) {
 
 function parseMax(value) {
   if (value === undefined) throw new Error("moshcode run: --max requires a positive integer");
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`moshcode run: --max must be a positive integer, got ${JSON.stringify(value)}`);
+  }
   const max = Number(value);
   if (!Number.isInteger(max) || max < 1) {
     throw new Error(`moshcode run: --max must be a positive integer, got ${JSON.stringify(value)}`);
