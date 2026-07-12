@@ -23,7 +23,11 @@ const DEFAULT_SCRIPT = `while (alive) {
 
 function readScript(arg) {
   if (!arg || arg === "-") return fs.readFileSync(0, "utf8"); // stdin (paste)
-  return fs.readFileSync(arg, "utf8");
+  try {
+    return fs.readFileSync(arg, "utf8");
+  } catch (e) {
+    throw new Error(`moshcode run: cannot read script ${JSON.stringify(arg)} (${e.code || e.message})`);
+  }
 }
 
 function parseMax(value) {
@@ -138,7 +142,13 @@ async function main() {
       }
       else file = a;
     }
-    const src = file ? readScript(file) : (fs.existsSync(EXAMPLE) ? fs.readFileSync(EXAMPLE, "utf8") : DEFAULT_SCRIPT);
+    let src;
+    try {
+      src = file ? readScript(file) : (fs.existsSync(EXAMPLE) ? fs.readFileSync(EXAMPLE, "utf8") : DEFAULT_SCRIPT);
+    } catch (e) {
+      console.error(String(e.message || e));
+      process.exit(1);
+    }
     let ast;
     try { ast = compile(src); }
     catch (e) { console.error(String(e.message || e)); process.exit(1); }
