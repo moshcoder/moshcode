@@ -6,6 +6,7 @@ import path from "node:path";
 import { compile, run } from "../src/interpreter.mjs";
 import { defaultCommands } from "../src/commands.mjs";
 import { ENGINES, engineList, engineStatus, resolveEngine, openSession } from "../src/engines.mjs";
+import { runUpgrade } from "../src/upgrade.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { tui } from "../src/tui.mjs";
 
@@ -55,6 +56,9 @@ usage:
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
   moshcode install <engine>            install an agentic-coding engine
+  moshcode upgrade [self|<engine>…]    update moshcode + all installed engines
+                                       (no args = everything; name targets to
+                                       narrow, e.g. \`upgrade claude\`)
   moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
                                        prd/NNNN-slug.md and hand it to an engine to
                                        author; no arg lists existing PRDs
@@ -104,6 +108,12 @@ async function main() {
       backToPit(`install ${engine}`, code);
     });
     return;
+  }
+  if (cmd === "upgrade" || cmd === "update") {
+    console.log("🎸 moshcode upgrade — updating moshcode + installed engines 🤘");
+    const results = await runUpgrade(rest);
+    const failed = results.filter((r) => !r.ok).length;
+    return backToPit("upgrade", failed ? 1 : 0);
   }
   if (cmd === "commands") {
     console.log("built-in moshscript commands:\n  " + Object.keys(defaultCommands()).map((c) => `${c}()`).join("  "));

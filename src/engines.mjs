@@ -11,6 +11,7 @@ export const ENGINES = {
     desc: "opencode — the open-source coding agent (SST/anomalyco)",
     bin: "opencode",
     install: { cmd: "bash", args: ["-c", "curl -fsSL https://opencode.ai/install | bash"] },
+    upgrade: { cmd: "opencode", args: ["upgrade"] },
   },
   claude: {
     desc: "Claude Code — Anthropic's agentic CLI",
@@ -42,8 +43,18 @@ export const ENGINES = {
     desc: "Aider — pair-programming in your terminal",
     bin: "aider",
     install: { cmd: "bash", args: ["-c", "curl -LsSf https://aider.chat/install.sh | sh"] },
+    upgrade: { cmd: "aider", args: ["--upgrade"] },
   },
 };
+
+/**
+ * The command that upgrades an already-installed engine in place: its native
+ * updater if it has one, else re-run the installer (they're idempotent and
+ * fetch the latest — claude/codex/gemini are `npm i -g` which upgrades).
+ */
+export function upgradeSpec(engine) {
+  return engine.upgrade || engine.install;
+}
 
 /** Aliases so `/agents cc` etc. resolve. */
 const ALIASES = { cc: "claude", "claude-code": "claude", openai: "codex", gpt: "codex", google: "gemini" };
@@ -74,6 +85,21 @@ export function engineStatus() {
 
 export function engineList() {
   return Object.entries(ENGINES).map(([k, v]) => `  ${k.padEnd(10)} ${v.desc}`).join("\n");
+}
+
+/**
+ * Spawn an arbitrary command with stdio inherited (so its own progress/prompts
+ * own the terminal). Resolves { ok, code, signal } on exit. Used by install +
+ * upgrade to run engine installers/updaters.
+ */
+export function runCmd(cmd, args = []) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn(cmd, args, { stdio: "inherit" }); }
+    catch (e) { resolve({ ok: false, error: e }); return; }
+    child.on("error", (e) => resolve({ ok: false, error: e }));
+    child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
+  });
 }
 
 /**

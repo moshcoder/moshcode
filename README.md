@@ -22,6 +22,18 @@ moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 ```
 
+### Upgrade everything
+
+```sh
+moshcode upgrade            # update moshcode + every installed engine
+moshcode upgrade claude     # just one engine (name any; alias ok)
+moshcode upgrade self       # just moshcode itself
+```
+
+Each engine is updated with its own native updater when it has one (e.g.
+`opencode upgrade`, `aider --upgrade`) and re-run through its installer
+otherwise — moshcode never vendors them. In the TUI: `/upgrade [name…]`.
+
 ## PRD — plan before you mosh
 
 Write a product requirements doc *first*, then let your coding agents build to it.

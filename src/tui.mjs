@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
+import { runUpgrade } from "./upgrade.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
@@ -69,6 +70,7 @@ function printHelp() {
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
     `   ${acid("/install <name>")}    install an engine`,
+    `   ${acid("/upgrade [name…]")}   update moshcode + all installed engines (or just the named ones)`,
     `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
@@ -76,6 +78,11 @@ function printHelp() {
     "",
     ash("  shortcut: type an engine name by itself, e.g. ") + acid("claude"),
   ].join("\n"));
+}
+
+async function upgradeAll(targets) {
+  console.log(info(`upgrading ${bone("moshcode")} + installed engines — hand-off to each tool's updater…`));
+  await runUpgrade(targets, { log: (s) => console.log(s), rule: () => console.log(hr()) });
 }
 
 async function openEngine(key, engine, args) {
@@ -166,6 +173,12 @@ export async function tui() {
       if (!rest[0]) { console.log(err("usage: /install <engine>")); continue; }
       rl.close();
       await installEngine(rest[0].toLowerCase());
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "upgrade" || cmd === "update") {
+      rl.close();
+      await upgradeAll(rest.map((r) => r.toLowerCase()));
       rl = mkrl();
       continue;
     }
