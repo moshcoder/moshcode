@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
-import { runSpec, installSpec, isSpecInstalled, OPENSPEC } from "./spec.mjs";
+import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
@@ -68,9 +68,8 @@ function printHelp() {
     bone("  commands"),
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
-    `   ${acid("/install <name>")}    install an engine (or ${bone("openspec")})`,
-    `   ${acid("/spec [init|…]")}     spec-driven dev — writes openspec/ to your repo (OpenSpec)` +
-      ash(isSpecInstalled() ? "  ●" : "  ○ /install openspec"),
+    `   ${acid("/install <name>")}    install an engine`,
+    `   ${acid("/prd [idea]")}        write a private PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
@@ -108,27 +107,20 @@ function installEngine(key) {
   });
 }
 
-async function installOpenSpec() {
-  if (isSpecInstalled()) { console.log(ok("openspec already installed. 🤘  try /spec init")); return; }
-  console.log(info(`installing openspec: ${OPENSPEC.install.cmd} ${OPENSPEC.install.args.join(" ")}`));
-  console.log(hr());
-  const r = await installSpec();
-  console.log(hr());
-  if (!r.ok) { console.log(err(`install failed: ${r.error?.message || r.error}`)); return; }
-  console.log(r.code === 0 ? ok("openspec installed. 🤘  try /spec init") : err(`install exited ${r.code}`));
+// Prefer claude (its stripEnv keeps the session clean), else the first installed
+// engine. Returns [key, engine] or null when nothing is installed.
+function pickEngine() {
+  const st = engineStatus();
+  const chosen = st.find((e) => e.key === "claude" && e.installed) || st.find((e) => e.installed);
+  return chosen ? [chosen.key, ENGINES[chosen.key]] : null;
 }
 
-async function openSpec(args) {
-  console.log(info(`openspec — spec-driven dev, saved to ${bone("openspec/")} in your repo. hand-off to its CLI…`));
-  console.log(hr());
-  const r = await runSpec(args);
-  console.log(hr());
-  if (!r.ok) {
-    console.log(r.error?.code === "ENOENT"
-      ? err("couldn't run openspec — need `openspec` on PATH or npx available.")
-      : err(`couldn't run openspec: ${r.error?.message || r.error}`));
-  } else {
-    console.log(info(`openspec exited${r.code != null ? ` (code ${r.code})` : ""}. back in the pit.`));
+function printPrds() {
+  const prds = listPrds();
+  if (!prds.length) { console.log(info(`no PRDs yet — ${acid("/prd <idea>")} to start one.`)); return; }
+  console.log(bone("  PRDs") + ash("  — private, under prd/"));
+  for (const p of prds) {
+    console.log(`   ${acid("●")} ${bone(p.slug.padEnd(24))} ${ash(p.status.padEnd(8))} ${p.title}`);
   }
 }
 
@@ -171,17 +163,25 @@ export async function tui() {
       continue;
     }
     if (cmd === "install") {
-      if (!rest[0]) { console.log(err("usage: /install <engine|openspec>")); continue; }
-      const target = rest[0].toLowerCase();
+      if (!rest[0]) { console.log(err("usage: /install <engine>")); continue; }
       rl.close();
-      if (target === "openspec" || target === "spec") await installOpenSpec();
-      else await installEngine(target);
+      await installEngine(rest[0].toLowerCase());
       rl = mkrl();
       continue;
     }
-    if (cmd === "spec") {
+    if (cmd === "prd") {
+      if (!rest.length) { printPrds(); continue; }
+      const idea = rest.join(" ");
+      const { slug, path: file, existed, gitignored } = createPrd(idea);
+      console.log(existed
+        ? info(`PRD ${bone(slug)} exists — opening an engine to keep editing ${ash(file)}`)
+        : ok(`scaffolded ${bone("prd/" + slug + "/prd.md")} ${ash("(private" + (gitignored ? ", gitignored" : "") + ")")}`));
+      const eng = pickEngine();
+      if (!eng) { console.log(info(`open an engine to fill it in — ${acid("/install claude")} then ${acid("/prd")} again.`)); continue; }
+      const [key, engine] = eng;
+      console.log(info(`handing ${bone(slug)} to ${bone(key)} to author…`));
       rl.close();
-      await openSpec(rest);
+      await openEngine(key, { ...engine, installed: true }, [authoringPrompt({ path: file, idea: existed ? "" : idea })]);
       rl = mkrl();
       continue;
     }
