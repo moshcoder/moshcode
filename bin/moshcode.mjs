@@ -7,6 +7,7 @@ import { compile, run } from "../src/interpreter.mjs";
 import { defaultCommands } from "../src/commands.mjs";
 import { ENGINES, engineList, engineStatus, resolveEngine, openSession } from "../src/engines.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
+import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { tui } from "../src/tui.mjs";
 
@@ -66,6 +67,7 @@ usage:
   moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
                                        prd/NNNN-slug.md and hand it to an engine to
                                        author; no arg lists existing PRDs
+  moshcode pwd                         show the current dir + git repo/branch/origin
   moshcode agents                      list engines + install status
   moshcode engines                     (alias of agents)
   moshcode commands                    list built-in moshscript commands
@@ -118,6 +120,18 @@ async function main() {
     const results = await runUpgrade(rest);
     const failed = results.filter((r) => !r.ok).length;
     return backToPit("upgrade", failed ? 1 : 0);
+  }
+  if (cmd === "pwd" || cmd === "where") {
+    const { cwd, home, git } = locate();
+    console.log(tilde(cwd, home));
+    if (git) {
+      console.log(`repo:   ${git.name}${git.branch ? ` (${git.branch})` : ""}`);
+      console.log(`root:   ${tilde(git.root, home)}`);
+      if (git.origin) console.log(`origin: ${git.origin}`);
+    } else {
+      console.log("(not a git repo)");
+    }
+    return;
   }
   if (cmd === "commands") {
     console.log("built-in moshscript commands:\n  " + Object.keys(defaultCommands()).map((c) => `${c}()`).join("  "));

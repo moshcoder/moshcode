@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { runUpgrade } from "./upgrade.mjs";
+import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
@@ -71,6 +72,7 @@ function printHelp() {
     `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
     `   ${acid("/install <name>")}    install an engine`,
     `   ${acid("/upgrade [name…]")}   update moshcode + all installed engines (or just the named ones)`,
+    `   ${acid("/pwd")}                show the current dir + git repo/branch/origin`,
     `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
@@ -78,6 +80,18 @@ function printHelp() {
     "",
     ash("  shortcut: type an engine name by itself, e.g. ") + acid("claude"),
   ].join("\n"));
+}
+
+function printPwd() {
+  const { cwd, home, git } = locate();
+  console.log("  " + bone(tilde(cwd, home)));
+  if (git) {
+    console.log("  " + ash("repo   ") + acid(git.name) + (git.branch ? ash(" on ") + bone(git.branch) : ""));
+    console.log("  " + ash("root   ") + tilde(git.root, home));
+    if (git.origin) console.log("  " + ash("origin ") + ash(git.origin));
+  } else {
+    console.log("  " + ash("(not a git repo)"));
+  }
 }
 
 async function upgradeAll(targets) {
@@ -164,6 +178,7 @@ export async function tui() {
 
     if (cmd === "quit" || cmd === "exit" || cmd === "q") break;
     if (cmd === "help" || cmd === "?" || cmd === "h") { printHelp(); continue; }
+    if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "run") {
       if (!rest[0]) { console.log(err("usage: /run <file.mosh>")); continue; }
       await runFile(rest[0]);
