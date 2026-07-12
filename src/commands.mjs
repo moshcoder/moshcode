@@ -36,9 +36,21 @@ async function deliver(type, data) {
 }
 
 export function defaultCommands() {
+  const expectNoArgs = (name, args) => {
+    if (args.length > 0) {
+      throw new Error(`moshscript: ${name}() does not take arguments`);
+    }
+  };
+
   return {
-    code: (ctx) => ctx.out("  ⌨  code()    → compiling features (no bugs)…"),
-    mosh: (ctx) => ctx.out("  🤘 mosh()    → opening the pit"),
+    code: (ctx, args) => {
+      expectNoArgs("code", args);
+      ctx.out("  ⌨  code()    → compiling features (no bugs)…");
+    },
+    mosh: (ctx, args) => {
+      expectNoArgs("mosh", args);
+      ctx.out("  🤘 mosh()    → opening the pit");
+    },
     notify: async (ctx, args) => {
       const msg = args.length ? args.join(" ") : "moshcode ping 🤘";
       ctx.out(`  🔔 notify()  → ${msg}`);
@@ -46,10 +58,20 @@ export function defaultCommands() {
       const res = await deliver("moshscript.notify", { message: msg, iter: ctx.iter });
       for (const r of res) if (!r.ok) ctx.out(`     ! notify ${r.target} failed (${r.status || r.error})`);
     },
-    repeat: (ctx) => ctx.out("  ↻  repeat()  → back to the top"),
+    repeat: (ctx, args) => {
+      expectNoArgs("repeat", args);
+      ctx.out("  ↻  repeat()  → back to the top");
+    },
     // handy extras
     say: (ctx, args) => ctx.out(`  💬 ${args.join(" ")}`),
-    sleep: async (_ctx, args) => { const ms = Number(args[0] || 0); if (ms > 0) await new Promise((r) => setTimeout(r, ms)); },
-    stop: (ctx) => { ctx.vars.alive = false; ctx.out("  ⏹  stop()    → alive = false"); },
+    sleep: async (_ctx, args) => {
+      const ms = Number(args[0] || 0);
+      if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+    },
+    stop: (ctx, args) => {
+      expectNoArgs("stop", args);
+      ctx.vars.alive = false;
+      ctx.out("  ⏹  stop()    → alive = false");
+    },
   };
 }
