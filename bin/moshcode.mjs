@@ -107,6 +107,14 @@ async function main() {
         catch (e) { console.error(String(e.message || e)); process.exit(1); }
       }
       else if (a === "--dry-run") dryRun = true;
+      else if (a.startsWith("-")) {
+        console.error(`moshcode run: unknown option ${a}`);
+        process.exit(1);
+      }
+      else if (file) {
+        console.error(`moshcode run: expected one script file, got ${JSON.stringify(file)} and ${JSON.stringify(a)}`);
+        process.exit(1);
+      }
       else file = a;
     }
     const src = file ? readScript(file) : (fs.existsSync(EXAMPLE) ? fs.readFileSync(EXAMPLE, "utf8") : DEFAULT_SCRIPT);
