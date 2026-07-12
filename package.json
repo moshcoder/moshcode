@@ -1,6 +1,6 @@
 {
   "name": "moshcode",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "moshcode — a metal wrapper CLI for agentic coding (installs/drives opencode, claude, codex; spec-driven dev via OpenSpec) + moshscript",
   "bin": {
@@ -11,6 +11,12 @@
     "demo": "node bin/moshcode.mjs run examples/alive.mosh",
     "test": "node --test"
   },
-  "files": ["bin", "src", "examples", "install.sh", "README.md"],
+  "files": [
+    "bin",
+    "src",
+    "examples",
+    "install.sh",
+    "README.md"
+  ],
   "license": "MIT"
 }

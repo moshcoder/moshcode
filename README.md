@@ -22,29 +22,23 @@ moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 ```
 
-## Spec — plan before you mosh
+## PRD — plan before you mosh
 
-Spec-driven development, powered by [OpenSpec](https://github.com/Fission-AI/OpenSpec).
-`moshcode spec` is a passthrough to the `openspec` CLI: agree on the requirements
-*first*, commit them to your repo, then let your coding agents build to the spec.
-
-```sh
-moshcode spec init          # write an openspec/ folder (specs/ + changes/) to the repo
-moshcode spec list          # list current specs / changes
-moshcode spec update        # refresh agent guidance + slash commands
-moshcode spec validate      # check specs are well-formed
-```
-
-The `openspec/` folder is a committed plan layer your agents read before writing
-code. moshcode stays a conductor — it doesn't fork OpenSpec, it drives it: if
-`openspec` isn't installed it runs via `npx -y @fission-ai/openspec@latest`, so
-there's nothing to set up. Install it globally for speed:
+Write a product requirements doc *first*, then let your coding agents build to it.
+`moshcode prd` uses [OpenPRD](https://github.com/profullstack/logicsrc/blob/master/docs/openprd.md) —
+a lightweight, **single-file** PRD standard: one `prd/<slug>/prd.md` per decision
+(problem, goals, users, requirements, metrics). No multi-file ceremony.
 
 ```sh
-npm install -g @fission-ai/openspec@latest
+moshcode prd "parked-domain service expansion"   # scaffold a PRD, then hand it to an engine to author
+moshcode prd                                      # list existing PRDs
 ```
 
-In the TUI shell it's `/spec [init|update|list|…]`.
+`moshcode prd <idea>` writes a private `prd/<slug>/prd.md` and hands it to a coding
+engine (Claude Code by default) to fill in. **PRDs are private** — the `prd/` folder
+is gitignored automatically; only the OpenPRD *standard* itself is public.
+
+In the TUI shell it's `/prd [idea]`.
 
 ## moshscript
 
