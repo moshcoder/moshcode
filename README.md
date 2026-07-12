@@ -7,7 +7,7 @@ tiny scripting toolkit (moshscript) on top.
 ## Install
 
 ```sh
-curl -fsSL https://moshcode.sh/install.sh | sh
+curl -fsSL https://moshcoding.com/install.sh | sh
 ```
 
 Zero-dependency ESM — all it needs is Node.js 18+. Later: `… | sh -s -- update`

@@ -2,9 +2,9 @@
 # moshcode — one-line installer 🤘
 #
 # Usage:
-#   curl -fsSL https://moshcode.sh/install.sh | sh
-#   curl -fsSL https://moshcode.sh/install.sh | sh -s -- update      (alias: upgrade)
-#   curl -fsSL https://moshcode.sh/install.sh | sh -s -- remove      (alias: uninstall)
+#   curl -fsSL https://moshcoding.com/install.sh | sh
+#   curl -fsSL https://moshcoding.com/install.sh | sh -s -- update      (alias: upgrade)
+#   curl -fsSL https://moshcoding.com/install.sh | sh -s -- remove      (alias: uninstall)
 #
 # (also works straight from GitHub:)
 #   curl -fsSL https://raw.githubusercontent.com/moshcoder/moshcode/main/install.sh | sh
@@ -28,7 +28,7 @@
 set -eu
 
 REPO="moshcoder/moshcode"
-INSTALL_URL="https://moshcode.sh/install.sh"
+INSTALL_URL="https://moshcoding.com/install.sh"
 MOSHCODE_HOME="${MOSHCODE_HOME:-$HOME/.moshcode}"
 MOSHCODE_BIN="${MOSHCODE_BIN:-$HOME/.local/bin}"
 WRAPPER="$MOSHCODE_BIN/moshcode"
