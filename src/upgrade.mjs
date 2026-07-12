@@ -1,6 +1,9 @@
 // `moshcode upgrade` — update everything that has a newer version: moshcode
 // itself and every installed coding engine. Conductor pattern: we just re-run
 // each tool's own updater/installer (they fetch latest), never vendor them.
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import fs from "node:fs";
 import { ENGINES, engineStatus, resolveEngine, upgradeSpec, runCmd } from "./engines.mjs";
 
 // Self-upgrade re-runs the moshcode installer's `update` path. Defaults to the
@@ -8,8 +11,25 @@ import { ENGINES, engineStatus, resolveEngine, upgradeSpec, runCmd } from "./eng
 const SELF_URL = process.env.MOSHCODE_INSTALL_URL
   || "https://raw.githubusercontent.com/moshcoder/moshcode/main/install.sh";
 
+// Where the *running* moshcode actually lives (…/<home>/src/upgrade.mjs → <home>).
+// We point the installer at this so it updates THIS copy in place, not a default
+// path that might not be the one on your PATH.
+export const MOSHCODE_HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Running from a git checkout? Then a reinstall would blow away the working tree
+// — update it with `git pull`, not the installer.
+function isGitCheckout(dir) {
+  return fs.existsSync(path.join(dir, ".git"));
+}
+
+function selfVersion() {
+  try { return JSON.parse(fs.readFileSync(path.join(MOSHCODE_HOME, "package.json"), "utf8")).version || null; }
+  catch { return null; }
+}
+
 function selfSpec() {
-  return { cmd: "sh", args: ["-c", `curl -fsSL ${SELF_URL} | sh -s -- update`] };
+  // Export MOSHCODE_HOME so install.sh updates the exact dir we run from.
+  return { cmd: "sh", args: ["-c", `export MOSHCODE_HOME='${MOSHCODE_HOME}'; curl -fsSL ${SELF_URL} | sh -s -- update`] };
 }
 
 /**
@@ -83,11 +103,22 @@ export async function runUpgrade(targets = [], io = {}) {
     return ok;
   };
 
-  if (self) await run("moshcode", selfSpec(), "(self)");
+  if (self) {
+    if (isGitCheckout(MOSHCODE_HOME)) {
+      // Don't reinstall over a working tree — just tell the user how to update it.
+      log(`\n· moshcode runs from a git checkout (${MOSHCODE_HOME}) — \`git pull\` there to update it (skipping self-reinstall).`);
+    } else {
+      const before = selfVersion();
+      const ok = await run("moshcode", selfSpec(), "(self)");
+      const after = selfVersion();
+      if (ok && before && after) {
+        log(before === after ? `· moshcode already at ${after}` : `· moshcode ${before} → ${after} — restart moshcode to load it.`);
+      }
+    }
+  }
   for (const it of items) await run(it.label, it.spec, it.installed ? "" : "(installing — not present)");
 
   const failed = results.filter((r) => !r.ok);
   log(`\n${failed.length ? "✗" : "✓"} upgraded ${results.length - failed.length}/${results.length}${failed.length ? ` — failed: ${failed.map((r) => r.name).join(", ")}` : "."} 🤘`);
-  if (self) log("· restart moshcode to pick up its own new version.");
   return results;
 }
