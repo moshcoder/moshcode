@@ -33,3 +33,12 @@ test("run rejects multiple script files", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /moshcode run: expected one script file/);
 });
+
+test("run reports missing script files without a stack trace", () => {
+  const missing = join(tmpdir(), "moshcode-missing-script.mosh");
+  const result = run([missing, "--dry-run"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /moshcode run: cannot read script/);
+  assert.doesNotMatch(result.stderr, /Error: moshcode run/);
+});
