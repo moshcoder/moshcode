@@ -25,18 +25,27 @@ moshcode install codex      # npm i -g @openai/codex
 ## PRD — plan before you mosh
 
 Write a product requirements doc *first*, then let your coding agents build to it.
-`moshcode prd` uses [OpenPRD](https://github.com/profullstack/logicsrc/blob/master/docs/openprd.md) —
-a lightweight, **single-file** PRD standard: one `prd/<slug>/prd.md` per decision
-(problem, goals, users, requirements, metrics). No multi-file ceremony.
+`moshcode prd` publishes PRDs per [OpenPRD](https://github.com/profullstack/logicsrc/blob/master/docs/openprd.md) —
+a **DIP-style** standard: a numbered, committed proposal collection in your repo
+(like a BIP/EIP process), one file per decision.
 
 ```sh
-moshcode prd "parked-domain service expansion"   # scaffold a PRD, then hand it to an engine to author
+moshcode prd "parked-domain service expansion"   # publish the next numbered PRD, then hand it to an engine
 moshcode prd                                      # list existing PRDs
 ```
 
-`moshcode prd <idea>` writes a private `prd/<slug>/prd.md` and hands it to a coding
-engine (Claude Code by default) to fill in. **PRDs are private** — the `prd/` folder
-is gitignored automatically; only the OpenPRD *standard* itself is public.
+`moshcode prd <idea>` bootstraps `prd/` on first use (a `README.md` index +
+`0000-template.md`), assigns the next four-digit number, writes
+`prd/NNNN-slug.md` (status `Draft`), and hands it to a coding engine (Claude Code
+by default) to author. PRDs are **committed** to the repo — they carry a lifecycle
+(Draft → Review → Accepted → Final) in their front-matter.
+
+```txt
+prd/
+  README.md              # index of PRDs
+  0000-template.md       # the OpenPRD template
+  0001-parked-domain-expansion.md
+```
 
 In the TUI shell it's `/prd [idea]`.
 

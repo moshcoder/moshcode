@@ -55,9 +55,9 @@ usage:
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
   moshcode install <engine>            install an agentic-coding engine
-  moshcode prd [idea]                  write a private PRD (OpenPRD) to prd/<slug>/
-                                       and hand it to an engine to author; no arg
-                                       lists existing PRDs
+  moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
+                                       prd/NNNN-slug.md and hand it to an engine to
+                                       author; no arg lists existing PRDs
   moshcode agents                      list engines + install status
   moshcode engines                     (alias of agents)
   moshcode commands                    list built-in moshscript commands
@@ -152,18 +152,19 @@ async function main() {
     if (!rest.length) {
       const prds = listPrds();
       if (!prds.length) { console.log("no PRDs yet — `moshcode prd <idea>` to start one."); return; }
-      for (const p of prds) console.log(`● ${p.slug.padEnd(24)} ${p.status.padEnd(8)} ${p.title}`);
+      for (const p of prds) console.log(`${p.id}  ${p.status.padEnd(9)} ${p.title}`);
       return;
     }
     const idea = rest.join(" ");
-    const { slug, path: file, existed, gitignored } = createPrd(idea);
+    const { id, slug, path: file, existed, bootstrapped } = createPrd(idea);
+    if (bootstrapped) console.log("bootstrapped prd/ — README + 0000-template.md");
     console.log(existed
-      ? `PRD ${slug} exists — ${file}`
-      : `✓ scaffolded prd/${slug}/prd.md (private${gitignored ? ", gitignored" : ""})`);
+      ? `PRD ${id} exists — ${file}`
+      : `✓ published prd/${id}-${slug}.md (committed — status: Draft)`);
     const st = engineStatus();
     const chosen = st.find((e) => e.key === "claude" && e.installed) || st.find((e) => e.installed);
     if (!chosen) { console.log("open an engine to author it — run: moshcode install claude"); return; }
-    console.log(`handing ${slug} to ${chosen.key} to author…`);
+    console.log(`handing ${id} to ${chosen.key} to author…`);
     const r = await openSession(ENGINES[chosen.key], [authoringPrompt({ path: file, idea: existed ? "" : idea })]);
     return backToPit(chosen.key, r.code, r.signal);
   }

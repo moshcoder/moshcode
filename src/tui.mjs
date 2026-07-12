@@ -69,7 +69,7 @@ function printHelp() {
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
     `   ${acid("/install <name>")}    install an engine`,
-    `   ${acid("/prd [idea]")}        write a private PRD (OpenPRD), or list them with no arg`,
+    `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
@@ -118,9 +118,9 @@ function pickEngine() {
 function printPrds() {
   const prds = listPrds();
   if (!prds.length) { console.log(info(`no PRDs yet — ${acid("/prd <idea>")} to start one.`)); return; }
-  console.log(bone("  PRDs") + ash("  — private, under prd/"));
+  console.log(bone("  PRDs") + ash("  — under prd/ (OpenPRD)"));
   for (const p of prds) {
-    console.log(`   ${acid("●")} ${bone(p.slug.padEnd(24))} ${ash(p.status.padEnd(8))} ${p.title}`);
+    console.log(`   ${acid(p.id)} ${ash(p.status.padEnd(9))} ${bone(p.title)}`);
   }
 }
 
@@ -172,14 +172,15 @@ export async function tui() {
     if (cmd === "prd") {
       if (!rest.length) { printPrds(); continue; }
       const idea = rest.join(" ");
-      const { slug, path: file, existed, gitignored } = createPrd(idea);
+      const { id, slug, path: file, existed, bootstrapped } = createPrd(idea);
+      if (bootstrapped) console.log(info(`bootstrapped ${bone("prd/")} — README + 0000-template.md`));
       console.log(existed
-        ? info(`PRD ${bone(slug)} exists — opening an engine to keep editing ${ash(file)}`)
-        : ok(`scaffolded ${bone("prd/" + slug + "/prd.md")} ${ash("(private" + (gitignored ? ", gitignored" : "") + ")")}`));
+        ? info(`PRD ${bone(id)} exists — opening an engine to keep editing ${ash(file)}`)
+        : ok(`published ${bone(`prd/${id}-${slug}.md`)} ${ash("(committed — status: Draft)")}`));
       const eng = pickEngine();
       if (!eng) { console.log(info(`open an engine to fill it in — ${acid("/install claude")} then ${acid("/prd")} again.`)); continue; }
       const [key, engine] = eng;
-      console.log(info(`handing ${bone(slug)} to ${bone(key)} to author…`));
+      console.log(info(`handing ${bone(id)} to ${bone(key)} to author…`));
       rl.close();
       await openEngine(key, { ...engine, installed: true }, [authoringPrompt({ path: file, idea: existed ? "" : idea })]);
       rl = mkrl();
