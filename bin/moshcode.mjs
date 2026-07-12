@@ -145,6 +145,10 @@ async function main() {
         try { max = parseMax(rest[++k]); }
         catch (e) { console.error(String(e.message || e)); process.exit(1); }
       }
+      else if (a.startsWith("--max=")) {
+        try { max = parseMax(a.slice("--max=".length)); }
+        catch (e) { console.error(String(e.message || e)); process.exit(1); }
+      }
       else if (a === "--dry-run") dryRun = true;
       else if (a.startsWith("-")) {
         console.error(`moshcode run: unknown option ${a}`);
