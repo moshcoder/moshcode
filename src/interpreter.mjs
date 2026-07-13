@@ -12,7 +12,7 @@
 // flag is truthy, bounded by ctx.maxIterations. Commands run top-to-bottom.
 
 export function tokenize(src) {
-  const re = /("(?:[^"\\]|\\.)*")|(\/\/[^\n]*)|(\d+(?:\.\d+)?)|([A-Za-z_]\w*)|([(){};,])|(\s+)/g;
+  const re = /("(?:[^"\\]|\\.)*")|(\/\/[^\n]*)|(-?\d+(?:\.\d+)?)|([A-Za-z_]\w*)|([(){};,])|(\s+)/g;
   const tokens = [];
   let m;
   let lastIndex = 0;
