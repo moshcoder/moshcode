@@ -12,7 +12,7 @@ import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
-import { login, whoami, logout } from "./auth.mjs";
+import { login, loginDevice, whoami, logout } from "./auth.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
@@ -311,7 +311,8 @@ export async function tui() {
     if (cmd === "help" || cmd === "?" || cmd === "h") { printHelp(); continue; }
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "login") {
-      try { const { email } = await login(); console.log(ok(`logged in${email ? ` as ${email}` : ""} 🤘`)); }
+      const device = rest.includes("--device") || rest.includes("device") || rest.includes("-d");
+      try { const { email } = device ? await loginDevice() : await login(); console.log(ok(`logged in${email ? ` as ${email}` : ""} 🤘`)); }
       catch (e) { console.log(err(String(e.message || e))); }
       continue;
     }

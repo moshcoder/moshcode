@@ -65,7 +65,8 @@ export function takeNext(req, res) {
 export function csrfGuard(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   // machine endpoints are Bearer/HMAC/PKCE-authenticated, not cookie sessions
-  if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/") || req.path === "/cli/token") return next();
+  if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/") ||
+      req.path === "/cli/token" || req.path.startsWith("/cli/device/")) return next();
   const sent = req.body?._csrf || req.get("x-csrf-token");
   if (!sent || sent !== req.cookies?.[CSRF]) return res.status(403).send("bad csrf token");
   next();

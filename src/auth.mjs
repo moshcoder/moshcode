@@ -88,6 +88,50 @@ export function login({ timeoutMs = 180000 } = {}) {
   });
 }
 
+/**
+ * Device-code login (headless / CI): no local browser or loopback needed. Prints
+ * a short code + URL; you approve it in ANY browser; the CLI polls until done.
+ */
+export async function loginDevice({ open = true } = {}) {
+  const startRes = await fetch(`${API()}/cli/device/code`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: `moshcode cli @ ${os.hostname()}` }),
+  });
+  if (!startRes.ok) throw new Error(`couldn't start device login (${startRes.status})`);
+  const d = await startRes.json();
+
+  console.log(`\n🔑 to log in, open:  ${d.verification_uri}`);
+  console.log(`   and enter code:  \x1b[1m\x1b[38;5;154m${d.user_code}\x1b[0m\n`);
+  if (open) openBrowser(d.verification_uri_complete);
+
+  const interval = Math.max(2, d.interval || 5) * 1000;
+  const deadline = Date.now() + (d.expires_in || 600) * 1000;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  console.log("   waiting for you to authorize…");
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("code expired — run `moshcode login --device` again");
+    await sleep(interval);
+    let data;
+    try {
+      const r = await fetch(`${API()}/cli/device/token`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_code: d.device_code }),
+      });
+      data = await r.json();
+    } catch { continue; } // transient network — keep polling
+    if (data.access_token) {
+      saveCreds({ api: API(), token: data.access_token, email: data.user?.email || null, id: data.user?.id });
+      return { email: data.user?.email || null };
+    }
+    if (data.error === "access_denied") throw new Error("authorization denied");
+    if (data.error === "expired_token") throw new Error("code expired — run `moshcode login --device` again");
+    // authorization_pending / slow_down → keep waiting
+  }
+}
+
 /** Print who is logged in (verified against the app). */
 export async function whoami() {
   const creds = loadCreds();

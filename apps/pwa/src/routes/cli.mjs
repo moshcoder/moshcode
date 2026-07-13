@@ -11,8 +11,18 @@ import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { createApiKey, bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
+import { config } from "../config.mjs";
 
 export const cliRouter = Router();
+
+// Unambiguous alphabet for the short human device code (no 0/O/1/I/L/vowels).
+const CODE_ALPHA = "BCDFGHJKMNPQRSTVWXYZ23456789";
+function makeUserCode() {
+  let s = "";
+  for (let i = 0; i < 8; i++) s += CODE_ALPHA[crypto.randomInt(CODE_ALPHA.length)];
+  return `${s.slice(0, 4)}-${s.slice(4)}`;
+}
+const normCode = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/(.{4})(.{4})/, "$1-$2");
 
 // Only loopback redirect URIs are allowed (the CLI listens on 127.0.0.1).
 function loopbackOk(uri) {
@@ -83,4 +93,72 @@ cliRouter.get("/api/me", async (req, res) => {
   const user = await userForApiKey(bearer(req));
   if (!user) return res.status(401).json({ error: "invalid or missing API key" });
   res.json({ id: user.id, email: user.email || null, name: user.display_name, credits: await balance(user.id) });
+});
+
+// ---- device-code flow (headless / CI: `moshcode login --device`) ----
+
+// CLI asks for a code pair.
+cliRouter.post("/cli/device/code", async (req, res) => {
+  const deviceCode = token(32);
+  let userCode = makeUserCode();
+  // avoid the astronomically-unlikely collision on the human code
+  for (let i = 0; i < 3 && await get(`SELECT 1 FROM device_codes WHERE user_code = ?`, [userCode]); i++) userCode = makeUserCode();
+  const now = Date.now();
+  const interval = 5, ttl = 10 * 60 * 1000;
+  await run(
+    `INSERT INTO device_codes (device_code,user_code,status,name,interval_s,created_at,expires_at) VALUES (?,?,?,?,?,?,?)`,
+    [deviceCode, userCode, "pending", String(req.body?.name || "moshcode cli").slice(0, 40), interval, now, now + ttl]
+  );
+  res.json({
+    device_code: deviceCode,
+    user_code: userCode,
+    verification_uri: `${config.origin}/device`,
+    verification_uri_complete: `${config.origin}/device?code=${encodeURIComponent(userCode)}`,
+    expires_in: Math.floor(ttl / 1000),
+    interval,
+  });
+});
+
+// The page a human opens to approve a device.
+cliRouter.get("/device", requireAuth, (req, res) => {
+  const prefill = req.query.code ? normCode(req.query.code) : "";
+  const done = req.query.done;
+  const bad = req.query.bad;
+  const body = `${appBar(req.user, 0)}
+  <main class="wrap" style="max-width:440px;padding-top:8vh">
+    <div class="card"><div class="card-body" style="text-align:center">
+      <div style="font-size:2rem">🔑</div>
+      <h1 style="font-size:1.4rem;margin:10px 0">Connect a device</h1>
+      ${done ? `<div class="notice ok">✓ device connected — return to your terminal 🤘</div>`
+        : `<p class="dim mono" style="font-size:.82rem">Enter the code shown in your terminal to authorize the moshcode CLI as <b>${esc(req.user.email || req.user.display_name)}</b>.</p>
+        ${bad ? `<div class="notice err">that code is invalid or expired — check your terminal.</div>` : ""}
+        <form method="post" action="/device" style="margin-top:14px">${csrfInput(req)}
+          <input name="user_code" value="${esc(prefill)}" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters"
+            style="text-align:center;font-size:1.3rem;letter-spacing:.2em;text-transform:uppercase" required>
+          <button class="btn acid block" type="submit" style="margin-top:12px">Authorize 🤘</button>
+        </form>`}
+    </div></div>
+  </main>${footer}`;
+  res.type("html").send(page({ title: "moshcode ▸ connect device", body }));
+});
+
+cliRouter.post("/device", requireAuth, async (req, res) => {
+  const userCode = normCode(req.body.user_code);
+  const row = await get(`SELECT * FROM device_codes WHERE user_code = ? AND status = 'pending' AND expires_at > ?`, [userCode, Date.now()]);
+  if (!row) return res.redirect(`/device?bad=1${req.body.user_code ? "&code=" + encodeURIComponent(req.body.user_code) : ""}`);
+  await run(`UPDATE device_codes SET status = 'approved', user_id = ? WHERE device_code = ?`, [req.user.id, row.device_code]);
+  res.redirect("/device?done=1");
+});
+
+// CLI polls here until approved.
+cliRouter.post("/cli/device/token", async (req, res) => {
+  const row = await get(`SELECT * FROM device_codes WHERE device_code = ?`, [req.body?.device_code || ""]);
+  if (!row || row.expires_at < Date.now() || row.status === "claimed") return res.status(400).json({ error: "expired_token" });
+  if (row.status === "denied") return res.status(400).json({ error: "access_denied" });
+  if (row.status !== "approved") return res.status(400).json({ error: "authorization_pending" });
+
+  await run(`UPDATE device_codes SET status = 'claimed' WHERE device_code = ?`, [row.device_code]);
+  const user = await get(`SELECT * FROM users WHERE id = ?`, [row.user_id]);
+  const { plaintext } = await createApiKey(user.id, row.name || "moshcode cli");
+  res.json({ access_token: plaintext, token_type: "bearer", user: { id: user.id, email: user.email || null, name: user.display_name } });
 });

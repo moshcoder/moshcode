@@ -1,5 +1,5 @@
 /* moshcode PWA service worker — offline app shell (network-first for docs). */
-const CACHE = "moshcode-v2";
+const CACHE = "moshcode-v3";
 const SHELL = ["/", "/icon.svg", "/manifest.webmanifest", "/passkey.js"];
 
 self.addEventListener("install", (e) => {

@@ -193,3 +193,8 @@ pagesRouter.post("/push/subscribe", requireAuth, async (req, res) => {
     [id(), req.user.id, endpoint, p256dh, auth, Date.now()]);
   res.json({ ok: true });
 });
+
+pagesRouter.post("/push/unsubscribe", requireAuth, async (req, res) => {
+  if (req.body?.endpoint) await run(`DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?`, [req.body.endpoint, req.user.id]);
+  res.json({ ok: true });
+});
