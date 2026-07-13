@@ -130,7 +130,7 @@ function printHelp() {
     `   ${acid("/pwd")}                show the current dir + git repo/branch/origin`,
     `   ${acid("/shell [cmd]")}        drop into $SHELL (exit → back to the pit); also ${acid("!cmd")}`,
     `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
-    `   ${acid("/run <file.mosh>")}   run a moshscript program`,
+    `   ${acid("/run <file.mosh>")}   run a moshscript [--max N] [--dry-run]`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
     "",
@@ -138,7 +138,7 @@ function printHelp() {
     ash("   .mosh files are real JavaScript with the command vocabulary injected."),
     ash("   local verbs: ") + acid("code() mosh() notify() ask() say() sleep() stop() repeat()"),
     ash("   CLI verbs:   ") + acid("agents() start() install() upgrade() mcp() skill() prd()"),
-    ash("               ") + acid("ugig() coinpay() c0mpute() pwd() run()"),
+    ash("               ") + acid("ugig() coinpay() c0mpute() pwd() run() shell()"),
     ash("   shebang:     ") + acid("#!/usr/bin/env moshscript") + ash("  (chmod +x to self-run)"),
     "",
     ash("  raw shortcuts: type an engine or tool name by itself, e.g. ") + acid("claude") + ash(" or ") + acid("ugig"),
@@ -261,14 +261,37 @@ function printPrds() {
   }
 }
 
-async function runFile(file) {
+async function runFile(args) {
+  // Parse /run options the same way the CLI does (R3: two entrypoints agree).
+  let max, dryRun = false, file = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--max" || a === "-n") {
+      const v = Number(args[++i]);
+      if (!Number.isInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
+      max = v;
+    } else if (a.startsWith("--max=")) {
+      const v = Number(a.slice("--max=".length));
+      if (!Number.isInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
+      max = v;
+    } else if (a === "--dry-run") {
+      dryRun = true;
+    } else if (!file) {
+      file = a;
+    }
+  }
+  if (!file) { console.log(err("usage: /run <file.mosh> [--max N] [--dry-run]")); return; }
+
   let src;
   try { src = fs.readFileSync(file, "utf8"); }
   catch (e) { console.log(err(`can't read ${file}: ${e.message}`)); return; }
   console.log(hr());
+  if (dryRun) console.log(info("dry run — narrating without executing"));
   let result = { iterations: 0 };
+  const opts = { commands: moshVocabulary(), dryRun, out: (s) => console.log(s) };
+  if (max !== undefined) opts.max = max;
   try {
-    result = await runScript(src, { commands: moshVocabulary(), out: (s) => console.log(s) });
+    result = await runScript(src, opts);
   } catch (e) { console.log(err(String(e.message || e))); }
   console.log(hr());
   console.log(info(`moshscript done — ${result.iterations} loop(s).`));
@@ -319,8 +342,7 @@ export async function tui() {
     if (cmd === "whoami") { await whoami(); continue; }
     if (cmd === "logout") { logout(); continue; }
     if (cmd === "run") {
-      if (!rest[0]) { console.log(err("usage: /run <file.mosh>")); continue; }
-      await runFile(rest[0]);
+      await runFile(rest);
       continue;
     }
     if (cmd === "shell" || cmd === "sh") {

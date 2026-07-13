@@ -89,6 +89,7 @@ test("CLI verbs are callable from moshscript in dry-run mode", async () => {
   assert.match(output, /would run: moshcode mcp install https:\/\/example\.com\/mcp/);
 });
 
+// ai() verb — headless, non-interactive engine invocation.
 test("aiExecArgs maps each engine to its headless invocation", () => {
   assert.deepEqual(aiExecArgs("claude", "hi"), ["-p", "hi"]);
   assert.deepEqual(aiExecArgs("codex", "hi"), ["exec", "hi"]);
@@ -108,4 +109,79 @@ test("ai() in dry-run narrates the engine invocation and returns empty string", 
   const out = runAi(ctx, "summarize the diff", { engine: "codex" });
   assert.equal(out, "");
   assert.match(ctx.lines.join("\n"), /would run: codex exec/);
+});
+
+// R8: non-zero exits return { ok: false } instead of throwing, so scripts can
+// branch on outcomes without a try/catch.
+test("R8: a non-zero CLI exit returns { ok: false } instead of throwing", async () => {
+  // Run a real `moshcode` command that will fail (unknown engine).
+  // We use the actual moshcode binary via runMoshcode with a non-dry context.
+  const lines = [];
+  const ctx = { dryRun: false, out: (l) => lines.push(l) };
+  // `moshcode agents nonexistent-engine-xyz` should exit non-zero.
+  const result = runMoshcode("agents", ["nonexistent-engine-xyz-99"], ctx);
+  assert.equal(result.ok, false, "non-zero exit should return ok: false");
+  assert.ok(result.code !== 0, "should have a non-zero exit code");
+  assert.equal(typeof result.code, "number");
+});
+
+test("R8: a non-zero exit does NOT crash a moshscript — script continues", async () => {
+  const lines = [];
+  // The script calls a failing CLI verb then continues to the next line.
+  // Under the old throwing behavior, the second say() would never run.
+  const result = await runScript(
+    `const r = agents("nonexistent-engine-xyz-99");
+     say("still alive after fail, ok=" + r.ok);`,
+    { commands: moshVocabulary(), out: (s) => lines.push(s) }
+  );
+  const output = lines.join("\n");
+  assert.match(output, /still alive after fail, ok=false/,
+    "script should continue after a non-zero CLI exit");
+});
+
+// shell() verb — the system verb for arbitrary shell commands.
+test("shell() is in the vocabulary", () => {
+  assert.ok(moshVocabulary().has("shell"), "expected shell() in the vocabulary");
+});
+
+test("shell() in dry-run narrates the command without running it", () => {
+  const ctx = dryCtx();
+  const cmd = moshVocabulary().get("shell");
+  const result = cmd.run(ctx, "echo hello");
+  assert.equal(result.ok, true);
+  assert.equal(result.dryRun, true);
+  assert.match(ctx.lines.join("\n"), /would run:.*echo hello/);
+});
+
+test("shell() throws when called without arguments", () => {
+  const ctx = dryCtx();
+  const cmd = moshVocabulary().get("shell");
+  assert.throws(() => cmd.run(ctx), /shell\(\) requires a command string/);
+});
+
+test("shell() runs a real command and returns { ok, code }", () => {
+  const lines = [];
+  const ctx = { dryRun: false, out: (l) => lines.push(l) };
+  const cmd = moshVocabulary().get("shell");
+  const result = cmd.run(ctx, "true");
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 0);
+});
+
+test("shell() returns { ok: false } on non-zero exit without throwing", () => {
+  const lines = [];
+  const ctx = { dryRun: false, out: (l) => lines.push(l) };
+  const cmd = moshVocabulary().get("shell");
+  const result = cmd.run(ctx, "false");
+  assert.equal(result.ok, false);
+  assert.ok(result.code !== 0);
+});
+
+test("shell() is callable from moshscript and the script continues on failure", async () => {
+  const lines = [];
+  await runScript(
+    `const r = shell("false"); say("continued, ok=" + r.ok);`,
+    { commands: moshVocabulary(), out: (s) => lines.push(s) }
+  );
+  assert.match(lines.join("\n"), /continued, ok=false/);
 });
