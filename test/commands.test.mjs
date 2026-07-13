@@ -43,13 +43,12 @@ test("mosh() blasts the moshcoding playlist url", async () => {
   assert.ok(!ctx.lines.some((l) => /launched in your browser/.test(l)));
 });
 
-test("notify() prints the message + an approval link and returns { id, url }", async () => {
-  const ctx = createCtx();
+test("notify() in dry-run prints the message and doesn't hit the network", async () => {
+  const ctx = createCtx(); // dryRun: true
   const res = await verb("notify")(ctx, "hello", "there");
 
   assert.match(ctx.lines.join("\n"), /hello there/);
-  assert.match(ctx.lines.join("\n"), /\/approve\//);
-  assert.ok(res.id && /\/approve\//.test(res.url));
+  assert.deepEqual(res, { dryRun: true });
 });
 
 test("ask() in dry-run announces it would block, returns null", async () => {
@@ -57,7 +56,7 @@ test("ask() in dry-run announces it would block, returns null", async () => {
   const reply = await verb("ask")(ctx, "what next?");
 
   assert.equal(reply, null);
-  assert.match(ctx.lines.join("\n"), /approve\/instruct/);
+  assert.match(ctx.lines.join("\n"), /would block/);
 });
 
 test("stop() flips the ctx alive flag off", async () => {

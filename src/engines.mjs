@@ -93,6 +93,33 @@ export function isInstalled(bin) {
   return false;
 }
 
+// Headless "run one prompt, print the answer, exit" invocation per engine — the
+// non-interactive mode the ai() moshscript shortcut captures stdout from. Kept
+// as a pure map so it's unit-tested without spawning engines.
+const AI_EXEC = {
+  claude: (p) => ["-p", p],                                  // claude print mode
+  codex: (p) => ["exec", p],                                 // codex non-interactive
+  gemini: (p) => ["-p", p],                                  // gemini prompt mode
+  opencode: (p) => ["run", p],                               // opencode one-shot
+  aider: (p) => ["--message", p, "--yes", "--no-auto-commits"], // aider single message
+};
+
+/** argv that runs `prompt` headlessly on `engine` (throws if it has no headless mode). */
+export function aiExecArgs(engine, prompt) {
+  const fn = AI_EXEC[engine];
+  if (!fn) throw new Error(`moshscript: ai() has no headless mode for "${engine}"`);
+  return fn(String(prompt));
+}
+
+/** First installed engine that supports headless ai(), honoring a preference. */
+export function pickAiEngine(preferred) {
+  const order = preferred ? [preferred] : ["claude", "codex", "opencode", "gemini", "aider"];
+  for (const key of order) {
+    if (ENGINES[key] && AI_EXEC[key] && isInstalled(ENGINES[key].bin)) return key;
+  }
+  return null;
+}
+
 /** Engine entries annotated with install status. */
 export function engineStatus() {
   return Object.entries(ENGINES).map(([key, e]) => ({ key, ...e, installed: isInstalled(e.bin) }));

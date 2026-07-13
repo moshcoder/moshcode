@@ -16,8 +16,8 @@
 import { spawn } from "node:child_process";
 
 import { createRegistry } from "./registry.mjs";
-import { cliVerb } from "./cli.mjs";
-import { deliver, newApprovalId, approvalUrl, pollApproval } from "./notify.mjs";
+import { cliVerb, aiVerb } from "./cli.mjs";
+import { ingestApproval, pollApproval } from "./notify.mjs";
 
 // The moshcoding pit-anthem playlist. mosh() blasts this URL and, on a desktop
 // with a GUI, tries to open it in the default browser.
@@ -80,41 +80,39 @@ const COMMANDS = [
   },
   {
     name: "notify",
-    summary: "ping the operator (email/SMS/Telegram/Slack) + approval link",
-    // Fire-and-forget. Delivers a ping and an approval link on moshcode.sh, and
-    // returns { id, url } so a script can hand the link off however it likes.
+    summary: "ping the operator via app.moshcode.sh (email/SMS/Slack/Telegram/push)",
+    // Fire-and-forget. Posts the approval to the app, which fans it out to the
+    // operator's channels. Returns { id, url } so a script can hand the link off.
     async run(ctx, ...args) {
       const msg = args.length ? args.join(" ") : "moshcode ping 🤘";
-      const id = newApprovalId();
-      const url = approvalUrl(id);
       ctx.out(`  🔔 notify()  → ${msg}`);
-      ctx.out(`     🔗 ${url}`);
-      if (ctx.dryRun) return { id, url, dryRun: true };
-      const res = await deliver("moshscript.notify", { message: msg, iter: ctx.iter, approval: { id, url } });
-      for (const r of res) if (!r.ok) ctx.out(`     ! notify ${r.target} failed (${r.status || r.error})`);
-      return { id, url, ok: res.every((r) => r.ok) };
+      if (ctx.dryRun) return { dryRun: true };
+      const r = await ingestApproval({ message: msg, kind: "notify", script: "moshscript", iter: ctx.iter });
+      if (!r.ok) { ctx.out(`     ! notify failed (${r.error || r.status}) — set MOSHCODE_API_KEY`); return null; }
+      ctx.out(`     🔗 ${r.url}`);
+      if (r.warning) ctx.out(`     ⚠ ${r.warning}`);
+      return { id: r.id, url: r.url };
     },
   },
   {
     name: "ask",
-    summary: "notify + BLOCK until the human approves/instructs at moshcode.sh",
-    // The human-in-the-loop gate. Sends the ping + link, then waits for the
-    // operator to open moshcode.sh/approve/:id, read the context, and submit.
-    // Resolves with their instructions (or null on timeout). Requires `await`.
+    summary: "notify + BLOCK until the human approves/instructs at app.moshcode.sh",
+    // The human-in-the-loop gate. Posts the approval to the app, then waits for
+    // the operator to open app.moshcode.sh/approve/:id, read the context, and
+    // submit. Resolves with their instructions (or null). Requires `await`.
     //   const task = await ask("what next?");
     async run(ctx, ...args) {
       const prompt = args.length ? args.join(" ") : "moshcode needs a human 🤘";
-      const id = newApprovalId();
-      const url = approvalUrl(id);
       ctx.out(`  🙋 ask()     → ${prompt}`);
-      ctx.out(`     🔗 approve/instruct: ${url}`);
       if (ctx.dryRun) {
         ctx.out("     (dry run — would block here for a human reply)");
         return null;
       }
-      await deliver("moshscript.ask", { message: prompt, iter: ctx.iter, approval: { id, url } });
+      const r = await ingestApproval({ message: prompt, kind: "ask", script: "moshscript", iter: ctx.iter });
+      if (!r.ok) { ctx.out(`     ! ask failed (${r.error || r.status}) — set MOSHCODE_API_KEY`); return null; }
+      ctx.out(`     🔗 approve/instruct: ${r.url}`);
       ctx.out("     ⏳ waiting for a human…");
-      const reply = await pollApproval(id);
+      const reply = await pollApproval(r.id);
       ctx.out(reply == null ? "     ⌛ no reply — moving on" : `     ✅ got it: ${reply}`);
       return reply;
     },
@@ -165,6 +163,8 @@ const COMMANDS = [
   // .mosh file can pull in other .mosh files. It blocks until the included script
   // finishes (spawnSync), so they run in order.
   cliVerb("run", "run another .mosh file (include)"),
+  // shortcut: ai() runs an engine headlessly and RETURNS its output (see PRD R17)
+  aiVerb,
   cliVerb("agents", "launch an autonomous agent session (moshcode agents <engine>)"),
   cliVerb("start", "raw-launch an engine (moshcode start <engine>)"),
   cliVerb("install", "install an engine or workflow tool"),

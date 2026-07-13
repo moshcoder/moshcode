@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runMoshcode, cliVerb } from "../src/cli.mjs";
+import { runMoshcode, cliVerb, runAi } from "../src/cli.mjs";
+import { aiExecArgs, pickAiEngine } from "../src/engines.mjs";
 import { moshVocabulary } from "../src/commands.mjs";
 import { runScript } from "../src/runtime.mjs";
 import { createRegistry } from "../src/registry.mjs";
@@ -27,7 +28,7 @@ test("runMoshcode stringifies args and never spawns under dry-run", async () => 
 
 test("the CLI capabilities are all registered as verbs", () => {
   const reg = moshVocabulary();
-  for (const name of ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "pwd"]) {
+  for (const name of ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "pwd", "ai"]) {
     assert.ok(reg.has(name), `expected ${name}() in the vocabulary`);
   }
 });
@@ -86,4 +87,25 @@ test("CLI verbs are callable from moshscript in dry-run mode", async () => {
   assert.match(output, /would run: moshcode install claude/);
   assert.match(output, /would run: moshcode agents claude/);
   assert.match(output, /would run: moshcode mcp install https:\/\/example\.com\/mcp/);
+});
+
+test("aiExecArgs maps each engine to its headless invocation", () => {
+  assert.deepEqual(aiExecArgs("claude", "hi"), ["-p", "hi"]);
+  assert.deepEqual(aiExecArgs("codex", "hi"), ["exec", "hi"]);
+  assert.deepEqual(aiExecArgs("gemini", "hi"), ["-p", "hi"]);
+  assert.deepEqual(aiExecArgs("opencode", "hi"), ["run", "hi"]);
+  assert.deepEqual(aiExecArgs("aider", "hi").slice(0, 2), ["--message", "hi"]);
+  assert.throws(() => aiExecArgs("nope", "hi"), /no headless mode/);
+});
+
+test("pickAiEngine honors an explicit preference only if installed", () => {
+  // nothing is guaranteed installed in CI → null, and an unknown pref → null
+  assert.equal(pickAiEngine("definitely-not-an-engine"), null);
+});
+
+test("ai() in dry-run narrates the engine invocation and returns empty string", () => {
+  const ctx = { dryRun: true, lines: [], out(l) { this.lines.push(l); } };
+  const out = runAi(ctx, "summarize the diff", { engine: "codex" });
+  assert.equal(out, "");
+  assert.match(ctx.lines.join("\n"), /would run: codex exec/);
 });

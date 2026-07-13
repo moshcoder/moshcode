@@ -17,6 +17,7 @@
 // Under --dry-run it narrates the argv instead of spawning.
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { ENGINES, aiExecArgs, pickAiEngine } from "./engines.mjs";
 
 // Resolve THIS package's own moshcode entrypoint, so scripting stays
 // self-referential and doesn't depend on `moshcode` being on PATH.
@@ -47,3 +48,43 @@ export function runMoshcode(cmd, args, ctx) {
 export function cliVerb(name, summary) {
   return { name, summary, run: (ctx, ...args) => runMoshcode(name, args, ctx) };
 }
+
+/**
+ * ai(prompt, opts?) — run a coding engine HEADLESSLY on `prompt` and RETURN its
+ * output as a string (unlike agents()/start(), which hand over the terminal and
+ * return nothing). Blocking (spawnSync, stdout captured). opts.engine picks the
+ * engine; otherwise the first installed one. Honors dry-run (returns "").
+ */
+export function runAi(ctx, prompt, opts = {}) {
+  if (ctx.dryRun) {
+    // narrate without requiring an installed engine
+    const engine = pickAiEngine(opts.engine) || opts.engine || "claude";
+    const args = aiExecArgs(engine, prompt); // throws only on an unknown engine name
+    ctx.out(`  🧠 ai(${JSON.stringify(String(prompt).slice(0, 48))}) → would run: ${engine} ${args.join(" ")}`);
+    return "";
+  }
+
+  const engine = pickAiEngine(opts.engine);
+  if (!engine) {
+    throw new Error(`moshscript: ai() needs an installed engine — try install("claude")`);
+  }
+  const e = ENGINES[engine];
+  const args = aiExecArgs(engine, prompt);
+  ctx.out(`  🧠 ai() → ${engine}: ${String(prompt).slice(0, 60)}${String(prompt).length > 60 ? "…" : ""}`);
+
+  const env = { ...process.env };
+  for (const k of e.stripEnv || []) delete env[k];
+  const res = spawnSync(e.bin, args, { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024 });
+  if (res.error) throw res.error;
+  if (res.status !== 0) {
+    throw new Error(`moshscript: ai() → ${engine} exited with ${res.signal || res.status}${res.stderr ? `: ${res.stderr.trim().slice(0, 200)}` : ""}`);
+  }
+  return (res.stdout || "").trim();
+}
+
+/** The ai() shortcut as a vocabulary command. */
+export const aiVerb = {
+  name: "ai",
+  summary: "run a coding engine on a prompt and return its output (shortcut)",
+  run: (ctx, prompt, opts) => runAi(ctx, prompt, opts),
+};
