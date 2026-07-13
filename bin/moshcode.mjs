@@ -5,7 +5,15 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { compile, run } from "../src/interpreter.mjs";
 import { defaultCommands } from "../src/commands.mjs";
-import { ENGINES, engineList, engineStatus, resolveEngine, openSession } from "../src/engines.mjs";
+import {
+  ENGINES,
+  agentLaunchArgs,
+  engineList,
+  engineStatus,
+  resolveEngine,
+  openSession,
+} from "../src/engines.mjs";
+import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
@@ -51,30 +59,72 @@ function backToPit(label, code, signal) {
   return tui();
 }
 
+// Direct workflow-tool calls are ordinary CLI passthroughs, not interactive
+// engine sessions. Preserve the child's result for shells, scripts, and agents.
+function propagateExit(code, signal) {
+  if (signal) {
+    try { process.kill(process.pid, signal); }
+    catch { process.exitCode = 1; }
+    return;
+  }
+  process.exitCode = code ?? 0;
+}
+
+function printEngineStatus() {
+  for (const engine of engineStatus()) {
+    console.log(`${engine.installed ? "●" : "○"} ${engine.key.padEnd(10)} ${engine.desc}`);
+  }
+}
+
+async function launchEngine(key, engine, args, { agentMode = false } = {}) {
+  if (agentMode) {
+    console.error(`⚠ agent mode: ${key} ${engine.agentArgs.join(" ")} — native approvals/permissions are bypassed or auto-approved.`);
+  }
+  const result = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args);
+  if (!result.ok) {
+    console.error(result.error?.code === "ENOENT"
+      ? `${key} isn't installed (\`${engine.bin}\`). run: moshcode install ${key}`
+      : `launch failed: ${result.error?.message || result.error}`);
+    if (!process.stdin.isTTY) { process.exitCode = 1; return; }
+    return tui();
+  }
+  return backToPit(key, result.code, result.signal);
+}
+
 function help() {
   console.log(`moshcode — metal scripting toolkit 🤘
 
 usage:
   moshcode                             open the TUI shell (then /agents <engine>)
-  moshcode <engine> [args…]            open a passthrough session on an engine
+  moshcode agents [engine] [args…]     list engines, or launch one autonomously
+                                       (bypasses/auto-approves native permissions)
+  moshcode start <engine> [args…]      raw engine launch; inject no arguments
+  moshcode <engine> [args…]            raw launch shorthand (backward compatible)
+  moshcode <tool> [args…]              transparently invoke ugig or coinpay
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
-  moshcode install <engine>            install an agentic-coding engine
-  moshcode upgrade [self|<engine>…]    update moshcode + all installed engines
+  moshcode install <engine|tool>       install a coding engine or workflow tool
+  moshcode upgrade [target…]           update moshcode + installed engines/tools
                                        (no args = everything; name targets to
-                                       narrow, e.g. \`upgrade claude\`)
+                                       narrow, e.g. \`upgrade ugig\`)
   moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
                                        prd/NNNN-slug.md and hand it to an engine to
                                        author; no arg lists existing PRDs
   moshcode pwd                         show the current dir + git repo/branch/origin
-  moshcode agents                      list engines + install status
-  moshcode engines                     (alias of agents)
+  moshcode engines                     list engines + install status
+  moshcode tools                       list workflow tools + install status
   moshcode commands                    list built-in moshscript commands
   moshcode help                        this
 
 engines (moshcode is a wrapper — it installs/drives these):
 ${engineList()}
+
+warning: agent mode intentionally weakens native safety checks. use it only in
+isolated or trusted workspaces. use \`moshcode start <engine>\` for native defaults.
+
+tools (native CLI passthrough; each tool owns its auth and output):
+${toolList()}
 
 moshscript looks like this:
 ${DEFAULT_SCRIPT}
@@ -93,30 +143,61 @@ async function main() {
   // No args → open the interactive TUI shell (/agents <engine>, etc.).
   if (cmd === undefined) return tui();
 
-  if (cmd === "engines" || cmd === "agents") {
-    for (const e of engineStatus()) {
-      console.log(`${e.installed ? "●" : "○"} ${e.key.padEnd(10)} ${e.desc}`);
+  if (cmd === "engines") {
+    printEngineStatus();
+    return;
+  }
+  if (cmd === "agents") {
+    if (!rest.length) { printEngineStatus(); return; }
+    const resolved = resolveEngine(rest[0]);
+    if (!resolved) {
+      console.error(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`);
+      process.exitCode = 1;
+      return;
+    }
+    const [key, engine] = resolved;
+    return launchEngine(key, engine, rest.slice(1), { agentMode: true });
+  }
+  if (cmd === "start") {
+    if (!rest.length) {
+      console.error(`usage: moshcode start <engine> [args…]\nengines:\n${engineList()}`);
+      process.exitCode = 1;
+      return;
+    }
+    const resolved = resolveEngine(rest[0]);
+    if (!resolved) {
+      console.error(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`);
+      process.exitCode = 1;
+      return;
+    }
+    const [key, engine] = resolved;
+    return launchEngine(key, engine, rest.slice(1));
+  }
+  if (cmd === "tools") {
+    for (const tool of toolStatus()) {
+      console.log(`${tool.installed ? "●" : "○"} ${tool.key.padEnd(10)} ${tool.desc}`);
     }
     return;
   }
   if (cmd === "install") {
-    const engine = rest.find((a) => !a.startsWith("-"));
-    if (!engine || !ENGINES[engine]) {
-      console.error(`usage: moshcode install <engine>\nengines:\n${engineList()}`);
-      process.exit(engine ? 1 : 0);
+    const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
+    const entry = target && (ENGINES[target] || TOOLS[target]);
+    if (!target || !entry) {
+      console.error(`usage: moshcode install <engine|tool>\nengines:\n${engineList()}\ntools:\n${toolList()}`);
+      process.exit(target ? 1 : 0);
     }
-    const { install, desc, bin } = ENGINES[engine];
-    console.log(`🎸 installing ${engine} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
+    const { install, desc, bin } = entry;
+    console.log(`🎸 installing ${target} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
     const child = spawn(install.cmd, install.args, { stdio: "inherit" });
     child.on("error", (e) => { console.error(`install failed: ${e.message}`); process.exit(1); });
     child.on("exit", (code) => {
-      if (code === 0) console.log(`\n✓ ${engine} installed. run it with \`${bin}\`. 🤘`);
-      backToPit(`install ${engine}`, code);
+      if (code === 0) console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
+      backToPit(`install ${target}`, code);
     });
     return;
   }
   if (cmd === "upgrade" || cmd === "update") {
-    console.log("🎸 moshcode upgrade — updating moshcode + installed engines 🤘");
+    console.log("🎸 moshcode upgrade — updating moshcode + installed engines/tools 🤘");
     const results = await runUpgrade(rest);
     const failed = results.filter((r) => !r.ok).length;
     return backToPit("upgrade", failed ? 1 : 0);
@@ -207,17 +288,24 @@ async function main() {
   const resolved = resolveEngine(cmd);
   if (resolved) {
     const [key, engine] = resolved;
-    const r = await openSession(engine, rest);
+    return launchEngine(key, engine, rest);
+  }
+
+  // `moshcode <tool> [args…]` is deliberately silent: the native CLI owns
+  // stdout/stderr so JSON and other pipelines remain byte-for-byte usable.
+  const resolvedTool = resolveTool(cmd);
+  if (resolvedTool) {
+    const [key, tool] = resolvedTool;
+    const r = await openTool(tool, rest);
     if (!r.ok) {
       console.error(r.error?.code === "ENOENT"
-        ? `${key} isn't installed (\`${engine.bin}\`). run: moshcode install ${key}`
+        ? `${key} isn't installed (\`${tool.bin}\`). run: moshcode install ${key}`
         : `launch failed: ${r.error?.message || r.error}`);
-      // Couldn't even launch — drop into the pit (so you can /install it) when
-      // interactive; otherwise exit non-zero for scripts/CI.
-      if (!process.stdin.isTTY) process.exit(1);
-      return tui();
+      process.exitCode = 1;
+      return;
     }
-    return backToPit(key, r.code, r.signal);
+    propagateExit(r.code, r.signal);
+    return;
   }
 
   help();

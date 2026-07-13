@@ -1,10 +1,11 @@
-// `moshcode upgrade` — update everything that has a newer version: moshcode
-// itself and every installed coding engine. Conductor pattern: we just re-run
-// each tool's own updater/installer (they fetch latest), never vendor them.
+// `moshcode upgrade` — update everything that has a newer version: moshcode,
+// installed coding engines, and installed workflow tools. Conductor pattern:
+// re-run each target's own updater/installer (they fetch latest), never vendor.
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 import { ENGINES, engineStatus, resolveEngine, upgradeSpec, runCmd } from "./engines.mjs";
+import { TOOLS, resolveTool, toolStatus, toolUpgradeSpec } from "./tools.mjs";
 
 // Self-upgrade re-runs the moshcode installer's `update` path. Defaults to the
 // GitHub-hosted install.sh (always live); override with MOSHCODE_INSTALL_URL.
@@ -34,40 +35,67 @@ function selfSpec() {
 
 /**
  * Work out an upgrade plan from optional targets:
- *   []/["all"]            → moshcode + every *installed* engine
+ *   []/["all"]            → moshcode + every installed engine and tool
  *   ["self"|"moshcode"]   → moshcode only
  *   ["engines"]           → all installed engines (no self)
- *   ["claude", …]         → those engines (installs the ones not present yet)
- * Returns { self, items:[{key,label,spec,installed}], unknown:[] }.
+ *   ["tools"]             → all installed tools (no self)
+ *   ["claude"|"ugig", …] → named targets (install if not present yet)
+ * Returns { self, items:[{key,label,kind,spec,installed}], unknown:[] }.
  */
 export function planUpgrade(targets = []) {
   const t = targets.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
-  const status = engineStatus();
-  const byKey = Object.fromEntries(status.map((e) => [e.key, e]));
+  const engines = engineStatus();
+  const tools = toolStatus();
+  const engineByKey = Object.fromEntries(engines.map((entry) => [entry.key, entry]));
+  const toolByKey = Object.fromEntries(tools.map((entry) => [entry.key, entry]));
 
   const wantsAll = t.length === 0 || t.includes("all");
   const wantsSelf = wantsAll || t.includes("self") || t.includes("moshcode");
   const wantsEngines = wantsAll || t.includes("engines");
+  const wantsTools = wantsAll || t.includes("tools");
 
   const items = [];
   const unknown = [];
   const seen = new Set();
 
-  const add = (key) => {
-    if (seen.has(key)) return;
-    seen.add(key);
-    const st = byKey[key];
-    items.push({ key, label: key, spec: upgradeSpec(ENGINES[key]), installed: st.installed });
+  const addEngine = (key) => {
+    const id = `engine:${key}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    items.push({
+      key,
+      label: key,
+      kind: "engine",
+      spec: upgradeSpec(ENGINES[key]),
+      installed: engineByKey[key].installed,
+    });
+  };
+  const addTool = (key) => {
+    const id = `tool:${key}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    items.push({
+      key,
+      label: key,
+      kind: "tool",
+      spec: toolUpgradeSpec(TOOLS[key]),
+      installed: toolByKey[key].installed,
+    });
   };
 
   if (wantsEngines) {
-    for (const e of status) if (e.installed) add(e.key);
+    for (const engine of engines) if (engine.installed) addEngine(engine.key);
   }
-  // Explicitly-named engines/aliases (upgrade even if not among "installed").
+  if (wantsTools) {
+    for (const tool of tools) if (tool.installed) addTool(tool.key);
+  }
+  // Explicit names/engine aliases upgrade even when not currently installed.
   for (const tok of t) {
-    if (["all", "self", "moshcode", "engines"].includes(tok)) continue;
-    const resolved = resolveEngine(tok);
-    if (resolved) add(resolved[0]);
+    if (["all", "self", "moshcode", "engines", "tools"].includes(tok)) continue;
+    const engine = resolveEngine(tok);
+    const tool = resolveTool(tok);
+    if (engine) addEngine(engine[0]);
+    else if (tool) addTool(tool[0]);
     else unknown.push(tok);
   }
 
@@ -84,10 +112,10 @@ export async function runUpgrade(targets = [], io = {}) {
   const rule = io.rule || (() => console.log("─".repeat(48)));
   const { self, items, unknown } = planUpgrade(targets);
 
-  for (const u of unknown) log(`? skipping unknown engine "${u}"`);
+  for (const u of unknown) log(`? skipping unknown upgrade target "${u}"`);
 
   if (!self && items.length === 0) {
-    if (!unknown.length) log("nothing to upgrade — no engines installed. install one: moshcode install claude");
+    if (!unknown.length) log("nothing to upgrade — no matching engines or tools are installed.");
     return [];
   }
 

@@ -2,7 +2,8 @@
 
 A metal wrapper CLI for agentic coding. moshcode doesn't reinvent the agent — it
 **installs and drives** existing ones (opencode, Claude Code, codex) and adds a
-tiny scripting toolkit (moshscript) on top.
+tiny scripting toolkit (moshscript) on top. It also conducts adjacent native
+workflow tools for finding work and getting paid.
 
 ## Install
 
@@ -22,17 +23,79 @@ moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 ```
 
-### Upgrade everything
+### Autonomous agents versus raw starts
+
+`agents` intentionally starts an autonomous session by injecting each engine's
+native bypass or auto-approval mode. Use this only in an isolated container, VM,
+or workspace you trust:
 
 ```sh
-moshcode upgrade            # update moshcode + every installed engine
+moshcode agents claude      # claude --dangerously-skip-permissions
+moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox
+moshcode agents gemini      # gemini --approval-mode=yolo
+moshcode agents aider       # aider --yes-always
+moshcode agents opencode    # opencode --auto
+```
+
+`start` is the explicit raw path. It injects nothing, so the native engine keeps
+its normal permission model and receives only your arguments:
+
+```sh
+moshcode start claude
+moshcode start codex --sandbox workspace-write
+```
+
+Bare engine commands remain raw for backward compatibility, so `moshcode claude`
+is shorthand for `moshcode start claude`. In the TUI, use `/agents <engine>` for
+autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
+`/agents` without an engine still lists engines and their install status.
+
+The modes are not identical across providers. In particular, OpenCode `--auto`
+auto-approves permission requests but continues to enforce explicit deny rules.
+
+## Workflow tools: UGig + CoinPay
+
+UGig and CoinPay remain independent native CLIs with their own authentication,
+configuration, command trees, output formats, and release cycles. MoshCode
+installs them and passes control through without reimplementing their APIs.
+
+```sh
+moshcode tools                    # list tools and native install status
+moshcode install ugig             # npm install -g ugig
+moshcode install coinpay          # npm install -g @profullstack/coinpay
+
+moshcode ugig --json gigs list    # arguments/output go straight to ugig
+moshcode coinpay wallet balance   # arguments/output go straight to coinpay
+```
+
+Top-level passthrough preserves stdin, stdout, stderr, environment variables,
+the current directory, and the native exit result. That keeps JSON pipelines
+usable:
+
+```sh
+moshcode ugig --json gigs list | jq .
+```
+
+Run `moshcode ugig --help` or `moshcode coinpay --help` for each tool's current
+native setup and authentication commands. CoinPay currently requires Node.js
+20+, while MoshCode itself remains compatible with Node.js 18+.
+
+In the TUI, use `/tools`, `/ugig [args…]`, or `/coinpay [args…]`. The native CLI
+owns the terminal until it exits, then MoshCode returns to the pit.
+
+## Upgrade everything
+
+```sh
+moshcode upgrade            # moshcode + every installed engine and tool
 moshcode upgrade claude     # just one engine (name any; alias ok)
+moshcode upgrade ugig       # just one workflow tool
+moshcode upgrade tools      # all installed workflow tools, no self/engines
 moshcode upgrade self       # just moshcode itself
 ```
 
-Each engine is updated with its own native updater when it has one (e.g.
+Each target is updated with its own native updater when it has one (e.g.
 `opencode upgrade`, `aider --upgrade`) and re-run through its installer
-otherwise — moshcode never vendors them. In the TUI: `/upgrade [name…]`.
+otherwise — MoshCode never vendors it. In the TUI: `/upgrade [name…]`.
 
 ## PRD — plan before you mosh
 

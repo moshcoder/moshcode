@@ -10,12 +10,14 @@ export const ENGINES = {
   opencode: {
     desc: "opencode — the open-source coding agent (SST/anomalyco)",
     bin: "opencode",
+    agentArgs: ["--auto"],
     install: { cmd: "bash", args: ["-c", "curl -fsSL https://opencode.ai/install | bash"] },
     upgrade: { cmd: "opencode", args: ["upgrade"] },
   },
   claude: {
     desc: "Claude Code — Anthropic's agentic CLI",
     bin: "claude",
+    agentArgs: ["--dangerously-skip-permissions"],
     install: { cmd: "npm", args: ["install", "-g", "@anthropic-ai/claude-code"] },
     // Claude Code authenticates via its own stored login (~/.claude). An
     // inherited ANTHROPIC_API_KEY hijacks that subscription auth — and if the
@@ -32,16 +34,19 @@ export const ENGINES = {
   codex: {
     desc: "Codex — OpenAI's coding CLI",
     bin: "codex",
+    agentArgs: ["--dangerously-bypass-approvals-and-sandbox"],
     install: { cmd: "npm", args: ["install", "-g", "@openai/codex"] },
   },
   gemini: {
     desc: "Gemini CLI — Google's agentic CLI",
     bin: "gemini",
+    agentArgs: ["--approval-mode=yolo"],
     install: { cmd: "npm", args: ["install", "-g", "@google/gemini-cli"] },
   },
   aider: {
     desc: "Aider — pair-programming in your terminal",
     bin: "aider",
+    agentArgs: ["--yes-always"],
     install: { cmd: "bash", args: ["-c", "curl -LsSf https://aider.chat/install.sh | sh"] },
     upgrade: { cmd: "aider", args: ["--upgrade"] },
   },
@@ -87,6 +92,11 @@ export function engineList() {
   return Object.entries(ENGINES).map(([k, v]) => `  ${k.padEnd(10)} ${v.desc}`).join("\n");
 }
 
+/** Prepend an engine's autonomous-mode flags to caller-supplied arguments. */
+export function agentLaunchArgs(engine, args = []) {
+  return [...(engine.agentArgs || []), ...args];
+}
+
 /**
  * Spawn an arbitrary command with stdio inherited (so its own progress/prompts
  * own the terminal). Resolves { ok, code, signal } on exit. Used by install +
@@ -103,21 +113,25 @@ export function runCmd(cmd, args = []) {
 }
 
 /**
- * Open a session on an engine: spawn its CLI with stdio inherited so the child
- * fully owns the terminal (its own TUI, prompts, colors — full stdin/stdout/
- * stderr passthrough). Resolves { ok, code } when it exits.
+ * Hand the current process streams to an external CLI. Arguments, cwd, and the
+ * environment are inherited unchanged unless that target explicitly asks for
+ * environment keys to be stripped (Claude uses this to avoid nested-session
+ * markers). Resolves { ok, code, signal } when the child exits.
  */
-export function openSession(engine, args = []) {
+export function openPassthrough(target, args = []) {
   return new Promise((resolve) => {
     let env = process.env;
-    if (engine.stripEnv?.length) {
+    if (target.stripEnv?.length) {
       env = { ...process.env };
-      for (const k of engine.stripEnv) delete env[k];
+      for (const k of target.stripEnv) delete env[k];
     }
     let child;
-    try { child = spawn(engine.bin, args, { stdio: "inherit", env }); }
+    try { child = spawn(target.bin, args, { stdio: "inherit", env }); }
     catch (e) { resolve({ ok: false, error: e }); return; }
     child.on("error", (e) => resolve({ ok: false, error: e }));
     child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
   });
 }
+
+// Backwards-compatible engine-oriented name used by the existing CLI/TUI.
+export const openSession = openPassthrough;

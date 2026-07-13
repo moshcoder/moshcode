@@ -7,7 +7,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ENGINES, resolveEngine, engineStatus, openSession } from "./engines.mjs";
+import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
+import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
@@ -57,11 +58,56 @@ const mkrl = () => {
 };
 const ask = (rl) => new Promise((res) => rl.question(PROMPT(), res));
 
+// Small shell-like tokenizer for TUI commands. It keeps quoted values such as
+// `/coinpay card pay --description "Fix the build"` as one native CLI argument
+// without invoking a shell or performing expansions.
+export function splitCommandLine(line) {
+  const parts = [];
+  let value = "", quote = null, escaped = false, started = false;
+  for (const char of String(line)) {
+    if (escaped) {
+      value += char;
+      escaped = false;
+      started = true;
+    } else if (char === "\\" && quote !== "'") {
+      escaped = true;
+      started = true;
+    } else if (quote) {
+      if (char === quote) quote = null;
+      else value += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) {
+        parts.push(value);
+        value = "";
+        started = false;
+      }
+    } else {
+      value += char;
+      started = true;
+    }
+  }
+  if (escaped) throw new Error("trailing escape");
+  if (quote) throw new Error(`unterminated ${quote} quote`);
+  if (started) parts.push(value);
+  return parts;
+}
+
 function printEngines() {
-  console.log(bone("  engines") + ash("  — open one with ") + acid("/agents <name>"));
+  console.log(bone("  engines") + ash("  — autonomous ") + acid("/agents <name>") + ash(" · raw ") + acid("/start <name>"));
   for (const e of engineStatus()) {
     const dot = e.installed ? acid("●") : ash("○");
     console.log(`   ${dot} ${bone(e.key.padEnd(9))} ${ash(e.installed ? "installed" : "not installed — /install " + e.key)}`);
+  }
+}
+
+function printTools() {
+  console.log(bone("  tools") + ash("    — run one with ") + acid("/ugig") + ash(" or ") + acid("/coinpay"));
+  for (const tool of toolStatus()) {
+    const dot = tool.installed ? acid("●") : ash("○");
+    console.log(`   ${dot} ${bone(tool.key.padEnd(9))} ${ash(tool.installed ? "installed" : "not installed — /install " + tool.key)}`);
   }
 }
 
@@ -69,16 +115,20 @@ function printHelp() {
   console.log([
     bone("  commands"),
     `   ${acid("/agents")}            list coding engines`,
-    `   ${acid("/agents <name>")}     open a session (claude · codex · gemini · aider · opencode)`,
-    `   ${acid("/install <name>")}    install an engine`,
-    `   ${acid("/upgrade [name…]")}   update moshcode + all installed engines (or just the named ones)`,
+    `   ${acid("/agents <name>")}     autonomous launch; bypass/auto-approve native permissions`,
+    `   ${acid("/start <name>")}      raw launch; inject no engine arguments`,
+    `   ${acid("/tools")}             list workflow tools (ugig · coinpay)`,
+    `   ${acid("/ugig [args…]")}      hand off to the native UGig CLI`,
+    `   ${acid("/coinpay [args…]")}   hand off to the native CoinPay CLI`,
+    `   ${acid("/install <name>")}    install an engine or workflow tool`,
+    `   ${acid("/upgrade [name…]")}   update moshcode + installed engines/tools (or named targets)`,
     `   ${acid("/pwd")}                show the current dir + git repo/branch/origin`,
     `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
     "",
-    ash("  shortcut: type an engine name by itself, e.g. ") + acid("claude"),
+    ash("  raw shortcuts: type an engine or tool name by itself, e.g. ") + acid("claude") + ash(" or ") + acid("ugig"),
   ].join("\n"));
 }
 
@@ -95,17 +145,20 @@ function printPwd() {
 }
 
 async function upgradeAll(targets) {
-  console.log(info(`upgrading ${bone("moshcode")} + installed engines — hand-off to each tool's updater…`));
+  console.log(info(`upgrading ${bone("moshcode")} + installed engines/tools — hand-off to each updater…`));
   await runUpgrade(targets, { log: (s) => console.log(s), rule: () => console.log(hr()) });
 }
 
-async function openEngine(key, engine, args) {
+async function openEngine(key, engine, args, { agentMode = false } = {}) {
   if (!engine.installed && !args.length) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
   }
-  console.log(info(`opening ${bone(key)} — hand-off to its CLI, exit it to come back…`));
+  if (agentMode) {
+    console.log(err(`agent mode: ${key} ${engine.agentArgs.join(" ")} — native approvals/permissions are bypassed or auto-approved.`));
+  }
+  console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());
-  const r = await openSession(engine, args);
+  const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args);
   console.log(hr());
   if (!r.ok) {
     console.log(r.error?.code === "ENOENT"
@@ -116,13 +169,30 @@ async function openEngine(key, engine, args) {
   }
 }
 
-function installEngine(key) {
+async function openWorkflowTool(key, tool, args) {
+  if (!tool.installed) {
+    console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
+  }
+  console.log(info(`opening ${bone(key)} — native CLI owns the terminal until it exits…`));
+  console.log(hr());
+  const result = await openTool(tool, args);
+  console.log(hr());
+  if (!result.ok) {
+    console.log(result.error?.code === "ENOENT"
+      ? err(`${key} isn't on PATH (\`${tool.bin}\`). install it with /install ${key}`)
+      : err(`couldn't launch ${key}: ${result.error?.message || result.error}`));
+  } else {
+    console.log(info(`${key} exited${result.code != null ? ` (code ${result.code})` : result.signal ? ` (${result.signal})` : ""}. back in the pit.`));
+  }
+}
+
+function installTarget(key) {
   return new Promise((resolve) => {
-    const engine = ENGINES[key];
-    if (!engine) { console.log(err(`unknown engine "${key}"`)); return resolve(); }
-    console.log(info(`installing ${key}: ${engine.install.cmd} ${engine.install.args.join(" ")}`));
+    const target = ENGINES[key] || TOOLS[key];
+    if (!target) { console.log(err(`unknown engine or tool "${key}"`)); return resolve(); }
+    console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
     console.log(hr());
-    const child = spawn(engine.install.cmd, engine.install.args, { stdio: "inherit" });
+    const child = spawn(target.install.cmd, target.install.args, { stdio: "inherit" });
     child.on("error", (e) => { console.log(hr()); console.log(err(`install failed: ${e.message}`)); resolve(); });
     child.on("exit", (code) => { console.log(hr()); console.log(code === 0 ? ok(`${key} installed. 🤘`) : err(`install exited ${code}`)); resolve(); });
   });
@@ -162,6 +232,8 @@ export async function tui() {
   console.log(banner());
   console.log();
   printEngines();
+  console.log();
+  printTools();
   console.log("\n" + ash("  /help for commands · /quit to leave") + "\n");
 
   let rl = mkrl();
@@ -173,7 +245,10 @@ export async function tui() {
     if (!line) continue;
     saveHistory(); // readline just recorded this line into the shared history
 
-    const [raw, ...rest] = line.split(/\s+/);
+    let parts;
+    try { parts = splitCommandLine(line); }
+    catch (error) { console.log(err(`can't parse command: ${error.message}`)); continue; }
+    const [raw, ...rest] = parts;
     const cmd = raw.toLowerCase().replace(/^\//, "");
 
     if (cmd === "quit" || cmd === "exit" || cmd === "q") break;
@@ -185,9 +260,9 @@ export async function tui() {
       continue;
     }
     if (cmd === "install") {
-      if (!rest[0]) { console.log(err("usage: /install <engine>")); continue; }
+      if (!rest[0]) { console.log(err("usage: /install <engine|tool>")); continue; }
       rl.close();
-      await installEngine(rest[0].toLowerCase());
+      await installTarget(rest[0].toLowerCase());
       rl = mkrl();
       continue;
     }
@@ -220,7 +295,32 @@ export async function tui() {
       if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
       const [key, engine] = resolved;
       rl.close();
+      await openEngine(
+        key,
+        { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed },
+        rest.slice(1),
+        { agentMode: true },
+      );
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "start") {
+      if (!rest[0]) { console.log(err("usage: /start <engine> [args…]")); continue; }
+      const resolved = resolveEngine(rest[0]);
+      if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
+      const [key, engine] = resolved;
+      rl.close();
       await openEngine(key, { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed }, rest.slice(1));
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "tools") {
+      if (!rest[0]) { printTools(); continue; }
+      const resolved = resolveTool(rest[0]);
+      if (!resolved) { console.log(err(`unknown tool "${rest[0]}". try: ${Object.keys(TOOLS).join(", ")}`)); continue; }
+      const [key, tool] = resolved;
+      rl.close();
+      await openWorkflowTool(key, { ...tool, installed: toolStatus().find((entry) => entry.key === key)?.installed }, rest.slice(1));
       rl = mkrl();
       continue;
     }
@@ -230,6 +330,15 @@ export async function tui() {
       const [key, engine] = resolved;
       rl.close();
       await openEngine(key, { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed }, rest);
+      rl = mkrl();
+      continue;
+    }
+    // Bare workflow-tool name (including `/ugig` and `/coinpay`) → run it.
+    const resolvedTool = resolveTool(cmd);
+    if (resolvedTool) {
+      const [key, tool] = resolvedTool;
+      rl.close();
+      await openWorkflowTool(key, { ...tool, installed: toolStatus().find((entry) => entry.key === key)?.installed }, rest);
       rl = mkrl();
       continue;
     }

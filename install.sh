@@ -120,7 +120,9 @@ run_install() {
     ensure_path
     printf '\n%sdone.%s run:\n' "$ACID" "$RESET"
     printf '  moshcode                 # open the TUI shell\n'
-    printf '  moshcode spec init       # spec-driven dev, saved to your repo (OpenSpec)\n'
+    printf '  moshcode start claude    # raw engine session (use agents for autonomous)\n'
+    printf '  moshcode prd "your idea" # plan with a numbered OpenPRD\n'
+    printf '  moshcode tools           # install/run UGig and CoinPay CLIs\n'
     printf '  moshcode help\n\n'
     unset _ref
 }
