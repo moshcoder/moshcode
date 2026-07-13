@@ -133,6 +133,13 @@ function printHelp() {
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
     "",
+    bone("  moshscript") + ash("  — secretly all JS is legal"),
+    ash("   .mosh files are real JavaScript with the command vocabulary injected."),
+    ash("   local verbs: ") + acid("code() mosh() notify() ask() say() sleep() stop() repeat()"),
+    ash("   CLI verbs:   ") + acid("agents() start() install() upgrade() mcp() skill() prd()"),
+    ash("               ") + acid("ugig() coinpay() c0mpute() pwd() run()"),
+    ash("   shebang:     ") + acid("#!/usr/bin/env moshscript") + ash("  (chmod +x to self-run)"),
+    "",
     ash("  raw shortcuts: type an engine or tool name by itself, e.g. ") + acid("claude") + ash(" or ") + acid("ugig"),
   ].join("\n"));
 }

@@ -2,7 +2,7 @@
 openprd: "0.2"
 id: "0004"
 title: moshscript — a scriptable /run for driving all of moshcode programmatically
-status: Draft
+status: Accepted
 authors:
   - anthony@chovy.com
 created: 2026-07-13

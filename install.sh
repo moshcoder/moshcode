@@ -32,6 +32,7 @@ INSTALL_URL="https://moshcoding.com/install.sh"
 MOSHCODE_HOME="${MOSHCODE_HOME:-$HOME/.moshcode}"
 MOSHCODE_BIN="${MOSHCODE_BIN:-$HOME/.local/bin}"
 WRAPPER="$MOSHCODE_BIN/moshcode"
+SCRIPT_WRAPPER="$MOSHCODE_BIN/moshscript"
 
 # ---- pretty output (acid-lime, matching the CLI) --------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -97,6 +98,16 @@ exec node "$MOSHCODE_HOME/bin/moshcode.mjs" "\$@"
 WRAP_EOF
     chmod +x "$WRAPPER"
     ok "wrapper at $WRAPPER"
+
+    # moshscript — thin alias for `moshcode run`, so .mosh files can use
+    # #!/usr/bin/env moshscript as a shebang and run like shell scripts.
+    cat > "$SCRIPT_WRAPPER" <<SCRIPT_EOF
+#!/bin/sh
+# moshscript wrapper — installed by $INSTALL_URL. Re-run the installer to update.
+exec node "$MOSHCODE_HOME/bin/moshcode.mjs" run "\$@"
+SCRIPT_EOF
+    chmod +x "$SCRIPT_WRAPPER"
+    ok "wrapper at $SCRIPT_WRAPPER"
 }
 
 ensure_path() {
@@ -130,8 +141,9 @@ run_install() {
 run_remove() {
     info "removing moshcode"
     rm -f "$WRAPPER" 2>/dev/null || true
+    rm -f "$SCRIPT_WRAPPER" 2>/dev/null || true
     rm -rf "$MOSHCODE_HOME" 2>/dev/null || true
-    ok "removed $WRAPPER and $MOSHCODE_HOME. 🤘"
+    ok "removed $WRAPPER, $SCRIPT_WRAPPER, and $MOSHCODE_HOME. 🤘"
 }
 
 CMD="${1:-install}"
