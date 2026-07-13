@@ -148,12 +148,13 @@ ${local.map((c) => `  ${(`${c.name}()`).padEnd(14)} ${c.summary}`).join("\n")}
 CLI commands (each shells out to \`moshcode <name> ...args\`):
 ${cli.map((c) => `  ${(`${c.name}()`).padEnd(14)} ${c.summary}`).join("\n")}
 
-human-in-the-loop:
-  notify(msg)    fire-and-forget ping to moshcoding.com + webhook
-  ask(prompt)    blocking gate — waits for human reply at moshcode.sh
+human-in-the-loop + AI (via app.moshcode.sh):
+  notify(msg)          ping the operator across their channels + return the link
+  ask(prompt)          blocking gate — waits for the human's reply at app.moshcode.sh
+  ai(prompt, {engine}) run a coding engine headlessly and return its output
 
-env: MOSHCODE_API (default https://moshcoding.com), MOSHCODE_WEBHOOK_URL,
-     MOSHCODE_WEBHOOK_SECRET, MOSHCODE_PLAYLIST
+env: MOSHCODE_API (default https://app.moshcode.sh), MOSHCODE_API_KEY (from the
+     app's Settings → API keys), MOSHCODE_WEBHOOK_SECRET, MOSHCODE_PLAYLIST
 `);
 }
 
