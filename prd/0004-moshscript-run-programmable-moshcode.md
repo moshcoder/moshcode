@@ -185,6 +185,28 @@ programmatically."* Two things have to become true that aren't today:
   the caller continues. This gives moshscript an include/compose system for free —
   developers factor setup/teardown into reusable `.mosh` files. (Recursion/cycle
   protection is a developer concern for v1; `--max` does not bound include depth.)
+- R17 [P1] **Shortcuts** — higher-level sugar verbs composed from the CLI. Because
+  moshscript already batch-scripts moshcode, calling an engine is *technically*
+  possible today via `agents("claude")`; shortcuts make the common moves ergonomic
+  and, crucially, *return values scripts can use*. The flagship shortcut is
+  **`ai(prompt, opts?)`** — run a coding engine on a prompt and RETURN its output
+  as a string, so a script can branch on what the AI said:
+  ```js
+  const summary = ai("summarize the git diff in one line");
+  notify(summary);
+  ```
+  - `ai(prompt)` MUST run the default/available engine (claude, else codex /
+    opencode / gemini / aider) headlessly and return stdout as a string.
+    `ai(prompt, { engine: "codex" })` MUST target a specific engine.
+  - This requires a NON-interactive capture mode distinct from `agents()`/`start()`
+    (which hand over the TTY with inherited stdio and return no value): `ai()`
+    spawns the engine in its headless/print mode with stdout **captured** (piped,
+    not inherited) and returns it. `agents()`/`start()` are unchanged.
+  - `ai()` MUST honor `--dry-run` (narrate the engine + prompt, return "" ) and be
+    bounded like other verbs. Engine headless invocation (e.g. `claude -p`,
+    `codex exec`) MUST be defined per engine in a pure, tested mapping (cf. R12).
+  - Shortcuts are a namespace to grow (e.g. `ask()` is itself a human shortcut);
+    `ai()` is the first. Each shortcut MUST be documented in `moshcode commands`.
 
 ## UX Notes
 
