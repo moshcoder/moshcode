@@ -25,7 +25,7 @@ export function banner() {
     acid("  ╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝"),
     "",
     "  " + bone("moshcode") + ash("  ·  a wall of distortion for your coding agents"),
-    "  " + acid("https://moshcoding.com"),
+    "  " + acid("https://moshcode.sh"),
   ].join("\n");
 }
 
