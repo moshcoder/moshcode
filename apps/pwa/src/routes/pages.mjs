@@ -85,10 +85,14 @@ pagesRouter.get("/app", requireAuth, async (req, res) => {
       </div>
       <div class="card">
         <div class="card-head"><span class="h">Channels</span><a class="pill" href="/settings">manage</a></div>
-        <div class="card-body dim mono" style="font-size:.8rem">where your pings land — email, SMS, Slack, Telegram, push. Configure in <a class="acid" href="/settings">settings</a>.</div>
+        <div class="card-body">
+          <p class="dim mono" style="font-size:.8rem;margin-top:0">where your pings land — email, Slack, Telegram, SMS, push. Configure in <a class="acid" href="/settings">settings</a>.</p>
+          <button class="btn block" id="push-btn" data-vapid="${esc(config.push.vapidPublic)}" style="margin-top:6px">🔔 Enable push on this device</button>
+        </div>
       </div>
     </div>
-  </div></main>${footer}`;
+  </div></main>${footer}
+  <script src="/push.js"></script>`;
   res.type("html").send(page({ title: "moshcode ▸ approvals", body }));
 });
 
@@ -173,4 +177,15 @@ pagesRouter.post("/settings/apikeys", requireAuth, async (req, res) => {
 pagesRouter.post("/settings/apikeys/:id/delete", requireAuth, async (req, res) => {
   await revokeApiKey(req.user.id, req.params.id);
   res.redirect("/settings");
+});
+
+// web push subscription for this device (session-authed; CSRF via x-csrf-token)
+pagesRouter.post("/push/subscribe", requireAuth, async (req, res) => {
+  const { endpoint, p256dh, auth } = req.body || {};
+  if (!endpoint || !p256dh || !auth) return res.status(400).json({ error: "bad subscription" });
+  const existing = await get(`SELECT id FROM push_subscriptions WHERE endpoint = ?`, [endpoint]);
+  if (existing) await run(`UPDATE push_subscriptions SET user_id=?, p256dh=?, auth=? WHERE endpoint=?`, [req.user.id, p256dh, auth, endpoint]);
+  else await run(`INSERT INTO push_subscriptions (id,user_id,endpoint,p256dh,auth,created_at) VALUES (?,?,?,?,?,?)`,
+    [id(), req.user.id, endpoint, p256dh, auth, Date.now()]);
+  res.json({ ok: true });
 });

@@ -12,6 +12,28 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+// approval push notifications
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) {}
+  e.waitUntil(self.registration.showNotification(d.title || "moshcode 🤘", {
+    body: d.body || "You have an approval waiting.",
+    icon: "/icon.svg",
+    badge: "/icon.svg",
+    data: { url: d.url || "/app" },
+    tag: "moshcode-approval",
+  }));
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "/app";
+  e.waitUntil(clients.matchAll({ type: "window" }).then((cs) => {
+    for (const c of cs) if ("focus" in c) { c.navigate(url); return c.focus(); }
+    return clients.openWindow(url);
+  }));
+});
+
 self.addEventListener("fetch", (e) => {
   const { request } = e;
   if (request.method !== "GET") return; // never cache POSTs / API writes

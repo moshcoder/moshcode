@@ -207,6 +207,22 @@ programmatically."* Two things have to become true that aren't today:
     `codex exec`) MUST be defined per engine in a pure, tested mapping (cf. R12).
   - Shortcuts are a namespace to grow (e.g. `ask()` is itself a human shortcut);
     `ai()` is the first. Each shortcut MUST be documented in `moshcode commands`.
+  - **`ai()` composes with `ask()` as the escalation gate.** The intended pattern
+    is an autonomous loop that uses `ai()` to do the work AND to decide when a
+    human is actually needed, then calls `ask()` only at that point — so the
+    operator is pinged (slack/email/sms → a link with the full context + the
+    question) exactly when their judgment matters, not on every iteration:
+    ```js
+    while (alive) {
+      const plan = ai("given the failing test, propose a fix. If you're unsure or it's risky, reply exactly NEEDS_HUMAN.");
+      const go = plan.includes("NEEDS_HUMAN") ? await ask(`unsure — ${plan}`) : plan;
+      if (go) ai(`apply this: ${go}`);
+      repeat();
+    }
+    ```
+    This is the through-line for the approvals web app (app.moshcode.sh): its whole
+    job is to render that context + question at the link and route the human's
+    reply back into the waiting `ask()`.
 
 ## UX Notes
 

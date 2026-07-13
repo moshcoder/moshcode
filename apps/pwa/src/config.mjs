@@ -45,6 +45,13 @@ export const config = {
     apiKey: process.env.RESEND_API_KEY || "",
     from: process.env.RESEND_FROM || "moshcode <notify@moshcoding.com>",
   },
+  push: {
+    vapidPublic: process.env.VAPID_PUBLIC || "",
+    vapidPrivate: process.env.VAPID_PRIVATE || "",
+    subject: process.env.VAPID_SUBJECT || "mailto:anthony@profullstack.com",
+  },
+  telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN || "" },
+  slack: { defaultWebhook: process.env.SLACK_WEBHOOK_URL || "" },
   coinpay: {
     apiBase: (process.env.COINPAY_API_BASE || "https://coinpayportal.com").replace(/\/+$/, ""),
     businessId: process.env.COINPAY_BUSINESS_ID || "",
