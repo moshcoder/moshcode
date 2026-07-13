@@ -3,7 +3,7 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import { config } from "../config.mjs";
 import { token } from "../lib/crypto.mjs";
-import { createSession, setCeremony, getCeremony, clearCeremony } from "../lib/session.mjs";
+import { createSession, setCeremony, getCeremony, clearCeremony, takeNext } from "../lib/session.mjs";
 import { userByCoinpay, createUserForCoinpay } from "../lib/users.mjs";
 
 export const coinpayRouter = Router();
@@ -60,7 +60,7 @@ coinpayRouter.get("/auth/coinpay/callback", async (req, res) => {
     let user = await userByCoinpay(sub);
     if (!user) user = await createUserForCoinpay(sub, info.name || info.username);
     await createSession(res, user.id);
-    res.redirect("/app");
+    res.redirect(takeNext(req, res) || "/");
   } catch (e) {
     console.error("coinpay login failed:", e.message);
     res.redirect("/?err=coinpay-failed");

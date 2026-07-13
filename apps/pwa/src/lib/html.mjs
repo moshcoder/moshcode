@@ -102,7 +102,7 @@ ${head}
 
 export function appBar(user, balance) {
   return `<header class="bar"><div class="wrap bar-inner">
-    <a class="brand" href="/app"><span class="mark">M</span>MOSHCODE<span class="app">app</span></a>
+    <a class="brand" href="/"><span class="mark">M</span>MOSHCODE<span class="app">app</span></a>
     <div class="bar-right">
       ${user ? `<span class="bal-chip">◆ <b>${balance.toLocaleString()}</b> cr</span>
       <a class="btn" href="/settings">Settings</a>
@@ -114,6 +114,6 @@ export function appBar(user, balance) {
 
 export const footer = `<footer><div class="wrap foot">
   <div class="brand" style="font-size:.9rem"><span class="mark" style="width:18px;height:18px;font-size:.75rem">M</span>MOSHCODE</div>
-  <div style="display:flex;gap:20px;flex-wrap:wrap"><a href="https://moshcode.sh">moshcode.sh</a><a href="/app">Approvals</a><a href="/settings">Settings</a></div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap"><a href="https://moshcode.sh">moshcode.sh</a><a href="/">Approvals</a><a href="/settings">Settings</a></div>
   <div class="metal">no bugs, only <b>features</b>. 🤘</div>
 </div></footer>`;

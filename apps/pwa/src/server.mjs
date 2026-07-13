@@ -10,6 +10,7 @@ import { passkeyRouter } from "./routes/passkey.mjs";
 import { coinpayRouter } from "./routes/coinpay.mjs";
 import { approvalsRouter } from "./routes/approvals.mjs";
 import { creditsRouter } from "./routes/credits.mjs";
+import { cliRouter } from "./routes/cli.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
 
 const app = express();
@@ -38,10 +39,11 @@ app.use(passkeyRouter);
 app.use(coinpayRouter);
 app.use(approvalsRouter);
 app.use(creditsRouter);
+app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(pagesRouter);     // /app, /settings
 
 app.use((req, res) => res.status(404).type("html").send(
-  `<body style="background:#070806;color:#edf2e4;font-family:monospace;padding:14vh 24px;text-align:center"><h1 style="color:#a6ff1a">404</h1><p>no such page in the pit.</p><a style="color:#a6ff1a" href="/app">back to the pit →</a></body>`));
+  `<body style="background:#070806;color:#edf2e4;font-family:monospace;padding:14vh 24px;text-align:center"><h1 style="color:#a6ff1a">404</h1><p>no such page in the pit.</p><a style="color:#a6ff1a" href="/">back to the pit →</a></body>`));
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {

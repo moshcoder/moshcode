@@ -1,5 +1,5 @@
 /* moshcode PWA service worker — offline app shell (network-first for docs). */
-const CACHE = "moshcode-v1";
+const CACHE = "moshcode-v2";
 const SHELL = ["/", "/icon.svg", "/manifest.webmanifest", "/passkey.js"];
 
 self.addEventListener("install", (e) => {
@@ -20,14 +20,14 @@ self.addEventListener("push", (e) => {
     body: d.body || "You have an approval waiting.",
     icon: "/icon.svg",
     badge: "/icon.svg",
-    data: { url: d.url || "/app" },
+    data: { url: d.url || "/" },
     tag: "moshcode-approval",
   }));
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || "/app";
+  const url = (e.notification.data && e.notification.data.url) || "/";
   e.waitUntil(clients.matchAll({ type: "window" }).then((cs) => {
     for (const c of cs) if ("focus" in c) { c.navigate(url); return c.focus(); }
     return clients.openWindow(url);

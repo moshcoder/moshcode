@@ -45,14 +45,27 @@ export async function sessionMiddleware(req, res, next) {
 }
 
 export function requireAuth(req, res, next) {
-  if (!req.user) return res.redirect("/?next=" + encodeURIComponent(req.originalUrl));
+  if (!req.user) { setNext(res, req.originalUrl); return res.redirect("/"); }
   next();
+}
+
+// Remember where to go after login (safe local paths only), across any auth method.
+export function setNext(res, pathname) {
+  if (typeof pathname === "string" && pathname.startsWith("/") && !pathname.startsWith("//")) {
+    res.cookie("mc_next", sign(pathname), cookieOpts({ maxAge: 1000 * 60 * 10 }));
+  }
+}
+export function takeNext(req, res) {
+  const p = unsign(req.cookies?.mc_next);
+  if (req.cookies?.mc_next) res.clearCookie("mc_next", cookieOpts());
+  return typeof p === "string" && p.startsWith("/") && !p.startsWith("//") ? p : null;
 }
 
 // CSRF guard for unsafe methods on browser (form) routes. API/webhooks are Bearer/HMAC.
 export function csrfGuard(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/")) return next();
+  // machine endpoints are Bearer/HMAC/PKCE-authenticated, not cookie sessions
+  if (req.path.startsWith("/api/") || req.path.startsWith("/webhooks/") || req.path === "/cli/token") return next();
   const sent = req.body?._csrf || req.get("x-csrf-token");
   if (!sent || sent !== req.cookies?.[CSRF]) return res.status(403).send("bad csrf token");
   next();

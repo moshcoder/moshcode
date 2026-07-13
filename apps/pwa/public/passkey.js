@@ -24,7 +24,7 @@
     var att = await SimpleWebAuthnBrowser.startRegistration({ optionsJSON: opts });
     var r = await post("/auth/passkey/register/verify", att);
     var out = await r.json();
-    if (out.ok) location.href = out.redirect || "/app";
+    if (out.ok) location.href = out.redirect || "/";
     else say(out.error || "couldn't create passkey");
   }
 
@@ -33,7 +33,7 @@
     var asr = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: opts });
     var r = await post("/auth/passkey/login/verify", asr);
     var out = await r.json();
-    if (out.ok) { location.href = out.redirect || "/app"; return true; }
+    if (out.ok) { location.href = out.redirect || "/"; return true; }
     throw new Error(out.error || "sign-in failed");
   }
 

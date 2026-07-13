@@ -20,7 +20,8 @@ const timeago = (ts) => {
 };
 
 // ---------- dashboard ----------
-pagesRouter.get("/app", requireAuth, async (req, res) => {
+// The dashboard lives at the root (/) when signed in; also reachable at /dashboard.
+export async function dashboardHandler(req, res) {
   const uid = req.user.id;
   const [bal, pending, resolved, led] = await Promise.all([
     balance(uid),
@@ -93,8 +94,11 @@ pagesRouter.get("/app", requireAuth, async (req, res) => {
     </div>
   </div></main>${footer}
   <script src="/push.js"></script>`;
-  res.type("html").send(page({ title: "moshcode ▸ approvals", body }));
-});
+  res.type("html").send(page({ title: "moshcode ▸ dashboard", body }));
+}
+
+pagesRouter.get("/dashboard", requireAuth, dashboardHandler);
+pagesRouter.get("/app", (req, res) => res.redirect(301, "/")); // legacy → root
 
 // ---------- settings ----------
 const CHANNEL_KINDS = ["push", "email", "slack", "telegram", "sms", "webhook"];

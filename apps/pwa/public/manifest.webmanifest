@@ -2,7 +2,7 @@
   "name": "moshcode",
   "short_name": "moshcode",
   "description": "Human-in-the-loop approvals for your moshscript loops.",
-  "start_url": "/app",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#070806",

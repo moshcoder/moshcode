@@ -1,9 +1,10 @@
 // Email/password auth + the sign-in page (which also hosts passkey + CoinPay buttons).
 import { Router } from "express";
 import { page, footer, esc } from "../lib/html.mjs";
-import { csrfInput, createSession, destroySession } from "../lib/session.mjs";
+import { csrfInput, createSession, destroySession, takeNext } from "../lib/session.mjs";
 import { hashPassword, verifyPassword } from "../lib/crypto.mjs";
 import { createUserWithPassword, userByEmail } from "../lib/users.mjs";
+import { dashboardHandler } from "./pages.mjs";
 import { config } from "../config.mjs";
 
 export const authRouter = Router();
@@ -44,7 +45,11 @@ function authPage(req, { error = "", mode = "in" } = {}) {
 }
 
 authRouter.get("/", (req, res) => {
-  if (req.user) return res.redirect("/app");
+  if (req.user) {
+    const next = takeNext(req, res);
+    if (next) return res.redirect(next);
+    return dashboardHandler(req, res); // dashboard lives at the root
+  }
   res.type("html").send(authPage(req, { mode: req.query.mode === "up" ? "up" : "in" }));
 });
 
@@ -56,7 +61,7 @@ authRouter.post("/auth/register", async (req, res) => {
   if (await userByEmail(email)) return res.type("html").send(authPage(req, { mode: "up", error: "That email already has an account — sign in." }));
   const user = await createUserWithPassword(email, hashPassword(password));
   await createSession(res, user.id);
-  res.redirect("/app");
+  res.redirect(takeNext(req, res) || "/");
 });
 
 authRouter.post("/auth/login", async (req, res) => {
@@ -67,7 +72,7 @@ authRouter.post("/auth/login", async (req, res) => {
     return res.type("html").send(authPage(req, { mode: "in", error: "Wrong email or password." }));
   }
   await createSession(res, user.id);
-  res.redirect("/app");
+  res.redirect(takeNext(req, res) || "/");
 });
 
 authRouter.post("/auth/logout", async (req, res) => {

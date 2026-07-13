@@ -10,7 +10,7 @@ import {
 import { get, run } from "../db.mjs";
 import { config } from "../config.mjs";
 import { id } from "../lib/crypto.mjs";
-import { createSession, setCeremony, getCeremony, clearCeremony } from "../lib/session.mjs";
+import { createSession, setCeremony, getCeremony, clearCeremony, takeNext } from "../lib/session.mjs";
 import { createUserPasskey, userById } from "../lib/users.mjs";
 
 export const passkeyRouter = Router();
@@ -63,7 +63,7 @@ passkeyRouter.post("/auth/passkey/register/verify", async (req, res) => {
   );
   clearCeremony(res, "reg");
   await createSession(res, user.id);
-  res.json({ ok: true, redirect: "/app" });
+  res.json({ ok: true, redirect: takeNext(req, res) || "/" });
 });
 
 // ---- authentication (discoverable / usernameless sign-in) ----
@@ -106,5 +106,5 @@ passkeyRouter.post("/auth/passkey/login/verify", async (req, res) => {
     [verification.authenticationInfo.newCounter, cred.id]);
   clearCeremony(res, "auth");
   await createSession(res, cred.user_id);
-  res.json({ ok: true, redirect: "/app" });
+  res.json({ ok: true, redirect: takeNext(req, res) || "/" });
 });
