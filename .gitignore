@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 *.log
+
+# aider local session artifacts
+.aider*
