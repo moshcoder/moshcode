@@ -23,7 +23,14 @@ import { ENGINES, aiExecArgs, pickAiEngine } from "./engines.mjs";
 // self-referential and doesn't depend on `moshcode` being on PATH.
 const MOSHCODE_BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
-/** Run `moshcode <cmd> ...args`, blocking until it exits. Returns { ok, code }. */
+/**
+ * Run `moshcode <cmd> ...args`, blocking until it exits.
+ *
+ * Returns { ok, code } — always. A non-zero exit returns { ok: false, code }
+ * so scripts can branch on outcomes (`if (!install("foo").ok) …`) without a
+ * try/catch. Only truly fatal errors (spawn failures like ENOENT) throw.
+ * This is the R8 convention from PRD 0004.
+ */
 export function runMoshcode(cmd, args, ctx) {
   const argv = [cmd, ...args.map(String)];
   const printable = `moshcode ${argv.join(" ")}`.trimEnd();
@@ -35,13 +42,14 @@ export function runMoshcode(cmd, args, ctx) {
 
   ctx.out(`  ▶ ${printable}`);
   const res = spawnSync(process.execPath, [MOSHCODE_BIN, ...argv], { stdio: "inherit" });
-  if (res.error) throw res.error;
-  if (res.status !== 0) {
-    // Fail loud for now — whether a non-zero passthrough should throw or return
-    // a result is an open question in PRD 0004 (R8).
-    throw new Error(`moshscript: ${cmd}() → moshcode exited with ${res.signal || res.status}`);
+  if (res.error) throw res.error; // truly fatal: spawn itself failed (ENOENT etc.)
+
+  const code = res.status ?? 1;
+  if (code !== 0) {
+    ctx.out(`  ✗ ${cmd}() exited ${res.signal || code}`);
+    return { ok: false, code, signal: res.signal || null };
   }
-  return { ok: true, code: res.status };
+  return { ok: true, code: 0 };
 }
 
 /** A vocabulary command mapping `name(...args)` → `moshcode name ...args`. */

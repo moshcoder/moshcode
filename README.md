@@ -197,6 +197,7 @@ chmod +x deploy.mosh
 | `ask(prompt)` | blocking gate — waits for human reply at moshcode.sh |
 | `say("…")` | print a line |
 | `sleep(ms)` | pause for N milliseconds (blocking) |
+| `shell(cmd)` | run a shell command (blocking, `$SHELL -c`); returns `{ ok, code }` |
 | `stop()` | end the loop (`alive = false`) |
 | `repeat()` | back to the top of the loop |
 
@@ -237,6 +238,25 @@ chmod +x deploy.mosh
 const task = await ask("what should I work on next?");
 say(`got it: ${task}`);
 ```
+
+### Error handling
+
+CLI verbs and `shell()` return `{ ok, code }` instead of throwing on non-zero
+exits, so scripts can branch on outcomes without `try/catch`:
+
+```js
+const r = install("claude");
+if (!r.ok) {
+  say(`install failed (exit ${r.code}), trying fallback…`);
+  install("codex");
+}
+
+const test = shell("npm test");
+if (!test.ok) notify("tests failed!");
+```
+
+Only truly fatal errors (e.g. `moshcode` binary not found) throw. This keeps
+`while (alive)` loops resilient — a single failing verb doesn't crash the script.
 
 ### Dry run
 

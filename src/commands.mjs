@@ -13,7 +13,7 @@
 //   2. Local verbs — moshscript-only flavor/helpers with no CLI equivalent
 //      (mosh, code, notify, say, sleep, stop, repeat). `mosh()` is the worked
 //      example of the local command shape.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { createRegistry } from "./registry.mjs";
 import { cliVerb, aiVerb } from "./cli.mjs";
@@ -153,6 +153,35 @@ const COMMANDS = [
       expectNoArgs("stop", args);
       ctx.stop();
       ctx.out("  ⏹  stop()    → alive = false");
+    },
+  },
+
+  {
+    name: "shell",
+    summary: "run a shell command (blocking, spawnSync $SHELL -c)",
+    // The moshscript system verb for arbitrary shell commands. Blocking
+    // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
+    // and the child owns the terminal for interactive commands. Returns
+    // { ok, code } so scripts can branch on the exit status:
+    //   const r = shell("npm test"); if (!r.ok) say("tests failed");
+    run(ctx, ...args) {
+      const cmd = args.join(" ");
+      if (!cmd) throw new Error("moshscript: shell() requires a command string");
+      if (ctx.dryRun) {
+        ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL -c ${JSON.stringify(cmd)}`);
+        return { ok: true, dryRun: true };
+      }
+      const sh = process.env.SHELL
+        || (process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : "/bin/sh");
+      ctx.out(`  ▶ shell: ${cmd}`);
+      const res = spawnSync(sh, ["-c", cmd], { stdio: "inherit" });
+      if (res.error) throw res.error;
+      const code = res.status ?? 1;
+      if (code !== 0) {
+        ctx.out(`  ✗ shell() exited ${res.signal || code}`);
+        return { ok: false, code, signal: res.signal || null };
+      }
+      return { ok: true, code: 0 };
     },
   },
 
