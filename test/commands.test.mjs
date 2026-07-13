@@ -1,48 +1,86 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { defaultCommands } from "../src/commands.mjs";
+import { moshVocabulary } from "../src/commands.mjs";
 
 function createCtx() {
   return {
     dryRun: true,
     iter: 0,
-    vars: { alive: true },
+    stopped: false,
     lines: [],
     out(line) {
       this.lines.push(line);
     },
+    stop() {
+      this.stopped = true;
+    },
   };
+}
+
+// The verb helper: pull one command's run() out of a fresh vocabulary.
+function verb(name) {
+  const cmd = moshVocabulary().get(name);
+  assert.ok(cmd, `expected a ${name}() command in the vocabulary`);
+  return cmd.run;
 }
 
 for (const name of ["code", "mosh", "repeat", "stop"]) {
   test(`${name}() rejects unexpected arguments`, async () => {
-    const commands = defaultCommands();
     await assert.rejects(
-      async () => commands[name](createCtx(), ["extra"]),
+      async () => verb(name)(createCtx(), "extra"),
       new RegExp(`moshscript: ${name}\\(\\) does not take arguments`)
     );
   });
 }
 
-test("notify() still accepts message arguments", async () => {
-  const commands = defaultCommands();
+test("mosh() blasts the moshcoding playlist url", async () => {
   const ctx = createCtx();
+  await verb("mosh")(ctx);
 
-  await commands.notify(ctx, ["hello", "there"]);
-
-  assert.equal(ctx.lines.length, 1);
-  assert.match(ctx.lines[0], /hello there/);
+  assert.match(ctx.lines.join("\n"), /open\.spotify\.com\/playlist\//);
+  // dryRun ctx must not attempt to launch a browser (no launch line)
+  assert.ok(!ctx.lines.some((l) => /launched in your browser/.test(l)));
 });
 
-test("sleep accepts zero milliseconds", async () => {
-  await defaultCommands().sleep({}, [0]);
+test("notify() prints the message + an approval link and returns { id, url }", async () => {
+  const ctx = createCtx();
+  const res = await verb("notify")(ctx, "hello", "there");
+
+  assert.match(ctx.lines.join("\n"), /hello there/);
+  assert.match(ctx.lines.join("\n"), /\/approve\//);
+  assert.ok(res.id && /\/approve\//.test(res.url));
 });
 
-test("sleep rejects non-finite and negative durations", async () => {
-  const sleep = defaultCommands().sleep;
+test("ask() in dry-run announces it would block, returns null", async () => {
+  const ctx = createCtx();
+  const reply = await verb("ask")(ctx, "what next?");
 
-  await assert.rejects(() => sleep({}, ["forever"]), /finite non-negative number/);
-  await assert.rejects(() => sleep({}, ["Infinity"]), /finite non-negative number/);
-  await assert.rejects(() => sleep({}, [-1]), /finite non-negative number/);
+  assert.equal(reply, null);
+  assert.match(ctx.lines.join("\n"), /approve\/instruct/);
+});
+
+test("stop() flips the ctx alive flag off", async () => {
+  const ctx = createCtx();
+  await verb("stop")(ctx);
+  assert.equal(ctx.stopped, true);
+});
+
+test("sleep accepts zero milliseconds (no-op, synchronous)", () => {
+  assert.equal(verb("sleep")({}, 0), undefined);
+});
+
+test("sleep throws synchronously on a negative duration", () => {
+  assert.throws(
+    () => verb("sleep")({}, -1),
+    /sleep\(ms\) requires a finite non-negative number/
+  );
+});
+
+test("the vocabulary exposes summaries for `moshcode commands`", () => {
+  for (const cmd of moshVocabulary().all()) {
+    assert.equal(typeof cmd.name, "string");
+    assert.equal(typeof cmd.summary, "string");
+    assert.ok(cmd.summary.length > 0, `${cmd.name}() needs a summary`);
+  }
 });

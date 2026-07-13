@@ -49,17 +49,34 @@ test("run accepts equals-form max option", async () => {
   assert.match(result.stdout, /1 loop\(s\)/);
 });
 
-test("run rejects multiple script files", async () => {
+test("run() includes another .mosh file, in order", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "moshcode-include-"));
+  const child = join(dir, "child.mosh");
+  const parent = join(dir, "parent.mosh");
+  writeFileSync(child, 'say("from the child 🤘");\n');
+  writeFileSync(parent, `say("parent before");\nrun(${JSON.stringify(child)});\nsay("parent after");\n`);
+
+  const result = await run([parent]);
+
+  assert.equal(result.status, 0);
+  // ordering: parent before → child → parent after
+  const before = result.stdout.indexOf("parent before");
+  const inChild = result.stdout.indexOf("from the child");
+  const after = result.stdout.indexOf("parent after");
+  assert.ok(before >= 0 && inChild > before && after > inChild, result.stdout);
+});
+
+test("positional args after the script file reach the script as argv", async () => {
   const dir = mkdtempSync(join(tmpdir(), "moshcode-run-"));
-  const first = join(dir, "first.mosh");
-  const second = join(dir, "second.mosh");
-  writeFileSync(first, 'say("one");\n');
-  writeFileSync(second, 'say("two");\n');
+  const script = join(dir, "argv.mosh");
+  // secretly all JS is legal — read argv straight off the injected global
+  writeFileSync(script, 'say(argv[0]); say(argv[1]);\n');
 
-  const result = await run([first, second, "--dry-run"]);
+  const result = await run([script, "staging", "--fast"]);
 
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /moshcode run: expected one script file/);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /staging/);
+  assert.match(result.stdout, /--fast/);
 });
 
 test("run reports missing script files without a stack trace", async () => {

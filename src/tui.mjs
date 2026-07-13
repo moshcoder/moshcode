@@ -12,8 +12,8 @@ import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
-import { compile, run } from "./interpreter.mjs";
-import { defaultCommands } from "./commands.mjs";
+import { runScript } from "./runtime.mjs";
+import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
 
@@ -257,13 +257,13 @@ async function runFile(file) {
   let src;
   try { src = fs.readFileSync(file, "utf8"); }
   catch (e) { console.log(err(`can't read ${file}: ${e.message}`)); return; }
-  let ast;
-  try { ast = compile(src); } catch (e) { console.log(err(String(e.message || e))); return; }
   console.log(hr());
-  const ctx = { vars: { alive: true }, iter: 0, maxIterations: 100000, out: (s) => console.log(s), commands: defaultCommands() };
-  try { await run(ast, ctx); } catch (e) { console.log(err(String(e.message || e))); }
+  let result = { iterations: 0 };
+  try {
+    result = await runScript(src, { commands: moshVocabulary(), out: (s) => console.log(s) });
+  } catch (e) { console.log(err(String(e.message || e))); }
   console.log(hr());
-  console.log(info(`moshscript done — ${ctx.iter} loop(s).`));
+  console.log(info(`moshscript done — ${result.iterations} loop(s).`));
 }
 
 export async function tui() {

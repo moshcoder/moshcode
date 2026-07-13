@@ -1,0 +1,21 @@
+#!/usr/bin/env moshscript
+// scripting-the-cli.mosh — secretly all JS is legal, and every CLI verb is just
+// `moshcode <cmd> ...args`. Try it safely first:
+//
+//   moshcode run examples/scripting-the-cli.mosh --dry-run
+//   chmod +x examples/scripting-the-cli.mosh && ./examples/scripting-the-cli.mosh claude
+//
+// argv[0] is the engine to drop into at the end (default: claude).
+
+const engine = argv[0] || "claude";
+const engines = ["claude", "codex"];
+
+say(`🎸 setting up ${engines.length} engines`);
+for (const e of engines) {
+  install(e);                                  // → moshcode install <e>
+}
+
+mcp("install", "https://mcp.sentry.dev/mcp");  // → moshcode mcp install ...
+notify(`moshcode ready — dropping into ${engine}`);
+
+agents(engine);                                // → moshcode agents <engine>

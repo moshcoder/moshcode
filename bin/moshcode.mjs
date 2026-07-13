@@ -3,8 +3,8 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { compile, run } from "../src/interpreter.mjs";
-import { defaultCommands } from "../src/commands.mjs";
+import { runScript } from "../src/runtime.mjs";
+import { moshVocabulary } from "../src/commands.mjs";
 import {
   ENGINES,
   agentLaunchArgs,
@@ -226,11 +226,15 @@ async function main() {
     return;
   }
   if (cmd === "commands") {
-    console.log("built-in moshscript commands:\n  " + Object.keys(defaultCommands()).map((c) => `${c}()`).join("  "));
+    console.log("built-in moshscript commands:");
+    for (const c of moshVocabulary().all()) {
+      console.log(`  ${(`${c.name}()`).padEnd(12)} ${c.summary}`);
+    }
     return;
   }
   if (cmd === "run") {
-    let max = 3, dryRun = false, file = null;
+    let max = 3, dryRun = false;
+    const positional = []; // first is the file; the rest reach the script as argv
     for (let k = 0; k < rest.length; k++) {
       const a = rest[k];
       if (a === "--max" || a === "-n") {
@@ -242,16 +246,14 @@ async function main() {
         catch (e) { console.error(String(e.message || e)); process.exit(1); }
       }
       else if (a === "--dry-run") dryRun = true;
-      else if (a.startsWith("-")) {
+      else if (a.startsWith("-") && positional.length === 0) {
         console.error(`moshcode run: unknown option ${a}`);
         process.exit(1);
       }
-      else if (file) {
-        console.error(`moshcode run: expected one script file, got ${JSON.stringify(file)} and ${JSON.stringify(a)}`);
-        process.exit(1);
-      }
-      else file = a;
+      else positional.push(a);
     }
+    const file = positional[0] || null;
+    const argv = positional.slice(1);
     let src;
     try {
       src = file ? readScript(file) : (fs.existsSync(EXAMPLE) ? fs.readFileSync(EXAMPLE, "utf8") : DEFAULT_SCRIPT);
@@ -259,22 +261,22 @@ async function main() {
       console.error(String(e.message || e));
       process.exit(1);
     }
-    let ast;
-    try { ast = compile(src); }
-    catch (e) { console.error(String(e.message || e)); process.exit(1); }
 
-    const ctx = {
-      vars: { alive: true },
-      iter: 0,
-      maxIterations: max,
-      dryRun,
-      out: (s) => console.log(s),
-      commands: defaultCommands(),
-    };
-    console.log("🎸 moshcode — running moshscript\n");
-    try { await run(ast, ctx); }
-    catch (e) { console.error("\n" + String(e.message || e)); process.exit(1); }
-    console.log(`\n✓ ${ctx.iter} loop(s) — no bugs, only features. 🤘`);
+    console.log(`🎸 moshcode — running moshscript${dryRun ? " (dry run)" : ""}\n`);
+    let result;
+    try {
+      result = await runScript(src, {
+        commands: moshVocabulary(),
+        max,
+        dryRun,
+        argv,
+        out: (s) => console.log(s),
+      });
+    } catch (e) {
+      console.error("\n" + String(e.message || e));
+      process.exit(1);
+    }
+    console.log(`\n✓ ${result.iterations} loop(s) — no bugs, only features. 🤘`);
     return backToPit("moshscript", 0);
   }
 
