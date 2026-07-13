@@ -39,6 +39,10 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function yamlString(value) {
+  return JSON.stringify(String(value ?? ""));
+}
+
 function gitEmail(root) {
   try {
     return execSync("git config user.email", { cwd: root, stdio: ["ignore", "pipe", "ignore"] })
@@ -110,7 +114,7 @@ export function renderPrd({ id, title, idea, author }) {
   return `---
 openprd: "${OPENPRD.version}"
 id: "${id}"
-title: ${title}
+title: ${yamlString(title)}
 status: Draft
 authors:
   - ${author}
