@@ -14,7 +14,8 @@ export const TOOLS = {
   coinpay: {
     desc: "CoinPay — wallets, payments, swaps, escrow, and settlement",
     bin: "coinpay",
-    install: { cmd: "npm", args: ["install", "-g", "@profullstack/coinpay"] },
+    // CoinPay ships via its own install script (fetched from GitHub), not npm.
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://coinpayportal.com/install.sh | sh"] },
   },
 };
 

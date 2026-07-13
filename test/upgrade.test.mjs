@@ -44,7 +44,7 @@ test("explicit tool upgrades use official installers even when not installed", (
     {
       key: "coinpay",
       kind: "tool",
-      spec: { cmd: "npm", args: ["install", "-g", "@profullstack/coinpay"] },
+      spec: { cmd: "sh", args: ["-c", "curl -fsSL https://coinpayportal.com/install.sh | sh"] },
     },
   ]);
 });
