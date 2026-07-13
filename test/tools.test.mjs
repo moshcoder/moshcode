@@ -68,7 +68,10 @@ test("tool registry uses the official native CLI packages", () => {
   assert.deepEqual(resolveTool("UGIG"), ["ugig", TOOLS.ugig]);
   assert.deepEqual(resolveTool("coinpay"), ["coinpay", TOOLS.coinpay]);
   assert.equal(resolveTool("claude"), null);
-  assert.deepEqual(TOOLS.ugig.install, { cmd: "npm", args: ["install", "-g", "ugig"] });
+  assert.deepEqual(TOOLS.ugig.install, {
+    cmd: "bash",
+    args: ["-c", "curl -fsSL https://ugig.net/install.sh | bash"],
+  });
   assert.deepEqual(TOOLS.coinpay.install, {
     cmd: "npm",
     args: ["install", "-g", "@profullstack/coinpay"],
@@ -141,7 +144,6 @@ test("tools status reports native executables found on PATH", async () => {
 });
 
 for (const [name, expectedPackage] of [
-  ["ugig", "ugig"],
   ["coinpay", "@profullstack/coinpay"],
 ]) {
   test(`install ${name} delegates to npm with the official package`, async () => {
@@ -163,3 +165,27 @@ fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)))
     assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), ["install", "-g", expectedPackage]);
   });
 }
+
+// UGig isn't on npm — `install ugig` runs its official install script via bash.
+test("install ugig delegates to the ugig.net install script", async () => {
+  const root = tempDir("moshcode-install-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "bash-args.json");
+  mkdirSync(nativeBin);
+  // Fake `bash` captures its argv instead of actually piping curl to a shell.
+  writeExecutable(nativeBin, "bash", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.BASH_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "ugig"], {
+    binDir: nativeBin,
+    env: { BASH_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "-c",
+    "curl -fsSL https://ugig.net/install.sh | bash",
+  ]);
+});

@@ -8,7 +8,8 @@ export const TOOLS = {
   ugig: {
     desc: "UGig — freelance marketplace CLI for humans and agents",
     bin: "ugig",
-    install: { cmd: "npm", args: ["install", "-g", "ugig"] },
+    // UGig isn't published to npm — it ships via its own install script.
+    install: { cmd: "bash", args: ["-c", "curl -fsSL https://ugig.net/install.sh | bash"] },
   },
   coinpay: {
     desc: "CoinPay — wallets, payments, swaps, escrow, and settlement",

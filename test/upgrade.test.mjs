@@ -39,7 +39,7 @@ test("explicit tool upgrades use official installers even when not installed", (
     {
       key: "ugig",
       kind: "tool",
-      spec: { cmd: "npm", args: ["install", "-g", "ugig"] },
+      spec: { cmd: "bash", args: ["-c", "curl -fsSL https://ugig.net/install.sh | bash"] },
     },
     {
       key: "coinpay",
