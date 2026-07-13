@@ -23,6 +23,15 @@ export const TOOLS = {
     // c0mpute ships via its own install script (the v1 stack installer).
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"] },
   },
+  secrets: {
+    desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
+    // The passthrough target is the `logicsrc` binary; the moshcode command is
+    // `/secrets` so it reads as "manage secrets". LOGICSRC_BIN points at a local
+    // build before logicsrc ships a global install.
+    bin: process.env.LOGICSRC_BIN || "logicsrc",
+    // LogicSRC ships via its own install script (same pattern as the others).
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://logicsrc.com/install.sh | sh"] },
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */

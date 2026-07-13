@@ -95,7 +95,7 @@ async function launchEngine(key, engine, args, { agentMode = false } = {}) {
 
 function help() {
   const vocab = moshVocabulary().all();
-  const local = vocab.filter((c) => !["run","agents","start","install","upgrade","mcp","skill","prd","ugig","coinpay","c0mpute","pwd"].includes(c.name));
+  const local = vocab.filter((c) => !["run","agents","start","install","upgrade","mcp","skill","prd","ugig","coinpay","c0mpute","secrets","pwd"].includes(c.name));
   const cli = vocab.filter((c) => !local.includes(c));
   console.log(`moshcode — metal scripting toolkit 🤘
 
@@ -105,7 +105,9 @@ usage:
                                        (bypasses/auto-approves native permissions)
   moshcode start <engine> [args…]      raw engine launch; inject no arguments
   moshcode <engine> [args…]            raw launch shorthand (backward compatible)
-  moshcode <tool> [args…]              transparently invoke ugig, coinpay, or c0mpute
+  moshcode <tool> [args…]              transparently invoke ugig, coinpay, c0mpute, or secrets
+  moshcode secrets [args…]             manage/view team secrets (wraps the logicsrc CLI:
+                                       login, teams, credentials — e.g. \`secrets teams pull acme prod\`)
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
      [--dry-run] [args…]               built-in loop if no file); --max bounds
                                        the while loop (default 3); --dry-run

@@ -81,9 +81,17 @@ test("tool registry uses the official native CLI packages", () => {
     cmd: "sh",
     args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"],
   });
+  assert.deepEqual(resolveTool("secrets"), ["secrets", TOOLS.secrets]);
+  // /secrets wraps the `logicsrc` binary and ships via its own install script.
+  assert.equal(TOOLS.secrets.bin, process.env.LOGICSRC_BIN || "logicsrc");
+  assert.deepEqual(TOOLS.secrets.install, {
+    cmd: "sh",
+    args: ["-c", "curl -fsSL https://logicsrc.com/install.sh | sh"],
+  });
   assert.match(toolList(), /ugig/);
   assert.match(toolList(), /coinpay/);
   assert.match(toolList(), /c0mpute/);
+  assert.match(toolList(), /secrets/);
 });
 
 for (const name of ["ugig", "coinpay"]) {

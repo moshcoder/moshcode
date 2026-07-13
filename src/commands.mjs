@@ -204,6 +204,7 @@ const COMMANDS = [
   cliVerb("ugig", "drive the ugig workflow CLI"),
   cliVerb("coinpay", "drive the coinpay workflow CLI"),
   cliVerb("c0mpute", "drive the c0mpute workflow CLI"),
+  cliVerb("secrets", "manage/view team secrets via logicsrc (login, teams, credentials)"),
   cliVerb("pwd", "print the current repo/location"),
 ];
 

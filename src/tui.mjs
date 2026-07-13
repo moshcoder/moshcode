@@ -106,7 +106,7 @@ function printEngines() {
 }
 
 function printTools() {
-  console.log(bone("  tools") + ash("    — run one with ") + acid("/ugig") + ash(", ") + acid("/coinpay") + ash(", or ") + acid("/c0mpute"));
+  console.log(bone("  tools") + ash("    — run one with ") + acid("/ugig") + ash(", ") + acid("/coinpay") + ash(", ") + acid("/c0mpute") + ash(", or ") + acid("/secrets"));
   for (const tool of toolStatus()) {
     const dot = tool.installed ? acid("●") : ash("○");
     console.log(`   ${dot} ${bone(tool.key.padEnd(9))} ${ash(tool.installed ? "installed" : "not installed — /install " + tool.key)}`);
@@ -119,10 +119,11 @@ function printHelp() {
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     autonomous launch; bypass/auto-approve native permissions`,
     `   ${acid("/start <name>")}      raw launch; inject no engine arguments`,
-    `   ${acid("/tools")}             list workflow tools (ugig · coinpay · c0mpute)`,
+    `   ${acid("/tools")}             list workflow tools (ugig · coinpay · c0mpute · secrets)`,
     `   ${acid("/ugig [args…]")}      hand off to the native UGig CLI`,
     `   ${acid("/coinpay [args…]")}   hand off to the native CoinPay CLI`,
     `   ${acid("/c0mpute [args…]")}   hand off to the native c0mpute CLI`,
+    `   ${acid("/secrets [args…]")}   share/view team secrets via logicsrc (login · teams · credentials)`,
     `   ${acid("/mcp install <url>")} register an MCP server across every engine that supports it`,
     `   ${acid("/skill install <url>")} install a skill across every engine that supports it`,
     `   ${acid("/install <name>")}    install an engine or workflow tool`,
@@ -138,7 +139,7 @@ function printHelp() {
     ash("   .mosh files are real JavaScript with the command vocabulary injected."),
     ash("   local verbs: ") + acid("code() mosh() notify() ask() say() sleep() stop() repeat()"),
     ash("   CLI verbs:   ") + acid("agents() start() install() upgrade() mcp() skill() prd()"),
-    ash("               ") + acid("ugig() coinpay() c0mpute() pwd() run() shell()"),
+    ash("               ") + acid("ugig() coinpay() c0mpute() secrets() pwd() run() shell()"),
     ash("   shebang:     ") + acid("#!/usr/bin/env moshscript") + ash("  (chmod +x to self-run)"),
     "",
     ash("  raw shortcuts: type an engine or tool name by itself, e.g. ") + acid("claude") + ash(" or ") + acid("ugig"),
