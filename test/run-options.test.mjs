@@ -42,6 +42,13 @@ test("run rejects unknown options before treating them as files", async () => {
   assert.match(result.stderr, /moshcode run: unknown option --dryrun/);
 });
 
+test("run accepts equals-form max option", async () => {
+  const result = await run(["--max=1", "--dry-run"]);
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /1 loop\(s\)/);
+});
+
 test("run rejects multiple script files", async () => {
   const dir = mkdtempSync(join(tmpdir(), "moshcode-run-"));
   const first = join(dir, "first.mosh");

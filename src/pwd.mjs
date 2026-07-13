@@ -82,5 +82,7 @@ export function locate(cwd = process.cwd()) {
 
 // Collapse $HOME to `~` for tidy display.
 export function tilde(p, home) {
-  return home && p.startsWith(home) ? "~" + p.slice(home.length) : p;
+  if (!home || p === home) return home ? "~" : p;
+  const relative = p.slice(home.length);
+  return p.startsWith(home) && relative.startsWith(path.sep) ? "~" + relative : p;
 }
