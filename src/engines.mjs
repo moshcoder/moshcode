@@ -2,6 +2,14 @@
 // runs the engine's official installer; `/agents <name>` (or `moshcode <name>`)
 // opens a passthrough session on it. moshcode itself stays lean (no vendored
 // fork). Add engines here.
+//
+// `agentsView` (optional) is the exact argv that opens the engine's native
+// agent list/view — used by `/agents <name>` when the engine actually has one
+// (claude, opencode). It's the FULL leading args (subcommand + any flags that
+// subcommand accepts), because not every agents-subcommand takes the engine's
+// bypass flag (e.g. `opencode agent list` takes none). Engines without an
+// `agentsView` fall back to `agentArgs` — an autonomous session with native
+// approvals bypassed/auto-approved.
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -11,6 +19,7 @@ export const ENGINES = {
     desc: "opencode — the open-source coding agent (SST/anomalyco)",
     bin: "opencode",
     agentArgs: ["--auto"],
+    agentsView: ["agent", "list"], // `opencode agent list` — lists agents; the `agent` subcommand takes no bypass flag
     install: { cmd: "bash", args: ["-c", "curl -fsSL https://opencode.ai/install | bash"] },
     upgrade: { cmd: "opencode", args: ["upgrade"] },
   },
@@ -18,6 +27,7 @@ export const ENGINES = {
     desc: "Claude Code — Anthropic's agentic CLI",
     bin: "claude",
     agentArgs: ["--dangerously-skip-permissions"],
+    agentsView: ["agents", "--dangerously-skip-permissions"], // `claude agents …` — the background-agents view; accepts the skip flag
     install: { cmd: "npm", args: ["install", "-g", "@anthropic-ai/claude-code"] },
     // Claude Code authenticates via its own stored login (~/.claude). An
     // inherited ANTHROPIC_API_KEY hijacks that subscription auth — and if the
@@ -92,9 +102,14 @@ export function engineList() {
   return Object.entries(ENGINES).map(([k, v]) => `  ${k.padEnd(10)} ${v.desc}`).join("\n");
 }
 
-/** Prepend an engine's autonomous-mode flags to caller-supplied arguments. */
+/**
+ * Args for an agent-mode launch (`/agents <engine>` / `moshcode agents <engine>`):
+ * the engine's native agents-view invocation when it has one (so you land on your
+ * agent list), else its autonomous bypass flags. Caller-supplied args follow.
+ */
 export function agentLaunchArgs(engine, args = []) {
-  return [...(engine.agentArgs || []), ...args];
+  const lead = engine.agentsView || engine.agentArgs || [];
+  return [...lead, ...args];
 }
 
 /**

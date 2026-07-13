@@ -17,9 +17,20 @@ import test from "node:test";
 import { ENGINES, agentLaunchArgs } from "../src/engines.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
+// The autonomous-session bypass flags each engine declares (engine.agentArgs).
 const EXPECTED_AGENT_ARGS = {
   opencode: ["--auto"],
   claude: ["--dangerously-skip-permissions"],
+  codex: ["--dangerously-bypass-approvals-and-sandbox"],
+  gemini: ["--approval-mode=yolo"],
+  aider: ["--yes-always"],
+};
+
+// What an agent-mode launch actually runs (agentLaunchArgs): the engine's native
+// agents-view invocation where it has one, else its autonomous bypass flags.
+const EXPECTED_LAUNCH_ARGS = {
+  opencode: ["agent", "list"],
+  claude: ["agents", "--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
   aider: ["--yes-always"],
@@ -75,15 +86,15 @@ test("every engine declares its reviewed autonomous-mode arguments", () => {
   );
   for (const [key, engine] of Object.entries(ENGINES)) {
     assert.deepEqual(agentLaunchArgs(engine, ["--user-arg", "two words"]), [
-      ...EXPECTED_AGENT_ARGS[key],
+      ...EXPECTED_LAUNCH_ARGS[key],
       "--user-arg",
       "two words",
     ]);
   }
 });
 
-for (const [key, expected] of Object.entries(EXPECTED_AGENT_ARGS)) {
-  test(`agents ${key} injects autonomous flags before user arguments`, async () => {
+for (const [key, expected] of Object.entries(EXPECTED_LAUNCH_ARGS)) {
+  test(`agents ${key} injects its agent-launch args before user arguments`, async () => {
     const nativeBin = tempDir();
     mkdirSync(nativeBin, { recursive: true });
     writeEngine(nativeBin, key);

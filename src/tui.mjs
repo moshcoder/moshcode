@@ -154,7 +154,7 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
   }
   if (agentMode) {
-    console.log(err(`agent mode: ${key} ${engine.agentArgs.join(" ")} — native approvals/permissions are bypassed or auto-approved.`));
+    console.log(err(`agent mode: ${key} ${agentLaunchArgs(engine).join(" ")}${engine.agentsView ? " — opening its agent view" : " — native approvals/permissions are bypassed or auto-approved"}.`));
   }
   console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());

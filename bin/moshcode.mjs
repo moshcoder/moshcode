@@ -78,7 +78,7 @@ function printEngineStatus() {
 
 async function launchEngine(key, engine, args, { agentMode = false } = {}) {
   if (agentMode) {
-    console.error(`⚠ agent mode: ${key} ${engine.agentArgs.join(" ")} — native approvals/permissions are bypassed or auto-approved.`);
+    console.error(`⚠ agent mode: ${key} ${agentLaunchArgs(engine).join(" ")}${engine.agentsView ? " — opening its agent view" : " — native approvals/permissions are bypassed or auto-approved"}.`);
   }
   const result = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args);
   if (!result.ok) {

@@ -25,16 +25,17 @@ moshcode install codex      # npm i -g @openai/codex
 
 ### Autonomous agents versus raw starts
 
-`agents` intentionally starts an autonomous session by injecting each engine's
-native bypass or auto-approval mode. Use this only in an isolated container, VM,
-or workspace you trust:
+`agents` opens the engine's native **agent view** when it has one, so you land on
+your agent list. Engines without an agents view instead start an autonomous
+session by injecting the engine's native bypass or auto-approval mode. Either way,
+use this only in an isolated container, VM, or workspace you trust:
 
 ```sh
-moshcode agents claude      # claude --dangerously-skip-permissions
-moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox
-moshcode agents gemini      # gemini --approval-mode=yolo
-moshcode agents aider       # aider --yes-always
-moshcode agents opencode    # opencode --auto
+moshcode agents claude      # claude agents --dangerously-skip-permissions  (agent view)
+moshcode agents opencode    # opencode agent list                          (agent view)
+moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
+moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
+moshcode agents aider       # aider --yes-always                                (autonomous)
 ```
 
 `start` is the explicit raw path. It injects nothing, so the native engine keeps
