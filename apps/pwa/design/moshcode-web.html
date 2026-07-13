@@ -1,0 +1,356 @@
+<title>moshcode ▸ app</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #070806;
+    --bg-tint: #0b0d08;
+    --surface: #101208;
+    --surface-2: #15180d;
+    --line: #23281a;
+    --line-2: #333a25;
+    --text: #edf2e4;
+    --dim: #969d85;
+    --faint: #5d6350;
+    --acid: #a6ff1a;        /* moshcoding green */
+    --acid-2: #bcff52;
+    --acid-ink: #0a1400;
+    --volt: #16e0ff;        /* moshcode.sh electric ⚡ */
+    --danger: #ff0050;      /* moshcoding hot red */
+    --warn: #ffc233;
+    --glow: rgba(166, 255, 26, .14);
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", Helvetica, system-ui, -apple-system, Arial, sans-serif;
+    --maxw: 1220px;
+    --r: 12px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(760px 440px at 88% -10%, var(--glow), transparent 62%),
+      repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.012) 3px 4px),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: var(--acid); color: var(--acid-ink); }
+
+  /* type helpers */
+  .kicker { font-family: var(--sans); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+  .label { font-family: var(--mono); font-size: .64rem; letter-spacing: .2em; text-transform: uppercase; color: var(--faint); }
+  h1, h2, h3 { margin: 0; font-family: var(--sans); font-weight: 800; text-transform: uppercase; letter-spacing: -.01em; text-wrap: balance; }
+
+  /* pills / chips */
+  .pill { font-family: var(--mono); font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--dim); white-space: nowrap; }
+  .pill.acid { color: var(--acid); border-color: color-mix(in srgb, var(--acid) 45%, var(--line)); background: color-mix(in srgb, var(--acid) 10%, transparent); }
+  .pill.volt { color: var(--volt); border-color: color-mix(in srgb, var(--volt) 45%, var(--line)); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+
+  /* buttons */
+  .btn { font-family: var(--mono); font-size: .78rem; font-weight: 600; padding: 9px 15px; border-radius: 8px; cursor: pointer; border: 1px solid var(--line-2); background: transparent; color: var(--text); display: inline-flex; align-items: center; gap: 8px; transition: border-color .14s, background .14s, transform .05s; white-space: nowrap; }
+  .btn:hover { border-color: var(--faint); background: var(--surface); }
+  .btn:active { transform: translateY(1px); }
+  .btn.acid { background: var(--acid); color: var(--acid-ink); border-color: var(--acid); font-weight: 700; }
+  .btn.acid:hover { background: var(--acid-2); border-color: var(--acid-2); }
+  .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+  .btn.danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); border-color: var(--danger); }
+  .btn:focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
+
+  /* ---------- app bar ---------- */
+  header.bar { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .bar-inner { display: flex; align-items: center; gap: 22px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--sans); font-weight: 800; text-transform: uppercase; letter-spacing: -.02em; font-size: 1.12rem; }
+  .brand .mark { width: 22px; height: 22px; border-radius: 5px; background: var(--acid); color: var(--acid-ink); display: grid; place-items: center; font-family: var(--mono); font-weight: 800; font-size: .9rem; box-shadow: 0 0 0 3px var(--glow); }
+  .brand .app { font-family: var(--mono); font-weight: 600; font-size: .62rem; letter-spacing: .22em; color: var(--faint); text-transform: uppercase; border: 1px solid var(--line-2); padding: 2px 6px; border-radius: 5px; }
+  .tabs { display: flex; gap: 4px; margin-left: 12px; }
+  .tab { font-family: var(--mono); font-size: .78rem; padding: 7px 12px; border-radius: 7px; color: var(--dim); }
+  .tab:hover { color: var(--text); background: var(--surface); }
+  .tab.on { color: var(--acid-ink); background: var(--acid); font-weight: 600; }
+  .bar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .bal-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: .78rem; border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 11px; }
+  .bal-chip b { color: var(--acid); font-variant-numeric: tabular-nums; }
+  .avatar { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--surface-2), var(--line-2)); border: 1px solid var(--line-2); display: grid; place-items: center; font-family: var(--mono); font-size: .72rem; color: var(--dim); }
+
+  /* status strip */
+  .strip { border-bottom: 1px solid var(--line); background: var(--bg-tint); }
+  .strip-inner { display: flex; align-items: center; gap: 18px; padding: 11px 0; font-family: var(--mono); font-size: .76rem; color: var(--dim); flex-wrap: wrap; }
+  .strip .now { color: var(--text); display: inline-flex; align-items: center; gap: 8px; }
+  .beat { width: 8px; height: 8px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 0 0 var(--glow); animation: beat 1.7s ease-out infinite; }
+  .strip .sep { color: var(--faint); }
+  .strip .tag { color: var(--volt); }
+
+  /* ---------- layout ---------- */
+  main { padding: 26px 0 60px; }
+  .grid { display: grid; grid-template-columns: 1.55fr .95fr; gap: 22px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 22px; }
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .section-title h2 { font-size: 1.24rem; }
+  .section-title .count { font-family: var(--mono); font-size: .74rem; color: var(--acid); }
+
+  .card { border: 1px solid var(--line); border-radius: var(--r); background: linear-gradient(180deg, var(--surface), var(--bg-tint)); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .card-head .h { font-family: var(--mono); font-size: .72rem; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+
+  /* active approval */
+  .active { border-color: color-mix(in srgb, var(--acid) 30%, var(--line)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--acid) 16%, transparent), 0 30px 60px -40px #000; }
+  .active .card-head { border-bottom-color: color-mix(in srgb, var(--acid) 22%, var(--line)); }
+  .ap-body { padding: 18px 18px 16px; }
+  .ap-meta { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: .72rem; color: var(--faint); }
+  .ap-title { font-size: 1.7rem; margin: 12px 0 4px; letter-spacing: -.02em; }
+  .ap-sub { color: var(--dim); font-family: var(--mono); font-size: .78rem; }
+  .ctx { margin-top: 16px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .ctx .cell { background: var(--surface); padding: 11px 13px; font-family: var(--mono); font-size: .76rem; }
+  .ctx .k { color: var(--faint); font-size: .64rem; letter-spacing: .12em; text-transform: uppercase; }
+  .ctx .v { color: var(--text); margin-top: 3px; }
+  .ctx .v.ok { color: var(--acid); }
+  .reply { margin-top: 16px; }
+  .reply textarea { width: 100%; resize: vertical; min-height: 66px; border: 1px solid var(--line-2); background: var(--bg); color: var(--text); border-radius: 9px; padding: 11px 13px; font-family: var(--mono); font-size: .82rem; line-height: 1.6; }
+  .reply textarea:focus { outline: none; border-color: var(--acid); }
+  .reply textarea::placeholder { color: var(--faint); }
+  .ap-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .ap-actions .spacer { flex: 1; }
+
+  /* pending queue */
+  .queue { display: flex; flex-direction: column; }
+  .q-row { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); transition: background .14s; }
+  .q-row:last-child { border-bottom: 0; }
+  .q-row:hover { background: var(--surface); }
+  .q-wait { display: grid; place-items: center; }
+  .q-wait .ring { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 0 rgba(255,194,51,.5); animation: beat 1.9s ease-out infinite; }
+  .q-main .q-q { font-family: var(--sans); font-weight: 700; font-size: .96rem; }
+  .q-main .q-s { font-family: var(--mono); font-size: .72rem; color: var(--faint); margin-top: 2px; }
+  .q-right { text-align: right; font-family: var(--mono); font-size: .72rem; color: var(--dim); display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+
+  /* resolved */
+  .r-row { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: .78rem; }
+  .r-row:last-child { border-bottom: 0; }
+  .r-row .glyph { color: var(--acid); }
+  .r-row .glyph.red { color: var(--danger); }
+  .r-row .q { color: var(--dim); }
+  .r-row .q b { color: var(--text); font-weight: 600; }
+  .r-row .t { color: var(--faint); }
+
+  /* credits */
+  .credits .c-body { padding: 18px; }
+  .bal { display: flex; align-items: baseline; gap: 9px; }
+  .bal .n { font-family: var(--sans); font-weight: 800; font-size: 2.5rem; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .bal .u { font-family: var(--mono); color: var(--dim); font-size: .82rem; }
+  .ledger { margin-top: 16px; border-top: 1px solid var(--line); }
+  .l-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: .76rem; align-items: center; }
+  .l-row .d { color: var(--dim); }
+  .l-row .a { font-variant-numeric: tabular-nums; }
+  .l-row .a.deb { color: var(--warn); }
+  .l-row .a.cred { color: var(--acid); }
+
+  /* channels */
+  .chan-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .chan-row:last-child { border-bottom: 0; }
+  .chan-row svg { width: 16px; height: 16px; stroke: var(--acid); flex: none; }
+  .chan-row .cn { font-family: var(--mono); font-size: .82rem; }
+  .chan-row .cs { font-family: var(--mono); font-size: .68rem; color: var(--faint); }
+  .chan-row .cost { margin-left: auto; font-family: var(--mono); font-size: .72rem; color: var(--dim); }
+  .chan-row .cost.free { color: var(--acid); }
+  .toggle { width: 34px; height: 19px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--bg); position: relative; flex: none; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--faint); transition: left .15s, background .15s; }
+  .toggle.on { background: color-mix(in srgb, var(--acid) 22%, transparent); border-color: var(--acid); }
+  .toggle.on::after { left: 16px; background: var(--acid); }
+
+  /* install prompt */
+  .install { border: 1px dashed var(--line-2); border-radius: var(--r); padding: 16px; display: flex; align-items: center; gap: 14px; background: var(--bg-tint); }
+  .install .ic { font-family: var(--mono); color: var(--volt); font-size: 1.3rem; }
+  .install .t1 { font-family: var(--sans); font-weight: 700; font-size: .9rem; text-transform: uppercase; letter-spacing: .02em; }
+  .install .t2 { font-family: var(--mono); font-size: .72rem; color: var(--dim); }
+
+  footer { border-top: 1px solid var(--line); padding: 26px 0; }
+  .foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; font-family: var(--mono); font-size: .74rem; color: var(--faint); }
+  .foot .metal { color: var(--dim); }
+  .foot .metal b { color: var(--acid); font-weight: 600; }
+
+  @keyframes beat { 0% { box-shadow: 0 0 0 0 currentColor; } 70%,100% { box-shadow: 0 0 0 8px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .beat, .q-wait .ring { animation: none; } }
+
+  @media (max-width: 940px) {
+    .grid { grid-template-columns: 1fr; }
+    .tabs { display: none; }
+    .ctx { grid-template-columns: 1fr; }
+  }
+</style>
+
+<header class="bar">
+  <div class="wrap bar-inner">
+    <div class="brand"><span class="mark">M</span>MOSHCODE<span class="app">app</span></div>
+    <nav class="tabs">
+      <a class="tab on" href="#">Approvals</a>
+      <a class="tab" href="#">Credits</a>
+      <a class="tab" href="#">Channels</a>
+      <a class="tab" href="#">Scripts</a>
+    </nav>
+    <div class="bar-right">
+      <span class="bal-chip">◆ <b>2,480</b> cr</span>
+      <span class="avatar">AC</span>
+    </div>
+  </div>
+</header>
+
+<div class="strip">
+  <div class="wrap strip-inner">
+    <span class="now"><span class="beat"></span>2 scripts in the pit</span>
+    <span class="sep">·</span>
+    <span>1 waiting on you</span>
+    <span class="sep">·</span>
+    <span>last mosh 3m ago</span>
+    <span class="sep">·</span>
+    <span class="tag">#moshing</span>
+  </div>
+</div>
+
+<main>
+  <div class="wrap grid">
+    <!-- MAIN: approvals -->
+    <div class="col">
+      <div>
+        <div class="section-title">
+          <h2>Needs you</h2>
+          <span class="count">2 paused</span>
+        </div>
+
+        <!-- active approval -->
+        <div class="card active">
+          <div class="card-head">
+            <span class="h">deploy.mosh · iter 7</span>
+            <span class="pill acid">Paused for you</span>
+          </div>
+          <div class="ap-body">
+            <div class="ap-meta">
+              <span>asked 40s ago</span><span class="sep">·</span>
+              <span>via SMS + Slack</span><span class="sep">·</span>
+              <span>agent: claude</span>
+            </div>
+            <h3 class="ap-title">Ship v2 to prod?</h3>
+            <div class="ap-sub">ask("ship v2 to prod?") — the loop is holding on your reply.</div>
+
+            <div class="ctx">
+              <div class="cell"><div class="k">Tests</div><div class="v ok">passing · 214/214</div></div>
+              <div class="cell"><div class="k">Diff</div><div class="v">41 files, +1,208 −340</div></div>
+              <div class="cell"><div class="k">Engine</div><div class="v">idle, holding session</div></div>
+              <div class="cell"><div class="k">Branch</div><div class="v">release/v2 → main</div></div>
+            </div>
+
+            <div class="reply">
+              <textarea placeholder="Instructions back to the script… (optional)">yes — and bump the tag to v2.1</textarea>
+            </div>
+            <div class="ap-actions">
+              <button class="btn acid">Approve &amp; continue</button>
+              <button class="btn">Redirect</button>
+              <span class="spacer"></span>
+              <button class="btn danger">Kill the loop</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- pending queue -->
+      <div>
+        <div class="section-title"><h2>In the queue</h2></div>
+        <div class="card queue">
+          <div class="q-row">
+            <div class="q-wait"><span class="ring"></span></div>
+            <div class="q-main">
+              <div class="q-q">Merge the flaky-test quarantine?</div>
+              <div class="q-s">nightly.mosh · iter 22 · ask()</div>
+            </div>
+            <div class="q-right"><span>waited 6m</span><span class="pill volt">via Telegram</span></div>
+          </div>
+          <div class="q-row">
+            <div class="q-wait"><span class="ring"></span></div>
+            <div class="q-main">
+              <div class="q-q">Approve $150 PR payout to @dev?</div>
+              <div class="q-s">payouts.mosh · iter 3 · ask()</div>
+            </div>
+            <div class="q-right"><span>waited 12m</span><span class="pill">via Email</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- resolved -->
+      <div>
+        <div class="section-title"><h2>Moshed</h2><span class="label" style="letter-spacing:.16em">last 24h</span></div>
+        <div class="card">
+          <div class="r-row"><span class="glyph">✓</span><span class="q"><b>Regenerate og:image?</b> → “yes, keep the skeleton”</span><span class="t">2h ago</span></div>
+          <div class="r-row"><span class="glyph">✓</span><span class="q"><b>Bump deps &amp; ship?</b> → “approved”</span><span class="t">5h ago</span></div>
+          <div class="r-row"><span class="glyph red">✕</span><span class="q"><b>Force-push to main?</b> → killed the loop</span><span class="t">9h ago</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ASIDE: credits + channels -->
+    <div class="col">
+      <div class="card credits">
+        <div class="card-head"><span class="h">Credits</span><span class="pill acid">prepaid</span></div>
+        <div class="c-body">
+          <div class="bal"><span class="n">2,480</span><span class="u">credits</span></div>
+          <button class="btn acid" style="margin-top:14px;width:100%;justify-content:center">Buy credits · CoinPay</button>
+          <div class="ledger">
+            <div class="l-row"><span class="d">Top-up · CoinPay (USDC)</span><span class="a cred">+2,500</span></div>
+            <div class="l-row"><span class="d">ask() → SMS · deploy.mosh</span><span class="a deb">−12</span></div>
+            <div class="l-row"><span class="d">ask() → Telegram · nightly</span><span class="a deb">−4</span></div>
+            <div class="l-row"><span class="d">notify() → email · payouts</span><span class="a deb">−4</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="h">Channels</span><span class="pill">where pings land</span></div>
+        <div class="chan-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+          <div><div class="cn">Web push (PWA)</div><div class="cs">this device</div></div>
+          <span class="cost free">free</span><span class="toggle on"></span>
+        </div>
+        <div class="chan-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+          <div><div class="cn">Email</div><div class="cs">anthony@profullstack.com</div></div>
+          <span class="cost free">free</span><span class="toggle on"></span>
+        </div>
+        <div class="chan-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M9 4v12a3 3 0 1 1-3-3h12a3 3 0 1 1-3 3V4a3 3 0 1 1 3 3H6a3 3 0 1 1 3-3z"/></svg>
+          <div><div class="cn">Slack · #ops</div><div class="cs">connected</div></div>
+          <span class="cost">4 cr</span><span class="toggle on"></span>
+        </div>
+        <div class="chan-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="m22 3-10 9M22 3l-7 18-4-8-8-3z"/></svg>
+          <div><div class="cn">Telegram</div><div class="cs">@anthony</div></div>
+          <span class="cost">4 cr</span><span class="toggle on"></span>
+        </div>
+        <div class="chan-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
+          <div><div class="cn">SMS</div><div class="cs">+1 ••• ••• 4021</div></div>
+          <span class="cost">12 cr</span><span class="toggle on"></span>
+        </div>
+      </div>
+
+      <div class="install">
+        <span class="ic">⚡</span>
+        <div>
+          <div class="t1">Install the app</div>
+          <div class="t2">Add moshcode to your home screen — approve from the pit, anywhere.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div class="brand" style="font-size:.95rem"><span class="mark" style="width:18px;height:18px;font-size:.75rem">M</span>MOSHCODE</div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <a href="#">Docs</a><a href="#">CLI</a><a href="#">moshcode.sh</a><a href="#">Status</a>
+    </div>
+    <div class="metal">no bugs, only <b>features</b>. 🤘</div>
+  </div>
+</footer>
