@@ -3,11 +3,11 @@ import test from "node:test";
 
 import { ingestApproval, pollApproval } from "../src/notify.mjs";
 
-test("ingestApproval fails cleanly without an API key", async () => {
+test("ingestApproval fails cleanly when not authenticated", async () => {
   delete process.env.MOSHCODE_API_KEY;
   const r = await ingestApproval({ message: "hi" }, { fetchImpl: async () => ({ ok: true, json: async () => ({}) }) });
   assert.equal(r.ok, false);
-  assert.match(r.error, /MOSHCODE_API_KEY/);
+  assert.match(r.error, /not logged in/);
 });
 
 test("ingestApproval posts to the app with a Bearer key and returns {id,url}", async () => {

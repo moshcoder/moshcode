@@ -88,7 +88,7 @@ const COMMANDS = [
       ctx.out(`  🔔 notify()  → ${msg}`);
       if (ctx.dryRun) return { dryRun: true };
       const r = await ingestApproval({ message: msg, kind: "notify", script: "moshscript", iter: ctx.iter });
-      if (!r.ok) { ctx.out(`     ! notify failed (${r.error || r.status}) — set MOSHCODE_API_KEY`); return null; }
+      if (!r.ok) { ctx.out(`     ! notify failed (${r.error || r.status}) — run \`moshcode login\``); return null; }
       ctx.out(`     🔗 ${r.url}`);
       if (r.warning) ctx.out(`     ⚠ ${r.warning}`);
       return { id: r.id, url: r.url };
@@ -109,7 +109,7 @@ const COMMANDS = [
         return null;
       }
       const r = await ingestApproval({ message: prompt, kind: "ask", script: "moshscript", iter: ctx.iter });
-      if (!r.ok) { ctx.out(`     ! ask failed (${r.error || r.status}) — set MOSHCODE_API_KEY`); return null; }
+      if (!r.ok) { ctx.out(`     ! ask failed (${r.error || r.status}) — run \`moshcode login\``); return null; }
       ctx.out(`     🔗 approve/instruct: ${r.url}`);
       ctx.out("     ⏳ waiting for a human…");
       const reply = await pollApproval(r.id);

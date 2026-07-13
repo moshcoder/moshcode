@@ -18,6 +18,7 @@ import { runUpgrade } from "../src/upgrade.mjs";
 import { mcpCommand, skillCommand } from "../src/integrations.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
+import { login, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -121,6 +122,9 @@ usage:
   moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
                                        prd/NNNN-slug.md and hand it to an engine to
                                        author; no arg lists existing PRDs
+  moshcode login                       authenticate this machine with app.moshcode.sh
+                                       (browser OAuth+PKCE) so notify()/ask() reach you
+  moshcode whoami | logout             show / clear the logged-in account
   moshcode pwd                         show the current dir + git repo/branch/origin
   moshcode engines                     list engines + install status
   moshcode tools                       list workflow tools + install status
@@ -248,6 +252,13 @@ async function main() {
     }
     return;
   }
+  if (cmd === "login") {
+    try { const { email } = await login(); console.log(`✓ logged in${email ? ` as ${email}` : ""} 🤘 — notify()/ask() will reach you now.`); }
+    catch (e) { console.error(String(e.message || e)); process.exitCode = 1; }
+    return;
+  }
+  if (cmd === "whoami") { await whoami(); return; }
+  if (cmd === "logout") { logout(); return; }
   if (cmd === "run") {
     let max = 3, dryRun = false;
     const positional = []; // first is the file; the rest reach the script as argv

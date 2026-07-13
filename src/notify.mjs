@@ -9,9 +9,12 @@
 // (from the app's Settings → API keys). MOSHCODE_WEBHOOK_SECRET optionally signs
 // the ingest for defense in depth. The HTTP layer is injectable for tests.
 import crypto from "node:crypto";
+import { loadCreds } from "./auth.mjs";
 
-const API = (process.env.MOSHCODE_API || "https://app.moshcode.sh").replace(/\/+$/, "");
-const KEY = () => process.env.MOSHCODE_API_KEY || "";
+// Prefer explicit env; otherwise fall back to `moshcode login` credentials, so a
+// script Just Works after login without exporting anything.
+const API = () => (process.env.MOSHCODE_API || loadCreds()?.api || "https://app.moshcode.sh").replace(/\/+$/, "");
+const KEY = () => process.env.MOSHCODE_API_KEY || loadCreds()?.token || "";
 const SECRET = () => process.env.MOSHCODE_WEBHOOK_SECRET || "";
 
 function signHeaders(body) {
@@ -24,11 +27,11 @@ function signHeaders(body) {
 
 /** POST an approval to the app. Returns { ok, id, url, delivered, charged, warning } or { ok:false }. */
 export async function ingestApproval(payload, { fetchImpl = fetch } = {}) {
-  if (!KEY()) return { ok: false, error: "no MOSHCODE_API_KEY set" };
+  if (!KEY()) return { ok: false, error: "not logged in" };
   const body = JSON.stringify(payload);
   let res;
   try {
-    res = await fetchImpl(`${API}/api/approvals`, {
+    res = await fetchImpl(`${API()}/api/approvals`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${KEY()}`, ...signHeaders(body) },
       body,
@@ -54,7 +57,7 @@ export async function pollApproval(id, opts = {}) {
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   } = opts;
 
-  const url = `${API}/api/approvals/${id}`;
+  const url = `${API()}/api/approvals/${id}`;
   const headers = KEY() ? { authorization: `Bearer ${KEY()}` } : {};
   const start = now();
   for (;;) {
