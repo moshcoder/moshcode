@@ -18,5 +18,5 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 |---|---|---|
 | [0001](0001-wrap-ugig-and-coinpay-clis.md) | Wrap the UGig and CoinPay CLIs | Accepted |
 | [0002](0002-separate-agent-and-raw-engine-launches.md) | Separate autonomous agent and raw engine launches | Accepted |
-| [0003](0003-cross-engine-mcp-and-skill-installation.md) | Install MCP servers and skills across every engine at once | Draft |
+| [0003](0003-cross-engine-mcp-and-skill-installation.md) | Install MCP servers and skills across every engine at once | Accepted |
 <!-- PRD-INDEX:END -->

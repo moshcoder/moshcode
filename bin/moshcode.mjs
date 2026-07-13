@@ -15,6 +15,7 @@ import {
 } from "../src/engines.mjs";
 import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
+import { mcpCommand, skillCommand } from "../src/integrations.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { tui } from "../src/tui.mjs";
@@ -104,6 +105,10 @@ usage:
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)
+  moshcode mcp install <url>           register an MCP server across every engine
+  moshcode mcp add <name> <url|cmd>    that supports it (claude/gemini/codex/opencode)
+  moshcode skill install <git-url>     install a skill across every engine that
+                                       supports it (claude/gemini)
   moshcode install <engine|tool>       install a coding engine or workflow tool
   moshcode upgrade [target…]           update moshcode + installed engines/tools
                                        (no args = everything; name targets to
@@ -178,6 +183,12 @@ async function main() {
       console.log(`${tool.installed ? "●" : "○"} ${tool.key.padEnd(10)} ${tool.desc}`);
     }
     return;
+  }
+  if (cmd === "mcp") {
+    return mcpCommand(rest);
+  }
+  if (cmd === "skill" || cmd === "skills") {
+    return skillCommand(rest);
   }
   if (cmd === "install") {
     const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();

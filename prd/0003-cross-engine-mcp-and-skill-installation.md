@@ -2,14 +2,14 @@
 openprd: "0.2"
 id: "0003"
 title: Install MCP servers and skills across every engine at once
-status: Draft
+status: Accepted
 authors:
   - anthony@chovy.com
 created: 2026-07-13
 updated: 2026-07-13
 repo: https://github.com/moshcoder/moshcode
 discussion:
-implementation:
+implementation: src/mcp.mjs, src/skills.mjs, src/integrations.mjs
 tags:
   - cli
   - mcp

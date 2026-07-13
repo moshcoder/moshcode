@@ -14,6 +14,7 @@ import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { compile, run } from "./interpreter.mjs";
 import { defaultCommands } from "./commands.mjs";
+import { mcpCommand, skillCommand } from "./integrations.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
@@ -120,6 +121,8 @@ function printHelp() {
     `   ${acid("/tools")}             list workflow tools (ugig · coinpay)`,
     `   ${acid("/ugig [args…]")}      hand off to the native UGig CLI`,
     `   ${acid("/coinpay [args…]")}   hand off to the native CoinPay CLI`,
+    `   ${acid("/mcp install <url>")} register an MCP server across every engine that supports it`,
+    `   ${acid("/skill install <url>")} install a skill across every engine that supports it`,
     `   ${acid("/install <name>")}    install an engine or workflow tool`,
     `   ${acid("/upgrade [name…]")}   update moshcode + installed engines/tools (or named targets)`,
     `   ${acid("/pwd")}                show the current dir + git repo/branch/origin`,
@@ -311,6 +314,18 @@ export async function tui() {
       const [key, engine] = resolved;
       rl.close();
       await openEngine(key, { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed }, rest.slice(1));
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "mcp") {
+      rl.close();
+      await mcpCommand(rest);
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "skill" || cmd === "skills") {
+      rl.close();
+      await skillCommand(rest);
       rl = mkrl();
       continue;
     }
