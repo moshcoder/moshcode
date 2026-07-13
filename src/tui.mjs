@@ -105,7 +105,7 @@ function printEngines() {
 }
 
 function printTools() {
-  console.log(bone("  tools") + ash("    — run one with ") + acid("/ugig") + ash(" or ") + acid("/coinpay"));
+  console.log(bone("  tools") + ash("    — run one with ") + acid("/ugig") + ash(", ") + acid("/coinpay") + ash(", or ") + acid("/c0mpute"));
   for (const tool of toolStatus()) {
     const dot = tool.installed ? acid("●") : ash("○");
     console.log(`   ${dot} ${bone(tool.key.padEnd(9))} ${ash(tool.installed ? "installed" : "not installed — /install " + tool.key)}`);
@@ -118,9 +118,10 @@ function printHelp() {
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     autonomous launch; bypass/auto-approve native permissions`,
     `   ${acid("/start <name>")}      raw launch; inject no engine arguments`,
-    `   ${acid("/tools")}             list workflow tools (ugig · coinpay)`,
+    `   ${acid("/tools")}             list workflow tools (ugig · coinpay · c0mpute)`,
     `   ${acid("/ugig [args…]")}      hand off to the native UGig CLI`,
     `   ${acid("/coinpay [args…]")}   hand off to the native CoinPay CLI`,
+    `   ${acid("/c0mpute [args…]")}   hand off to the native c0mpute CLI`,
     `   ${acid("/mcp install <url>")} register an MCP server across every engine that supports it`,
     `   ${acid("/skill install <url>")} install a skill across every engine that supports it`,
     `   ${acid("/install <name>")}    install an engine or workflow tool`,

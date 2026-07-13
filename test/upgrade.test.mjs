@@ -8,7 +8,7 @@ import { planUpgrade } from "../src/upgrade.mjs";
 
 function withFakeTools(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "moshcode-upgrade-"));
-  for (const name of ["ugig", "coinpay"]) {
+  for (const name of ["ugig", "coinpay", "c0mpute"]) {
     const file = path.join(dir, name);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);
@@ -27,6 +27,7 @@ test("upgrade tools selects installed workflow tools without self or engines", (
     assert.deepEqual(plan.items.map(({ key, kind }) => ({ key, kind })), [
       { key: "ugig", kind: "tool" },
       { key: "coinpay", kind: "tool" },
+      { key: "c0mpute", kind: "tool" },
     ]);
   });
 });

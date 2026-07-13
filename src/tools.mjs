@@ -1,7 +1,7 @@
 // Adjacent workflow CLIs moshcode can install and transparently invoke.
 // These are deliberately separate from coding engines: UGig owns marketplace
-// workflows, CoinPay owns payment workflows, and moshcode only conducts their
-// native command lines.
+// workflows, CoinPay owns payment workflows, c0mpute owns the compute network,
+// and moshcode only conducts their native command lines.
 import { isInstalled, openPassthrough } from "./engines.mjs";
 
 export const TOOLS = {
@@ -16,6 +16,12 @@ export const TOOLS = {
     bin: "coinpay",
     // CoinPay ships via its own install script (fetched from GitHub), not npm.
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://coinpayportal.com/install.sh | sh"] },
+  },
+  c0mpute: {
+    desc: "c0mpute — decentralized compute network CLI",
+    bin: "c0mpute",
+    // c0mpute ships via its own install script (the v1 stack installer).
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"] },
   },
 };
 

@@ -101,7 +101,7 @@ usage:
                                        (bypasses/auto-approves native permissions)
   moshcode start <engine> [args…]      raw engine launch; inject no arguments
   moshcode <engine> [args…]            raw launch shorthand (backward compatible)
-  moshcode <tool> [args…]              transparently invoke ugig or coinpay
+  moshcode <tool> [args…]              transparently invoke ugig, coinpay, or c0mpute
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
                                        built-in loop if no file); --max bounds
                                        the while loop (default 3)

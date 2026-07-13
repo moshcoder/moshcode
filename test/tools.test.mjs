@@ -67,6 +67,7 @@ function run(args, { binDir, cwd, input = "", env = {} } = {}) {
 test("tool registry uses the official native CLI packages", () => {
   assert.deepEqual(resolveTool("UGIG"), ["ugig", TOOLS.ugig]);
   assert.deepEqual(resolveTool("coinpay"), ["coinpay", TOOLS.coinpay]);
+  assert.deepEqual(resolveTool("c0mpute"), ["c0mpute", TOOLS.c0mpute]);
   assert.equal(resolveTool("claude"), null);
   assert.deepEqual(TOOLS.ugig.install, {
     cmd: "bash",
@@ -76,8 +77,13 @@ test("tool registry uses the official native CLI packages", () => {
     cmd: "sh",
     args: ["-c", "curl -fsSL https://coinpayportal.com/install.sh | sh"],
   });
+  assert.deepEqual(TOOLS.c0mpute.install, {
+    cmd: "sh",
+    args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"],
+  });
   assert.match(toolList(), /ugig/);
   assert.match(toolList(), /coinpay/);
+  assert.match(toolList(), /c0mpute/);
 });
 
 for (const name of ["ugig", "coinpay"]) {
@@ -149,6 +155,7 @@ test("tools status reports native executables found on PATH", async () => {
 for (const [name, shell, script] of [
   ["ugig", "bash", "curl -fsSL https://ugig.net/install.sh | bash"],
   ["coinpay", "sh", "curl -fsSL https://coinpayportal.com/install.sh | sh"],
+  ["c0mpute", "sh", "curl -fsSL https://c0mpute.com/install.sh | sh"],
 ]) {
   test(`install ${name} delegates to its official install script`, async () => {
     const root = tempDir("moshcode-install-");
