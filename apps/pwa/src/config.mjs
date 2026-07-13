@@ -43,7 +43,7 @@ export const config = {
   ingestSecret: process.env.MOSHCODE_WEBHOOK_SECRET || "",
   resend: {
     apiKey: process.env.RESEND_API_KEY || "",
-    from: process.env.RESEND_FROM || "moshcode <notify@moshcode.sh>",
+    from: process.env.RESEND_FROM || "moshcode <notify@moshcoding.com>",
   },
   coinpay: {
     apiBase: (process.env.COINPAY_API_BASE || "https://coinpayportal.com").replace(/\/+$/, ""),
