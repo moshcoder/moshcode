@@ -127,6 +127,7 @@ function printHelp() {
     `   ${acid("/install <name>")}    install an engine or workflow tool`,
     `   ${acid("/upgrade [name…]")}   update moshcode + installed engines/tools (or named targets)`,
     `   ${acid("/pwd")}                show the current dir + git repo/branch/origin`,
+    `   ${acid("/shell [cmd]")}        drop into $SHELL (exit → back to the pit); also ${acid("!cmd")}`,
     `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript program`,
     `   ${acid("/help")}              this`,
@@ -190,6 +191,39 @@ async function openWorkflowTool(key, tool, args) {
   }
 }
 
+// Spawn the user's shell with the terminal fully handed over (stdio inherit),
+// inheriting the current cwd + env. No args → an interactive shell; a raw
+// command string → `$SHELL -c "<cmd>"` (one-off). Resolves { ok, code, signal }.
+function runShell(rawCmd) {
+  return new Promise((resolve) => {
+    const shell = process.env.SHELL
+      || (process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : "/bin/sh");
+    const args = rawCmd ? ["-c", rawCmd] : [];
+    let child;
+    try { child = spawn(shell, args, { stdio: "inherit" }); }
+    catch (e) { resolve({ ok: false, error: e }); return; }
+    child.on("error", (e) => resolve({ ok: false, error: e }));
+    child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
+  });
+}
+
+// vim `:sh` — drop into a shell and land back at the mosh prompt on exit, with
+// the whole TUI session (history, cwd) intact. `rawCmd` runs a one-off instead.
+async function openShell(rawCmd) {
+  const shellName = path.basename(process.env.SHELL || "sh");
+  console.log(info(rawCmd
+    ? `${bone(shellName)} ${ash("-c")} ${ash(rawCmd)}`
+    : `dropping to ${bone(shellName)} — ${ash("`exit` or Ctrl-D brings you back to the pit")}`));
+  console.log(hr());
+  const r = await runShell(rawCmd);
+  console.log(hr());
+  if (!r.ok) {
+    console.log(err(`couldn't start shell: ${r.error?.message || r.error}`));
+  } else {
+    console.log(info(`shell exited${r.code != null ? ` (code ${r.code})` : r.signal ? ` (${r.signal})` : ""}. back in the pit.`));
+  }
+}
+
 function installTarget(key) {
   return new Promise((resolve) => {
     const target = ENGINES[key] || TOOLS[key];
@@ -249,6 +283,16 @@ export async function tui() {
     if (!line) continue;
     saveHistory(); // readline just recorded this line into the shared history
 
+    // vim-style shell escape: `!` drops into $SHELL, `!<cmd>` runs one-off. We
+    // take the raw remainder (not the tokenized parts) so quoting is preserved.
+    if (line.startsWith("!")) {
+      const rawCmd = line.slice(1).trim();
+      rl.close();
+      await openShell(rawCmd || null);
+      rl = mkrl();
+      continue;
+    }
+
     let parts;
     try { parts = splitCommandLine(line); }
     catch (error) { console.log(err(`can't parse command: ${error.message}`)); continue; }
@@ -261,6 +305,12 @@ export async function tui() {
     if (cmd === "run") {
       if (!rest[0]) { console.log(err("usage: /run <file.mosh>")); continue; }
       await runFile(rest[0]);
+      continue;
+    }
+    if (cmd === "shell" || cmd === "sh") {
+      rl.close();
+      await openShell(rest.length ? rest.join(" ") : null);
+      rl = mkrl();
       continue;
     }
     if (cmd === "install") {
