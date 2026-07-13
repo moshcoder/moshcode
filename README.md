@@ -127,9 +127,12 @@ In the TUI shell it's `/prd [idea]`.
 
 ## moshscript
 
-A metal scripting toolkit. Paste dead-simple, readable scripts and run them.
+A metal scripting toolkit — **secretly all JS is legal**. The simple surface
+stays dead-simple, but a `.mosh` file is real JavaScript under the hood with the
+full moshcode command vocabulary injected as globals:
 
-```
+```js
+// alive.mosh — the starter script (unchanged, still works)
 while (alive) {
   code();
   mosh();
@@ -138,39 +141,131 @@ while (alive) {
 } // no bugs, only features
 ```
 
-## Run
+The secret that it's all JS — no new syntax to learn:
+
+```js
+// deploy-agents.mosh — real work, still reads like the toy
+const engines = ["claude", "codex"];
+for (const e of engines) {
+  install(e);                                  // → moshcode install <e>
+}
+mcp("install", "https://mcp.sentry.dev/mcp");  // fan out across engines
+say(`ready to mosh with ${engines.length} engines`);
+agents("claude");                              // drop into an autonomous session
+```
+
+### Run
 
 ```sh
-moshcode run examples/alive.mosh        # run a script
-moshcode run - < script.mosh            # or pipe/paste from stdin
-moshcode run --max 5                    # bound the while loop (default 3)
-echo 'say("hi"); notify();' | moshcode run -
-moshcode commands                       # list built-in commands
-moshcode help
+moshcode run examples/alive.mosh              # run a script
+moshcode run deploy.mosh --dry-run            # narrate without executing
+moshcode run alive.mosh --max 5               # bound the while loop (default 3)
+moshcode run deploy.mosh staging --fast       # extra args reach the script as argv
+moshcode run - < script.mosh                  # pipe/paste from stdin
+moshcode commands                             # list the full vocabulary
 ```
 
 No install/build step — it's plain ESM. `node bin/moshcode.mjs …` works too.
 
-## moshscript
+### Shebang — self-running scripts
 
-The whole language:
+`.mosh` files support shebang lines, so `chmod +x` makes them run like shell
+scripts. The `moshscript` executable is installed alongside `moshcode`:
 
-- `while (alive) { … }` — loops the body while the `alive` flag is set (bounded by `--max`).
-- `name(args…);` — call a command. `//` comments are ignored.
+```js
+#!/usr/bin/env moshscript
+// deploy.mosh — chmod +x it and run it like any shell script
+install("claude");
+agents("claude");
+```
 
-Built-in commands: `code()` `mosh()` `notify()` `repeat()` `say("…")` `sleep(ms)` `stop()`.
+```sh
+chmod +x deploy.mosh
+./deploy.mosh                        # shebang → moshscript → moshcode run
+./deploy.mosh --dry-run staging      # args after the file reach the script
+```
 
-### notify()
+### Commands
 
-Pings **moshcoding.com web notifications**, and — if `MOSHCODE_WEBHOOK_URL` is set —
-also POSTs to that webhook. Both are HMAC-signed (`X-Moshcode-Signature`) with
-`MOSHCODE_WEBHOOK_SECRET`.
+**Local verbs** (moshscript-only, in-process):
+
+| verb | description |
+|---|---|
+| `code()` | compile features (no bugs) |
+| `mosh()` | open the pit + blast the moshcoding playlist |
+| `notify(msg)` | fire-and-forget ping + approval link on moshcode.sh |
+| `ask(prompt)` | blocking gate — waits for human reply at moshcode.sh |
+| `say("…")` | print a line |
+| `sleep(ms)` | pause for N milliseconds (blocking) |
+| `stop()` | end the loop (`alive = false`) |
+| `repeat()` | back to the top of the loop |
+
+**CLI verbs** (each shells out to `moshcode <name> ...args`):
+
+| verb | description |
+|---|---|
+| `agents(engine)` | launch an autonomous agent session |
+| `start(engine)` | raw-launch an engine |
+| `install(target)` | install an engine or workflow tool |
+| `upgrade(targets…)` | upgrade moshcode, engines, and tools |
+| `mcp(args…)` | register/fan out an MCP server |
+| `skill(args…)` | install a skill across engines |
+| `prd(idea)` | publish/author an OpenPRD doc |
+| `ugig(args…)` | drive the ugig workflow CLI |
+| `coinpay(args…)` | drive the coinpay workflow CLI |
+| `c0mpute(args…)` | drive the c0mpute workflow CLI |
+| `pwd()` | print the current repo/location |
+| `run(file)` | run another .mosh file (include/compose) |
+
+**Specials** (injected globals, not commands):
+
+| name | description |
+|---|---|
+| `alive` | `true` while the loop may continue; reads bounded by `--max` |
+| `argv` | positional args passed after the script file |
+| `env` | `process.env` — parameterize scripts from the environment |
+
+### Human-in-the-loop
+
+- `notify(msg)` — fire-and-forget. Pings the operator across configured channels
+  and surfaces an approval link at `app.moshcode.sh/approve/:id`. Returns `{ id, url }`.
+- `ask(prompt)` — blocking gate. Same ping + link, then **blocks** until the
+  operator opens the link, reads the context, types instructions, and submits.
+  Resolves with their text (or `null` on timeout). Use with `await`:
+
+```js
+const task = await ask("what should I work on next?");
+say(`got it: ${task}`);
+```
+
+### Dry run
+
+`--dry-run` narrates every action without executing it — no engine spawns, no
+installs, no network POSTs, no PRD writes:
+
+```
+$ moshcode run deploy.mosh --dry-run
+🎸 moshcode — running moshscript (dry run)
+
+  ▶ install(claude) → would run: moshcode install claude
+  ▶ mcp(install, https://mcp.sentry.dev/mcp) → would run: moshcode mcp install …
+  💬 ready to mosh with 2 engines
+  ▶ agents(claude) → would run: moshcode agents claude
+
+✓ 0 loop(s) — no bugs, only features. 🤘
+```
 
 ### Add your own commands
 
+The vocabulary is open for extension via the registry:
+
 ```js
-import { defaultCommands } from "moshcode/src/commands.mjs";
-const commands = { ...defaultCommands(), deploy: (ctx) => ctx.out("shipping…") };
+import { moshVocabulary } from "moshcode/src/commands.mjs";
+import { runScript } from "moshcode/src/runtime.mjs";
+
+const commands = moshVocabulary();
+commands.register({ name: "deploy", summary: "ship it", run: (ctx) => ctx.out("shipping…") });
+await runScript(src, { commands });
 ```
 
 ## Env
@@ -178,5 +273,7 @@ const commands = { ...defaultCommands(), deploy: (ctx) => ctx.out("shipping…")
 | var | default | purpose |
 |---|---|---|
 | `MOSHCODE_API` | `https://moshcoding.com` | web-notifications endpoint host |
+| `MOSHCODE_SITE` | `https://app.moshcode.sh` | approval URL base |
 | `MOSHCODE_WEBHOOK_URL` | — | optional extra webhook for `notify()` |
 | `MOSHCODE_WEBHOOK_SECRET` | — | signs notify() posts |
+| `MOSHCODE_PLAYLIST` | Spotify playlist URL | what `mosh()` blasts in the browser |

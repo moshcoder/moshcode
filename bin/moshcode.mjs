@@ -93,6 +93,9 @@ async function launchEngine(key, engine, args, { agentMode = false } = {}) {
 }
 
 function help() {
+  const vocab = moshVocabulary().all();
+  const local = vocab.filter((c) => !["run","agents","start","install","upgrade","mcp","skill","prd","ugig","coinpay","c0mpute","pwd"].includes(c.name));
+  const cli = vocab.filter((c) => !local.includes(c));
   console.log(`moshcode — metal scripting toolkit 🤘
 
 usage:
@@ -103,8 +106,10 @@ usage:
   moshcode <engine> [args…]            raw launch shorthand (backward compatible)
   moshcode <tool> [args…]              transparently invoke ugig, coinpay, or c0mpute
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
-                                       built-in loop if no file); --max bounds
-                                       the while loop (default 3)
+     [--dry-run] [args…]               built-in loop if no file); --max bounds
+                                       the while loop (default 3); --dry-run
+                                       narrates without executing; extra args
+                                       reach the script as argv
   moshcode mcp install <url>           register an MCP server across every engine
   moshcode mcp add <name> <url|cmd>    that supports it (claude/gemini/codex/opencode)
   moshcode skill install <git-url>     install a skill across every engine that
@@ -131,14 +136,24 @@ isolated or trusted workspaces. use \`moshcode start <engine>\` for native defau
 tools (native CLI passthrough; each tool owns its auth and output):
 ${toolList()}
 
-moshscript looks like this:
+moshscript — secretly all JS is legal:
 ${DEFAULT_SCRIPT}
-commands: code() mosh() notify() repeat() say("…") sleep(ms) stop()
-notify() pings moshcoding.com web notifications, and a webhook too if
-MOSHCODE_WEBHOOK_URL is set (signed with MOSHCODE_WEBHOOK_SECRET).
+a .mosh file is real JavaScript with the command vocabulary injected as globals.
+const, for, if, await, template strings — all just work. shebang lines
+(#!/usr/bin/env moshscript) are stripped automatically, so chmod +x works.
+
+local commands (moshscript-only):
+${local.map((c) => `  ${(`${c.name}()`).padEnd(14)} ${c.summary}`).join("\n")}
+
+CLI commands (each shells out to \`moshcode <name> ...args\`):
+${cli.map((c) => `  ${(`${c.name}()`).padEnd(14)} ${c.summary}`).join("\n")}
+
+human-in-the-loop:
+  notify(msg)    fire-and-forget ping to moshcoding.com + webhook
+  ask(prompt)    blocking gate — waits for human reply at moshcode.sh
 
 env: MOSHCODE_API (default https://moshcoding.com), MOSHCODE_WEBHOOK_URL,
-     MOSHCODE_WEBHOOK_SECRET
+     MOSHCODE_WEBHOOK_SECRET, MOSHCODE_PLAYLIST
 `);
 }
 
