@@ -11,7 +11,7 @@
 // `agentsView` fall back to `agentArgs` — an autonomous session with native
 // approvals bypassed/auto-approved.
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 export const ENGINES = {
@@ -82,15 +82,54 @@ export function resolveEngine(token) {
   return key ? [key, ENGINES[key]] : null;
 }
 
-/** Is `bin` an executable on PATH? (cross-platform-ish) */
-export function isInstalled(bin) {
-  const exts = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
-  for (const dir of (process.env.PATH || "").split(path.delimiter).filter(Boolean)) {
+function executableCandidates(bin) {
+  const exts = process.platform === "win32" ? ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";")] : [""];
+  const dirs = path.isAbsolute(bin) || bin.includes(path.sep) ? [""] : (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const seen = new Set();
+  const candidates = [];
+  for (const dir of dirs) {
     for (const ext of exts) {
-      try { if (existsSync(path.join(dir, bin + ext)) && statSync(path.join(dir, bin + ext)).isFile()) return true; } catch { /* keep looking */ }
+      const candidate = dir ? path.join(dir, bin + ext) : bin + ext;
+      const key = candidate.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidates.push(candidate);
+      }
     }
   }
-  return false;
+  return candidates;
+}
+
+function resolveExecutable(bin) {
+  for (const candidate of executableCandidates(bin)) {
+    try {
+      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    } catch { /* keep looking */ }
+  }
+  return null;
+}
+
+function nodeShebang(file) {
+  try {
+    const head = readFileSync(file, "utf8").slice(0, 80);
+    return /^#!.*\bnode(?:\.exe)?\b/.test(head);
+  } catch {
+    return false;
+  }
+}
+
+function spawnSpec(bin, args = []) {
+  const resolved = resolveExecutable(bin);
+  if (!resolved) return { cmd: bin, args };
+  if (process.platform === "win32" && path.extname(resolved) === "" && nodeShebang(resolved)) {
+    return { cmd: process.execPath, args: [resolved, ...args] };
+  }
+  return { cmd: resolved, args };
+}
+
+/** Is `bin` an executable on PATH? (cross-platform-ish) */
+export function isInstalled(bin) {
+  return Boolean(resolveExecutable(bin));
 }
 
 // Headless "run one prompt, print the answer, exit" invocation per engine — the
@@ -147,7 +186,8 @@ export function agentLaunchArgs(engine, args = []) {
 export function runCmd(cmd, args = []) {
   return new Promise((resolve) => {
     let child;
-    try { child = spawn(cmd, args, { stdio: "inherit" }); }
+    const spec = spawnSpec(cmd, args);
+    try { child = spawn(spec.cmd, spec.args, { stdio: "inherit" }); }
     catch (e) { resolve({ ok: false, error: e }); return; }
     child.on("error", (e) => resolve({ ok: false, error: e }));
     child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
@@ -168,7 +208,8 @@ export function openPassthrough(target, args = []) {
       for (const k of target.stripEnv) delete env[k];
     }
     let child;
-    try { child = spawn(target.bin, args, { stdio: "inherit", env }); }
+    const spec = spawnSpec(target.bin, args);
+    try { child = spawn(spec.cmd, spec.args, { stdio: "inherit", env }); }
     catch (e) { resolve({ ok: false, error: e }); return; }
     child.on("error", (e) => resolve({ ok: false, error: e }));
     child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));

@@ -171,10 +171,12 @@ const COMMANDS = [
         ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL -c ${JSON.stringify(cmd)}`);
         return { ok: true, dryRun: true };
       }
-      const sh = process.env.SHELL
-        || (process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : "/bin/sh");
+      const sh = process.platform === "win32"
+        ? (process.env.COMSPEC || "cmd.exe")
+        : (process.env.SHELL || "/bin/sh");
+      const shArgs = process.platform === "win32" ? ["/d", "/s", "/c", cmd] : ["-c", cmd];
       ctx.out(`  ▶ shell: ${cmd}`);
-      const res = spawnSync(sh, ["-c", cmd], { stdio: "inherit" });
+      const res = spawnSync(sh, shArgs, { stdio: "inherit" });
       if (res.error) throw res.error;
       const code = res.status ?? 1;
       if (code !== 0) {
