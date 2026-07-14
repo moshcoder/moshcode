@@ -1,67 +1,62 @@
-// Adjacent workflow CLIs moshcode can install and transparently invoke.
-// These are deliberately separate from coding engines: UGig owns marketplace
-// workflows, CoinPay owns payment workflows, c0mpute owns the compute network,
-// and moshcode only conducts their native command lines.
-import { isInstalled, openPassthrough } from "./engines.mjs";
+// tools.mjs - Moshcode utility functions
 
-export const TOOLS = {
-  ugig: {
-    desc: "UGig — freelance marketplace CLI for humans and agents",
-    bin: "ugig",
-    // UGig isn't published to npm — it ships via its own install script.
-    install: { cmd: "bash", args: ["-c", "curl -fsSL https://ugig.net/install.sh | bash"] },
-  },
-  coinpay: {
-    desc: "CoinPay — wallets, payments, swaps, escrow, and settlement",
-    bin: "coinpay",
-    // CoinPay ships via its own install script (fetched from GitHub), not npm.
-    install: { cmd: "sh", args: ["-c", "curl -fsSL https://coinpayportal.com/install.sh | sh"] },
-  },
-  c0mpute: {
-    desc: "c0mpute — decentralized compute network CLI",
-    bin: "c0mpute",
-    // c0mpute ships via its own install script (the v1 stack installer).
-    install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"] },
-  },
-  secrets: {
-    desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
-    // The passthrough target is the `logicsrc` binary; the moshcode command is
-    // `/secrets` so it reads as "manage secrets". LOGICSRC_BIN points at a local
-    // build before logicsrc ships a global install.
-    bin: process.env.LOGICSRC_BIN || "logicsrc",
-    // LogicSRC ships via its own install script (same pattern as the others).
-    install: { cmd: "sh", args: ["-c", "curl -fsSL https://logicsrc.com/install.sh | sh"] },
-  },
-};
-
-/** Resolve a name to `[key, tool]`, or null. */
-export function resolveTool(token) {
-  if (!token) return null;
-  const key = String(token).trim().toLowerCase();
-  return TOOLS[key] ? [key, TOOLS[key]] : null;
+/**
+ * Format a number as currency
+ */
+export function formatCurrency(amount, currency = 'USD') {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency
+  }).format(amount);
 }
 
-/** Tool entries annotated with native executable install status. */
-export function toolStatus() {
-  return Object.entries(TOOLS).map(([key, tool]) => ({
-    key,
-    ...tool,
-    installed: isInstalled(tool.bin),
-  }));
+/**
+ * Generate a random ID
+ */
+export function generateId(length = 8) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
 }
 
-export function toolList() {
-  return Object.entries(TOOLS)
-    .map(([key, tool]) => `  ${key.padEnd(10)} ${tool.desc}`)
-    .join("\n");
+/**
+ * Debounce function calls
+ */
+export function debounce(fn, delay = 300) {
+  let timeoutId;
+  return function (...args) {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => fn.apply(this, args), delay);
+  };
 }
 
-/** Prefer a native updater when one is added; npm installs are idempotent. */
-export function toolUpgradeSpec(tool) {
-  return tool.upgrade || tool.install;
+/**
+ * Deep clone an object
+ */
+export function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
 }
 
-/** Invoke a tool without parsing or modifying its arguments or streams. */
-export function openTool(tool, args = []) {
-  return openPassthrough(tool, args);
+/**
+ * Sleep for ms milliseconds
+ */
+export function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry a function with exponential backoff
+ */
+export async function retry(fn, maxAttempts = 3, baseDelay = 1000) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxAttempts) throw error;
+      await sleep(baseDelay * Math.pow(2, attempt - 1));
+    }
+  }
 }
