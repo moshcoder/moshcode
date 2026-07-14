@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { runMoshcode, cliVerb, runAi } from "../src/cli.mjs";
 import { aiExecArgs, pickAiEngine } from "../src/engines.mjs";
 import { moshVocabulary } from "../src/commands.mjs";
 import { runScript } from "../src/runtime.mjs";
 import { createRegistry } from "../src/registry.mjs";
+
+test("moshcode --version prints the package version", () => {
+  const expected = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url)), "--version"], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.trim(), expected);
+  assert.equal(result.stderr, "");
+});
 
 function dryCtx() {
   return { dryRun: true, lines: [], out(l) { this.lines.push(l); } };

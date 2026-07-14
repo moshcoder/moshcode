@@ -20,6 +20,7 @@ import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { login, loginDevice, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
+import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = path.join(HERE, "..", "examples", "alive.mosh");
@@ -170,6 +171,11 @@ async function main() {
 
   // No args → open the interactive TUI shell (/agents <engine>, etc.).
   if (cmd === undefined) return tui();
+
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    console.log(moshcodeVersion() || "unknown");
+    return;
+  }
 
   if (cmd === "engines") {
     printEngineStatus();
