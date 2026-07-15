@@ -4,7 +4,7 @@ import { get, run } from "../db.mjs";
 import { config } from "../config.mjs";
 import { id } from "../lib/crypto.mjs";
 import { grant } from "../lib/credits.mjs";
-import { verifySignature } from "../lib/signature.mjs";
+import { verifyCoinPayWebhookRequest } from "../lib/coinpay-webhook.mjs";
 import { requireAuth } from "../lib/session.mjs";
 
 export const creditsRouter = Router();
@@ -48,9 +48,9 @@ creditsRouter.post("/credits/buy", requireAuth, async (req, res) => {
 
 // CoinPay confirms payment → credit the balance (idempotent on purchase id).
 creditsRouter.post("/webhooks/coinpay", async (req, res) => {
-  if (config.coinpay.webhookSecret && !verifySignature(req.get("x-coinpay-signature") || req.get("webhook-signature"), req.rawBody || "", config.coinpay.webhookSecret)) {
-    return res.status(401).json({ error: "bad signature" });
-  }
+  const auth = verifyCoinPayWebhookRequest(req);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+
   const event = req.body?.type || req.body?.event;
   const payId = req.body?.data?.id || req.body?.payment_id || req.body?.id;
   if (event && /confirmed|completed|paid/i.test(event) && payId) {
