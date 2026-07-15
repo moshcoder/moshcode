@@ -158,7 +158,7 @@ const COMMANDS = [
 
   {
     name: "shell",
-    summary: "run a shell command (blocking, spawnSync $SHELL -c)",
+    summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL -c elsewhere)",
     // The moshscript system verb for arbitrary shell commands. Blocking
     // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
     // and the child owns the terminal for interactive commands. Returns
