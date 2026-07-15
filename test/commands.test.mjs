@@ -83,3 +83,9 @@ test("the vocabulary exposes summaries for `moshcode commands`", () => {
     assert.ok(cmd.summary.length > 0, `${cmd.name}() needs a summary`);
   }
 });
+
+test("shell() summary describes the portable shell behavior", () => {
+  const cmd = moshVocabulary().get("shell");
+  assert.match(cmd.summary, /cmd\.exe on Windows/);
+  assert.match(cmd.summary, /\$SHELL -c elsewhere/);
+});

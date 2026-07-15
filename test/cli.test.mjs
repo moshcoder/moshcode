@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { runMoshcode, cliVerb, runAi } from "../src/cli.mjs";
 import { aiExecArgs, pickAiEngine } from "../src/engines.mjs";
 import { moshVocabulary } from "../src/commands.mjs";
 import { runScript } from "../src/runtime.mjs";
 import { createRegistry } from "../src/registry.mjs";
+
+test("moshcode --version prints the package version", () => {
+  const expected = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url)), "--version"], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.trim(), expected);
+  assert.equal(result.stderr, "");
+});
 
 function dryCtx() {
   return { dryRun: true, lines: [], out(l) { this.lines.push(l); } };
@@ -164,7 +177,7 @@ test("shell() runs a real command and returns { ok, code }", () => {
   const lines = [];
   const ctx = { dryRun: false, out: (l) => lines.push(l) };
   const cmd = moshVocabulary().get("shell");
-  const result = cmd.run(ctx, "true");
+  const result = cmd.run(ctx, "node -e process.exitCode=0");
   assert.equal(result.ok, true);
   assert.equal(result.code, 0);
 });
@@ -173,15 +186,15 @@ test("shell() returns { ok: false } on non-zero exit without throwing", () => {
   const lines = [];
   const ctx = { dryRun: false, out: (l) => lines.push(l) };
   const cmd = moshVocabulary().get("shell");
-  const result = cmd.run(ctx, "false");
+  const result = cmd.run(ctx, "node -e process.exitCode=7");
   assert.equal(result.ok, false);
-  assert.ok(result.code !== 0);
+  assert.equal(result.code, 7);
 });
 
 test("shell() is callable from moshscript and the script continues on failure", async () => {
   const lines = [];
   await runScript(
-    `const r = shell("false"); say("continued, ok=" + r.ok);`,
+    `const r = shell("node -e process.exitCode=7"); say("continued, ok=" + r.ok);`,
     { commands: moshVocabulary(), out: (s) => lines.push(s) }
   );
   assert.match(lines.join("\n"), /continued, ok=false/);

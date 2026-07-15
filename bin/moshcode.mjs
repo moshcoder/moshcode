@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { runScript } from "../src/runtime.mjs";
@@ -12,6 +11,7 @@ import {
   engineStatus,
   resolveEngine,
   openSession,
+  runCmd,
 } from "../src/engines.mjs";
 import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
@@ -20,6 +20,7 @@ import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { login, loginDevice, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
+import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = path.join(HERE, "..", "examples", "alive.mosh");
@@ -171,6 +172,11 @@ async function main() {
   // No args → open the interactive TUI shell (/agents <engine>, etc.).
   if (cmd === undefined) return tui();
 
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    console.log(moshcodeVersion() || "unknown");
+    return;
+  }
+
   if (cmd === "engines") {
     printEngineStatus();
     return;
@@ -222,13 +228,14 @@ async function main() {
     }
     const { install, desc, bin } = entry;
     console.log(`🎸 installing ${target} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
-    const child = spawn(install.cmd, install.args, { stdio: "inherit" });
-    child.on("error", (e) => { console.error(`install failed: ${e.message}`); process.exit(1); });
-    child.on("exit", (code) => {
-      if (code === 0) console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
-      backToPit(`install ${target}`, code);
-    });
-    return;
+    const result = await runCmd(install.cmd, install.args);
+    if (!result.ok) {
+      console.error(`install failed: ${result.error?.message || result.error || "unknown error"}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (result.code === 0) console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
+    return backToPit(`install ${target}`, result.code);
   }
   if (cmd === "upgrade" || cmd === "update") {
     console.log("🎸 moshcode upgrade — updating moshcode + installed engines/tools 🤘");
