@@ -7,7 +7,7 @@
 //
 // Config (env): MOSHCODE_API (default https://app.moshcode.sh), MOSHCODE_API_KEY
 // (from the app's Settings → API keys). MOSHCODE_WEBHOOK_SECRET optionally signs
-// the ingest for defense in depth. The HTTP layer is injectable for tests.
+// the ingest for defense in depth. The HTTP layer and API key are injectable for tests.
 import crypto from "node:crypto";
 import { loadCreds } from "./auth.mjs";
 
@@ -26,14 +26,15 @@ function signHeaders(body) {
 }
 
 /** POST an approval to the app. Returns { ok, id, url, delivered, charged, warning } or { ok:false }. */
-export async function ingestApproval(payload, { fetchImpl = fetch } = {}) {
-  if (!KEY()) return { ok: false, error: "not logged in" };
+export async function ingestApproval(payload, { fetchImpl = fetch, key } = {}) {
+  const apiKey = key ?? KEY();
+  if (!apiKey) return { ok: false, error: "not logged in" };
   const body = JSON.stringify(payload);
   let res;
   try {
     res = await fetchImpl(`${API()}/api/approvals`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${KEY()}`, ...signHeaders(body) },
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}`, ...signHeaders(body) },
       body,
     });
   } catch (e) {
