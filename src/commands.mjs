@@ -158,7 +158,7 @@ const COMMANDS = [
 
   {
     name: "shell",
-    summary: "run a shell command (blocking, spawnSync $SHELL -c)",
+    summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL -c elsewhere)",
     // The moshscript system verb for arbitrary shell commands. Blocking
     // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
     // and the child owns the terminal for interactive commands. Returns
@@ -171,10 +171,12 @@ const COMMANDS = [
         ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL -c ${JSON.stringify(cmd)}`);
         return { ok: true, dryRun: true };
       }
-      const sh = process.env.SHELL
-        || (process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : "/bin/sh");
+      const sh = process.platform === "win32"
+        ? (process.env.COMSPEC || "cmd.exe")
+        : (process.env.SHELL || "/bin/sh");
+      const shArgs = process.platform === "win32" ? ["/d", "/s", "/c", cmd] : ["-c", cmd];
       ctx.out(`  ▶ shell: ${cmd}`);
-      const res = spawnSync(sh, ["-c", cmd], { stdio: "inherit" });
+      const res = spawnSync(sh, shArgs, { stdio: "inherit" });
       if (res.error) throw res.error;
       const code = res.status ?? 1;
       if (code !== 0) {
