@@ -15,6 +15,11 @@ function splitKV(pair) {
   return i === -1 ? [String(pair), ""] : [pair.slice(0, i), pair.slice(i + 1)];
 }
 
+function headerName(header) {
+  const i = String(header).indexOf(":");
+  return i === -1 ? null : String(header).slice(0, i).trim();
+}
+
 /** Parse `/mcp` tokens (after the `mcp` word) into { list } | { spec } | { error }. */
 export function parseMcp(tokens) {
   const verb = tokens[0];
@@ -45,6 +50,15 @@ export function parseMcp(tokens) {
   }
   if (!name) return { error: "missing server name" };
   if (!target) return { error: "missing server URL or command" };
+  if (env.some(([key]) => String(key).trim() === "")) {
+    return { error: "mcp --env requires a non-empty key" };
+  }
+  if (headers.some((header) => headerName(header) === null)) {
+    return { error: "mcp --header requires a Name: Value header" };
+  }
+  if (headers.some((header) => headerName(header) === "")) {
+    return { error: "mcp --header requires a non-empty header name" };
+  }
   return { spec: { name, target, args, transport, env, headers } };
 }
 

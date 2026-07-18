@@ -77,6 +77,13 @@ test("parseMcp: a stdio install without a name errors", () => {
   assert.ok(parseMcp(["bogus"]).error);
 });
 
+test("parseMcp: env and header flags reject empty names", () => {
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--env", "=secret"]).error, /--env requires a non-empty key/);
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--header", ": Bearer token"]).error, /--header requires a non-empty header name/);
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--header", "Authorization"]).error, /--header requires a Name: Value header/);
+  assert.deepEqual(parseMcp(["install", "https://x.dev/mcp", "--env", "EMPTY="]).spec.env, [["EMPTY", ""]]);
+});
+
 test("runMcpAdd summarizes added / skipped / not-installed", async () => {
   const spec = { name: "s", target: "https://x.dev/mcp", env: [], headers: ["A: b"] };
   const plan = planMcpAdd(spec, { installedSet: new Set(["claude", "opencode"]) }); // gemini/codex not installed; codex also skips
