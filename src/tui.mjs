@@ -277,6 +277,9 @@ async function runFile(args) {
       max = v;
     } else if (a === "--dry-run") {
       dryRun = true;
+    } else if (a.startsWith("-") && !file) {
+      console.log(err(`unknown option ${a}`));
+      return;
     } else if (!file) {
       file = a;
     }
