@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -54,4 +57,26 @@ test("TUI /run rejects unknown options before reading a script file", async () =
   assert.equal(result.status, 0);
   assert.match(result.stdout, /unknown option --dryrun/);
   assert.doesNotMatch(result.stdout, /can't read --dryrun/);
+});
+
+test("TUI /run passes positional args through to moshscript argv", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moshcode-tui-"));
+  mkdirSync(join(dir, "space dir"));
+  const script = join(dir, "space dir", "argv.mosh");
+  writeFileSync(script, 'say(argv[0]); say(argv[1]);\n');
+  const scriptArg = script.replaceAll("\\", "/");
+
+  const result = spawnSync(
+    process.execPath,
+    ["bin/moshcode.mjs"],
+    {
+      cwd: join(import.meta.dirname, ".."),
+      input: `/run "${scriptArg}" alpha "two words"\n/quit\n`,
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /alpha/);
+  assert.match(result.stdout, /two words/);
 });
