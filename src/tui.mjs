@@ -66,12 +66,20 @@ const ask = (rl) => new Promise((res) => rl.question(PROMPT(), res));
 export function splitCommandLine(line) {
   const parts = [];
   let value = "", quote = null, escaped = false, started = false;
-  for (const char of String(line)) {
+  const input = String(line);
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
     if (escaped) {
       value += char;
       escaped = false;
       started = true;
     } else if (char === "\\" && quote !== "'") {
+      const next = input[i + 1];
+      if (quote === '"' && next !== '"' && next !== "\\") {
+        value += char;
+        started = true;
+        continue;
+      }
       escaped = true;
       started = true;
     } else if (quote) {

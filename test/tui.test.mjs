@@ -19,6 +19,13 @@ test("TUI command parsing supports escaped whitespace and empty arguments", () =
   ]);
 });
 
+test("TUI command parsing preserves Windows paths inside double quotes", () => {
+  assert.deepEqual(splitCommandLine('/run "C:\\Users\\mosh\\script.mosh"'), [
+    "/run",
+    "C:\\Users\\mosh\\script.mosh",
+  ]);
+});
+
 test("TUI command parsing rejects incomplete quoting", () => {
   assert.throws(() => splitCommandLine('/coinpay --description "unfinished'), /unterminated/);
   assert.throws(() => splitCommandLine("/ugig trailing\\"), /trailing escape/);
