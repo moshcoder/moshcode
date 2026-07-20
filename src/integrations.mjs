@@ -22,7 +22,9 @@ function headerName(header) {
 
 function flagValue(rest, index, flag) {
   const value = rest[index + 1];
-  if (value === undefined || value === "--") return { error: `${flag} requires a value` };
+  if (value === undefined || value === "--" || String(value).startsWith("-")) {
+    return { error: `${flag} requires a value` };
+  }
   return { value };
 }
 
