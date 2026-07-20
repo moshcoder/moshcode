@@ -217,9 +217,13 @@ export function regenerateIndex(root = process.cwd()) {
     ? ["| # | Title | Status |", "|---|---|---|",
        ...prds.map((p) => `| [${p.id}](${p.file}) | ${p.title} | ${p.status} |`)].join("\n")
     : "_No PRDs yet._";
+  // Use a function replacement so `$`-sequences in a PRD title (e.g. `$&`, `$1`,
+  // `$\`` ) are inserted verbatim instead of being read as String.replace special
+  // patterns, which would otherwise splice the match back in and corrupt the index.
+  const block = `${INDEX_START}\n${rows}\n${INDEX_END}`;
   const next = body.replace(
     new RegExp(`${INDEX_START}[\\s\\S]*${INDEX_END}`),
-    `${INDEX_START}\n${rows}\n${INDEX_END}`,
+    () => block,
   );
   if (next === body) return false;
   fs.writeFileSync(readme, next);
