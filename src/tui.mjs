@@ -273,6 +273,7 @@ function printPrds() {
 async function runFile(args) {
   // Parse /run options the same way the CLI does (R3: two entrypoints agree).
   let max, dryRun = false, file = null;
+  const argv = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--max" || a === "-n") {
@@ -290,6 +291,8 @@ async function runFile(args) {
       return;
     } else if (!file) {
       file = a;
+    } else {
+      argv.push(a);
     }
   }
   if (!file) { console.log(err("usage: /run <file.mosh> [--max N] [--dry-run]")); return; }
@@ -300,7 +303,7 @@ async function runFile(args) {
   console.log(hr());
   if (dryRun) console.log(info("dry run — narrating without executing"));
   let result = { iterations: 0 };
-  const opts = { commands: moshVocabulary(), dryRun, out: (s) => console.log(s) };
+  const opts = { commands: moshVocabulary(), dryRun, argv, out: (s) => console.log(s) };
   if (max !== undefined) opts.max = max;
   try {
     result = await runScript(src, opts);
