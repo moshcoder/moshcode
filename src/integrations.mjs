@@ -20,6 +20,12 @@ function headerName(header) {
   return i === -1 ? null : String(header).slice(0, i).trim();
 }
 
+function flagValue(rest, index, flag) {
+  const value = rest[index + 1];
+  if (value === undefined || value === "--") return { error: `${flag} requires a value` };
+  return { value };
+}
+
 /** Parse `/mcp` tokens (after the `mcp` word) into { list } | { spec } | { error }. */
 export function parseMcp(tokens) {
   const verb = tokens[0];
@@ -32,10 +38,26 @@ export function parseMcp(tokens) {
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i];
     if (t === "--") { cmdParts = rest.slice(i + 1); break; }
-    else if (t === "--name") name = rest[++i];
-    else if (t === "-t" || t === "--transport") transport = rest[++i];
-    else if (t === "-e" || t === "--env") env.push(splitKV(rest[++i]));
-    else if (t === "-H" || t === "--header") headers.push(rest[++i]);
+    else if (t === "--name") {
+      const next = flagValue(rest, i, t);
+      if (next.error) return next;
+      name = next.value; i++;
+    }
+    else if (t === "-t" || t === "--transport") {
+      const next = flagValue(rest, i, t);
+      if (next.error) return next;
+      transport = next.value; i++;
+    }
+    else if (t === "-e" || t === "--env") {
+      const next = flagValue(rest, i, t);
+      if (next.error) return next;
+      env.push(splitKV(next.value)); i++;
+    }
+    else if (t === "-H" || t === "--header") {
+      const next = flagValue(rest, i, t);
+      if (next.error) return next;
+      headers.push(next.value); i++;
+    }
     else positional.push(t);
   }
 

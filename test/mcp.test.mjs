@@ -84,6 +84,13 @@ test("parseMcp: env and header flags reject empty names", () => {
   assert.deepEqual(parseMcp(["install", "https://x.dev/mcp", "--env", "EMPTY="]).spec.env, [["EMPTY", ""]]);
 });
 
+test("parseMcp: flags that need values reject missing values", () => {
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--name"]).error, /--name requires a value/);
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--transport", "--"]).error, /--transport requires a value/);
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--env"]).error, /--env requires a value/);
+  assert.match(parseMcp(["install", "https://x.dev/mcp", "--header"]).error, /--header requires a value/);
+});
+
 test("runMcpAdd summarizes added / skipped / not-installed", async () => {
   const spec = { name: "s", target: "https://x.dev/mcp", env: [], headers: ["A: b"] };
   const plan = planMcpAdd(spec, { installedSet: new Set(["claude", "opencode"]) }); // gemini/codex not installed; codex also skips
