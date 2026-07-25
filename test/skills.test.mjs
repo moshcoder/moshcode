@@ -14,6 +14,27 @@ test("skillName derives from a git url or path, or takes an override", () => {
   assert.equal(skillName("whatever", "Custom Name"), "custom-name");
 });
 
+test("skillName never yields `.` or `..`, which would escape the skills dir", () => {
+  const here = path.basename(process.cwd());
+  const parent = path.basename(path.dirname(process.cwd()));
+  assert.equal(skillName("."), here);
+  assert.equal(skillName("./"), here);
+  assert.equal(skillName("a/b/."), "b");
+  assert.equal(skillName(".."), parent);
+  assert.equal(skillName("../"), parent);
+  assert.equal(skillName("whatever", "."), "skill");
+  assert.equal(skillName("whatever", ".."), "skill");
+});
+
+test("the claude clone destination stays inside the skills dir", () => {
+  const dir = claudeSkillsDir();
+  for (const source of [".", "./", "..", "../", "a/b/."]) {
+    const { args } = skillInstallAction("claude", { source, name: skillName(source) });
+    const dest = args.at(-1);
+    assert.equal(path.dirname(dest), dir, `${source} escaped to ${dest}`);
+  }
+});
+
 test("skillInstallAction: gemini installs natively, claude clones into its skills dir", () => {
   const gemini = skillInstallAction("gemini", { source: "https://x/y", name: "y" });
   assert.deepEqual(gemini, { cmd: "gemini", args: ["skills", "install", "https://x/y", "--scope", "user"] });
