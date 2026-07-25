@@ -177,6 +177,21 @@ ${INDEX_END}
 `;
 }
 
+// Read a front-matter scalar back to its plain text. renderPrd writes the title
+// as a quoted YAML string so metacharacters stay valid, so the quotes (and any
+// escapes inside them) are syntax, not part of the title — strip them, or every
+// listing and index row shows `"My title"` instead of `My title`.
+function unquoteYaml(value) {
+  const raw = String(value).trim();
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    try { return JSON.parse(raw); } catch { return raw.slice(1, -1); }
+  }
+  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) {
+    return raw.slice(1, -1).replace(/''/g, "'");
+  }
+  return raw;
+}
+
 /** List numbered PRDs (NNNN-slug.md, excluding the 0000 template). */
 export function listPrds(root = process.cwd()) {
   const base = prdDir(root);
@@ -191,8 +206,8 @@ export function listPrds(root = process.cwd()) {
     try {
       const head = fs.readFileSync(file, "utf8").split(/\r?\n/).slice(0, 16);
       for (const l of head) {
-        const t = l.match(/^title:\s*(.+)$/); if (t) title = t[1].trim();
-        const s = l.match(/^status:\s*(.+)$/); if (s) status = s[1].trim();
+        const t = l.match(/^title:\s*(.+)$/); if (t) title = unquoteYaml(t[1]);
+        const s = l.match(/^status:\s*(.+)$/); if (s) status = unquoteYaml(s[1]);
       }
     } catch { continue; }
     out.push({ id: m[1], slug: m[2], title, status, file: name, path: file });
@@ -213,9 +228,12 @@ export function regenerateIndex(root = process.cwd()) {
   let body;
   try { body = fs.readFileSync(readme, "utf8"); } catch { return false; }
   const prds = listPrds(root);
+  // A `|` in a title would close its table cell early and shift every column
+  // after it, so escape it for the markdown table.
+  const cell = (text) => String(text).replace(/\|/g, "\\|");
   const rows = prds.length
     ? ["| # | Title | Status |", "|---|---|---|",
-       ...prds.map((p) => `| [${p.id}](${p.file}) | ${p.title} | ${p.status} |`)].join("\n")
+       ...prds.map((p) => `| [${p.id}](${p.file}) | ${cell(p.title)} | ${cell(p.status)} |`)].join("\n")
     : "_No PRDs yet._";
   // Use a function replacement so `$`-sequences in a PRD title (e.g. `$&`, `$1`,
   // `$\`` ) are inserted verbatim instead of being read as String.replace special
