@@ -111,3 +111,27 @@ test("DEFAULT_MAX bounds an unbounded while when no max is passed", async () => 
   await runScript(`while (alive) { push(1); }`, { commands: registry });
   assert.equal(calls.length, DEFAULT_MAX);
 });
+
+test("a rejecting fire-and-forget verb does not kill a script that keeps running", async () => {
+  const calls = [];
+  const registry = createRegistry([
+    { name: "push", summary: "record", run: (_ctx, x) => calls.push(x) },
+    { name: "fire", summary: "async, rejects", run: async () => { throw new Error("network boom"); } },
+    { name: "waitv", summary: "async, resolves later", run: (_ctx, ms) => new Promise((r) => setTimeout(r, ms)) },
+  ]);
+  // The rejection must stay observed from the moment it is queued: crossing a
+  // tick boundary (the `await waitv`) used to let Node report it as unhandled
+  // and tear the process down before the drain in runScript ran.
+  const result = await runScript(`fire(); await waitv(5); push("after wait");`, {
+    commands: registry,
+  });
+  assert.deepEqual(calls, ["after wait"]);
+  assert.deepEqual(result, { iterations: 0, stopped: false });
+});
+
+test("an awaited async verb still propagates its rejection to the script", async () => {
+  const registry = createRegistry([
+    { name: "fire", summary: "async, rejects", run: async () => { throw new Error("network boom"); } },
+  ]);
+  await assert.rejects(async () => runScript(`await fire();`, { commands: registry }), /network boom/);
+});

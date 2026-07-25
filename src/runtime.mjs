@@ -59,12 +59,19 @@ function makeControl(max, out) {
 // otherwise the process could exit before a fire-and-forget notification lands.
 // Blocking verbs (the CLI verbs via spawnSync, sleep) return synchronously and
 // need no draining, which is what keeps the simple no-`await` style correct.
+//
+// What gets queued is `Promise.allSettled([result])`, not the bare `result`. The
+// settled wrapper subscribes immediately, so a fire-and-forget verb that rejects
+// is never seen as an unhandled rejection while the script runs on — queueing the
+// bare promise let Node kill the process at the next tick, before the drain below
+// could ever observe it. The script still gets the original promise back, so an
+// `await`ed call fails exactly as before.
 function makeScope(registry, ctx, control, pending) {
   const bound = new Map();
   for (const cmd of registry.all()) {
     bound.set(cmd.name, (...args) => {
       const result = cmd.run(ctx, ...args);
-      if (result && typeof result.then === "function") pending.push(result);
+      if (result && typeof result.then === "function") pending.push(Promise.allSettled([result]));
       return result;
     });
   }
