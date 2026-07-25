@@ -137,11 +137,15 @@ const COMMANDS = [
     summary: "pause for N milliseconds (blocking)",
     // Synchronous/blocking so it pauses inline in the simple no-`await` style:
     // `while (alive) { work(); sleep(1000); }` actually waits each iteration.
-    run(_ctx, ...args) {
+    run(ctx, ...args) {
       const raw = args[0] ?? 0;
       const ms = Number(raw);
       if (!Number.isFinite(ms) || ms < 0) {
         throw new Error(`moshscript: sleep(ms) requires a finite non-negative number, got ${JSON.stringify(raw)}`);
+      }
+      if (ctx.dryRun) {
+        ctx.out(`  ⏱ sleep(${ms}) → would pause for ${ms}ms`);
+        return;
       }
       if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     },

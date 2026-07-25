@@ -66,14 +66,33 @@ test("stop() flips the ctx alive flag off", async () => {
 });
 
 test("sleep accepts zero milliseconds (no-op, synchronous)", () => {
-  assert.equal(verb("sleep")({}, 0), undefined);
+  assert.equal(verb("sleep")({ dryRun: false }, 0), undefined);
 });
 
 test("sleep throws synchronously on a negative duration", () => {
   assert.throws(
-    () => verb("sleep")({}, -1),
+    () => verb("sleep")({ dryRun: false }, -1),
     /sleep\(ms\) requires a finite non-negative number/
   );
+});
+
+test("sleep in dry-run narrates without blocking", () => {
+  const ctx = createCtx();
+  const originalWait = Atomics.wait;
+  let waited = false;
+  Atomics.wait = () => {
+    waited = true;
+    return "timed-out";
+  };
+
+  try {
+    assert.equal(verb("sleep")(ctx, 60_000), undefined);
+  } finally {
+    Atomics.wait = originalWait;
+  }
+
+  assert.equal(waited, false);
+  assert.match(ctx.lines.join("\n"), /would pause for 60000ms/);
 });
 
 test("the vocabulary exposes summaries for `moshcode commands`", () => {
