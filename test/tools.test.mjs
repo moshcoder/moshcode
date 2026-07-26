@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -126,7 +127,10 @@ process.exit(23);
     assert.deepEqual(JSON.parse(result.stdout), {
       argv: ["--json", "two words", "--flag=value"],
       input: "native stdin",
-      cwd,
+      // The child reports process.cwd() — the resolved physical path, while
+      // `cwd` may pass through a symlink (macOS: /var → /private/var), so
+      // compare against the real path, not the symlinked spelling.
+      cwd: realpathSync(cwd),
       marker: "preserved",
     });
     assert.equal(result.stderr, "native stderr");
