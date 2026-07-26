@@ -28,9 +28,16 @@ function selfVersion() {
   catch { return null; }
 }
 
-function selfSpec() {
+// POSIX-safe single-quoting for values embedded in the `sh -c` command line:
+// wrap in '…' and escape every ' as '\'' . Without this an apostrophe in the
+// install path (e.g. /Users/o'brien/moshcode) broke self-upgrade with a shell
+// syntax error — and a hostile path could break out of the quotes and inject
+// extra shell into the update command.
+const shQ = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
+export function selfSpec(home = MOSHCODE_HOME, url = SELF_URL) {
   // Export MOSHCODE_HOME so install.sh updates the exact dir we run from.
-  return { cmd: "sh", args: ["-c", `export MOSHCODE_HOME='${MOSHCODE_HOME}'; curl -fsSL ${SELF_URL} | sh -s -- update`] };
+  return { cmd: "sh", args: ["-c", `export MOSHCODE_HOME=${shQ(home)}; curl -fsSL ${shQ(url)} | sh -s -- update`] };
 }
 
 /**
