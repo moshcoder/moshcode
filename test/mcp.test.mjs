@@ -20,6 +20,19 @@ test("deriveName pulls a sane name from a remote host", () => {
   assert.equal(deriveName("not a url"), "server");
 });
 
+test("deriveName skips the generic label of a multi-part suffix", () => {
+  assert.equal(deriveName("https://mcp.acme.co.uk/sse"), "acme");
+  assert.equal(deriveName("https://api.example.com.au/mcp"), "example");
+  assert.equal(deriveName("https://widgets.co.za/mcp"), "widgets");
+  // A .co TLD is still just a TLD, and a bare suffix host keeps its fallback.
+  assert.equal(deriveName("https://mcp.example.co/sse"), "example");
+  assert.equal(deriveName("https://co.uk/mcp"), "co");
+});
+
+test("deriveName gives distinct multi-part-suffix hosts distinct names", () => {
+  assert.notEqual(deriveName("https://mcp.acme.co.uk/sse"), deriveName("https://mcp.widgets.co.za/sse"));
+});
+
 test("isRemoteTarget distinguishes URLs from commands", () => {
   assert.equal(isRemoteTarget("https://x.dev/mcp"), true);
   assert.equal(isRemoteTarget("npx"), false);
