@@ -41,7 +41,10 @@ export function runMoshcode(cmd, args, ctx) {
   }
 
   ctx.out(`  ▶ ${printable}`);
-  const res = spawnSync(process.execPath, [MOSHCODE_BIN, ...argv], { stdio: "inherit" });
+  const res = spawnSync(process.execPath, [MOSHCODE_BIN, ...argv], {
+    stdio: "inherit",
+    env: { ...process.env, MOSHCODE_NESTED: "1" },
+  });
   if (res.error) throw res.error; // truly fatal: spawn itself failed (ENOENT etc.)
 
   const code = res.status ?? 1;
