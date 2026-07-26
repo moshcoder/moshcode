@@ -11,12 +11,21 @@ export function isRemoteTarget(target) {
   return /^https?:\/\//i.test(String(target));
 }
 
+// Second-level labels that are part of a multi-part public suffix rather than a
+// name, as in co.uk / com.au / co.za. Dropping only the TLD would leave these.
+const SUFFIX_LABELS = ["co", "com", "net", "org", "gov", "edu", "ac"];
+
 /** Derive a sane server name from a remote URL's host (e.g. mcp.sentry.dev → sentry). */
 export function deriveName(target) {
   const sanitize = (s) => String(s).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "");
   try {
     const labels = new URL(target).hostname.split(".").filter(Boolean);
-    const withoutTld = labels.slice(0, -1); // drop the TLD
+    let withoutTld = labels.slice(0, -1); // drop the TLD
+    // ...and the generic label of a multi-part suffix, as long as a real name
+    // still precedes it (a bare "co.uk" host has nothing better to offer).
+    if (withoutTld.length > 1 && SUFFIX_LABELS.includes(withoutTld[withoutTld.length - 1])) {
+      withoutTld = withoutTld.slice(0, -1);
+    }
     const meaningful = withoutTld.filter((l) => !["mcp", "www", "api", "app"].includes(l));
     const pick = meaningful[meaningful.length - 1] || withoutTld[withoutTld.length - 1] || labels[0];
     return sanitize(pick) || "server";
