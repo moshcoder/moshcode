@@ -42,6 +42,39 @@ test("run rejects unknown options before treating them as files", async () => {
   assert.match(result.stderr, /moshcode run: unknown option --dryrun/);
 });
 
+function runWithStdin(args, input) {
+  return new Promise((resolve, reject) => {
+    const dir = mkdtempSync(join(tmpdir(), "moshcode-run-stdin-"));
+    const stdinFile = join(dir, "stdin");
+    const stdoutFile = join(dir, "stdout");
+    const stderrFile = join(dir, "stderr");
+    writeFileSync(stdinFile, input);
+    const stdin = openSync(stdinFile, "r");
+    const stdout = openSync(stdoutFile, "w");
+    const stderr = openSync(stderrFile, "w");
+    const child = spawn(process.execPath, [BIN, "run", ...args], {
+      stdio: [stdin, stdout, stderr],
+    });
+    let failed = false;
+    child.on("error", (error) => { failed = true; reject(error); });
+    child.on("close", (status) => {
+      for (const fd of [stdin, stdout, stderr]) closeSync(fd);
+      if (!failed) resolve({
+        status,
+        stdout: readFileSync(stdoutFile, "utf8"),
+        stderr: readFileSync(stderrFile, "utf8"),
+      });
+    });
+  });
+}
+
+test("run - reads the script from stdin", async () => {
+  const result = await runWithStdin(["-"], 'say("from stdin");\n');
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /from stdin/);
+});
+
 test("run accepts equals-form max option", async () => {
   const result = await run(["--max=1", "--dry-run"]);
 

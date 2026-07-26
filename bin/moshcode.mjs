@@ -289,7 +289,7 @@ async function main() {
         catch (e) { console.error(String(e.message || e)); process.exit(1); }
       }
       else if (a === "--dry-run") dryRun = true;
-      else if (a.startsWith("-") && positional.length === 0) {
+      else if (a !== "-" && a.startsWith("-") && positional.length === 0) {
         console.error(`moshcode run: unknown option ${a}`);
         process.exit(1);
       }
