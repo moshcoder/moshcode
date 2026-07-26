@@ -16,9 +16,17 @@ export function claudeSkillsDir() {
 /** Derive a skill name from a git URL or path (basename minus `.git`), or use the override. */
 export function skillName(source, override) {
   const sanitize = (s) => String(s).toLowerCase().replace(/[^a-z0-9._-]/g, "-").replace(/^-+|-+$/g, "");
-  if (override) return sanitize(override) || "skill";
-  const base = String(source).replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "skill";
-  return sanitize(base.replace(/\.git$/i, "")) || "skill";
+  // `.` and `..` are directory references, not names: path.join would collapse
+  // them and land the clone on the skills dir itself (or its parent).
+  const named = (s) => (s === "." || s === ".." ? "" : s);
+  if (override) return named(sanitize(override)) || "skill";
+  const raw = String(source).replace(/[/\\]+$/, "");
+  const base = raw.split(/[/\\]/).pop() || "skill";
+  const derived = named(sanitize(base.replace(/\.git$/i, "")));
+  if (derived) return derived;
+  // A `.` / `..` source means "this directory", so name the skill after the
+  // directory it resolves to: `skill install .` installs the repo you are in.
+  return named(sanitize(path.basename(path.resolve(raw)))) || "skill";
 }
 
 /**
