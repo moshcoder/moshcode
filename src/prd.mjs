@@ -108,9 +108,16 @@ How the goals will be measured.
 `;
 }
 
+// The seed marker is a hidden HTML comment, so a `-->` inside the idea would
+// close it early and render the rest of the idea (plus the real closer) as
+// visible text at the top of the Problem section. Neutralise the terminator.
+function commentSafe(text) {
+  return String(text).replace(/--+>/g, (run) => `${run.slice(0, -1)}&gt;`);
+}
+
 /** A numbered PRD body (prd/NNNN-slug.md), seeded from an idea. */
 export function renderPrd({ id, title, idea, author }) {
-  const seed = idea && idea !== title ? `\n<!-- seed: ${idea} -->` : "";
+  const seed = idea && idea !== title ? `\n<!-- seed: ${commentSafe(idea)} -->` : "";
   return `---
 openprd: "${OPENPRD.version}"
 id: "${id}"
