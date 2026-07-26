@@ -199,6 +199,19 @@ function unquoteYaml(value) {
   return raw;
 }
 
+// The front matter is the block between the leading `---` and its closing
+// `---`; everything after that is prose. Reading a fixed window of leading
+// lines instead let a body line that merely starts with `title:`/`status:` —
+// a YAML sample in a fenced code block, say — win, because the scan kept the
+// last match it saw anywhere in the window. It also cut off longer front
+// matter. Return the block itself, or nothing when the file has none.
+function frontMatter(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return [];
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+  return end === -1 ? [] : lines.slice(1, end);
+}
+
 /** List numbered PRDs (NNNN-slug.md, excluding the 0000 template). */
 export function listPrds(root = process.cwd()) {
   const base = prdDir(root);
@@ -211,7 +224,7 @@ export function listPrds(root = process.cwd()) {
     const file = path.join(base, name);
     let title = m[2], status = "?";
     try {
-      const head = fs.readFileSync(file, "utf8").split(/\r?\n/).slice(0, 16);
+      const head = frontMatter(fs.readFileSync(file, "utf8"));
       for (const l of head) {
         const t = l.match(/^title:\s*(.+)$/); if (t) title = unquoteYaml(t[1]);
         const s = l.match(/^status:\s*(.+)$/); if (s) status = unquoteYaml(s[1]);
