@@ -108,3 +108,62 @@ test("createPrd hides the whole idea even when it contains a comment terminator"
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("listPrds ignores body lines that look like front matter", () => {
+  // A PRD documenting an API often shows a YAML sample in a fenced block. Those
+  // lines start at column 0 like real keys do, so a scan that runs past the
+  // closing `---` reads them as the PRD's own title and status.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    const dir = path.join(root, "prd");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "0001-job-api.md"), [
+      "---",
+      'title: "Job API v2"',
+      "status: Accepted",
+      "---",
+      "",
+      "## Requirements",
+      "",
+      "- R1 [P0] Return the job record:",
+      "",
+      "```yaml",
+      "title: nightly-import",
+      "status: queued",
+      "```",
+      "",
+    ].join("\n"));
+
+    const [prd] = listPrds(root);
+    assert.equal(prd.title, "Job API v2");
+    assert.equal(prd.status, "Accepted");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("listPrds does not take a title or status from a PRD with no front matter", () => {
+  // A doc dropped into prd/ without front matter has no declared status. Prose
+  // is not front matter, so fall back to the slug and the unknown marker rather
+  // than lifting whatever a line happens to start with.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    const dir = path.join(root, "prd");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "0002-import-notes.md"), [
+      "# Import notes",
+      "",
+      "Fields the importer needs from each upstream row:",
+      "",
+      "title: taken from the H1",
+      "status: derived, never authored by hand",
+      "",
+    ].join("\n"));
+
+    const [prd] = listPrds(root);
+    assert.equal(prd.title, "import-notes");
+    assert.equal(prd.status, "?");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
