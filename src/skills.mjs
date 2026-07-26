@@ -3,7 +3,7 @@
 // source into its personal skills dir. See prd/0003.
 import os from "node:os";
 import path from "node:path";
-import { ENGINES, isInstalled, runCmd } from "./engines.mjs";
+import { ENGINES, isInstalled, ranOk, runCmd } from "./engines.mjs";
 
 // Coding engines with a skills primitive. Codex/OpenCode/Aider have none.
 export const SKILL_ENGINES = ["claude", "gemini"];
@@ -66,7 +66,7 @@ export async function runSkillInstall(plan, { run = runCmd } = {}) {
     if (item.skip) { results.push({ key: item.key, status: "skipped", reason: item.skip }); continue; }
     if (!item.installed) { results.push({ key: item.key, status: "not-installed" }); continue; }
     const r = await run(item.cmd, item.args);
-    results.push({ key: item.key, status: r.ok && (r.code === 0 || r.code == null) ? "installed" : "failed", code: r.code });
+    results.push({ key: item.key, status: ranOk(r) ? "installed" : "failed", code: r.code, signal: r.signal ?? null });
   }
   return results;
 }

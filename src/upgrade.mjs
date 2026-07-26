@@ -4,7 +4,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
-import { ENGINES, engineStatus, resolveEngine, upgradeSpec, runCmd } from "./engines.mjs";
+import { ENGINES, engineStatus, exitReason, ranOk, resolveEngine, upgradeSpec, runCmd } from "./engines.mjs";
 import { TOOLS, resolveTool, toolStatus, toolUpgradeSpec } from "./tools.mjs";
 
 // Self-upgrade re-runs the moshcode installer's `update` path. Defaults to the
@@ -125,9 +125,9 @@ export async function runUpgrade(targets = [], io = {}) {
     rule();
     const r = await runCmd(spec.cmd, spec.args);
     rule();
-    const ok = r.ok && (r.code == null || r.code === 0);
-    log(ok ? `✓ ${name} up to date` : `✗ ${name} upgrade failed${r.code != null ? ` (code ${r.code})` : r.error ? `: ${r.error.message || r.error}` : ""}`);
-    results.push({ name, ok, code: r.code });
+    const ok = ranOk(r);
+    log(ok ? `✓ ${name} up to date` : `✗ ${name} upgrade failed (${exitReason(r)})`);
+    results.push({ name, ok, code: r.code, signal: r.signal ?? null });
     return ok;
   };
 

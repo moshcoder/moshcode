@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { ENGINES, agentLaunchArgs } from "../src/engines.mjs";
+import { ENGINES, agentLaunchArgs, exitReason, ranOk, runCmd } from "../src/engines.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 // The autonomous-session bypass flags each engine declares (engine.agentArgs).
@@ -129,4 +129,31 @@ test("bare engine launch remains a raw passthrough", async () => {
   assert.equal(result.status, 0);
   assert.deepEqual(JSON.parse(result.stdout), ["--model", "sonnet"]);
   assert.equal(result.stderr, "");
+});
+
+test("a signal-killed child is a failure, not a codeless success", async () => {
+  const r = await runCmd("bash", ["-c", "kill -9 $$"]);
+
+  // Node reports a signal death with code === null — the old `code == null`
+  // success check read that as "exited cleanly".
+  assert.equal(r.ok, true);
+  assert.equal(r.code, null);
+  assert.equal(r.signal, "SIGKILL");
+
+  assert.equal(ranOk(r), false);
+  assert.equal(exitReason(r), "SIGKILL");
+});
+
+test("ranOk and exitReason cover clean exits, bad codes, and spawn errors", async () => {
+  const clean = await runCmd("bash", ["-c", "exit 0"]);
+  assert.equal(ranOk(clean), true);
+  assert.equal(exitReason(clean), null);
+
+  const bad = await runCmd("bash", ["-c", "exit 128"]);
+  assert.equal(ranOk(bad), false);
+  assert.equal(exitReason(bad), "code 128");
+
+  const missing = await runCmd("moshcode-does-not-exist-xyz", []);
+  assert.equal(ranOk(missing), false);
+  assert.match(exitReason(missing), /ENOENT|not found|spawn/i);
 });

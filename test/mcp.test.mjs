@@ -142,3 +142,13 @@ fs.writeFileSync(path.join(process.env.CAPS, "${name}.json"), JSON.stringify(pro
   assert.deepEqual(JSON.parse(readFileSync(path.join(caps, "codex.json"), "utf8")), ["mcp", "add", "sentry", "--url", "https://mcp.sentry.dev/mcp"]);
   assert.deepEqual(JSON.parse(readFileSync(path.join(caps, "opencode.json"), "utf8")), ["mcp", "add", "sentry", "--url", "https://mcp.sentry.dev/mcp"]);
 });
+
+test("an mcp add killed by a signal reports failed, not added", async () => {
+  const spec = { name: "s", target: "https://x.dev/mcp", env: [], headers: [] };
+  const plan = planMcpAdd(spec, { installedSet: new Set(["claude"]) });
+  const results = await runMcpAdd(plan, { run: async () => ({ ok: true, code: null, signal: "SIGTERM" }) });
+  const claude = results.find((r) => r.key === "claude");
+
+  assert.equal(claude.status, "failed");
+  assert.equal(claude.signal, "SIGTERM");
+});

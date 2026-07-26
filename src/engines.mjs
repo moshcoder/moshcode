@@ -195,6 +195,28 @@ export function runCmd(cmd, args = []) {
 }
 
 /**
+ * True only when a child actually ran and exited 0. Node reports a signal death
+ * as `code === null` (the signal name lands in `signal` instead), so a killed
+ * child — OOM, a timeout wrapper's SIGTERM, Ctrl-C — must not read as success
+ * just because it has no exit code.
+ */
+export function ranOk(r) {
+  return Boolean(r?.ok) && r.code === 0;
+}
+
+/**
+ * Short human reason a `runCmd` result failed: "code 128", "SIGKILL", or the
+ * spawn error message. Null when it succeeded.
+ */
+export function exitReason(r) {
+  if (ranOk(r)) return null;
+  if (r?.error) return r.error.message || String(r.error);
+  if (r?.code != null) return `code ${r.code}`;
+  if (r?.signal) return r.signal;
+  return "unknown error";
+}
+
+/**
  * Hand the current process streams to an external CLI. Arguments, cwd, and the
  * environment are inherited unchanged unless that target explicitly asks for
  * environment keys to be stripped (Claude uses this to avoid nested-session
