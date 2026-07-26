@@ -184,3 +184,19 @@ fs.writeFileSync(process.env.SHELL_CAPTURE, JSON.stringify(process.argv.slice(2)
     assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), ["-c", script]);
   });
 }
+
+test("tool lookup ignores inherited Object.prototype members", () => {
+  // TOOLS is a plain object literal: `TOOLS.constructor` is truthy but is not a
+  // tool, so resolving it would hand a bin-less, install-less entry downstream.
+  assert.equal(resolveTool("constructor"), null);
+  assert.equal(resolveTool("__proto__"), null);
+  assert.equal(resolveTool("valueOf"), null);
+});
+
+test("moshcode install reports an Object.prototype name as unknown", async () => {
+  const result = await run(["install", "constructor"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /usage: moshcode install <engine\|tool>/);
+  assert.doesNotMatch(result.stderr, /TypeError/);
+});

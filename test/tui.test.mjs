@@ -105,3 +105,15 @@ test("TUI /shell and !cmd run an identical command identically", posixShell, asy
   assert.equal(viaBang.status, 0);
   assert.deepEqual(bracketed(viaSlash.stdout), bracketed(viaBang.stdout));
 });
+
+// ENGINES/TOOLS are plain object literals, so an unknown target that happens to
+// name an Object.prototype member used to resolve truthy and reach `.install`,
+// killing the whole pit with a raw TypeError instead of printing the usual
+// unknown-target line.
+test("TUI /install rejects an Object.prototype name instead of crashing the pit", async () => {
+  const result = await runTui("/install constructor\n/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /unknown engine or tool "constructor"/);
+  assert.doesNotMatch(result.stderr, /TypeError/);
+});

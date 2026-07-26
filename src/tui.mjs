@@ -252,7 +252,9 @@ async function openShell(rawCmd) {
 
 function installTarget(key) {
   return new Promise((resolve) => {
-    const target = ENGINES[key] || TOOLS[key];
+    // Own properties only — `/install constructor` must print the unknown-target
+    // line, not resolve to something off Object.prototype and crash the pit.
+    const target = (Object.hasOwn(ENGINES, key) && ENGINES[key]) || (Object.hasOwn(TOOLS, key) && TOOLS[key]);
     if (!target) { console.log(err(`unknown engine or tool "${key}"`)); return resolve(); }
     console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
     console.log(hr());
