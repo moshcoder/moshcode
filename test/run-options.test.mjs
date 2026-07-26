@@ -49,6 +49,21 @@ test("run accepts equals-form max option", async () => {
   assert.match(result.stdout, /1 loop\(s\)/);
 });
 
+test("run() marks the nested moshcode child as nested", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "moshcode-nested-"));
+  const child = join(dir, "child.mosh");
+  const parent = join(dir, "parent.mosh");
+  writeFileSync(child, 'shell("echo NESTEDVAL=$MOSHCODE_NESTED");\n');
+  writeFileSync(parent, `run(${JSON.stringify(child)});\n`);
+
+  const result = await run([parent]);
+
+  assert.equal(result.status, 0);
+  // Without MOSHCODE_NESTED the child drops into its own TUI on a shared TTY
+  // instead of returning control to the parent script.
+  assert.match(result.stdout, /NESTEDVAL=1/);
+});
+
 test("run() includes another .mosh file, in order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "moshcode-include-"));
   const child = join(dir, "child.mosh");

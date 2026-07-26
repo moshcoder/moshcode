@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 const BIN = fileURLToPath(new URL("moshcode.mjs", import.meta.url));
 const args = process.argv.slice(2); // everything after `moshscript`
 
-const child = spawn(process.execPath, [BIN, "run", ...args], { stdio: "inherit" });
+const child = spawn(process.execPath, [BIN, "run", ...args], {
+  stdio: "inherit",
+  env: { ...process.env, MOSHCODE_NESTED: "1" },
+});
 child.on("error", (e) => { console.error(`moshscript: ${e.message}`); process.exit(1); });
 child.on("exit", (code, signal) => {
   if (signal) {

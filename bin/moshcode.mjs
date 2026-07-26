@@ -56,7 +56,10 @@ function parseMax(value) {
 // interactive. Piped / non-TTY invocations (scripts, CI, `… | moshcode run -`)
 // keep the old behaviour: exit with the child's code.
 function backToPit(label, code, signal) {
-  if (!process.stdin.isTTY) process.exit(code ?? 0);
+  // A nested invocation (moshscript shim, or a CLI verb called from a script)
+  // must hand control back to its parent, not open a second mosh pit on the
+  // shared TTY.
+  if (!process.stdin.isTTY || process.env.MOSHCODE_NESTED === "1") process.exit(code ?? 0);
   const how = signal ? ` (${signal})` : code != null ? ` (code ${code})` : "";
   console.log(`\n↩ ${label} exited${how} — back in the mosh pit. /quit to leave.\n`);
   return tui();
