@@ -64,3 +64,12 @@ test("runSkillInstall summarizes installed / not-installed", async () => {
   assert.equal(byKey.gemini, "installed");
   assert.equal(byKey.claude, "not-installed");
 });
+
+test("a skill install killed by a signal reports failed, not installed", async () => {
+  const plan = planSkillInstall({ source: "https://x/y", name: "y" }, { installedSet: new Set(["gemini"]) });
+  const results = await runSkillInstall(plan, { run: async () => ({ ok: true, code: null, signal: "SIGKILL" }) });
+  const gemini = results.find((r) => r.key === "gemini");
+
+  assert.equal(gemini.status, "failed");
+  assert.equal(gemini.signal, "SIGKILL");
+});

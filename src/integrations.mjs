@@ -114,7 +114,7 @@ export function printSkillTargets() {
 function summarize(results) {
   for (const r of results) {
     if (r.status === "added" || r.status === "installed") console.log(line(r.key, ok(r.status)));
-    else if (r.status === "failed") console.log(line(r.key, err(`failed${r.code != null ? ` (code ${r.code})` : ""}`)));
+    else if (r.status === "failed") console.log(line(r.key, err(`failed${r.code != null ? ` (code ${r.code})` : r.signal ? ` (${r.signal})` : ""}`)));
     else if (r.status === "not-installed") console.log(line(r.key, ash("not installed — /install " + r.key)));
     else console.log(line(r.key, ash(`skipped — ${r.reason}`)));
   }

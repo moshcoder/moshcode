@@ -1,7 +1,7 @@
 // Register MCP (Model Context Protocol) servers across every engine that
 // supports them, from one canonical definition. MoshCode drives each engine's
 // own `mcp add` so the engine owns its config format. See prd/0003.
-import { ENGINES, isInstalled, runCmd } from "./engines.mjs";
+import { ENGINES, isInstalled, ranOk, runCmd } from "./engines.mjs";
 
 // Coding engines that can register MCP servers. Aider has no MCP support.
 export const MCP_ENGINES = ["claude", "gemini", "codex", "opencode"];
@@ -112,7 +112,7 @@ export async function runMcpAdd(plan, { run = runCmd } = {}) {
     if (item.skip) { results.push({ key: item.key, status: "skipped", reason: item.skip }); continue; }
     if (!item.installed) { results.push({ key: item.key, status: "not-installed" }); continue; }
     const r = await run(item.bin, item.argv);
-    results.push({ key: item.key, status: r.ok && (r.code === 0 || r.code == null) ? "added" : "failed", code: r.code });
+    results.push({ key: item.key, status: ranOk(r) ? "added" : "failed", code: r.code, signal: r.signal ?? null });
   }
   return results;
 }
