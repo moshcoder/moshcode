@@ -80,3 +80,28 @@ test("TUI /run passes positional args through to moshscript argv", () => {
   assert.match(result.stdout, /alpha/);
   assert.match(result.stdout, /two words/);
 });
+
+// `/shell <cmd>` and `!<cmd>` are the same feature — both hand the command to
+// `$SHELL -c`, which does its own parsing. Re-joining the tokenized parts drops
+// the user's quotes, so `-m "two words"` reaches the shell as two arguments.
+const posixShell = process.platform === "win32" ? { skip: "needs a POSIX shell" } : {};
+
+test("TUI /shell hands the raw command line to the shell, quoting intact", posixShell, async () => {
+  const result = await runTui('/shell printf "[%s]\\n" "two words"\n/quit\n');
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /\[two words\]/);
+  assert.doesNotMatch(result.stdout, /\[two\]/);
+});
+
+test("TUI /shell and !cmd run an identical command identically", posixShell, async () => {
+  const command = 'printf "[%s]\\n" "two words"';
+  const bracketed = (out) => out.match(/\[[^\]\n]*\]/g) || [];
+
+  const viaSlash = await runTui(`/shell ${command}\n/quit\n`);
+  const viaBang = await runTui(`!${command}\n/quit\n`);
+
+  assert.equal(viaSlash.status, 0);
+  assert.equal(viaBang.status, 0);
+  assert.deepEqual(bracketed(viaSlash.stdout), bracketed(viaBang.stdout));
+});

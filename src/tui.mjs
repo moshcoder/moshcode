@@ -105,6 +105,15 @@ export function splitCommandLine(line) {
   return parts;
 }
 
+// Everything after the first word of a command line, exactly as typed. `/shell`
+// hands this straight to `$SHELL -c`, the same way `!cmd` does: the shell does
+// its own parsing, so re-joining the tokenized parts would strip the user's
+// quotes and escapes and silently split `-m "two words"` into two arguments.
+function commandRemainder(line) {
+  const firstWord = /^\s*\S+\s*/.exec(String(line));
+  return firstWord ? String(line).slice(firstWord[0].length).trim() : "";
+}
+
 function printEngines() {
   console.log(bone("  engines") + ash("  — autonomous ") + acid("/agents <name>") + ash(" · raw ") + acid("/start <name>"));
   for (const e of engineStatus()) {
@@ -361,8 +370,9 @@ export async function tui() {
       continue;
     }
     if (cmd === "shell" || cmd === "sh") {
+      const rawCmd = commandRemainder(line);
       rl.close();
-      await openShell(rest.length ? rest.join(" ") : null);
+      await openShell(rawCmd || null);
       rl = mkrl();
       continue;
     }
