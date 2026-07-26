@@ -83,7 +83,12 @@ cliRouter.post("/cli/token", async (req, res) => {
   const challenge = crypto.createHash("sha256").update(String(code_verifier)).digest("base64url");
   if (challenge !== row.code_challenge) return res.status(400).json({ error: "PKCE verification failed" });
 
-  await run(`UPDATE cli_auth_codes SET used = 1 WHERE code = ?`, [code]);
+  // Claim the code atomically. The read-check-update sequence above is not
+  // enough on its own: with a remote (network) database, two concurrent
+  // exchanges can both pass the `used` check before either UPDATE lands, and
+  // one single-use code would mint two API keys. Only the first claim wins.
+  const claimed = await run(`UPDATE cli_auth_codes SET used = 1 WHERE code = ? AND used = 0`, [code]);
+  if (!claimed.rowsAffected) return res.status(400).json({ error: "invalid or expired code" });
   const user = await get(`SELECT * FROM users WHERE id = ?`, [row.user_id]);
   const { plaintext } = await createApiKey(user.id, row.name || "moshcode cli");
   res.json({ access_token: plaintext, token_type: "bearer", user: { id: user.id, email: user.email || null, name: user.display_name } });
