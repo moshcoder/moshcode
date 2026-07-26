@@ -77,3 +77,34 @@ test("regenerateIndex escapes a pipe in a title so the row keeps its columns", (
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("renderPrd keeps a `-->` in the idea from closing the seed comment", () => {
+  const idea = "add a dark mode toggle <!-- oops --> and then some more idea text";
+  const body = renderPrd({ id: "0007", title: "Add a dark mode toggle", idea, author: "you@example.com" });
+
+  const lines = body.split(/\r?\n/);
+  const at = lines.findIndex((l) => l.startsWith("<!-- seed:"));
+  assert.notEqual(at, -1, "the seed marker must be on its own line");
+  const seedLine = lines[at];
+  // Exactly one comment terminator: the one this template owns, at the end.
+  assert.equal(seedLine.match(/-->/g).length, 1, `seed comment closes early: ${seedLine}`);
+  assert.ok(seedLine.endsWith(" and then some more idea text -->"), seedLine);
+  assert.ok(seedLine.includes("<!-- oops --&gt;"), `idea terminator not neutralised: ${seedLine}`);
+  // The Problem section past the marker is untouched template text.
+  assert.match(lines[at + 1], /^_Describe the user\/business problem/);
+});
+
+test("createPrd hides the whole idea even when it contains a comment terminator", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    const { path: file } = createPrd("ship a parser for --> arrows in specs", root);
+
+    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    const at = lines.findIndex((l) => l.startsWith("<!-- seed:"));
+    assert.notEqual(at, -1, "createPrd must write a seed marker for a truncated idea");
+    assert.equal(lines[at].match(/-->/g).length, 1, `seed comment closes early: ${lines[at]}`);
+    assert.match(lines[at + 1], /^_Describe the user\/business problem/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
