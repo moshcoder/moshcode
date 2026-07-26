@@ -222,7 +222,7 @@ chmod +x deploy.mosh
 
 | name | description |
 |---|---|
-| `alive` | `true` while the loop may continue; reads bounded by `--max` |
+| `alive` | `true` while the loop may continue; iterations bounded by `--max` |
 | `argv` | positional args passed after the script file |
 | `env` | `process.env` — parameterize scripts from the environment |
 
@@ -296,4 +296,4 @@ await runScript(src, { commands });
 | `MOSHCODE_SITE` | `https://app.moshcode.sh` | approval URL base |
 | `MOSHCODE_WEBHOOK_URL` | — | optional extra webhook for `notify()` |
 | `MOSHCODE_WEBHOOK_SECRET` | — | signs notify() posts |
-| `MOSHCODE_PLAYLIST` | Spotify playlist URL | what `mosh()` blasts in the browser |
+| `MOSHCODE_PLAYLIST` | — | what `mosh()` blasts in the browser |
