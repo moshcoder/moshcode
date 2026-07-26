@@ -38,7 +38,10 @@ export const TOOLS = {
 export function resolveTool(token) {
   if (!token) return null;
   const key = String(token).trim().toLowerCase();
-  return TOOLS[key] ? [key, TOOLS[key]] : null;
+  // Own properties only: TOOLS is a plain object literal, so a name like
+  // `constructor` or `__proto__` would otherwise resolve to something off
+  // Object.prototype and be handed on as a tool with no bin/install.
+  return Object.hasOwn(TOOLS, key) ? [key, TOOLS[key]] : null;
 }
 
 /** Tool entries annotated with native executable install status. */

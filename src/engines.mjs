@@ -78,7 +78,10 @@ const ALIASES = { cc: "claude", "claude-code": "claude", openai: "codex", gpt: "
 export function resolveEngine(token) {
   if (!token) return null;
   const t = String(token).trim().toLowerCase();
-  const key = ENGINES[t] ? t : ALIASES[t];
+  // Own properties only: ENGINES/ALIASES are plain object literals, so a name
+  // like `constructor` or `__proto__` would otherwise resolve to something off
+  // Object.prototype and be handed on as an engine with no bin/install.
+  const key = Object.hasOwn(ENGINES, t) ? t : Object.hasOwn(ALIASES, t) ? ALIASES[t] : null;
   return key ? [key, ENGINES[key]] : null;
 }
 
@@ -145,7 +148,7 @@ const AI_EXEC = {
 
 /** argv that runs `prompt` headlessly on `engine` (throws if it has no headless mode). */
 export function aiExecArgs(engine, prompt) {
-  const fn = AI_EXEC[engine];
+  const fn = Object.hasOwn(AI_EXEC, engine) ? AI_EXEC[engine] : null;
   if (!fn) throw new Error(`moshscript: ai() has no headless mode for "${engine}"`);
   return fn(String(prompt));
 }
@@ -154,7 +157,7 @@ export function aiExecArgs(engine, prompt) {
 export function pickAiEngine(preferred) {
   const order = preferred ? [preferred] : ["claude", "codex", "opencode", "gemini", "aider"];
   for (const key of order) {
-    if (ENGINES[key] && AI_EXEC[key] && isInstalled(ENGINES[key].bin)) return key;
+    if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin)) return key;
   }
   return null;
 }

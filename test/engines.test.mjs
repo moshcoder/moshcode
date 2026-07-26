@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { ENGINES, agentLaunchArgs, exitReason, ranOk, runCmd } from "../src/engines.mjs";
+import { ENGINES, agentLaunchArgs, aiExecArgs, exitReason, pickAiEngine, ranOk, resolveEngine, runCmd } from "../src/engines.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 // The autonomous-session bypass flags each engine declares (engine.agentArgs).
@@ -156,4 +156,13 @@ test("ranOk and exitReason cover clean exits, bad codes, and spawn errors", asyn
   const missing = await runCmd("moshcode-does-not-exist-xyz", []);
   assert.equal(ranOk(missing), false);
   assert.match(exitReason(missing), /ENOENT|not found|spawn/i);
+});
+
+test("engine lookup ignores inherited Object.prototype members", () => {
+  // ENGINES/ALIASES/AI_EXEC are plain object literals, so an unknown name that
+  // matches an Object.prototype member must not resolve as a real engine.
+  assert.equal(resolveEngine("constructor"), null);
+  assert.equal(resolveEngine("__proto__"), null);
+  assert.equal(pickAiEngine("constructor"), null);
+  assert.throws(() => aiExecArgs("constructor", "hi"), /no headless mode for "constructor"/);
 });

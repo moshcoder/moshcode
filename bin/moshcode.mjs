@@ -224,7 +224,10 @@ async function main() {
   }
   if (cmd === "install") {
     const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
-    const entry = target && (ENGINES[target] || TOOLS[target]);
+    // Own properties only — `install constructor` must print usage, not resolve
+    // to something off Object.prototype and crash on its missing install spec.
+    const entry = target
+      && ((Object.hasOwn(ENGINES, target) && ENGINES[target]) || (Object.hasOwn(TOOLS, target) && TOOLS[target]));
     if (!target || !entry) {
       console.error(`usage: moshcode install <engine|tool>\nengines:\n${engineList()}\ntools:\n${toolList()}`);
       process.exit(target ? 1 : 0);
