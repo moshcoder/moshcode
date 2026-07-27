@@ -19,6 +19,20 @@ function resolveGitDir(dotgit, dir) {
   return null;
 }
 
+// A linked worktree's git dir (.git/worktrees/<name>) holds only that
+// worktree's own HEAD and index — the shared config, and therefore the
+// remotes, stay in the main repo's git dir. Git names it in a `commondir`
+// file, usually as a path relative to the worktree's git dir. Resolve it so
+// origin is found from inside a worktree; outside one there is no such file
+// and the git dir is already the common one.
+function commonGitDir(gitDir) {
+  try {
+    const pointer = fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    if (pointer) return path.resolve(gitDir, pointer);
+  } catch { /* not a linked worktree */ }
+  return gitDir;
+}
+
 // Walk up from `start` until we find a `.git` with a readable HEAD (a real
 // repo). A bare `.git` dir with no HEAD — e.g. a stray /tmp/.git — is skipped,
 // not mistaken for a repo. Returns { root, gitDir } or null at the fs root.
@@ -74,8 +88,9 @@ export function locate(cwd = process.cwd()) {
     git: {
       root: found.root,
       name: path.basename(found.root),
+      // HEAD is per-worktree; config (and its remotes) is shared.
       branch: readBranch(found.gitDir),
-      origin: readOrigin(found.gitDir),
+      origin: readOrigin(commonGitDir(found.gitDir)),
     },
   };
 }
