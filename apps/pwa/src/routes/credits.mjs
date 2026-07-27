@@ -60,8 +60,17 @@ creditsRouter.post("/webhooks/coinpay", async (req, res) => {
   if (event && /confirmed|completed|paid/i.test(event) && payId) {
     const p = await get(`SELECT * FROM credit_purchases WHERE id = ? AND status = 'pending'`, [payId]);
     if (p) {
-      await grant(p.user_id, p.credits, "topup.coinpay", { payment: payId, usd: p.amount_usd });
-      await run(`UPDATE credit_purchases SET status = 'cleared' WHERE id = ?`, [payId]);
+      // Claim the purchase atomically, the same way /cli/token claims auth
+      // codes. The status check above is not enough on its own: CoinPay retries
+      // a webhook it never got an ack for, so two deliveries of the same
+      // confirmation can be in flight at once. Against a remote (network)
+      // database both read "pending" before either UPDATE lands, and the pack
+      // gets granted twice. Only the first claim credits the ledger.
+      const claimed = await run(
+        `UPDATE credit_purchases SET status = 'cleared' WHERE id = ? AND status = 'pending'`, [payId]);
+      if (claimed.rowsAffected) {
+        await grant(p.user_id, p.credits, "topup.coinpay", { payment: payId, usd: p.amount_usd });
+      }
     }
   }
   res.json({ ok: true });
