@@ -18,6 +18,7 @@ to upgrade, `… | sh -s -- remove` to uninstall.
 
 ```sh
 moshcode engines            # list installable engines
+moshcode engines --json     # machine-readable install status for automation
 moshcode install opencode   # install opencode (curl … | bash)
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
@@ -62,6 +63,7 @@ installs them and passes control through without reimplementing their APIs.
 
 ```sh
 moshcode tools                    # list tools and native install status
+moshcode tools --json             # machine-readable install status for automation
 moshcode install ugig             # npm install -g ugig
 moshcode install coinpay          # npm install -g @profullstack/coinpay
 
