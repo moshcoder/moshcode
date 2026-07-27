@@ -139,6 +139,12 @@ export async function whoami() {
   try {
     const res = await fetch(`${creds.api || API()}/api/me`, { headers: { authorization: `Bearer ${creds.token}` } });
     if (res.status === 401) { console.log("session expired — run: moshcode login"); return; }
+    // Any other error status still has a body, and it isn't an account — reading
+    // it as one prints a made-up identity for a session the app just refused.
+    if (!res.ok) {
+      console.log(`${creds.email || "logged in"} @ ${creds.api || API()} (couldn't verify — the app returned ${res.status})`);
+      return;
+    }
     const me = await res.json();
     console.log(`${me.email || me.name || "moshcoder"} 🤘  (${me.credits ?? "?"} credits)  @ ${creds.api || API()}`);
   } catch {
