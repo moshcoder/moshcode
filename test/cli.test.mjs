@@ -10,15 +10,37 @@ import { moshVocabulary } from "../src/commands.mjs";
 import { runScript } from "../src/runtime.mjs";
 import { createRegistry } from "../src/registry.mjs";
 
+const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
+
 test("moshcode --version prints the package version", () => {
   const expected = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url)), "--version"], {
+  const result = spawnSync(process.execPath, [BIN, "--version"], {
     encoding: "utf8",
   });
   assert.equal(result.status, 0);
   assert.equal(result.stdout.trim(), expected);
   assert.equal(result.stderr, "");
 });
+
+for (const command of ["engines", "tools"]) {
+  test(`moshcode ${command} --json prints machine-readable install status`, () => {
+    const result = spawnSync(process.execPath, [BIN, command, "--json"], {
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, "");
+    const entries = JSON.parse(result.stdout);
+    assert.ok(entries.length > 0);
+    for (const entry of entries) {
+      assert.deepEqual(Object.keys(entry), ["name", "description", "binary", "installed"]);
+      assert.equal(typeof entry.name, "string");
+      assert.equal(typeof entry.description, "string");
+      assert.equal(typeof entry.binary, "string");
+      assert.equal(typeof entry.installed, "boolean");
+    }
+  });
+}
 
 function dryCtx() {
   return { dryRun: true, lines: [], out(l) { this.lines.push(l); } };

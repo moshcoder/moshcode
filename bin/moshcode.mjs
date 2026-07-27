@@ -76,10 +76,23 @@ function propagateExit(code, signal) {
   process.exitCode = code ?? 0;
 }
 
-function printEngineStatus() {
-  for (const engine of engineStatus()) {
-    console.log(`${engine.installed ? "●" : "○"} ${engine.key.padEnd(10)} ${engine.desc}`);
+function printStatus(entries, json = false) {
+  if (json) {
+    console.log(JSON.stringify(entries.map(({ key, desc, bin, installed }) => ({
+      name: key,
+      description: desc,
+      binary: bin,
+      installed,
+    })), null, 2));
+    return;
   }
+  for (const entry of entries) {
+    console.log(`${entry.installed ? "●" : "○"} ${entry.key.padEnd(10)} ${entry.desc}`);
+  }
+}
+
+function printEngineStatus(json = false) {
+  printStatus(engineStatus(), json);
 }
 
 async function launchEngine(key, engine, args, { agentMode = false } = {}) {
@@ -133,8 +146,8 @@ usage:
                                        code flow) so notify()/ask() reach you
   moshcode whoami | logout             show / clear the logged-in account
   moshcode pwd                         show the current dir + git repo/branch/origin
-  moshcode engines                     list engines + install status
-  moshcode tools                       list workflow tools + install status
+  moshcode engines [--json]            list engines + install status
+  moshcode tools [--json]              list workflow tools + install status
   moshcode commands                    list built-in moshscript commands
   moshcode help                        this
 
@@ -181,7 +194,7 @@ async function main() {
   }
 
   if (cmd === "engines") {
-    printEngineStatus();
+    printEngineStatus(rest.includes("--json"));
     return;
   }
   if (cmd === "agents") {
@@ -211,9 +224,7 @@ async function main() {
     return launchEngine(key, engine, rest.slice(1));
   }
   if (cmd === "tools") {
-    for (const tool of toolStatus()) {
-      console.log(`${tool.installed ? "●" : "○"} ${tool.key.padEnd(10)} ${tool.desc}`);
-    }
+    printStatus(toolStatus(), rest.includes("--json"));
     return;
   }
   if (cmd === "mcp") {
