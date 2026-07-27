@@ -56,9 +56,44 @@ const mkrl = () => {
   // Share the persistent array so ↑/↓ recalls earlier commands even after the
   // interface was torn down and rebuilt around an engine session.
   rl.history = history;
+  if (!process.stdin.isTTY) queuePipedLines(rl);
   return rl;
 };
-const ask = (rl) => new Promise((res) => rl.question(PROMPT(), res));
+
+// Piped stdin arrives in chunks and readline emits every line of a chunk as
+// soon as it lands. A one-shot `rl.question` only captures the first of them,
+// so the rest are dropped and the loop then waits on input that already went
+// by: `printf '/pwd\n/pwd\n/quit\n' | moshcode` runs one command and exits
+// without ever reaching /quit. Queue the lines as they arrive and hand them
+// out one at a time instead. The queue lives out here so it survives the
+// interface being torn down and rebuilt around a passthrough child.
+const pipedLines = [];
+let pipedEnded = false;
+let wakeReader = null;
+let stdinWatched = false;
+const wake = () => {
+  const waiting = wakeReader;
+  wakeReader = null;
+  waiting?.();
+};
+function queuePipedLines(rl) {
+  rl.on("line", (line) => { pipedLines.push(line); wake(); });
+  if (stdinWatched) return;
+  stdinWatched = true;
+  // Watch the stream, not the interface: `rl.close()` fires every time we tear
+  // the interface down around a child, which is not the end of the input.
+  process.stdin.on("end", () => { pipedEnded = true; wake(); });
+}
+
+const ask = async (rl) => {
+  if (process.stdin.isTTY) return new Promise((res) => rl.question(PROMPT(), res));
+  process.stdout.write(PROMPT());
+  for (;;) {
+    if (pipedLines.length) return pipedLines.shift();
+    if (pipedEnded) return null; // end of input — leave like Ctrl-D does
+    await new Promise((res) => { wakeReader = res; });
+  }
+};
 
 // Small shell-like tokenizer for TUI commands. It keeps quoted values such as
 // `/coinpay card pay --description "Fix the build"` as one native CLI argument

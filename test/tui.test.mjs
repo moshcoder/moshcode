@@ -117,3 +117,25 @@ test("TUI /install rejects an Object.prototype name instead of crashing the pit"
   assert.match(result.stdout, /unknown engine or tool "constructor"/);
   assert.doesNotMatch(result.stderr, /TypeError/);
 });
+
+// Piped stdin is delivered in chunks and readline emits every line of a chunk
+// at once, so a one-shot `rl.question` used to see the first line and drop the
+// rest — the loop then waited forever on input that had already gone by. Every
+// command after the first was silently skipped, /quit included, and the process
+// still exited 0.
+test("TUI runs every command from piped stdin, not just the first", async () => {
+  const result = await runTui("/run --dryrun\n/run --nope\n/pwd\n/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /unknown option --dryrun/);
+  assert.match(result.stdout, /unknown option --nope/);
+  assert.match(result.stdout, /code hard, mosh harder/); // /quit was reached
+});
+
+test("TUI leaves cleanly when piped input ends without /quit", async () => {
+  const result = await runTui("/run --dryrun\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /unknown option --dryrun/);
+  assert.match(result.stdout, /code hard, mosh harder/);
+});
