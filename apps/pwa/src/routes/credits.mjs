@@ -17,7 +17,11 @@ export const PACKS = {
 };
 
 creditsRouter.post("/credits/buy", requireAuth, async (req, res) => {
-  const pack = PACKS[req.body.pack] || PACKS.starter;
+  // Own properties only: PACKS is a plain object literal, so a pack name like
+  // `constructor` or `toString` would otherwise resolve to something off
+  // Object.prototype — truthy, so the starter fallback is skipped and the
+  // payment goes out with no amount/credits.
+  const pack = (req.body.pack && Object.hasOwn(PACKS, req.body.pack)) ? PACKS[req.body.pack] : PACKS.starter;
   if (!config.coinpay.businessId) {
     // not wired yet — tell the user instead of failing silently
     return res.redirect("/settings?err=coinpay-not-configured");
