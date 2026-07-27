@@ -53,7 +53,7 @@ export async function dashboardHandler(req, res) {
       <span style="font-variant-numeric:tabular-nums;color:${l.delta >= 0 ? "var(--acid)" : "var(--warn)"}">${l.delta >= 0 ? "+" : ""}${l.delta}</span>
     </div>`).join("") || `<div class="faint mono" style="font-size:.78rem;padding:8px 0">no activity yet</div>`;
 
-  const body = `${appBar(req.user, bal)}
+  const body = `${appBar(req.user, bal, req.csrfToken)}
   <div class="strip" style="border-bottom:1px solid var(--line);background:var(--bg-tint)"><div class="wrap" style="display:flex;gap:16px;padding:11px 0;font-family:var(--mono);font-size:.76rem;color:var(--dim);flex-wrap:wrap">
     <span style="color:var(--text)"><span class="beat"></span> ${pending.length} waiting on you</span>
     <span class="faint">·</span><span>balance ${bal.toLocaleString()} cr</span>
@@ -130,7 +130,7 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
       <form method="post" action="/settings/apikeys/${k.id}/delete" style="margin:0">${csrfInput(req)}<button class="btn danger" style="padding:5px 10px;font-size:.72rem">revoke</button></form>
     </div>`).join("") : `<div class="faint mono" style="font-size:.78rem;padding:6px 0">no keys yet</div>`;
 
-  const body = `${appBar(req.user, bal)}
+  const body = `${appBar(req.user, bal, req.csrfToken)}
   <main class="wrap" style="max-width:720px;padding-top:30px">
     <h1 style="font-size:1.5rem;margin-bottom:20px">Settings</h1>
     ${err ? `<div class="notice err">${esc(err.replace(/-/g, " "))}</div>` : ""}
