@@ -100,13 +100,13 @@ ${head}
 </html>`;
 }
 
-export function appBar(user, balance) {
+export function appBar(user, balance, csrf = "") {
   return `<header class="bar"><div class="wrap bar-inner">
     <a class="brand" href="/"><span class="mark">M</span>MOSHCODE<span class="app">app</span></a>
     <div class="bar-right">
       ${user ? `<span class="bal-chip">◆ <b>${balance.toLocaleString()}</b> cr</span>
       <a class="btn" href="/settings">Settings</a>
-      <form method="post" action="/auth/logout" style="margin:0"><button class="btn">Sign out</button></form>`
+      <form method="post" action="/auth/logout" style="margin:0"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="btn">Sign out</button></form>`
       : `<a class="btn acid" href="/">Sign in</a>`}
     </div>
   </div></header>`;

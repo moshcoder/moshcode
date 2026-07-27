@@ -101,7 +101,7 @@ approvalsRouter.get("/approve/:id", async (req, res) => {
       <div class="label" style="font-size:.6rem">${esc(k)}</div><div class="mono" style="margin-top:3px">${esc(String(v))}</div></div>`).join("");
 
   const t = req.query.t ? `?t=${esc(req.query.t)}` : "";
-  const body = `${appBar(req.user, req.user ? await balance(req.user.id) : 0)}
+  const body = `${appBar(req.user, req.user ? await balance(req.user.id) : 0, req.csrfToken)}
   <main class="wrap" style="max-width:560px;padding-top:40px">
     <div class="card">
       <div class="card-head"><span class="h">${esc(a.script || "moshscript")} · ${a.kind}()</span>
