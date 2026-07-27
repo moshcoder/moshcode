@@ -162,7 +162,13 @@ cliRouter.post("/cli/device/token", async (req, res) => {
   if (row.status === "denied") return res.status(400).json({ error: "access_denied" });
   if (row.status !== "approved") return res.status(400).json({ error: "authorization_pending" });
 
-  await run(`UPDATE device_codes SET status = 'claimed' WHERE device_code = ?`, [row.device_code]);
+  // Claim the code atomically, the same way /cli/token claims auth codes: the
+  // status check above is not enough on its own — with a remote (network)
+  // database, two concurrent polls can both read "approved" before either
+  // UPDATE lands, and one single-use code would mint two API keys. Only the
+  // first claim wins.
+  const claimed = await run(`UPDATE device_codes SET status = 'claimed' WHERE device_code = ? AND status = 'approved'`, [row.device_code]);
+  if (!claimed.rowsAffected) return res.status(400).json({ error: "expired_token" });
   const user = await get(`SELECT * FROM users WHERE id = ?`, [row.user_id]);
   const { plaintext } = await createApiKey(user.id, row.name || "moshcode cli");
   res.json({ access_token: plaintext, token_type: "bearer", user: { id: user.id, email: user.email || null, name: user.display_name } });
