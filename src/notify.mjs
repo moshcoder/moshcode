@@ -41,7 +41,16 @@ export async function ingestApproval(payload, { fetchImpl = fetch, key } = {}) {
     return { ok: false, error: String(e.message || e) };
   }
   if (!res.ok) return { ok: false, status: res.status };
-  const data = await res.json();
+  // A 200 is not a promise of JSON: a proxy, captive portal, or HTML error page
+  // still answers 200. Parsing outside the guard threw the raw SyntaxError all
+  // the way out of notify()/ask() and killed the script, instead of the
+  // documented { ok:false } the callers already print a friendly line for.
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    return { ok: false, error: `bad response from ${API()} (${String(e.message || e)})` };
+  }
   return { ok: true, ...data };
 }
 
