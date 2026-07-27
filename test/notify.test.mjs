@@ -26,6 +26,20 @@ test("ingestApproval posts to the app with a Bearer key and returns {id,url}", a
   delete process.env.MOSHCODE_API_KEY;
 });
 
+test("ingestApproval fails cleanly when a 200 response isn't JSON", async () => {
+  process.env.MOSHCODE_API_KEY = "mck_test";
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    // A proxy/captive portal/HTML error page answering 200 — res.json() rejects.
+    json: async () => JSON.parse("<!doctype html><h1>502 Bad Gateway</h1>"),
+  });
+  const r = await ingestApproval({ message: "ship it?", kind: "ask" }, { fetchImpl });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /bad response/);
+  delete process.env.MOSHCODE_API_KEY;
+});
+
 test("pollApproval resolves with the human's submitted response", async () => {
   const replies = [
     { ok: true, json: async () => ({ status: "pending" }) },
