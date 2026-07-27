@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -116,4 +116,49 @@ test("TUI /install rejects an Object.prototype name instead of crashing the pit"
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /unknown engine or tool "constructor"/);
   assert.doesNotMatch(result.stderr, /TypeError/);
+});
+
+// The pit persists every line typed at the prompt to ~/.moshcode_history, and
+// the documented flows put secrets on those lines (`/mcp install <url> -H
+// "Authorization: Bearer …"`, `/secrets`, `/coinpay`, `!export TOKEN=…`). The
+// file must be owner-only, the way credentials.json already is.
+const posixMode = { skip: process.platform === "win32" ? "POSIX permission bits" : false };
+
+function runTuiWithHome(home, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [BIN], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
+    child.stdin.end(input);
+  });
+}
+
+test("TUI writes the command history owner-only", posixMode, async () => {
+  const home = mkdtempSync(join(tmpdir(), "moshcode-history-"));
+
+  const result = await runTuiWithHome(home, "/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const file = join(home, ".moshcode_history");
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+test("TUI tightens a history file that was already world-readable", posixMode, async () => {
+  const home = mkdtempSync(join(tmpdir(), "moshcode-history-"));
+  const file = join(home, ".moshcode_history");
+  writeFileSync(file, "/mcp install https://mcp.example.com/sse -H \"Authorization: Bearer sk-live\"\n");
+  chmodSync(file, 0o644);
+
+  const result = await runTuiWithHome(home, "/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.match(readFileSync(file, "utf8"), /Bearer sk-live/); // history itself survives
 });

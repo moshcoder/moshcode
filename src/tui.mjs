@@ -37,7 +37,14 @@ function loadHistory() {
 }
 function saveHistory() {
   try {
-    fs.writeFileSync(HISTORY_FILE, history.slice(0, HISTORY_MAX).join("\n") + "\n");
+    // Owner-only, like credentials.json: the pit records whatever was typed at
+    // the prompt, and that includes secrets by design — `/mcp install <url> -H
+    // "Authorization: Bearer …"`, `/secrets`, `/coinpay`, and `!` shell escapes.
+    fs.writeFileSync(HISTORY_FILE, history.slice(0, HISTORY_MAX).join("\n") + "\n", { mode: 0o600 });
+    // `mode` only applies when the file is created, so a history file that
+    // already exists keeps whatever the umask gave it (0644 on most systems).
+    // Tighten it every save so existing installs get fixed too.
+    fs.chmodSync(HISTORY_FILE, 0o600);
   } catch {
     /* best effort — history is a convenience, never fatal */
   }
