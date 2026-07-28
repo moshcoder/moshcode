@@ -122,6 +122,9 @@ export function sleep(ms) {
  * Retry a function with exponential backoff
  */
 export async function retry(fn, maxAttempts = 3, baseDelay = 1000) {
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error('retry maxAttempts must be a positive integer');
+  }
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await fn();
