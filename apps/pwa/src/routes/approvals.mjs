@@ -10,7 +10,7 @@ import { config } from "../config.mjs";
 import { id, token } from "../lib/crypto.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { verifySignature } from "../lib/signature.mjs";
-import { balance, charge, costOf } from "../lib/credits.mjs";
+import { balance, costOf, reserve, settle } from "../lib/credits.mjs";
 import { fanOut } from "../lib/deliver.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { csrfInput } from "../lib/session.mjs";
@@ -45,12 +45,15 @@ approvalsRouter.post("/api/approvals", async (req, res) => {
   const url = `${config.origin}/approve/${approval.id}?t=${approval.cap_token}`;
 
   // decide which channels we can afford, deliver only to those, then charge for
-  // what actually went out (so the ledger always matches reality)
+  // what actually went out (so the ledger always matches reality). The hold goes
+  // in BEFORE delivery: checking the balance and charging afterwards lets two
+  // concurrent ingests — a script firing ask()/notify() in parallel, which the
+  // runtime allows — both pass the check and spend the same credits twice.
   const { all } = await import("../db.mjs");
   const enabled = (await all(`SELECT kind FROM channels WHERE user_id = ? AND enabled = 1`, [user.id])).map((r) => r.kind);
   const fullCost = costOf(enabled);
-  const bal = await balance(user.id);
-  const affordable = bal >= fullCost ? enabled : enabled.filter((k) => costOf([k]) === 0);
+  const held = fullCost > 0 ? await reserve(user.id, fullCost, "approval.delivered", { id: approval.id, channels: enabled }) : null;
+  const affordable = fullCost === 0 || held ? enabled : enabled.filter((k) => costOf([k]) === 0);
 
   const notified = await fanOut(user, { ...approval, url }, affordable);
   const cost = costOf(notified);
@@ -62,7 +65,8 @@ approvalsRouter.post("/api/approvals", async (req, res) => {
      "pending", approval.cap_token, JSON.stringify(notified), cost, approval.created_at]
   );
 
-  if (cost > 0) await charge(user.id, cost, "approval.delivered", { id: approval.id, channels: notified });
+  // settle the hold down to what actually went out (0 releases it)
+  if (held) await settle(held, cost, { id: approval.id, channels: notified });
 
   res.status(201).json({
     id: approval.id,
@@ -70,7 +74,7 @@ approvalsRouter.post("/api/approvals", async (req, res) => {
     status: "pending",
     delivered: notified,
     charged: cost,
-    warning: bal < fullCost ? "insufficient credits — only free channels were used" : undefined,
+    warning: fullCost > 0 && !held ? "insufficient credits — only free channels were used" : undefined,
   });
 });
 
