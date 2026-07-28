@@ -20,9 +20,10 @@ const b64url = (buf) => Buffer.from(buf).toString("base64url");
 export function loadCreds() {
   try { return JSON.parse(fs.readFileSync(credsPath, "utf8")); } catch { return null; }
 }
-function saveCreds(creds) {
+export function saveCreds(creds) {
   fs.mkdirSync(CREDS_DIR, { recursive: true });
   fs.writeFileSync(credsPath, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  fs.chmodSync(credsPath, 0o600);
 }
 
 function openBrowser(url) {
