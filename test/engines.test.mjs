@@ -20,6 +20,7 @@ const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 // The autonomous-session bypass flags each engine declares (engine.agentArgs).
 const EXPECTED_AGENT_ARGS = {
   opencode: ["--auto"],
+  privacycode: ["--auto"],
   claude: ["--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
@@ -30,6 +31,7 @@ const EXPECTED_AGENT_ARGS = {
 // agents-view invocation where it has one, else its autonomous bypass flags.
 const EXPECTED_LAUNCH_ARGS = {
   opencode: ["agent", "list"],
+  privacycode: ["agent", "list"],
   claude: ["agents", "--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],

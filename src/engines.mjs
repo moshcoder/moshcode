@@ -23,6 +23,15 @@ export const ENGINES = {
     install: { cmd: "bash", args: ["-c", "curl -fsSL https://opencode.ai/install | bash"] },
     upgrade: { cmd: "opencode", args: ["upgrade"] },
   },
+  privacycode: {
+    desc: "privacycode — privacy-first coding agent (profullstack)",
+    bin: "privacycode",
+    // An opencode derivative, so it speaks the same flags/subcommands.
+    agentArgs: ["--auto"],
+    agentsView: ["agent", "list"],
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
+    upgrade: { cmd: "privacycode", args: ["upgrade"] },
+  },
   claude: {
     desc: "Claude Code — Anthropic's agentic CLI",
     bin: "claude",
@@ -72,7 +81,10 @@ export function upgradeSpec(engine) {
 }
 
 /** Aliases so `/agents cc` etc. resolve. */
-const ALIASES = { cc: "claude", "claude-code": "claude", openai: "codex", gpt: "codex", google: "gemini" };
+const ALIASES = {
+  cc: "claude", "claude-code": "claude", openai: "codex", gpt: "codex", google: "gemini",
+  pc: "privacycode", getprivacycode: "privacycode", privacy: "privacycode",
+};
 
 /** Resolve a name/alias to `[key, engine]`, or null. */
 export function resolveEngine(token) {
@@ -143,6 +155,7 @@ const AI_EXEC = {
   codex: (p) => ["exec", p],                                 // codex non-interactive
   gemini: (p) => ["-p", p],                                  // gemini prompt mode
   opencode: (p) => ["run", p],                               // opencode one-shot
+  privacycode: (p) => ["run", p],                            // privacycode one-shot (opencode-derived)
   aider: (p) => ["--message", p, "--yes", "--no-auto-commits"], // aider single message
 };
 
@@ -155,7 +168,7 @@ export function aiExecArgs(engine, prompt) {
 
 /** First installed engine that supports headless ai(), honoring a preference. */
 export function pickAiEngine(preferred) {
-  const order = preferred ? [preferred] : ["claude", "codex", "opencode", "gemini", "aider"];
+  const order = preferred ? [preferred] : ["claude", "codex", "opencode", "privacycode", "gemini", "aider"];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin)) return key;
   }
