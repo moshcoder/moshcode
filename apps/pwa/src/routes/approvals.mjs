@@ -1,5 +1,7 @@
 // The human-in-the-loop approvals surface.
 //   POST /api/approvals        ingest from the CLI (Bearer API key) → fan out + charge
+//                              ask() lands pending (a human owes a reply); notify()
+//                              is fire-and-forget, so it lands already sent
 //   GET  /api/approvals/:id    CLI long-poll (Bearer owner, or ?t=cap) → {status,response}
 //   GET  /approve/:id          human page (session owner, or ?t=cap)
 //   POST /approve/:id          submit a response (approve / redirect)
@@ -58,11 +60,20 @@ approvalsRouter.post("/api/approvals", async (req, res) => {
   const notified = await fanOut(user, { ...approval, url }, affordable);
   const cost = costOf(notified);
 
+  // A notify() is fire-and-forget: the script posts it and moves on, and nothing
+  // ever polls it — only an ask() blocks on a human. Filing both as `pending`
+  // parks every notification in the dashboard's "needs you" queue for good: the
+  // count of things actually waiting on the operator is wrong, and the only way
+  // to clear one is to answer a script that stopped listening. A notify is done
+  // the moment it goes out.
+  const isNotify = approval.kind === "notify";
+  const status = isNotify ? "sent" : "pending";
   await run(
-    `INSERT INTO approvals (id,user_id,script,message,context,kind,status,cap_token,channels,cost,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO approvals (id,user_id,script,message,context,kind,status,cap_token,channels,cost,created_at,submitted_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     [approval.id, approval.user_id, approval.script, approval.message, approval.context, approval.kind,
-     "pending", approval.cap_token, JSON.stringify(notified), cost, approval.created_at]
+     status, approval.cap_token, JSON.stringify(notified), cost, approval.created_at,
+     isNotify ? approval.created_at : null]
   );
 
   // settle the hold down to what actually went out (0 releases it)
@@ -71,7 +82,7 @@ approvalsRouter.post("/api/approvals", async (req, res) => {
   res.status(201).json({
     id: approval.id,
     url,
-    status: "pending",
+    status,
     delivered: notified,
     charged: cost,
     warning: fullCost > 0 && !held ? "insufficient credits — only free channels were used" : undefined,
@@ -114,7 +125,10 @@ approvalsRouter.get("/approve/:id", async (req, res) => {
         <h1 style="font-size:1.7rem;letter-spacing:-.02em">${esc(a.message)}</h1>
         ${cells ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px">${cells}</div>` : ""}
         ${done
-          ? `<div class="notice ok" style="margin-top:18px">${a.status === "submitted" ? `You replied: “${esc(a.response || "")}”` : "This loop was killed."}</div>`
+          ? `<div class="notice ok" style="margin-top:18px">${
+              a.status === "sent" ? "This was a notification — nothing to respond to."
+              : a.status === "submitted" ? `You replied: “${esc(a.response || "")}”`
+              : "This loop was killed."}</div>`
           : `<form method="post" action="/approve/${a.id}${t}" style="margin-top:18px">${csrfInput(req)}
               <label class="field"><span>Instructions back to the script (optional)</span>
                 <textarea name="response" rows="3" placeholder="e.g. yes — and bump the tag to v2.1"></textarea></label>
