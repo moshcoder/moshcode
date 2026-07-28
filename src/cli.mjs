@@ -17,7 +17,7 @@
 // Under --dry-run it narrates the argv instead of spawning.
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ENGINES, aiExecArgs, pickAiEngine } from "./engines.mjs";
+import { ENGINES, aiExecArgs, pickAiEngine, resolveEngine } from "./engines.mjs";
 
 // Resolve THIS package's own moshcode entrypoint, so scripting stays
 // self-referential and doesn't depend on `moshcode` being on PATH.
@@ -68,8 +68,10 @@ export function cliVerb(name, summary) {
  */
 export function runAi(ctx, prompt, opts = {}) {
   if (ctx.dryRun) {
-    // narrate without requiring an installed engine
-    const engine = pickAiEngine(opts.engine) || opts.engine || "claude";
+    // narrate without requiring an installed engine — so the fallback has to
+    // resolve an alias itself: with nothing installed pickAiEngine() returns
+    // null, and handing the raw alias to aiExecArgs threw instead of narrating.
+    const engine = pickAiEngine(opts.engine) || resolveEngine(opts.engine)?.[0] || opts.engine || "claude";
     const args = aiExecArgs(engine, prompt); // throws only on an unknown engine name
     ctx.out(`  🧠 ai(${JSON.stringify(String(prompt).slice(0, 48))}) → would run: ${engine} ${args.join(" ")}`);
     return "";

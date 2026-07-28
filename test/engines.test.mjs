@@ -160,6 +160,25 @@ test("ranOk and exitReason cover clean exits, bad codes, and spawn errors", asyn
   assert.match(exitReason(missing), /ENOENT|not found|spawn/i);
 });
 
+test("pickAiEngine resolves an engine alias, like every other engine surface", () => {
+  // `/agents cc`, `moshcode start cc` and `moshcode upgrade cc` all resolve the
+  // alias, so an ai() preference must too — otherwise `ai(p, { engine: "cc" })`
+  // reports "needs an installed engine" with Claude sitting right there on PATH.
+  const dir = tempDir("moshcode-ai-alias-");
+  writeEngine(dir, "claude");
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}${path.delimiter}${previous || ""}`;
+  try {
+    assert.equal(pickAiEngine("claude"), "claude");
+    assert.equal(pickAiEngine("cc"), "claude");
+    assert.equal(pickAiEngine("claude-code"), "claude");
+    // an unknown preference is still no engine at all
+    assert.equal(pickAiEngine("definitely-not-an-engine"), null);
+  } finally {
+    process.env.PATH = previous;
+  }
+});
+
 test("engine lookup ignores inherited Object.prototype members", () => {
   // ENGINES/ALIASES/AI_EXEC are plain object literals, so an unknown name that
   // matches an Object.prototype member must not resolve as a real engine.
