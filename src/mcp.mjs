@@ -4,7 +4,7 @@
 import { ENGINES, isInstalled, ranOk, runCmd } from "./engines.mjs";
 
 // Coding engines that can register MCP servers. Aider has no MCP support.
-export const MCP_ENGINES = ["claude", "gemini", "codex", "opencode"];
+export const MCP_ENGINES = ["claude", "gemini", "codex", "opencode", "privacycode"];
 
 /** Is this target a remote server URL (vs a local stdio command)? */
 export function isRemoteTarget(target) {
@@ -84,9 +84,12 @@ export function mcpAddArgs(key, spec) {
       else argv.push("--", target, ...args);
       return { argv };
     }
-    case "opencode": {
+    // privacycode is opencode-derived, so it shares opencode's `mcp add` surface
+    // — including the "remote servers only, non-interactively" limitation.
+    case "opencode":
+    case "privacycode": {
       if (!remote) {
-        return { skip: "OpenCode CLI adds only remote (--url) servers non-interactively" };
+        return { skip: `${key === "privacycode" ? "privacycode" : "OpenCode"} CLI adds only remote (--url) servers non-interactively` };
       }
       const argv = ["mcp", "add", name, "--url", target];
       for (const [k, v] of env) argv.push("--env", `${k}=${v}`);

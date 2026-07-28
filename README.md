@@ -20,6 +20,7 @@ to upgrade, `… | sh -s -- remove` to uninstall.
 moshcode engines            # list installable engines
 moshcode engines --json     # machine-readable install status for automation
 moshcode install opencode   # install opencode (curl … | bash)
+moshcode install privacycode # curl -fsSL https://getprivacycode.com/install | sh
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 ```
@@ -34,6 +35,7 @@ use this only in an isolated container, VM, or workspace you trust:
 ```sh
 moshcode agents claude      # claude agents --dangerously-skip-permissions  (agent view)
 moshcode agents opencode    # opencode agent list                          (agent view)
+moshcode agents privacycode # privacycode agent list                       (agent view)
 moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
 moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
 moshcode agents aider       # aider --yes-always                                (autonomous)
