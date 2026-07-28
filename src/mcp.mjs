@@ -2,6 +2,7 @@
 // supports them, from one canonical definition. MoshCode drives each engine's
 // own `mcp add` so the engine owns its config format. See prd/0003.
 import { ENGINES, isInstalled, ranOk, runCmd } from "./engines.mjs";
+import { isIP } from "node:net";
 
 // Coding engines that can register MCP servers. Aider has no MCP support.
 export const MCP_ENGINES = ["claude", "gemini", "codex", "opencode"];
@@ -19,7 +20,13 @@ const SUFFIX_LABELS = ["co", "com", "net", "org", "gov", "edu", "ac"];
 export function deriveName(target) {
   const sanitize = (s) => String(s).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "");
   try {
-    const labels = new URL(target).hostname.split(".").filter(Boolean);
+    const hostname = new URL(target).hostname;
+    const ipHost = hostname.replace(/^\[|\]$/g, "");
+    if (isIP(ipHost)) {
+      const ipName = ipHost.replace(/[.:]+/g, "-").replace(/^-+|-+$/g, "");
+      return sanitize(`ip-${ipName}`);
+    }
+    const labels = hostname.split(".").filter(Boolean);
     let withoutTld = labels.slice(0, -1); // drop the TLD
     // ...and the generic label of a multi-part suffix, as long as a real name
     // still precedes it (a bare "co.uk" host has nothing better to offer).

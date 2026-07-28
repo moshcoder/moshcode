@@ -20,6 +20,11 @@ test("deriveName pulls a sane name from a remote host", () => {
   assert.equal(deriveName("not a url"), "server");
 });
 
+test("deriveName keeps IP literal hosts recognizable", () => {
+  assert.equal(deriveName("http://127.0.0.1:3000/sse"), "ip-127-0-0-1");
+  assert.equal(deriveName("http://[::1]:3000/sse"), "ip-1");
+});
+
 test("deriveName skips the generic label of a multi-part suffix", () => {
   assert.equal(deriveName("https://mcp.acme.co.uk/sse"), "acme");
   assert.equal(deriveName("https://api.example.com.au/mcp"), "example");
