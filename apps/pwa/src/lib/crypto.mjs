@@ -32,7 +32,9 @@ export function sign(value) {
 
 export function unsign(signed) {
   if (!signed || typeof signed !== "string" || !signed.includes(".")) return null;
-  const [payload, mac] = signed.split(".");
+  const parts = signed.split(".");
+  if (parts.length !== 2) return null;
+  const [payload, mac] = parts;
   const expected = crypto.createHmac("sha256", config.sessionSecret).update(payload).digest("base64url");
   const a = Buffer.from(mac);
   const b = Buffer.from(expected);
