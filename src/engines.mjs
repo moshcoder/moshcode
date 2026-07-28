@@ -155,7 +155,8 @@ export function aiExecArgs(engine, prompt) {
 
 /** First installed engine that supports headless ai(), honoring a preference. */
 export function pickAiEngine(preferred) {
-  const order = preferred ? [preferred] : ["claude", "codex", "opencode", "gemini", "aider"];
+  const resolved = preferred ? resolveEngine(preferred)?.[0] : null;
+  const order = resolved ? [resolved] : ["claude", "codex", "opencode", "gemini", "aider"];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin)) return key;
   }
