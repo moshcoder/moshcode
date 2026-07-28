@@ -1,6 +1,7 @@
 // Cookie sessions + auth middleware + CSRF (double-submit).
 import { get, run } from "../db.mjs";
 import { id, token, sign, unsign } from "./crypto.mjs";
+import { esc } from "./html.mjs";
 import { config } from "../config.mjs";
 
 const COOKIE = "mc_sess";
@@ -72,7 +73,12 @@ export function csrfGuard(req, res, next) {
   next();
 }
 
-export const csrfInput = (req) => `<input type="hidden" name="_csrf" value="${req.csrfToken}">`;
+// Escaped the same way appBar() escapes this exact token. The value comes
+// straight off the mc_csrf cookie, which the app never validates, so a quote in
+// it closes the attribute early: the browser then submits a truncated token,
+// csrfGuard rejects the POST, and every form in the app 403s until the cookie
+// is cleared by hand.
+export const csrfInput = (req) => `<input type="hidden" name="_csrf" value="${esc(req.csrfToken)}">`;
 
 // ---- ephemeral auth-ceremony state (webauthn challenge / oauth pkce) in signed cookies ----
 export function setCeremony(res, name, value, ttlMs = 1000 * 60 * 5) {
