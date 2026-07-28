@@ -33,3 +33,37 @@ export const charge = (userId, amount, reason, meta) => entry(userId, -Math.abs(
 export function costOf(kinds) {
   return kinds.reduce((sum, k) => sum + (CHANNEL_COST[k] ?? 0), 0);
 }
+
+/**
+ * Hold `amount` against a user's balance in a single statement, the same way
+ * /cli/token and /webhooks/coinpay claim their rows. Reading the balance and
+ * then inserting a charge is not enough on its own: against a remote (network)
+ * database two concurrent requests both read a sufficient balance before either
+ * insert lands, and both spend it. The `WHERE` runs inside the insert, so only
+ * the first reservation a balance can cover is written.
+ *
+ * Returns the ledger row id when the hold landed, or null when it did not.
+ */
+export async function reserve(userId, amount, reason, meta = null) {
+  const cost = Math.abs(amount);
+  const rowId = id();
+  const r = await run(
+    `INSERT INTO credit_ledger (id, user_id, delta, reason, meta, created_at)
+     SELECT ?,?,?,?,?,?
+      WHERE (SELECT COALESCE(SUM(delta),0) FROM credit_ledger WHERE user_id = ?) >= ?`,
+    [rowId, userId, -cost, reason, meta ? JSON.stringify(meta) : null, Date.now(), userId, cost]
+  );
+  return r.rowsAffected ? rowId : null;
+}
+
+/**
+ * Settle a reservation down to what was actually used, so the ledger keeps
+ * showing one row per delivery for exactly what went out. Settling to 0 releases
+ * the hold entirely (nothing was delivered, so there is nothing to charge for).
+ */
+export async function settle(rowId, amount, meta = null) {
+  const used = Math.abs(amount);
+  if (!used) return run(`DELETE FROM credit_ledger WHERE id = ?`, [rowId]);
+  return run(`UPDATE credit_ledger SET delta = ?, meta = ? WHERE id = ?`,
+    [-used, meta ? JSON.stringify(meta) : null, rowId]);
+}
