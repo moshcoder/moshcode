@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS approvals (
   message      TEXT NOT NULL,
   context      TEXT,                  -- json
   kind         TEXT NOT NULL DEFAULT 'ask', -- ask | notify
-  status       TEXT NOT NULL DEFAULT 'pending', -- pending | submitted | killed
+  status       TEXT NOT NULL DEFAULT 'pending', -- pending | submitted | killed | sent (a fire-and-forget notify)
   response     TEXT,
   cap_token    TEXT NOT NULL,         -- capability token embedded in the link
   channels     TEXT,                  -- json array of kinds it was delivered to
