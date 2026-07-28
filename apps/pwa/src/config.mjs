@@ -6,11 +6,13 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Tiny .env loader — does not override anything already in the environment.
-function loadEnv() {
-  const file = path.join(ROOT, ".env");
+// The value group is lazy on purpose: a greedy `(.*)` eats the whitespace the
+// trailing `\s*` is there to drop, so `KEY=secret ` exports the trailing space
+// as part of the secret, and `KEY="secret" ` never gets unquoted at all.
+export function loadEnv(file = path.join(ROOT, ".env")) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i.exec(line);
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/i.exec(line);
     if (!m) continue;
     const key = m[1];
     if (process.env[key] !== undefined) continue;
