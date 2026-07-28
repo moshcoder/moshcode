@@ -112,6 +112,19 @@ test("DEFAULT_MAX bounds an unbounded while when no max is passed", async () => 
   assert.equal(calls.length, DEFAULT_MAX);
 });
 
+test("runScript rejects invalid max values", async () => {
+  const { registry } = recorder();
+
+  await assert.rejects(
+    () => runScript(`while (alive) {}`, { commands: registry, max: 0 }),
+    /max must be a positive integer/,
+  );
+  await assert.rejects(
+    () => runScript(`while (alive) {}`, { commands: registry, max: 1.5 }),
+    /max must be a positive integer/,
+  );
+});
+
 test("a rejecting fire-and-forget verb does not kill a script that keeps running", async () => {
   const calls = [];
   const registry = createRegistry([

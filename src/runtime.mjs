@@ -121,6 +121,9 @@ export async function runScript(source, opts = {}) {
   }
   const out = opts.out || ((s) => console.log(s));
   const max = Number.isFinite(opts.max) ? opts.max : DEFAULT_MAX;
+  if (!Number.isInteger(max) || max < 1) {
+    throw new Error(`moshscript: max must be a positive integer, got ${JSON.stringify(opts.max)}`);
+  }
   const control = makeControl(max, out);
 
   const ctx = {
