@@ -15,8 +15,11 @@ test("skillName derives from a git url or path, or takes an override", () => {
 });
 
 test("skillName never yields `.` or `..`, which would escape the skills dir", () => {
-  const here = path.basename(process.cwd());
-  const parent = path.basename(path.dirname(process.cwd()));
+  // skillName normalizes every derived name to lowercase, including the
+  // cwd-based fallback. Keep this portable when a checkout lives below an
+  // uppercase directory such as ~/Projects.
+  const here = path.basename(process.cwd()).toLowerCase();
+  const parent = path.basename(path.dirname(process.cwd())).toLowerCase();
   assert.equal(skillName("."), here);
   assert.equal(skillName("./"), here);
   assert.equal(skillName("a/b/."), "b");
