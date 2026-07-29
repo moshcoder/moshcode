@@ -106,7 +106,10 @@ export function printSkillTargets() {
     const dot = isInstalled(ENGINES[key].bin) ? DOT.installed : DOT.missing;
     console.log(`   ${dot} ${bone(key.padEnd(9))} ${ash("skills supported")}`);
   }
-  for (const key of ["codex", "opencode", "aider"]) {
+  // The engines with no skills primitive are whatever ENGINES has left over.
+  // Derived, not hardcoded: a hardcoded list silently drops any engine added
+  // later, so the matrix stops showing every engine moshcode supports.
+  for (const key of Object.keys(ENGINES).filter((k) => !SKILL_ENGINES.includes(k))) {
     console.log(`   ${DOT.missing} ${bone(key.padEnd(9))} ${ash("no skills primitive")}`);
   }
 }
