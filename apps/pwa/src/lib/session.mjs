@@ -46,7 +46,15 @@ export async function sessionMiddleware(req, res, next) {
 }
 
 export function requireAuth(req, res, next) {
-  if (!req.user) { setNext(res, req.originalUrl); return res.redirect("/"); }
+  if (!req.user) {
+    // Only a GET is worth remembering. Every consumer of mc_next hands it to a
+    // redirect, which the browser follows as a GET, but several guarded routes
+    // are POST-only (/credits/buy, /settings/channels, /settings/apikeys,
+    // /push/subscribe). Storing one of those sent the user to a 404 the moment
+    // they signed back in — worst on /credits/buy, which is the purchase flow.
+    if (req.method === "GET") setNext(res, req.originalUrl);
+    return res.redirect("/");
+  }
   next();
 }
 
