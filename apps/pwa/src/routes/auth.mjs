@@ -10,6 +10,12 @@ import { config } from "../config.mjs";
 export const authRouter = Router();
 
 function authPage(req, { error = "", mode = "in" } = {}) {
+  // Keep the address the visitor just typed. Every path that re-renders this
+  // page with an error is a POST — wrong password, weak password, taken email,
+  // malformed email — so the address is in the body, not the query string.
+  // Reading only req.query blanked the field on each of those, and the visitor
+  // had to retype their email to correct a password.
+  const email = req.body?.email || req.query.email || "";
   const body = `
   <main class="wrap" style="max-width:440px;padding-top:8vh">
     <a class="brand" href="/" style="justify-content:center;font-size:1.5rem;margin-bottom:6px"><span class="mark">M</span>MOSHCODE<span class="app">app</span></a>
@@ -19,7 +25,7 @@ function authPage(req, { error = "", mode = "in" } = {}) {
       <form method="post" action="/auth/${mode === "up" ? "register" : "login"}">
         ${csrfInput(req)}
         <label class="field"><span>Email</span>
-          <input type="email" name="email" autocomplete="username" required placeholder="you@example.com" value="${esc(req.query.email || "")}"></label>
+          <input type="email" name="email" autocomplete="username" required placeholder="you@example.com" value="${esc(email)}"></label>
         <label class="field"><span>Password</span>
           <input type="password" name="password" autocomplete="${mode === "up" ? "new-password" : "current-password"}" required minlength="8" placeholder="8+ characters"></label>
         <button class="btn acid block" type="submit">${mode === "up" ? "Create account" : "Sign in"}</button>
