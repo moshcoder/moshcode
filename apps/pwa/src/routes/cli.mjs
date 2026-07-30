@@ -32,13 +32,16 @@ function loopbackOk(uri) {
   } catch { return false; }
 }
 
-cliRouter.get("/cli/authorize", requireAuth, (req, res) => {
+cliRouter.get("/cli/authorize", requireAuth, async (req, res) => {
   const { redirect_uri, state, code_challenge } = req.query;
   if (!loopbackOk(redirect_uri) || !state || !code_challenge) {
     return res.status(400).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>Bad CLI request</h1><p class="dim mono">missing/invalid redirect_uri, state, or code_challenge.</p></main>` }));
   }
   const name = String(req.query.name || "moshcode cli").slice(0, 40);
-  const body = `${appBar(req.user, 0, req.csrfToken)}
+  // The app bar's credit chip is a live readout, not decoration — pass the
+  // real balance, the way every other signed-in page does. A hardcoded 0 tells
+  // a funded account it is broke on the page where it authorizes the CLI.
+  const body = `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
   <main class="wrap" style="max-width:460px;padding-top:8vh">
     <div class="card"><div class="card-body" style="text-align:center">
       <div style="font-size:2rem">🔑</div>
@@ -125,11 +128,11 @@ cliRouter.post("/cli/device/code", async (req, res) => {
 });
 
 // The page a human opens to approve a device.
-cliRouter.get("/device", requireAuth, (req, res) => {
+cliRouter.get("/device", requireAuth, async (req, res) => {
   const prefill = req.query.code ? normCode(req.query.code) : "";
   const done = req.query.done;
   const bad = req.query.bad;
-  const body = `${appBar(req.user, 0, req.csrfToken)}
+  const body = `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
   <main class="wrap" style="max-width:440px;padding-top:8vh">
     <div class="card"><div class="card-body" style="text-align:center">
       <div style="font-size:2rem">🔑</div>
