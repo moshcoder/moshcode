@@ -23,13 +23,26 @@ function loadEnv() {
 }
 loadEnv();
 
-const origin = (process.env.PUBLIC_ORIGIN || `http://localhost:${process.env.PORT || 8080}`).replace(/\/+$/, "");
+function readPort(value = process.env.PORT) {
+  const raw = value === undefined || value === null || String(value).trim() === "" ? "8080" : String(value).trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`PORT must be a decimal integer, got ${JSON.stringify(value)}`);
+  }
+  const port = Number(raw);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`PORT must be between 0 and 65535, got ${JSON.stringify(value)}`);
+  }
+  return port;
+}
+
+const port = readPort();
+const origin = (process.env.PUBLIC_ORIGIN || `http://localhost:${port}`).trim().replace(/\/+$/, "");
 const rpID = new URL(origin).hostname;
 
 export const config = {
   root: ROOT,
   env: process.env.NODE_ENV || "development",
-  port: Number(process.env.PORT || 8080),
+  port,
   origin,
   // WebAuthn relying party = this host.
   rpID,
