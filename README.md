@@ -155,6 +155,28 @@ it reaches ttyd.
   when you do it.
 - The gateway's signing secret is per-process, so restarting it logs everyone out.
 
+## Known MCP servers
+
+Some MCP servers are worth remembering by name rather than by npx invocation:
+
+```sh
+moshcode mcp catalog              # what we know how to run
+moshcode mcp add porkbun          # expands to: npx -y @porkbunllc/mcp-server
+```
+
+That registers it across every engine that supports MCP (claude, gemini, codex,
+opencode, privacycode) in one go.
+
+The catalog is a convenience, never a gate — an explicit command always wins, so
+`moshcode mcp add porkbun -- node ./my-fork.js` runs your fork.
+
+**Credentials are named, not registered.** `porkbun` needs `PORKBUN_API_KEY` and
+`PORKBUN_SECRET_API_KEY`; moshcode prints which are missing rather than copying
+them into five engines' config files, which would be five places to leak them
+from and five to rotate. Porkbun's API access is off by default and enabled
+per-domain — and its documentation tools work with no keys at all, which is a
+sensible way to try the server before trusting it with DNS writes.
+
 ## Upgrade everything
 
 ```sh
