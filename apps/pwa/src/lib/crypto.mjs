@@ -11,9 +11,14 @@ export function hashPassword(password) {
 
 export function verifyPassword(password, stored) {
   if (!stored || !stored.startsWith("scrypt$")) return false;
-  const [, saltHex, hashHex] = stored.split("$");
+  const parts = stored.split("$");
+  if (parts.length !== 3) return false;
+  const [, saltHex, hashHex] = parts;
+  if (!/^[0-9a-f]+$/i.test(saltHex) || !/^[0-9a-f]+$/i.test(hashHex)) return false;
+  if (saltHex.length % 2 !== 0 || hashHex.length % 2 !== 0) return false;
   const salt = Buffer.from(saltHex, "hex");
   const expected = Buffer.from(hashHex, "hex");
+  if (salt.length === 0 || expected.length === 0) return false;
   const dk = crypto.scryptSync(String(password), salt, expected.length);
   return dk.length === expected.length && crypto.timingSafeEqual(dk, expected);
 }
