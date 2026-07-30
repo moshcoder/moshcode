@@ -44,13 +44,32 @@ function authPage(req, { error = "", mode = "in" } = {}) {
   return page({ title: "moshcode ▸ sign in", body });
 }
 
+/**
+ * Reason text for a `?err=<slug>` redirect, formatted the way /settings does it.
+ * The CoinPay login flow bounces failures to "/" (coinpay.mjs sends coinpay-state,
+ * coinpay-denied, coinpay-failed and coinpay-not-configured), and every one of them
+ * happens before a session exists — so they land on the sign-in page below, which
+ * used to drop them and leave the visitor staring at an unexplained form.
+ *
+ * Only a short lowercase slug is accepted. The value is attacker-supplied via a
+ * crafted link and this page is unauthenticated, so anything looser would turn the
+ * sign-in form into a billboard for reflected prose. authPage() also esc()apes it.
+ */
+function failureReason(raw) {
+  const code = String(raw || "");
+  return /^[a-z0-9-]{1,40}$/.test(code) ? code.replace(/-/g, " ") : "";
+}
+
 authRouter.get("/", (req, res) => {
   if (req.user) {
     const next = takeNext(req, res);
     if (next) return res.redirect(next);
     return dashboardHandler(req, res); // dashboard lives at the root
   }
-  res.type("html").send(authPage(req, { mode: req.query.mode === "up" ? "up" : "in" }));
+  res.type("html").send(authPage(req, {
+    mode: req.query.mode === "up" ? "up" : "in",
+    error: failureReason(req.query.err),
+  }));
 });
 
 authRouter.post("/auth/register", async (req, res) => {
