@@ -26,6 +26,23 @@ export function saveCreds(creds) {
   fs.chmodSync(credsPath, 0o600);
 }
 
+/**
+ * True when the loopback flow can't work: the browser that opens the authorize
+ * URL is on a *different* machine than this process, so the callback to
+ * 127.0.0.1 lands on that machine and never reaches our listener. SSH sessions
+ * and headless boxes (a droplet, a container, CI) are exactly that case — there
+ * the device-code flow is the only one that can finish.
+ */
+export function isRemoteShell() {
+  const forced = String(process.env.MOSHCODE_LOGIN || "").toLowerCase();
+  if (forced === "browser") return false;
+  if (forced === "device") return true;
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY || process.env.SSH_CLIENT) return true;
+  // No display server on Linux → nothing here can open a browser for us.
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return true;
+  return false;
+}
+
 function openBrowser(url) {
   const [cmd, args] =
     process.platform === "darwin" ? ["open", [url]]
@@ -131,6 +148,22 @@ export async function loginDevice({ open = true } = {}) {
     if (data.error === "expired_token") throw new Error("code expired — run `moshcode login --device` again");
     // authorization_pending / slow_down → keep waiting
   }
+}
+
+/**
+ * Pick the login flow that can actually finish here. Over SSH or on a headless
+ * box the loopback callback is undeliverable (it hits the *browser's* machine),
+ * so fall back to the device code instead of stranding you on a dead
+ * 127.0.0.1 URL. `device: true` / `browser: true` force one either way.
+ */
+export async function loginAuto({ device = false, browser = false } = {}) {
+  const remote = !browser && (device || isRemoteShell());
+  if (!remote) return login();
+  if (!device) {
+    console.log(`\n🖥  remote/headless shell — using the device-code flow.`);
+    console.log(`   (a loopback callback would open on the browser's machine, not this one.)`);
+  }
+  return loginDevice({ open: !isRemoteShell() });
 }
 
 /** Print who is logged in (verified against the app). */

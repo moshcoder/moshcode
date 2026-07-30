@@ -18,7 +18,7 @@ import { runUpgrade } from "../src/upgrade.mjs";
 import { mcpCommand, skillCommand } from "../src/integrations.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
-import { login, loginDevice, whoami, logout } from "../src/auth.mjs";
+import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
@@ -144,7 +144,8 @@ usage:
   moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
                                        prd/NNNN-slug.md and hand it to an engine to
                                        author; no arg lists existing PRDs
-  moshcode login [--device]            authenticate this machine with app.moshcode.sh
+  moshcode login [--device|--browser]  authenticate this machine with app.moshcode.sh
+                                       (device code over SSH/headless; --browser forces loopback)
                                        (browser OAuth+PKCE; --device = headless/CI
                                        code flow) so notify()/ask() reach you
   moshcode whoami | logout             show / clear the logged-in account
@@ -284,8 +285,9 @@ async function main() {
   }
   if (cmd === "login") {
     const device = rest.includes("--device") || rest.includes("-d") || !process.stdin.isTTY;
+    const browser = rest.includes("--browser") || rest.includes("-b");
     try {
-      const { email } = device ? await loginDevice() : await login();
+      const { email } = await loginAuto({ device, browser });
       console.log(`✓ logged in${email ? ` as ${email}` : ""} 🤘 — notify()/ask() will reach you now.`);
     } catch (e) { console.error(String(e.message || e)); process.exitCode = 1; }
     return;

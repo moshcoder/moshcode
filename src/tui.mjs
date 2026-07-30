@@ -12,7 +12,7 @@ import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
-import { login, loginDevice, whoami, logout } from "./auth.mjs";
+import { loginAuto, whoami, logout } from "./auth.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
@@ -156,6 +156,8 @@ function printHelp() {
     `   ${acid("/shell [cmd]")}        drop into $SHELL (exit → back to the pit); also ${acid("!cmd")}`,
     `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
     `   ${acid("/run <file.mosh>")}   run a moshscript [--max N] [--dry-run]`,
+    `   ${acid("/login [--device]")}  connect this machine to app.moshcode.sh (device code over SSH)`,
+    `   ${acid("/whoami")}            who this machine is logged in as`,
     `   ${acid("/help")}              this`,
     `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
     "",
@@ -368,7 +370,8 @@ export async function tui() {
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "login") {
       const device = rest.includes("--device") || rest.includes("device") || rest.includes("-d");
-      try { const { email } = device ? await loginDevice() : await login(); console.log(ok(`logged in${email ? ` as ${email}` : ""} 🤘`)); }
+      const browser = rest.includes("--browser") || rest.includes("browser") || rest.includes("-b");
+      try { const { email } = await loginAuto({ device, browser }); console.log(ok(`logged in${email ? ` as ${email}` : ""} 🤘`)); }
       catch (e) { console.log(err(String(e.message || e))); }
       continue;
     }
