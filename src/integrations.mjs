@@ -8,6 +8,7 @@ import {
 import {
   SKILL_ENGINES, planSkillInstall, runSkillInstall, skillName,
 } from "./skills.mjs";
+import { catalogList, resolveCatalog } from "./mcp-catalog.mjs";
 import { acid, ash, bone, ok, err, info } from "./ui.mjs";
 
 function splitKV(pair) {
@@ -32,7 +33,8 @@ function flagValue(rest, index, flag) {
 export function parseMcp(tokens) {
   const verb = tokens[0];
   if (!verb || verb === "list") return { list: true };
-  if (verb !== "install" && verb !== "add") return { error: `unknown mcp verb "${verb}" — try install, add, or list` };
+  if (verb === "catalog") return { showCatalog: true };
+  if (verb !== "install" && verb !== "add") return { error: `unknown mcp verb "${verb}" — try install, add, catalog, or list` };
 
   const rest = tokens.slice(1);
   let name, transport, cmdParts = null;
@@ -68,6 +70,19 @@ export function parseMcp(tokens) {
   if (cmdParts) { target = cmdParts[0]; args = cmdParts.slice(1); }
   else { target = positional[0]; args = positional.slice(1); }
 
+  // A bare known name is enough: `mcp add porkbun` fills the command in from
+  // the catalog. Only when nothing else was given — an explicit target always
+  // wins, so the catalog can never override what was actually typed.
+  let catalog = null;
+  if (!target) {
+    catalog = resolveCatalog(name) || resolveCatalog(positional[0]);
+    if (catalog) {
+      name = name || catalog.key;
+      target = catalog.target;
+      args = catalog.args;
+    }
+  }
+
   if (verb === "install" && !name) {
     if (target && isRemoteTarget(target)) name = deriveName(target);
     else return { error: "a stdio command server needs an explicit --name" };
@@ -83,11 +98,20 @@ export function parseMcp(tokens) {
   if (headers.some((header) => headerName(header) === "")) {
     return { error: "mcp --header requires a non-empty header name" };
   }
-  return { spec: { name, target, args, transport, env, headers } };
+  return {
+    spec: { name, target, args, transport, env, headers },
+    ...(catalog ? { catalog } : {}),
+  };
 }
 
 const DOT = { installed: acid("●"), missing: ash("○") };
 function line(key, statusText) { return `   ${bone(key.padEnd(9))} ${statusText}`; }
+
+/** Print the known-server catalog. */
+export function printMcpCatalog() {
+  console.log(bone("  known mcp servers") + ash("  — register one with ") + acid("/mcp add <name>"));
+  console.log(catalogList());
+}
 
 /** Print the MCP support matrix + install status. */
 export function printMcpTargets() {
@@ -127,12 +151,21 @@ function summarize(results) {
 export async function mcpCommand(tokens) {
   const parsed = parseMcp(tokens);
   if (parsed.list) { printMcpTargets(); return; }
+  if (parsed.showCatalog) { printMcpCatalog(); return; }
   if (parsed.error) { console.log(err(parsed.error)); return; }
 
   const { spec } = parsed;
   console.log(info(`registering ${bone(spec.name)} → ${ash(spec.target)} across MCP engines…`));
   const results = await runMcpAdd(planMcpAdd(spec));
   summarize(results);
+  // Credentials are named, never registered: an API key copied into five
+  // engines' config files is five places to leak it from and five to rotate.
+  const missing = (parsed.catalog?.env || []).filter((k) => !process.env[k]);
+  if (missing.length) {
+    console.log(ash(`  note: ${spec.name} needs ${missing.join(" and ")} in the environment.`));
+    if (parsed.catalog?.note) console.log(ash(`        ${parsed.catalog.note}`));
+    if (parsed.catalog?.docs) console.log(ash(`        ${parsed.catalog.docs}`));
+  }
   if (spec.headers.length || /^https?:/i.test(spec.target)) {
     console.log(ash("  note: OAuth/HTTP servers may still need per-engine auth (e.g. `opencode mcp auth`, `codex mcp login`)."));
   }
