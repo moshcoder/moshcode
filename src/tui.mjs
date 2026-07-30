@@ -14,6 +14,7 @@ import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
 import { createMirror, teeOutput } from "./mirror.mjs";
+import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
@@ -341,12 +342,19 @@ async function runFile(args) {
 }
 
 export async function tui() {
+  // In flight while the banner renders, so the MOTD costs no visible startup
+  // time. Skipped for piped runs — nobody is reading an ad in a test harness.
+  const motd = process.stdin.isTTY ? fetchMotdAd() : Promise.resolve(null);
+
   console.log(banner());
   console.log();
   printEngines();
   console.log();
   printTools();
   console.log("\n" + ash("  /help for commands · /quit to leave") + "\n");
+
+  const ad = await motd;
+  if (ad) console.log(dim(ad) + "\n");
 
   const { restoreTee, drainRemote, atPrompt } = await startMirror();
 
