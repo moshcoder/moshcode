@@ -41,7 +41,14 @@ export function parseCookies(header = "") {
     const eq = part.indexOf("=");
     if (eq < 0) continue;
     const k = part.slice(0, eq).trim();
-    if (k) out[k] = decodeURIComponent(part.slice(eq + 1).trim());
+    if (!k) continue;
+    const raw = part.slice(eq + 1).trim();
+    // A cookie value is whatever the client chose to send, and decodeURIComponent
+    // throws on a stray "%". This runs before any auth check, in an async request
+    // handler and in an `upgrade` listener — a throw in either takes the whole
+    // gateway down, so an unauthenticated client must not be able to cause one.
+    // Falling back to the raw value is what the `cookie` package does too.
+    try { out[k] = decodeURIComponent(raw); } catch { out[k] = raw; }
   }
   return out;
 }
