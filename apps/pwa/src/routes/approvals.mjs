@@ -109,7 +109,14 @@ approvalsRouter.get("/approve/:id", async (req, res) => {
   if (!a) return res.status(404).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>404 — no such approval</h1></main>` }));
   if (!canView(req, a)) return res.status(403).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>403 — not your pit</h1></main>` }));
 
-  const ctx = a.context ? JSON.parse(a.context) : {};
+  // `context` is stored as whatever the client sent — POST /api/approvals
+  // JSON.stringifies the value verbatim — so it is not necessarily a
+  // label→value map. Object.entries() on a string indexes it per character, so
+  // context:"deploy failed on prod" rendered 21 grid cells, one per letter; on
+  // a number or boolean it yields nothing and the value vanished from the page.
+  // Only a real object is a map; anything else is a single value.
+  const raw = a.context ? JSON.parse(a.context) : {};
+  const ctx = raw !== null && typeof raw === "object" ? raw : { context: raw };
   const done = a.status !== "pending";
   const cells = Object.entries(ctx).map(([k, v]) =>
     `<div style="background:var(--surface);padding:11px 13px;border:1px solid var(--line);border-radius:8px">
