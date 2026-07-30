@@ -14,7 +14,11 @@ function withFakeTools(fn) {
     chmodSync(file, 0o755);
   }
   const before = process.env.PATH;
-  process.env.PATH = `${dir}${path.delimiter}${before || ""}`;
+  // REPLACE the PATH rather than prepending to it: "which tools are installed"
+  // is the thing under test, so any real CLI on the developer's machine (gh,
+  // doctl, tailscale…) would otherwise leak into the plan and make the
+  // assertions depend on the host.
+  process.env.PATH = dir;
   try { return fn(); }
   finally { process.env.PATH = before; }
 }

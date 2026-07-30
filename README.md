@@ -57,21 +57,48 @@ autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
 The modes are not identical across providers. In particular, OpenCode `--auto`
 auto-approves permission requests but continues to enforce explicit deny rules.
 
-## Workflow tools: UGig + CoinPay
+## Workflow tools: UGig, CoinPay, and the cloud CLIs
 
-UGig and CoinPay remain independent native CLIs with their own authentication,
+These remain independent native CLIs with their own authentication,
 configuration, command trees, output formats, and release cycles. MoshCode
 installs them and passes control through without reimplementing their APIs.
+
+The primary development toolchain runs through `moshcode` as a
+[dev.profullstack.com](https://dev.profullstack.com/) user.
 
 ```sh
 moshcode tools                    # list tools and native install status
 moshcode tools --json             # machine-readable install status for automation
-moshcode install ugig             # npm install -g ugig
-moshcode install coinpay          # npm install -g @profullstack/coinpay
+moshcode install ugig             # runs the vendor's official install script
+moshcode install coinpay          # same — each tool owns its installer
 
 moshcode ugig --json gigs list    # arguments/output go straight to ugig
 moshcode coinpay wallet balance   # arguments/output go straight to coinpay
 ```
+
+### Cloud + infra CLIs
+
+```sh
+moshcode install railway          # npm i -g @railway/cli
+moshcode install gh               # GitHub release binary → ~/.local/bin
+moshcode install supabase         # GitHub release binary (no global npm package exists)
+moshcode install doppler          # official script, installed user-local (needs gpgv)
+moshcode install doctl            # GitHub release binary → ~/.local/bin
+moshcode install tailscale        # official script; system daemon, so it needs root
+
+moshcode gh pr list               # straight through to the native CLI
+moshcode railway up
+moshcode doctl compute droplet list
+```
+
+`gh`, `supabase`, and `doctl` publish no cross-platform install script, so
+MoshCode resolves the latest GitHub release and drops the binary in
+`$MOSHCODE_BIN` (default `~/.local/bin`) — no sudo, no package manager. Set
+`MOSHCODE_BIN` to install elsewhere.
+
+`tailscale` is the exception: it is a system daemon, so its official installer
+goes through your distro's package manager and will ask for sudo (on macOS it
+delegates to the App Store).
 
 Top-level passthrough preserves stdin, stdout, stderr, environment variables,
 the current directory, and the native exit result. That keeps JSON pipelines
@@ -219,6 +246,13 @@ chmod +x deploy.mosh
 | `ugig(args…)` | drive the ugig workflow CLI |
 | `coinpay(args…)` | drive the coinpay workflow CLI |
 | `c0mpute(args…)` | drive the c0mpute workflow CLI |
+| `secrets(args…)` | drive the logicsrc secrets CLI |
+| `railway(args…)` | drive the Railway CLI |
+| `gh(args…)` | drive the GitHub CLI |
+| `supabase(args…)` | drive the Supabase CLI |
+| `doppler(args…)` | drive the Doppler CLI |
+| `doctl(args…)` | drive the DigitalOcean CLI |
+| `tailscale(args…)` | drive the Tailscale CLI |
 | `pwd()` | print the current repo/location |
 | `run(file)` | run another .mosh file (include/compose) |
 

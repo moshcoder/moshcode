@@ -1,8 +1,18 @@
 // Adjacent workflow CLIs moshcode can install and transparently invoke.
 // These are deliberately separate from coding engines: UGig owns marketplace
 // workflows, CoinPay owns payment workflows, c0mpute owns the compute network,
-// and moshcode only conducts their native command lines.
+// the cloud CLIs below own deploys/secrets/infra, and moshcode only conducts
+// their native command lines.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { isInstalled, openPassthrough } from "./engines.mjs";
+
+// gh, supabase, and doctl publish only GitHub release binaries — no official
+// cross-platform install script between them — so their install spec runs our
+// own downloader instead of a vendor one. See src/release-install.mjs.
+const RELEASE_INSTALLER = path.join(path.dirname(fileURLToPath(import.meta.url)), "release-install.mjs");
+const releaseInstall = (tool) => ({ cmd: process.execPath, args: [RELEASE_INSTALLER, tool] });
 
 export const TOOLS = {
   ugig: {
@@ -31,6 +41,65 @@ export const TOOLS = {
     bin: process.env.LOGICSRC_BIN || "logicsrc",
     // LogicSRC ships via its own install script (same pattern as the others).
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://logicsrc.com/install.sh | sh"] },
+  },
+  railway: {
+    desc: "Railway — deploy and manage Railway projects, services, and env vars",
+    bin: "railway",
+    // Railway's shell installer wants bash process substitution
+    // (`bash <(curl …)`), which does not survive `sh -c "curl … | sh"`, and the
+    // agents.railway.com variant additionally runs `railway setup agent`, which
+    // rewrites local agent tool configs — a side effect an install command has
+    // no business having. The official npm package is cross-platform and
+    // idempotent, so it doubles as the upgrade path.
+    install: { cmd: "npm", args: ["install", "-g", "@railway/cli"] },
+  },
+  gh: {
+    desc: "GitHub CLI — repos, PRs, issues, releases, and Actions",
+    bin: "gh",
+    install: releaseInstall("gh"),
+  },
+  supabase: {
+    desc: "Supabase — local stack, migrations, edge functions, and projects",
+    bin: "supabase",
+    // Supabase does not support a global npm install, so fetching the release
+    // binary is what gives you a real `supabase` on PATH instead of `npx supabase`.
+    install: releaseInstall("supabase"),
+  },
+  doppler: {
+    desc: "Doppler — sync secrets and run commands with injected env",
+    bin: "doppler",
+    // Doppler's official script installs to /usr/local/bin via sudo by default;
+    // --install-path keeps it user-local (and implies --no-package-manager).
+    // The script verifies its own signature, so it needs `gpgv` on PATH — it
+    // exits 3 with an explicit message when gnupg is missing.
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        'mkdir -p "$HOME/.local/bin" && curl -fsSL https://cli.doppler.com/install.sh | sh -s -- --install-path "$HOME/.local/bin"',
+      ],
+    },
+    upgrade: { cmd: "doppler", args: ["update"] },
+  },
+  doctl: {
+    desc: "DigitalOcean — droplets, apps, databases, Kubernetes, and Spaces",
+    bin: "doctl",
+    install: releaseInstall("doctl"),
+  },
+  tailscale: {
+    desc: "Tailscale — WireGuard mesh VPN (up, status, ssh, serve, funnel)",
+    bin: "tailscale",
+    // The odd one out: tailscale is a system daemon, not a standalone binary, so
+    // it cannot be dropped in ~/.local/bin like gh/supabase/doctl. The official
+    // script goes through the distro package manager and enables `tailscaled`,
+    // which means it needs root — it finds sudo/doas itself and may prompt for a
+    // password (stdio is inherited, so the prompt works). On macOS the same
+    // script delegates to the App Store.
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://tailscale.com/install.sh | sh"] },
+    // Native updater on Linux (v1.36+) and Windows. macOS updates come from the
+    // App Store, so there it fails with tailscale's own message rather than
+    // silently re-adding package repos.
+    upgrade: { cmd: "tailscale", args: ["update"] },
   },
 };
 

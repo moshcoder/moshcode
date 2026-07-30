@@ -211,6 +211,12 @@ const COMMANDS = [
   cliVerb("coinpay", "drive the coinpay workflow CLI"),
   cliVerb("c0mpute", "drive the c0mpute workflow CLI"),
   cliVerb("secrets", "manage/view team secrets via logicsrc (login, teams, credentials)"),
+  cliVerb("railway", "drive the Railway CLI (deploys, services, env vars)"),
+  cliVerb("gh", "drive the GitHub CLI (repos, PRs, issues, releases)"),
+  cliVerb("supabase", "drive the Supabase CLI (local stack, migrations, functions)"),
+  cliVerb("doppler", "drive the Doppler CLI (secrets, env injection)"),
+  cliVerb("doctl", "drive the DigitalOcean CLI (droplets, apps, databases)"),
+  cliVerb("tailscale", "drive the Tailscale CLI (mesh VPN: up, status, ssh, serve)"),
   cliVerb("pwd", "print the current repo/location"),
 ];
 
