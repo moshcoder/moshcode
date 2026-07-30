@@ -108,10 +108,21 @@ sessionsRouter.post("/api/sessions/:id/output", cliAuth, async (req, res) => {
   if (chunk) {
     // seq is per-session and monotonic so a reconnecting browser can ask for
     // "everything after N" instead of replaying the whole scrollback.
-    const top = await get(`SELECT MAX(seq) AS seq FROM session_output WHERE session_id = ?`, [session.id]);
-    const seq = Number(top?.seq || 0) + 1;
-    await run(`INSERT INTO session_output (session_id,seq,chunk,created_at) VALUES (?,?,?,?)`,
-      [session.id, seq, chunk.slice(0, 20000), now]);
+    //
+    // Pick it inside the INSERT, the same way a credit reservation claims its
+    // row. Reading MAX(seq) and then inserting is not enough: a CLI streams
+    // output as it arrives, so two chunks are in flight at once, and against a
+    // network database (Turso) both reads land before either insert does. Both
+    // then write the same seq — and a browser resuming from `?since=<that seq>`
+    // asks for `seq > since`, so the chunk it had not received yet is skipped
+    // for good.
+    const inserted = await get(
+      `INSERT INTO session_output (session_id,seq,chunk,created_at)
+       SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? FROM session_output WHERE session_id = ?
+       RETURNING seq`,
+      [session.id, chunk.slice(0, 20000), now, session.id]
+    );
+    const seq = Number(inserted.seq);
     await run(
       `DELETE FROM session_output WHERE session_id = ? AND seq <= ?`,
       [session.id, seq - SCROLLBACK]
