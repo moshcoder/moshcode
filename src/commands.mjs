@@ -216,6 +216,7 @@ const COMMANDS = [
   cliVerb("supabase", "drive the Supabase CLI (local stack, migrations, functions)"),
   cliVerb("doppler", "drive the Doppler CLI (secrets, env injection)"),
   cliVerb("doctl", "drive the DigitalOcean CLI (droplets, apps, databases)"),
+  cliVerb("turso", "drive the Turso CLI (auth, databases, replicas)"),
   cliVerb("tailscale", "drive the Tailscale CLI (mesh VPN: up, status, ssh, serve)"),
   cliVerb("pwd", "print the current repo/location"),
 ];
