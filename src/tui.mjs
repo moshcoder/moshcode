@@ -401,7 +401,15 @@ export async function tui() {
     if (cmd === "prd") {
       if (!rest.length) { printPrds(); continue; }
       const idea = rest.join(" ");
-      const { id, slug, path: file, existed, bootstrapped } = createPrd(idea);
+      // createPrd writes prd/ under the cwd, so it can throw for reasons that have
+      // nothing to do with the session: prd/ already taken by a regular file, a
+      // read-only checkout, a full disk. Report it and go back to the prompt like
+      // every sibling command does — an unguarded throw here escapes the loop and
+      // takes the whole REPL down, losing the session over one bad cwd.
+      let created;
+      try { created = createPrd(idea); }
+      catch (e) { console.log(err(`can't publish the PRD: ${String(e.message || e)}`)); continue; }
+      const { id, slug, path: file, existed, bootstrapped } = created;
       if (bootstrapped) console.log(info(`bootstrapped ${bone("prd/")} — README + 0000-template.md`));
       console.log(existed
         ? info(`PRD ${bone(id)} exists — opening an engine to keep editing ${ash(file)}`)
