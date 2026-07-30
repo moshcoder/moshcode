@@ -115,6 +115,45 @@ native setup and authentication commands. CoinPay currently requires Node.js
 In the TUI, use `/tools`, `/ugig [args…]`, or `/coinpay [args…]`. The native CLI
 owns the terminal until it exits, then MoshCode returns to the pit.
 
+## Browser terminal (`moshcode console`)
+
+A real terminal in the browser — arrow keys, history, full-screen TUIs — because
+the thing on the other end is a real pty, not a log view. moshcode does not
+implement the terminal: [ttyd](https://github.com/tsl0922/ttyd) does, and
+moshcode puts an authenticating proxy in front of it so your `moshcode login` is
+the way in.
+
+Two processes on the box you want a shell on:
+
+```sh
+# 1. ttyd — bound to loopback ONLY. It must never be reachable directly.
+ttyd -i 127.0.0.1 -p 7681 -W login
+
+# 2. the gateway — verifies moshcode tokens, then proxies to ttyd
+moshcode console serve --port 7682 --ttyd 127.0.0.1:7681
+```
+
+Then, from any machine where you have run `moshcode login`:
+
+```sh
+moshcode console --url https://dev.example.com/    # prints an authenticated URL
+```
+
+The token is verified once against `app.moshcode.sh/api/me`, swapped for a
+short-lived HMAC cookie, and stripped from the URL by the redirect, so it does
+not sit in browser history or travel with every request. The websocket carrying
+the terminal is authenticated too — an unauthenticated upgrade is refused before
+it reaches ttyd.
+
+**This is a shell on the internet.** Treat it accordingly:
+
+- Keep ttyd on `127.0.0.1`. The gateway is the only thing that should reach it.
+- `--bind` defaults to `127.0.0.1`. Put the gateway on a **tailnet address**
+  (`moshcode install tailscale`) or behind a reverse proxy with TLS. Binding
+  `0.0.0.0` publishes a login prompt to the whole internet, and moshcode warns
+  when you do it.
+- The gateway's signing secret is per-process, so restarting it logs everyone out.
+
 ## Upgrade everything
 
 ```sh
