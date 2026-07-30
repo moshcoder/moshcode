@@ -30,7 +30,7 @@ process.env.SESSION_SECRET = "test-secret";
 async function boot() {
   const { migrate } = await import("../src/migrate.mjs");
   await migrate();
-  const { run, all, db } = await import("../src/db.mjs");
+  const { run, get, all, db } = await import("../src/db.mjs");
   // The local libsql driver resolves statements in microtasks, which fully
   // serializes concurrent request handlers and hides read-check-write races.
   // Production runs against a network database (Turso), where every statement
@@ -55,12 +55,12 @@ async function boot() {
   });
   const { port } = server.address();
 
-  const seedDeviceCode = async (deviceCode, { status = "approved", ageMs = 0 } = {}) => {
+  const seedDeviceCode = async (deviceCode, { status = "approved", ageMs = 0, userCode = "ABCD-2345" } = {}) => {
     await run(`INSERT OR REPLACE INTO users (id, email, display_name, created_at) VALUES ('u1','a@b.c','demo',1)`);
     const now = Date.now();
     await run(
       `INSERT INTO device_codes (device_code,user_code,user_id,status,name,interval_s,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)`,
-      [deviceCode, "ABCD-2345", status === "pending" ? null : "u1", status, "test", 5, now - ageMs, now - ageMs + 10 * 60 * 1000]
+      [deviceCode, userCode, status === "pending" ? null : "u1", status, "test", 5, now - ageMs, now - ageMs + 10 * 60 * 1000]
     );
   };
   // Raw http with a fresh connection per request: fetch()/undici would reuse a
@@ -79,7 +79,36 @@ async function boot() {
     req.end(JSON.stringify({ device_code: deviceCode }));
   });
 
-  return { run, all, db, server, seedDeviceCode, poll };
+  const seedSession = async (userId, sessionToken) => {
+    const now = Date.now();
+    await run(
+      `INSERT OR REPLACE INTO users (id, email, display_name, created_at) VALUES (?,?,?,?)`,
+      [userId, `${userId}@example.test`, userId, now]
+    );
+    await run(
+      `INSERT INTO sessions (token,user_id,created_at,expires_at) VALUES (?,?,?,?)`,
+      [sessionToken, userId, now, now + 60_000]
+    );
+  };
+
+  const approve = (userCode, sessionToken) => new Promise((resolve, reject) => {
+    const body = new URLSearchParams({ user_code: userCode, _csrf: "test-csrf" }).toString();
+    const req = http.request({
+      host: "127.0.0.1", port, path: "/device", method: "POST", agent: false,
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "content-length": Buffer.byteLength(body),
+        cookie: `mc_sess=${sessionToken}; mc_csrf=test-csrf`,
+      },
+    }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode, location: res.headers.location }));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+
+  return { run, get, all, db, server, seedDeviceCode, seedSession, approve, poll };
 }
 
 // One shared app/db for the whole file (db.mjs is a module-level singleton —
@@ -134,4 +163,24 @@ test("cli/device/token: a pending code is not exchangeable", { skip: !deps && "a
   assert.equal(res.status, 400);
   assert.equal(res.body.error, "authorization_pending");
   assert.equal((await all(`SELECT id FROM api_keys`)).length, before);
+});
+
+test("cli/device: concurrent approvals bind the code to exactly one account", { skip: !deps && "apps/pwa deps not installed" }, async () => {
+  const { get, seedDeviceCode, seedSession, approve } = await app();
+
+  await seedDeviceCode("dev-approval-race", { status: "pending", userCode: "WXYZ-6789" });
+  await seedSession("u-approve-a", "session-a");
+  await seedSession("u-approve-b", "session-b");
+
+  const [a, b] = await Promise.all([
+    approve("WXYZ-6789", "session-a"),
+    approve("WXYZ-6789", "session-b"),
+  ]);
+  const locations = [a.location, b.location];
+  assert.equal(locations.filter((location) => location === "/device?done=1").length, 1);
+  assert.equal(locations.filter((location) => location?.startsWith("/device?bad=1")).length, 1);
+
+  const row = await get(`SELECT status, user_id FROM device_codes WHERE device_code = ?`, ["dev-approval-race"]);
+  assert.equal(row.status, "approved");
+  assert.ok(["u-approve-a", "u-approve-b"].includes(row.user_id));
 });
