@@ -11,6 +11,7 @@ import { coinpayRouter } from "./routes/coinpay.mjs";
 import { approvalsRouter } from "./routes/approvals.mjs";
 import { creditsRouter } from "./routes/credits.mjs";
 import { cliRouter } from "./routes/cli.mjs";
+import { sessionsRouter } from "./routes/sessions.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
 
 const app = express();
@@ -40,6 +41,7 @@ app.use(coinpayRouter);
 app.use(approvalsRouter);
 app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
+app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
 app.use(pagesRouter);     // /app, /settings
 
 app.use((req, res) => res.status(404).type("html").send(

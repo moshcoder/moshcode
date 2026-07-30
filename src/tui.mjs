@@ -13,10 +13,11 @@ import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
+import { createMirror, teeOutput } from "./mirror.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
-import { banner, hr, acid, ash, bone, dim, ok, err, info } from "./ui.mjs";
+import { banner, hr, acid, ash, bone, dim, ok, err, info, moshcodeVersion } from "./ui.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
 
@@ -189,6 +190,11 @@ async function upgradeAll(targets) {
   await runUpgrade(targets, { log: (s) => console.log(s), rule: () => console.log(hr()) });
 }
 
+// The live mirror for this pit, once /sessions is watching. Module-level so the
+// engine/tool hand-offs can flag who owns the terminal without threading it
+// through every call.
+let activeMirror = null;
+
 async function openEngine(key, engine, args, { agentMode = false } = {}) {
   if (!engine.installed && !args.length) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
@@ -198,7 +204,9 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
   }
   console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());
+  activeMirror?.setEngine(key);
   const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args);
+  activeMirror?.setEngine(null);
   console.log(hr());
   if (!r.ok) {
     console.log(r.error?.code === "ENOENT"
@@ -340,10 +348,18 @@ export async function tui() {
   printTools();
   console.log("\n" + ash("  /help for commands · /quit to leave") + "\n");
 
+  const { restoreTee, drainRemote, atPrompt } = await startMirror();
+
   let rl = mkrl();
   for (;;) {
     let line;
-    try { line = await ask(rl); } catch { break; }
+    // Arm the prompt first, THEN release any command waiting from the web:
+    // rl.write() only lands as input once readline is actually asking.
+    const answer = ask(rl);
+    atPrompt(rl);
+    drainRemote();
+    try { line = await answer; } catch { break; }
+    finally { atPrompt(null); }
     if (line == null) break; // Ctrl-D
     line = line.trim();
     if (!line) continue;
@@ -497,4 +513,60 @@ export async function tui() {
   try { rl.close(); } catch { /* noop */ }
   saveHistory();
   console.log("\n" + ash("code hard, mosh harder. 🤘"));
+  await stopMirror(restoreTee);
+}
+
+/**
+ * Bring up the live mirror (app.moshcode.sh/sessions) for this pit: register
+ * the session, tee everything we print to it, and hold commands typed on the
+ * web until the prompt is ready for them.
+ *
+ * Entirely optional — not logged in, or the app unreachable, and the pit runs
+ * exactly as before.
+ */
+async function startMirror() {
+  const noop = { restoreTee: null, drainRemote: () => {}, atPrompt: () => {} };
+  // Only mirror a real interactive pit. A piped or scripted run (tests, CI,
+  // `echo /quit | moshcode`) has no human to watch from a browser, and the
+  // long-poll would keep that process alive long after its input ran out.
+  if (!process.stdin.isTTY || process.env.MOSHCODE_NO_MIRROR) return noop;
+
+  let mirror;
+  try { mirror = createMirror({ version: moshcodeVersion() || "", cwd: process.cwd() }); }
+  catch { return noop; }
+
+  let started = false;
+  try { started = await mirror.start(); } catch { started = false; }
+  if (!started) return noop;
+
+  activeMirror = mirror;
+  const restoreTee = teeOutput((chunk) => mirror.write(chunk));
+
+  // Commands arrive whenever; the prompt is only ready between engine
+  // hand-offs. Queue them and replay in order once readline is asking.
+  const queue = [];
+  let promptRl = null;
+  const drainRemote = () => {
+    // Exactly one per prompt: readline resolves the pending question with the
+    // first line it sees, so writing a second here would be swallowed. The
+    // loop re-arms and drains the next one on its way round.
+    if (promptRl && queue.length) {
+      const body = queue.shift();
+      // Echo it so the mirror (and the person at the keyboard) can see that
+      // this line came from the web rather than the local keyboard.
+      console.log(ash(`  ▸ (web) ${body}`));
+      promptRl.write(`${body}\n`);
+    }
+  };
+  mirror.onCommand((body) => { queue.push(body); drainRemote(); });
+
+  console.log(info(`mirroring this session → ${acid(mirror.url)}`));
+  return { restoreTee, drainRemote, atPrompt: (rl) => { promptRl = rl; } };
+}
+
+async function stopMirror(restoreTee) {
+  const mirror = activeMirror;
+  activeMirror = null;
+  try { restoreTee?.(); } catch { /* noop */ }
+  try { await mirror?.stop(); } catch { /* best effort */ }
 }
