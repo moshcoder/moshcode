@@ -166,9 +166,19 @@ export function aiExecArgs(engine, prompt) {
   return fn(String(prompt));
 }
 
-/** First installed engine that supports headless ai(), honoring a preference. */
+/**
+ * First installed engine that supports headless ai(), honoring a preference.
+ *
+ * A preference names an engine the same way every other engine surface does
+ * (`/agents cc`, `moshcode start cc`, `moshcode upgrade cc` — README: "name
+ * any; alias ok"), so resolve ALIASES here too. Matching raw ENGINES keys only
+ * made `ai(prompt, { engine: "cc" })` read as "no such engine" and fail with
+ * "needs an installed engine" even when Claude was installed. An unknown name
+ * still yields null.
+ */
 export function pickAiEngine(preferred) {
-  const order = preferred ? [preferred] : ["claude", "codex", "opencode", "privacycode", "gemini", "aider"];
+  const wanted = preferred ? resolveEngine(preferred)?.[0] : null;
+  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "aider"];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin)) return key;
   }

@@ -147,6 +147,16 @@ test("ai() in dry-run narrates the engine invocation and returns empty string", 
   assert.match(ctx.lines.join("\n"), /would run: codex exec/);
 });
 
+test("ai() in dry-run narrates an aliased engine instead of throwing", () => {
+  // A dry run narrates without requiring an installed engine, so with nothing
+  // installed pickAiEngine() returns null and the fallback has to resolve the
+  // alias itself — handing the raw "cc" to aiExecArgs threw "no headless mode".
+  const ctx = { dryRun: true, lines: [], out(l) { this.lines.push(l); } };
+  const out = runAi(ctx, "summarize the diff", { engine: "cc" });
+  assert.equal(out, "");
+  assert.match(ctx.lines.join("\n"), /would run: claude -p/);
+});
+
 // R8: non-zero exits return { ok: false } instead of throwing, so scripts can
 // branch on outcomes without a try/catch.
 test("R8: a non-zero CLI exit returns { ok: false } instead of throwing", async () => {
