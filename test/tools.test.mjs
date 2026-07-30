@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { TOOLS, resolveTool, toolList } from "../src/tools.mjs";
+import { TOOLS, resolveTool, retry, toolList } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -203,4 +203,26 @@ test("moshcode install reports an Object.prototype name as unknown", async () =>
   assert.equal(result.status, 1);
   assert.match(result.stderr, /usage: moshcode install <engine\|tool>/);
   assert.doesNotMatch(result.stderr, /TypeError/);
+});
+
+test("retry rejects non-positive attempt limits", async () => {
+  let calls = 0;
+
+  await assert.rejects(
+    retry(() => { calls++; }, 0, 1),
+    /maxAttempts must be a positive integer/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("retry retries until a later attempt succeeds", async () => {
+  let calls = 0;
+  const result = await retry(() => {
+    calls++;
+    if (calls < 2) throw new Error("not yet");
+    return "ok";
+  }, 2, 1);
+
+  assert.equal(result, "ok");
+  assert.equal(calls, 2);
 });
