@@ -30,7 +30,13 @@ export const revokeApiKey = (userId, keyId) =>
   run(`DELETE FROM api_keys WHERE id = ? AND user_id = ?`, [keyId, userId]);
 
 // Pull the Bearer token off a request.
+//
+// The scheme name is matched case-insensitively: RFC 7235 §2.1 says the
+// auth-scheme is case-insensitive, so a conformant client is free to send
+// `authorization: bearer mck_…`. Requiring the exact string "Bearer " turned
+// those away with a 401 that looks like a bad key. Only the scheme is matched
+// loosely — the token itself is still taken byte-exact.
 export function bearer(req) {
   const h = req.get("authorization") || "";
-  return h.startsWith("Bearer ") ? h.slice(7).trim() : null;
+  return /^Bearer /i.test(h) ? h.slice(7).trim() : null;
 }
