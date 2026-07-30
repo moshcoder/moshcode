@@ -51,6 +51,23 @@ async function sendSlack(webhookUrl, a) {
   return res.ok;
 }
 
+async function sendWebhook(webhookUrl, a) {
+  if (!webhookUrl) return false;
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      id: a.id,
+      kind: a.kind,
+      message: a.message,
+      script: a.script || null,
+      url: a.url,
+      created_at: a.created_at,
+    }),
+  });
+  return res.ok;
+}
+
 async function sendTelegram(chatId, a) {
   if (!config.telegram.botToken || !chatId) { console.log(`[telegram:stub] ${a.message}`); return false; }
   const res = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`, {
@@ -94,7 +111,8 @@ export async function fanOut(user, approval, onlyKinds = null) {
       else if (c.kind === "slack") ok = await sendSlack(c.target || config.slack.defaultWebhook, approval);
       else if (c.kind === "telegram") ok = await sendTelegram(c.target, approval);
       else if (c.kind === "push") ok = await sendPush(user, approval);
-      else { console.log(`[${c.kind}:stub] ${approval.message}`); ok = true; } // sms/webhook
+      else if (c.kind === "webhook") ok = await sendWebhook(c.target, approval);
+      else { console.log(`[${c.kind}:stub] ${approval.message}`); ok = true; } // sms
       if (ok) notified.push(c.kind);
     } catch (e) {
       console.error(`deliver ${c.kind} failed:`, e.message);

@@ -57,6 +57,22 @@ async function boot() {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));
   });
   const { port } = server.address();
+  const webhookDeliveries = [];
+  const webhookServer = await new Promise((resolve) => {
+    const s = http.createServer((req, res) => {
+      let data = "";
+      req.on("data", (chunk) => { data += chunk; });
+      req.on("end", () => {
+        webhookDeliveries.push({
+          contentType: req.headers["content-type"],
+          body: JSON.parse(data),
+        });
+        res.writeHead(204).end();
+      });
+    });
+    s.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const webhookUrl = `http://127.0.0.1:${webhookServer.address().port}/hook`;
 
   // A user with the given enabled channels and a starting balance. Returns the
   // plaintext API key the CLI would send.
@@ -94,7 +110,10 @@ async function boot() {
     req.end(JSON.stringify({ message }));
   });
 
-  return { run, all, db, server, seedUser, charges, ingest, balance };
+  return {
+    run, all, db, server, webhookServer, webhookUrl, webhookDeliveries,
+    seedUser, charges, ingest, balance,
+  };
 }
 
 // One shared app/db for the whole file (db.mjs is a module-level singleton —
@@ -104,7 +123,11 @@ const app = () => (booted ||= boot());
 
 test.after(() => {
   if (!booted) return;
-  booted.then(({ server, db }) => { server.close(); db.close?.(); })
+  booted.then(({ server, webhookServer, db }) => {
+    server.close();
+    webhookServer.close();
+    db.close?.();
+  })
     .finally(() => { try { fs.rmSync(workdir, { recursive: true, force: true }); } catch { /* noop */ } });
 });
 
@@ -142,9 +165,10 @@ test("api/approvals: concurrent ingests cannot spend the same credits twice", { 
 });
 
 test("api/approvals: a second sequential ingest falls back to free channels", { skip: !deps && "apps/pwa deps not installed" }, async () => {
-  const { seedUser, ingest, balance } = await app();
+  const { seedUser, ingest, balance, webhookUrl, webhookDeliveries } = await app();
 
-  const key = await seedUser("u-seq", { credits: 12, channels: [["sms", "+15550000"], ["webhook", "https://example.test/hook"]] });
+  webhookDeliveries.length = 0;
+  const key = await seedUser("u-seq", { credits: 12, channels: [["sms", "+15550000"], ["webhook", webhookUrl]] });
   const first = await ingest(key, "first");
   const second = await ingest(key, "second");
 
@@ -154,6 +178,9 @@ test("api/approvals: a second sequential ingest falls back to free channels", { 
   assert.equal(second.body.charged, 0);
   assert.match(second.body.warning, /insufficient credits/);
   assert.equal(await balance("u-seq"), 0);
+  assert.deepEqual(webhookDeliveries.map((delivery) => delivery.body.message), ["first", "second"]);
+  assert.ok(webhookDeliveries.every((delivery) => delivery.contentType === "application/json"));
+  assert.ok(webhookDeliveries.every((delivery) => delivery.body.url.includes("/approve/")));
 });
 
 test("api/approvals: a channel that fails to deliver is not charged for", { skip: !deps && "apps/pwa deps not installed" }, async () => {
@@ -171,9 +198,10 @@ test("api/approvals: a channel that fails to deliver is not charged for", { skip
 });
 
 test("api/approvals: a free-only account is never charged", { skip: !deps && "apps/pwa deps not installed" }, async () => {
-  const { seedUser, charges, ingest, balance } = await app();
+  const { seedUser, charges, ingest, balance, webhookUrl, webhookDeliveries } = await app();
 
-  const key = await seedUser("u-free", { credits: 0, channels: [["webhook", "https://example.test/hook"]] });
+  webhookDeliveries.length = 0;
+  const key = await seedUser("u-free", { credits: 0, channels: [["webhook", webhookUrl]] });
   const res = await ingest(key, "free ping");
 
   assert.deepEqual(res.body.delivered, ["webhook"]);
@@ -181,4 +209,6 @@ test("api/approvals: a free-only account is never charged", { skip: !deps && "ap
   assert.equal(res.body.warning, undefined);
   assert.deepEqual(await charges("u-free"), []); // no zero-value ledger noise
   assert.equal(await balance("u-free"), 0);
+  assert.equal(webhookDeliveries.length, 1);
+  assert.equal(webhookDeliveries[0].body.message, "free ping");
 });
