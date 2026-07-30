@@ -154,7 +154,13 @@ cliRouter.post("/device", requireAuth, async (req, res) => {
   const userCode = normCode(req.body.user_code);
   const row = await get(`SELECT * FROM device_codes WHERE user_code = ? AND status = 'pending' AND expires_at > ?`, [userCode, Date.now()]);
   if (!row) return res.redirect(`/device?bad=1${req.body.user_code ? "&code=" + encodeURIComponent(req.body.user_code) : ""}`);
-  await run(`UPDATE device_codes SET status = 'approved', user_id = ? WHERE device_code = ?`, [req.user.id, row.device_code]);
+  const approved = await run(
+    `UPDATE device_codes SET status = 'approved', user_id = ? WHERE device_code = ? AND status = 'pending' AND expires_at > ?`,
+    [req.user.id, row.device_code, Date.now()]
+  );
+  if (!approved.rowsAffected) {
+    return res.redirect(`/device?bad=1${req.body.user_code ? "&code=" + encodeURIComponent(req.body.user_code) : ""}`);
+  }
   res.redirect("/device?done=1");
 });
 
