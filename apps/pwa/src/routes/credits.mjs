@@ -50,6 +50,14 @@ creditsRouter.post("/credits/buy", requireAuth, async (req, res) => {
   }
 });
 
+// The status is the last segment of a dotted event name ("payment.confirmed"),
+// so match it as a whole word. A bare substring test answers "does this name
+// contain a success word anywhere" rather than "did the payment land": a
+// negated status ends in one of them ("payment.unpaid" ends in "paid",
+// "payment.unconfirmed" ends in "confirmed") and would grant the full credit
+// pack for money that never arrived.
+const CONFIRMED_EVENT = /(?:^|[.\-_/:])(?:confirmed|completed|paid)$/i;
+
 // CoinPay confirms payment → credit the balance (idempotent on purchase id).
 creditsRouter.post("/webhooks/coinpay", async (req, res) => {
   if (config.coinpay.webhookSecret && !verifySignature(req.get("x-coinpay-signature") || req.get("webhook-signature"), req.rawBody || "", config.coinpay.webhookSecret)) {
@@ -57,7 +65,7 @@ creditsRouter.post("/webhooks/coinpay", async (req, res) => {
   }
   const event = req.body?.type || req.body?.event;
   const payId = req.body?.data?.id || req.body?.payment_id || req.body?.id;
-  if (event && /confirmed|completed|paid/i.test(event) && payId) {
+  if (event && CONFIRMED_EVENT.test(event) && payId) {
     const p = await get(`SELECT * FROM credit_purchases WHERE id = ? AND status = 'pending'`, [payId]);
     if (p) {
       // Claim the purchase atomically, the same way /cli/token claims auth
