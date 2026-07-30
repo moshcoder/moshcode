@@ -82,6 +82,15 @@ test("run accepts equals-form max option", async () => {
   assert.match(result.stdout, /1 loop\(s\)/);
 });
 
+test("run rejects non-decimal max values", async () => {
+  for (const value of ["1e1", "0x2"]) {
+    const result = await run([`--max=${value}`, "--dry-run"]);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /moshcode run: --max must be a positive integer/);
+  }
+});
+
 test("run() marks the nested moshcode child as nested", async () => {
   const dir = mkdtempSync(join(tmpdir(), "moshcode-nested-"));
   const child = join(dir, "child.mosh");
