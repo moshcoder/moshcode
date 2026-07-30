@@ -97,7 +97,7 @@ test("tool registry uses the official native CLI packages", () => {
 });
 
 test("cloud CLIs resolve and are listed as workflow tools", () => {
-  for (const key of ["railway", "gh", "supabase", "doppler", "doctl", "tailscale"]) {
+  for (const key of ["railway", "gh", "supabase", "doppler", "doctl", "turso", "tailscale"]) {
     assert.deepEqual(resolveTool(key), [key, TOOLS[key]]);
     assert.equal(TOOLS[key].bin, key);
     assert.match(toolList(), new RegExp(key));
@@ -124,6 +124,17 @@ test("doppler installs user-local and updates natively", () => {
   assert.match(script, /--install-path "\$HOME\/\.local\/bin"/);
   assert.doesNotMatch(script, /sudo/);
   assert.deepEqual(TOOLS.doppler.upgrade, { cmd: "doppler", args: ["update"] });
+});
+
+test("turso installs from its official script", () => {
+  // https://github.com/tursodatabase/turso-cli — unpacks to $HOME/.turso and
+  // appends it to the shell profile, so it lands on PATH for the next shell.
+  assert.deepEqual(TOOLS.turso.install, {
+    cmd: "bash",
+    args: ["-c", "curl -sSfL https://get.tur.so/install.sh | bash"],
+  });
+  // Re-running the installer fetches the latest, so no separate upgrade spec.
+  assert.equal(TOOLS.turso.upgrade, undefined);
 });
 
 test("tailscale uses the official installer and native updater", () => {

@@ -84,6 +84,7 @@ moshcode install gh               # GitHub release binary → ~/.local/bin
 moshcode install supabase         # GitHub release binary (no global npm package exists)
 moshcode install doppler          # official script, installed user-local (needs gpgv)
 moshcode install doctl            # GitHub release binary → ~/.local/bin
+moshcode install turso            # official script → ~/.turso (new shell to pick up PATH)
 moshcode install tailscale        # official script; system daemon, so it needs root
 
 moshcode gh pr list               # straight through to the native CLI
@@ -252,6 +253,7 @@ chmod +x deploy.mosh
 | `supabase(args…)` | drive the Supabase CLI |
 | `doppler(args…)` | drive the Doppler CLI |
 | `doctl(args…)` | drive the DigitalOcean CLI |
+| `turso(args…)` | drive the Turso CLI |
 | `tailscale(args…)` | drive the Tailscale CLI |
 | `pwd()` | print the current repo/location |
 | `run(file)` | run another .mosh file (include/compose) |

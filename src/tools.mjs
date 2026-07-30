@@ -86,6 +86,15 @@ export const TOOLS = {
     bin: "doctl",
     install: releaseInstall("doctl"),
   },
+  turso: {
+    desc: "Turso — libSQL/SQLite at the edge (auth signup/login, db, replicas)",
+    bin: "turso",
+    // https://github.com/tursodatabase/turso-cli — the official installer, which
+    // unpacks to $HOME/.turso and appends that dir to your shell profile. It is
+    // therefore on PATH for the NEXT shell, so `moshcode tools` can still show
+    // turso as missing in the session that installed it.
+    install: { cmd: "bash", args: ["-c", "curl -sSfL https://get.tur.so/install.sh | bash"] },
+  },
   tailscale: {
     desc: "Tailscale — WireGuard mesh VPN (up, status, ssh, serve, funnel)",
     bin: "tailscale",
