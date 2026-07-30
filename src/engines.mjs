@@ -11,8 +11,11 @@
 // `agentsView` fall back to `agentArgs` — an autonomous session with native
 // approvals bypassed/auto-approved.
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+
+import { followFile, ptyEnabled, ptySpec, scriptFlavor, stripScriptBanner } from "./pty.mjs";
 
 export const ENGINES = {
   opencode: {
@@ -248,19 +251,55 @@ export function exitReason(r) {
  * environment keys to be stripped (Claude uses this to avoid nested-session
  * markers). Resolves { ok, code, signal } when the child exits.
  */
-export function openPassthrough(target, args = []) {
+export function openPassthrough(target, args = [], { onOutput } = {}) {
   return new Promise((resolve) => {
     let env = process.env;
     if (target.stripEnv?.length) {
       env = { ...process.env };
       for (const k of target.stripEnv) delete env[k];
     }
-    let child;
     const spec = spawnSpec(target.bin, args);
-    try { child = spawn(spec.cmd, spec.args, { stdio: "inherit", env }); }
-    catch (e) { resolve({ ok: false, error: e }); return; }
-    child.on("error", (e) => resolve({ ok: false, error: e }));
-    child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
+
+    // With a mirror attached, run the child under a pseudo-terminal so a copy
+    // of its output can be streamed to the session page. `inherit` alone hands
+    // the child the tty's own file descriptors, so none of its bytes ever pass
+    // through this process. See src/pty.mjs for why this is script(1) and not
+    // a pipe or node-pty.
+    let transcript = null;
+    let workDir = null;
+    let stopFollow = null;
+    let launch = { ...spec, stdio: "inherit" };
+    if (ptyEnabled(onOutput)) {
+      try {
+        workDir = mkdtempSync(path.join(tmpdir(), "moshcode-pty-"));
+        transcript = path.join(workDir, "transcript");
+        writeFileSync(transcript, "");
+        const wrapped = ptySpec(spec.cmd, spec.args, transcript, scriptFlavor());
+        if (wrapped) {
+          launch = { ...wrapped, stdio: "inherit" };
+          let first = true;
+          stopFollow = followFile(transcript, (chunk) => {
+            const clean = stripScriptBanner(chunk, first);
+            first = false;
+            if (clean) onOutput(clean);
+          });
+        }
+      } catch {
+        // Capture is a nicety; never let it stop the session from opening.
+        transcript = null;
+      }
+    }
+
+    const cleanup = () => {
+      try { stopFollow?.(); } catch { /* nothing left to drain */ }
+      if (workDir) { try { rmSync(workDir, { recursive: true, force: true }); } catch { /* temp dir */ } }
+    };
+
+    let child;
+    try { child = spawn(launch.cmd, launch.args, { stdio: "inherit", env }); }
+    catch (e) { cleanup(); resolve({ ok: false, error: e }); return; }
+    child.on("error", (e) => { cleanup(); resolve({ ok: false, error: e }); });
+    child.on("exit", (code, signal) => { cleanup(); resolve({ ok: true, code, signal }); });
   });
 }
 

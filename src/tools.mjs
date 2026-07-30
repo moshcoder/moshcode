@@ -134,8 +134,8 @@ export function toolUpgradeSpec(tool) {
 }
 
 /** Invoke a tool without parsing or modifying its arguments or streams. */
-export function openTool(tool, args = []) {
-  return openPassthrough(tool, args);
+export function openTool(tool, args = [], opts = {}) {
+  return openPassthrough(tool, args, opts);
 }
 
 // Generic utilities used by the app/package surface.

@@ -203,6 +203,17 @@ async function upgradeAll(targets) {
 // through every call.
 let activeMirror = null;
 
+/**
+ * Where a child's output should be copied to: the live mirror, or nowhere.
+ *
+ * teeOutput only sees what *this* process prints; a child launched with
+ * `stdio: "inherit"` writes straight to the tty and is invisible to it. Handing
+ * this sink down lets the launcher capture the child through a pty instead (see
+ * src/pty.mjs). Returning undefined when nothing is watching is what keeps
+ * unmirrored sessions on the untouched `inherit` path.
+ */
+const childSink = () => (activeMirror ? (chunk) => activeMirror?.write(chunk) : undefined);
+
 async function openEngine(key, engine, args, { agentMode = false } = {}) {
   if (!engine.installed && !args.length) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
@@ -213,7 +224,7 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
   console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());
   activeMirror?.setEngine(key);
-  const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args);
+  const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args, { onOutput: childSink() });
   activeMirror?.setEngine(null);
   console.log(hr());
   if (!r.ok) {
@@ -231,7 +242,7 @@ async function openWorkflowTool(key, tool, args) {
   }
   console.log(info(`opening ${bone(key)} — native CLI owns the terminal until it exits…`));
   console.log(hr());
-  const result = await openTool(tool, args);
+  const result = await openTool(tool, args, { onOutput: childSink() });
   console.log(hr());
   if (!result.ok) {
     console.log(result.error?.code === "ENOENT"
