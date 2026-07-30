@@ -20,6 +20,7 @@ import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
+import { consoleCommand } from "../src/console.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -154,6 +155,10 @@ usage:
                                        (browser OAuth+PKCE; --device = headless/CI
                                        code flow) so notify()/ask() reach you
   moshcode whoami | logout             show / clear the logged-in account
+  moshcode console serve               serve a browser terminal on this box (ttyd
+     [--port N] [--ttyd host:port]     behind moshcode login); --bind defaults to
+     [--bind addr]                     127.0.0.1 — put it on a tailnet, not 0.0.0.0
+  moshcode console --url <base>        print that gateway's URL with your login token
   moshcode pwd                         show the current dir + git repo/branch/origin
   moshcode engines [--json]            list engines + install status
   moshcode tools [--json]              list workflow tools + install status
@@ -242,6 +247,11 @@ async function main() {
       console.log("\nthe primary development toolchain runs through `moshcode` as a");
       console.log("dev.profullstack.com user — https://dev.profullstack.com/");
     }
+    return;
+  }
+  if (cmd === "console") {
+    const code = await consoleCommand(rest);
+    if (code) process.exitCode = code;
     return;
   }
   if (cmd === "mcp") {
