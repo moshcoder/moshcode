@@ -50,17 +50,34 @@ passkeyRouter.post("/auth/passkey/register/verify", async (req, res) => {
 
   const { credential } = verification.registrationInfo;
   const user = ceremony.existing ? await userById(ceremony.handle) : await createUserPasskey(ceremony.name);
-  await run(
-    `INSERT INTO webauthn_credentials (id, user_id, public_key, counter, transports, created_at) VALUES (?,?,?,?,?,?)`,
-    [
-      credential.id,
-      user.id,
-      Buffer.from(credential.publicKey).toString("base64url"),
-      credential.counter || 0,
-      JSON.stringify(credential.transports || req.body.response?.transports || []),
-      Date.now(),
-    ]
-  );
+  try {
+    await run(
+      `INSERT INTO webauthn_credentials (id, user_id, public_key, counter, transports, created_at) VALUES (?,?,?,?,?,?)`,
+      [
+        credential.id,
+        user.id,
+        Buffer.from(credential.publicKey).toString("base64url"),
+        credential.counter || 0,
+        JSON.stringify(credential.transports || req.body.response?.transports || []),
+        Date.now(),
+      ]
+    );
+  } catch (e) {
+    // mc_c_reg is only cleared on the way out, so one response submitted twice
+    // while both requests are still in flight (a double click, or a client retry
+    // after a slow first attempt) reaches this insert twice. The credential id is
+    // the primary key, so the second attempt always loses — and express 4 does not
+    // catch an async rejection, so unhandled it left the second request with no
+    // response at all and took the process down with it. Undo the user this
+    // attempt created (channels and the signup bonus cascade with the row) so a
+    // lost race cannot strand an account with no passkey to sign in with, or pay
+    // the signup bonus twice.
+    if (!ceremony.existing) await run(`DELETE FROM users WHERE id = ?`, [user.id]);
+    const duplicate = /constraint/i.test(`${e?.code || ""} ${e?.message || ""}`);
+    return res.status(duplicate ? 400 : 500).json({
+      error: duplicate ? "passkey already registered — sign in instead" : "could not save passkey — try again",
+    });
+  }
   clearCeremony(res, "reg");
   await createSession(res, user.id);
   res.json({ ok: true, redirect: takeNext(req, res) || "/" });
