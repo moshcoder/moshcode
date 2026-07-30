@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,7 +15,8 @@ writeFileSync(
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 
-const { whoami } = await import("../src/auth.mjs");
+const { saveCreds, whoami } = await import("../src/auth.mjs");
+const posixMode = process.platform === "win32" ? { skip: "POSIX permission bits" } : {};
 
 /** Run whoami against a canned app response and collect what it printed. */
 async function whoamiAgainst({ status, body }) {
@@ -54,4 +55,12 @@ test("whoami still prints the account the app confirms", async () => {
 test("whoami still calls out an expired session on 401", async () => {
   const out = await whoamiAgainst({ status: 401, body: { error: "unauthorized" } });
   assert.match(out, /session expired/);
+});
+
+test("saving credentials tightens a world-readable existing file", posixMode, () => {
+  chmodSync(join(home, ".moshcode", "credentials.json"), 0o644);
+
+  saveCreds({ api: "https://app.example.test", token: "tok_fresh", email: "me@example.test" });
+
+  assert.equal(statSync(join(home, ".moshcode", "credentials.json")).mode & 0o777, 0o600);
 });
