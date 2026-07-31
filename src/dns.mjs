@@ -289,7 +289,13 @@ export function dnsmasqConf(tlds, { host = DEFAULT_HOST, port = DEFAULT_PORT } =
 /* ----------------------------------------------------------------- the verb */
 
 import { promises as dnsPromises } from "node:dns";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
+  requiredPort, startDaemon, stopDaemon,
+} from "./dns-system.mjs";
 
 /** The parking host's address — an A record has to carry an IP, not a name. */
 export async function parkingAddress(host = DEFAULT_PARKING_HOST, lookup = dnsPromises.resolve4) {
@@ -303,13 +309,23 @@ export async function parkingAddress(host = DEFAULT_PARKING_HOST, lookup = dnsPr
 
 const USAGE = `moshcode dns — resolve Moshpit names on this machine
 
+  moshcode dns enable            run the bridge and route Moshpit TLDs to it
+  moshcode dns disable           stop it and remove the routing
+  moshcode dns status            what is running, what is routed, does it work
+
   moshcode dns tlds              list the TLDs claimed in the Pit
   moshcode dns resolve <name>    show what a name resolves to, and why
-  moshcode dns start [--port N]  run the resolver (foreground)
-  moshcode dns install [--write] resolver config routing those TLDs here
+  moshcode dns start [--port N]  run the resolver in the foreground
+  moshcode dns install [--write] print the resolver config without applying it
+
+  --dry-run    with enable/disable: print exactly what would be done
+  --backend    linux only: systemd-resolved (default) or dnsmasq
+  --port N     the bridge's port (Windows must use 53 — NRPT carries no port)
 
 The registry speaks HTTP, not DNS, so nothing outside a browser can reach a
-Moshpit name until this bridge is running and your resolver points at it.`;
+Moshpit name until this bridge is running and your resolver points at it.
+\`enable\` edits system DNS and needs root (Administrator on Windows); it routes
+only the Moshpit TLDs, so every other name keeps using your normal resolver.`;
 
 export async function dnsCommand(args = [], out = console.log) {
   const [sub, ...rest] = args;
@@ -389,6 +405,130 @@ export async function dnsCommand(args = [], out = console.log) {
     return 0;
   }
 
+  if (sub === "enable" || sub === "disable") {
+    const platform = detectPlatform();
+    if (!platform) {
+      out(`unsupported platform: ${process.platform}`);
+      return 1;
+    }
+    const dryRun = rest.includes("--dry-run");
+    const linuxBackend = flag("backend", "systemd-resolved");
+    const wanted = requiredPort(platform, port);
+
+    let tlds = [];
+    try {
+      tlds = await fetchTlds({ registryBase });
+    } catch {
+      // disable does not need the list on Linux, and on macOS a stale list is
+      // better than refusing to clean up because the registry is unreachable.
+      tlds = [];
+    }
+
+    if (sub === "enable" && !tlds.length) {
+      out("no TLDs claimed yet — nothing to route");
+      return 1;
+    }
+
+    let plan;
+    try {
+      plan = sub === "enable"
+        ? enablePlan({ platform, tlds, port: wanted, linuxBackend })
+        : disablePlan({ platform, tlds, linuxBackend });
+    } catch (err) {
+      out(err.message);
+      return 1;
+    }
+
+    if (dryRun) {
+      out(`# ${sub} on ${platform} — nothing below has been run`);
+      out(describePlan(plan));
+      return 0;
+    }
+
+    // Checked before doing half of it: every step here needs root, and a
+    // partial apply is worse than a clean refusal with the command to retry.
+    if (plan.elevated && typeof process.getuid === "function" && process.getuid() !== 0) {
+      out(`dns ${sub} edits system DNS and needs root.`);
+      out(`  sudo moshcode dns ${sub}${rest.length ? " " + rest.join(" ") : ""}`);
+      out("");
+      out("or see exactly what it would do first:");
+      out(`  moshcode dns ${sub} --dry-run`);
+      return 1;
+    }
+
+    const applied = await applyPlan(plan);
+    for (const r of applied.results) {
+      const what = r.step.kind === "run" ? `${r.step.command} ${r.step.args.join(" ")}` : r.step.path;
+      out(`  ${r.ok ? "ok  " : "FAIL"} ${r.step.kind.padEnd(6)} ${what}${r.ok ? "" : ` — ${r.error}`}`);
+    }
+    for (const note of plan.notes || []) out(`  note   ${note}`);
+
+    if (sub === "enable") {
+      const started = await startDaemon({ port: wanted, registryBase, entry: cliEntry() });
+      out(started.alreadyRunning
+        ? `  ok   bridge already running (pid ${started.pid})`
+        : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
+      out("");
+      out(applied.ok
+        ? `Moshpit names now resolve on this machine. Try: moshcode dns resolve ${tlds[0] ? `a.${tlds[0]}` : "<name>"}`
+        : "Some steps failed — routing is incomplete. Re-run, or use --dry-run to see what was meant to happen.");
+      out(`Routing covers the ${tlds.length} TLDs claimed right now. New ones do not route`);
+      out("until you re-run this — there is no common suffix to match, so every TLD is listed.");
+      out("Note: the bridge does not yet survive a reboot. Re-run `moshcode dns enable` after one.");
+    } else {
+      const stopped = await stopDaemon();
+      out(stopped.stopped ? "  ok   bridge stopped" : `  ok   bridge was not running${stopped.reason ? ` (${stopped.reason})` : ""}`);
+      out("");
+      out("Moshpit TLDs are back to your normal resolver.");
+    }
+    return applied.ok ? 0 : 1;
+  }
+
+  if (sub === "status") {
+    const platform = detectPlatform();
+    const daemon = await daemonStatus();
+    out(`platform   ${platform || process.platform}`);
+    out(`bridge     ${daemon.running ? `running (pid ${daemon.pid})` : daemon.stale ? `NOT running — stale pidfile for ${daemon.pid}` : "not running"}`);
+
+    // Routing is read off the filesystem rather than remembered, so a config
+    // someone edited or removed by hand is reported as it actually is.
+    const marker = platform === "macos" ? "/etc/resolver" : "/etc/systemd/resolved.conf.d/moshpit.conf";
+    const routed = platform === "linux" ? existsSync(marker) : platform === "macos" ? existsSync(marker) : null;
+    out(`routing    ${routed === null ? "(check NRPT: Get-DnsClientNrptRule)" : routed ? `configured (${marker})` : "not configured"}`);
+
+    // The state worth shouting about: names are pointed at a bridge that is not
+    // there, so every Moshpit name fails instead of falling through.
+    if (routed && !daemon.running) {
+      out("");
+      out("! routing is in place but the bridge is not running — Moshpit names will fail.");
+      out("  fix with: sudo moshcode dns enable     undo with: sudo moshcode dns disable");
+    }
+
+    const known = await fetchTlds({ registryBase }).catch(() => null);
+    const probe = known
+      ? await resolveName(`probe.${known[0] || "moshpit"}`, { registryBase }).catch(() => null)
+      : null;
+    out(probe ? `registry   reachable — ${known.length} TLDs claimed` : "registry   unreachable");
+
+    // Routing is a snapshot: the TLD list is enumerated at enable time because
+    // arbitrary endings share no suffix to match on. Drift is silent otherwise
+    // — a name claimed after you enabled simply does not resolve.
+    if (routed && known && platform === "linux") {
+      const conf = await readFile(marker, "utf8").catch(() => "");
+      const routedCount = (conf.match(/~[a-z0-9-]+/g) || []).length;
+      if (routedCount && routedCount !== known.length) {
+        out("");
+        out(`! routing covers ${routedCount} TLDs but ${known.length} are claimed — re-run \`sudo moshcode dns enable\``);
+      }
+    }
+    return 0;
+  }
+
   out(`unknown: dns ${sub}\n\n${USAGE}`);
   return 1;
+}
+
+/** The CLI's own entry point, so the daemon re-invokes this same binary. */
+function cliEntry() {
+  return fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 }
