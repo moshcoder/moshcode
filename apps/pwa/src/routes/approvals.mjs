@@ -157,7 +157,7 @@ async function resolve(req, res, status, response) {
   if (!a) return res.status(404).send("not found");
   if (!canView(req, a)) return res.status(403).send("forbidden");
   if (a.status === "pending") {
-    await run(`UPDATE approvals SET status = ?, response = ?, submitted_at = ? WHERE id = ?`,
+    await run(`UPDATE approvals SET status = ?, response = ?, submitted_at = ? WHERE id = ? AND status = 'pending'`,
       [status, response, Date.now(), a.id]);
   }
   const t = req.query.t ? `?t=${req.query.t}` : "";
