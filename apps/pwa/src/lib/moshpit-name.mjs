@@ -112,3 +112,53 @@ export function resolutionPreference({ registered, mode }) {
   if (!registered) return "clearnet";
   return normalizeMode(mode) === "moshpit" ? "moshpit" : "fallback";
 }
+
+/**
+ * How many endings one paste may claim at a time.
+ *
+ * A cap rather than no cap because this runs one INSERT per ending against a
+ * remote database, and a pasted spreadsheet column is exactly the shape of
+ * input that turns into ten thousand of them by accident.
+ */
+export const MAX_BULK_TLDS = 200;
+
+/**
+ * Pull a list of endings out of whatever someone pasted.
+ *
+ * Deliberately forgiving about shape, because the source is a text field and
+ * people paste columns, comma-separated exports, and hand-typed lines with the
+ * dot already on. Splitting on any run of whitespace, commas or semicolons
+ * covers all three without asking anyone to reformat first.
+ *
+ * `#` starts a comment to end of line, so a list can be annotated and re-pasted
+ * with the rejects commented out rather than deleted.
+ *
+ * Deduplicated on the normalised form, so `.Eggs`, `eggs` and `EGGS` in one
+ * paste are one claim rather than one claim and two "already taken" errors
+ * against yourself.
+ */
+export function parseTldList(input, limit = MAX_BULK_TLDS) {
+  const tokens = String(input ?? "")
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, ""))
+    .join("\n")
+    .split(/[\s,;]+/)
+    .map((t) => t.trim().toLowerCase().replace(/^\.+/, ""))
+    .filter(Boolean);
+
+  const seen = new Set();
+  const tlds = [];
+  let skipped = 0;
+
+  for (const token of tokens) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    // Counted rather than silently dropped: "I pasted 300 and got 200" needs to
+    // be visible, or the missing hundred look like they failed for some other
+    // reason.
+    if (tlds.length >= limit) { skipped++; continue; }
+    tlds.push(token);
+  }
+
+  return { tlds, skipped };
+}

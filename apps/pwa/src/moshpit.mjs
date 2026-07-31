@@ -11,11 +11,11 @@
 // checkable rather than trusted.
 
 import { get, all, run } from "./db.mjs";
-import { normalizeLabel, normalizeTld, parseMoshpitName, tldRejection } from "./lib/moshpit-name.mjs";
+import { MAX_BULK_TLDS, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, normalizeLabel, normalizeTld, parseMoshpitName, tldRejection,
-  normalizeMode, resolutionPreference,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, normalizeLabel, normalizeTld, parseMoshpitName,
+  parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
 const COLS = `tld, user_id, owner_email, alias_of, price_usd, created_at`;
@@ -553,4 +553,65 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
 
   await logAction(owned.tld, userId, `pin:remove:${owned.label}`);
   return { ok: true };
+}
+
+/* ---- claiming a list of endings at once ---- */
+
+/**
+ * Claim every ending in a pasted list.
+ *
+ * One at a time, not in parallel. `moshpit_tld_log` is the record of who
+ * claimed what first, and a batch that interleaves its writes makes that
+ * ordering meaningless for the endings inside it. Sequential is also the
+ * difference between one slow request and a burst that trips rate limits at
+ * the database.
+ *
+ * Partial success is the normal outcome, not the error case: any real list has
+ * a few names someone already holds. Every ending is attempted and reported on
+ * — the caller gets what landed and what did not, rather than a stop at the
+ * first collision with the rest silently unattempted.
+ */
+export async function registerTlds({ input, userId, ownerEmail = null, limit = MAX_BULK_TLDS }) {
+  const { tlds, skipped } = parseTldList(input, limit);
+
+  const claimed = [];
+  const mine = [];
+  const taken = [];
+  const rejected = [];
+
+  for (const tld of tlds) {
+    const result = await registerTld({ tld, userId, ownerEmail });
+    if (result.ok) { claimed.push(result.tld.tld); continue; }
+
+    if (result.taken) {
+      // Re-pasting a list you already claimed should read as "already yours",
+      // not as a collision with a stranger.
+      const owner = await getTld(tld);
+      (owner?.user_id === userId ? mine : taken).push(tld);
+      continue;
+    }
+    rejected.push({ tld, error: result.error });
+  }
+
+  return { claimed, mine, taken, rejected, skipped, attempted: tlds.length };
+}
+
+/** One line fit for a flash message: what landed, what did not, and why. */
+export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
+  const show = (list, n = 6) =>
+    list.slice(0, n).map((t) => `.${t}`).join(", ") + (list.length > n ? ` +${list.length - n} more` : "");
+
+  const parts = [];
+  if (result.claimed.length) parts.push(`claimed ${result.claimed.length} — ${show(result.claimed)}`);
+  if (result.mine.length) parts.push(`${result.mine.length} already yours`);
+  if (result.taken.length) parts.push(`${result.taken.length} taken by someone else (${show(result.taken)})`);
+  if (result.rejected.length) {
+    // The reason matters more than the count here: "reserved" and "too short"
+    // need different fixes, and a bare number tells you neither.
+    const reasons = result.rejected.slice(0, 3).map((r) => `.${r.tld} — ${r.error}`).join("; ");
+    parts.push(`${result.rejected.length} rejected (${reasons}${result.rejected.length > 3 ? "; …" : ""})`);
+  }
+  if (result.skipped) parts.push(`${result.skipped} past the ${limit} limit, not attempted`);
+
+  return parts.length ? parts.join(". ") + "." : "nothing to claim — paste one ending per line.";
 }
