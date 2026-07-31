@@ -188,11 +188,11 @@ moshpitRouter.put("/api/moshpit/tlds/:tld/price", async (req, res) => {
 async function startCheckout(req, res, { json }) {
   const q = await quoteName({ tld: req.params.tld, label: req.body?.label, buyerId: req.user.id });
   if (!q.ok) {
-    return json ? bad(res, q.error, q.taken ? 409 : 400) : back(res, { err: q.error });
+    return json ? bad(res, q.error, q.taken ? 409 : 400) : back(res, { err: q.error }, "theirs");
   }
   if (!config.coinpay.businessId) {
     const msg = "payments are not configured yet";
-    return json ? bad(res, msg, 503) : back(res, { err: msg });
+    return json ? bad(res, msg, 503) : back(res, { err: msg }, "theirs");
   }
 
   try {
@@ -222,7 +222,7 @@ async function startCheckout(req, res, { json }) {
   } catch (e) {
     console.error("[moshpit] checkout failed:", e.message);
     const msg = "could not start checkout";
-    return json ? bad(res, msg, 502) : back(res, { err: msg });
+    return json ? bad(res, msg, 502) : back(res, { err: msg }, "theirs");
   }
 }
 
@@ -374,6 +374,8 @@ const PIT_CSS = `
 .pit-name{background:var(--bg-tint);border-radius:8px;padding:6px 10px;margin-bottom:6px}
 .pit-name .mono{min-width:150px}
 .pit-forsale{border-color:color-mix(in srgb,var(--acid) 35%,var(--line))}
+.pit-tab .count{font-size:.68rem;color:var(--faint);margin-left:6px}
+.pit-tab.on .count{color:var(--acid)}
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}
@@ -400,13 +402,19 @@ const PIT_CSS = `
 .pit-land .pit-form,.pit-land .pit-row{margin-bottom:0}`;
 
 /**
- * The tab strip. `/pit` is the namespace itself and `/pit/dns` is how you
- * reach it from a machine — two halves of the same thing, and a link buried in
- * a paragraph is not how anyone finds the second one.
+ * The tab strip: the endings you hold, the ones you can buy from, and how to
+ * reach any of them from a machine. One strip rather than tabs inside tabs --
+ * these are three views of the same namespace, and a link buried in a paragraph
+ * is not how anyone finds the last one.
+ *
+ * `counts` is omitted on /pit/dns, which does not load the registry.
  */
-const pitTabs = (active) => `
+const pitTabs = (active, counts = null) => `
 <nav class="pit-tabs">
-  <a class="pit-tab${active === "namespace" ? " on" : ""}" href="/pit">Namespace</a>
+  <a class="pit-tab${active === "yours" ? " on" : ""}" href="/pit?tab=yours">Yours${
+    counts ? `<span class="count">${counts.yours}</span>` : ""}</a>
+  <a class="pit-tab${active === "theirs" ? " on" : ""}" href="/pit?tab=theirs">Theirs${
+    counts ? `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>` : ""}</a>
   <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>
 </nav>`;
 
@@ -437,13 +445,19 @@ moshpitRouter.get("/pit", async (req, res) => {
     });
   }
 
-  // Exemptions are only meaningful for a TLD that points somewhere, so only
-  // those cost a query.
-  const exemptions = new Map();
-  await Promise.all(mine.filter((t) => t.alias_of).map(async (t) => exemptions.set(t.tld, await listExempt(t.tld))));
+  // An unknown ?tab= falls back to Yours rather than rendering an empty page.
+  const tab = req.query.tab === "theirs" ? "theirs" : "yours";
+  const forSaleCount = theirs.filter(forSale).length;
 
+  // Per-TLD detail is only needed by the panel actually on screen, and only
+  // Yours has any: Theirs is one row per ending.
+  const exemptions = new Map();
   const names = new Map();
-  await Promise.all(mine.map(async (t) => names.set(t.tld, await listNames(t.tld))));
+  if (tab === "yours") {
+    // Exemptions are only meaningful for a TLD that points somewhere.
+    await Promise.all(mine.filter((t) => t.alias_of).map(async (t) => exemptions.set(t.tld, await listExempt(t.tld))));
+    await Promise.all(mine.map(async (t) => names.set(t.tld, await listNames(t.tld))));
+  }
 
   const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
     : req.query.ok ? `<p class="pit-msg ok">${esc(req.query.ok)}</p>` : "";
@@ -544,23 +558,27 @@ moshpitRouter.get("/pit", async (req, res) => {
     <span class="mono">foo.agentic</span> resolve to <span class="mono">foo.agent</span> — while any name
     you exempt stays exactly where it is.
   </p>
-  ${pitTabs("namespace")}
   ${landingCard(req, landing)}
   ${msg}
   ${req.user ? claimForm(req) : ""}
-  <h2 style="margin-top:34px;font-size:1.2rem">Yours</h2>
-  <p class="dim" style="max-width:62ch;margin:4px 0 14px">
-    Endings you hold. Names under them are yours to mint for nothing — or put a price on the
-    ending and let anyone buy one.
-  </p>
-  ${mineHtml}
-  <h2 style="margin-top:34px;font-size:1.2rem">Theirs</h2>
-  <p class="dim" style="max-width:62ch;margin:4px 0 14px">
-    Endings somebody else holds. Where the operator has set a price you can buy a name under it —
-    <span class="mono">foo.whatever</span> without owning <span class="mono">.whatever</span>. Paid in crypto
-    through CoinPay; the name lands the moment the payment confirms.
-  </p>
-  ${theirsHtml}
+  ${pitTabs(tab, { yours: mine.length, theirs: theirs.length, forSale: forSaleCount })}
+
+  <section class="pit-panel">
+  ${tab === "yours" ? `
+    <p class="dim" style="max-width:62ch;margin:0 0 14px">
+      Endings you hold. Names under them are yours to mint for nothing — or put a price on the
+      ending and let anyone buy one.
+    </p>
+    ${mineHtml}
+  ` : `
+    <p class="dim" style="max-width:62ch;margin:0 0 14px">
+      Endings somebody else holds. Where the operator has set a price you can buy a name under it —
+      <span class="mono">foo.whatever</span> without owning <span class="mono">.whatever</span>. Paid in crypto
+      through CoinPay; the name lands the moment the payment confirms.
+    </p>
+    ${theirsHtml}
+  `}
+  </section>
 </main>${footer}`,
   }));
 });
@@ -679,7 +697,10 @@ dig @127.0.0.1 -p 5354 +short anything.moshpit</code></pre>
 
 /* ---------- form posts (browser, CSRF-guarded) ---------- */
 
-const back = (res, params) => res.redirect(`/pit?${new URLSearchParams(params)}`);
+// Every form post lands back on /pit, so it has to say which tab it came from
+// -- otherwise buying a name in Theirs bounces you to Yours to read the result.
+const back = (res, params, tab = "yours") =>
+  res.redirect(`/pit?${new URLSearchParams({ ...params, tab })}`);
 
 moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
   const result = await registerTld({
