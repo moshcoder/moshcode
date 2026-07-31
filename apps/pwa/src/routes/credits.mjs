@@ -6,7 +6,7 @@ import { id } from "../lib/crypto.mjs";
 import { grant } from "../lib/credits.mjs";
 import { verifySignature } from "../lib/signature.mjs";
 import { requireAuth } from "../lib/session.mjs";
-import { settleNamePurchase } from "../moshpit.mjs";
+import { settleNamePurchase, settleTldPurchase } from "../moshpit.mjs";
 
 export const creditsRouter = Router();
 
@@ -72,6 +72,9 @@ creditsRouter.post("/webhooks/coinpay", async (req, res) => {
     // a credit top-up are different rows in different tables; whichever one
     // this id belongs to is the one that settles.
     await settleNamePurchase(payId).catch((e) => console.error("[moshpit] settle failed:", e.message));
+    // An ending is a different table from a name, and this is the one webhook
+    // URL CoinPay is configured with — whichever row the id belongs to settles.
+    await settleTldPurchase(payId).catch((e) => console.error("[moshpit] tld settle failed:", e.message));
 
     const p = await get(`SELECT * FROM credit_purchases WHERE id = ? AND status = 'pending'`, [payId]);
     if (p) {
