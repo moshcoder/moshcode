@@ -11,10 +11,15 @@ import {
 
 const SECRET = "test-secret";
 
-test("parseTarget accepts host:port, bare host, and a URL", () => {
+test("parseTarget accepts IPv4, IPv6, bare hosts, and URLs", () => {
   assert.deepEqual(parseTarget("127.0.0.1:7681"), { host: "127.0.0.1", port: 7681 });
   assert.deepEqual(parseTarget("localhost"), { host: "localhost", port: 7681 });
   assert.deepEqual(parseTarget("http://10.0.0.5:9999/"), { host: "10.0.0.5", port: 9999 });
+  assert.deepEqual(parseTarget("[::1]:7681"), { host: "::1", port: 7681 });
+  assert.deepEqual(parseTarget("http://[fd7a:115c:a1e0::1]:9999/"), {
+    host: "fd7a:115c:a1e0::1",
+    port: 9999,
+  });
   assert.deepEqual(parseTarget(), { host: "127.0.0.1", port: 7681 });
 });
 
