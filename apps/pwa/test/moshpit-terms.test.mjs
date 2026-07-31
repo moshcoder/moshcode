@@ -165,3 +165,39 @@ test("ending terms", { skip: installed ? false : "pwa dependencies not installed
     assert.equal(m.isExpired({ expires_at: Date.now() + 1000 }), false);
   });
 });
+
+test("deleting a user takes their rows with them", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+  const { migrate } = await import("../src/migrate.mjs");
+  await migrate();
+  const { run, all } = await import("../src/db.mjs");
+  const { randomBytes: rb } = await import("node:crypto");
+
+  await t.test("foreign keys are actually on", async () => {
+    // SQLite ignores every REFERENCES clause without this, per connection. The
+    // cascades in the schema were decorative for as long as it was unset.
+    assert.equal((await all("PRAGMA foreign_keys"))[0].foreign_keys, 1);
+  });
+
+  await t.test("names, pins and purchases follow the user out", async () => {
+    const uid = `u${rb(4).toString("hex")}`;
+    const tld = `fk${rb(4).toString("hex")}`;
+    const now = Date.now();
+    await run(`INSERT INTO users (id,email,created_at) VALUES (?,?,?)`, [uid, `${uid}@e.com`, now]);
+    await run(`INSERT INTO moshpit_tlds (tld,user_id,created_at) VALUES (?,?,?)`, [tld, uid, now]);
+    await run(`INSERT INTO moshpit_names (tld,label,user_id,created_at) VALUES (?,?,?,?)`, [tld, "a", uid, now]);
+    await run(`INSERT INTO moshpit_name_pins (tld,label,pin,kind,user_id,created_at) VALUES (?,?,?,?,?,?)`,
+      [tld, "a", "AAAA", "tls", uid, now]);
+
+    const mine = async (table) =>
+      (await all(`SELECT 1 FROM ${table} WHERE user_id = ?`, [uid])).length;
+    assert.equal(await mine("moshpit_names"), 1);
+    assert.equal(await mine("moshpit_name_pins"), 1);
+
+    await run(`DELETE FROM users WHERE id = ?`, [uid]);
+
+    // Orphans here are not cosmetic: a published key outliving its owner is a
+    // key nobody can revoke.
+    assert.equal(await mine("moshpit_names"), 0);
+    assert.equal(await mine("moshpit_name_pins"), 0);
+  });
+});
