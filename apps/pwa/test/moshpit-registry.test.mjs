@@ -226,8 +226,10 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     assert.equal(await m.getName("eggs", "123"), null);
   });
 
-  await t.test("the TLD itself still may not be numeric", async () => {
-    assert.equal((await m.registerTld({ tld: "123", userId: ALICE })).ok, false);
+  await t.test("an all-numeric ending can be claimed", async () => {
+    // .420, .187, .911. The IPv4 ambiguity is a property of a whole hostname,
+    // not of an ending, so it is enforced by parseMoshpitName instead.
+    assert.equal((await m.registerTld({ tld: "420", userId: ALICE })).ok, true);
   });
 
   await t.test("minting is logged", async () => {

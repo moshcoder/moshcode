@@ -23,16 +23,23 @@ test("normalizeTld rejects what could never be a TLD", () => {
   assert.equal(normalizeTld("-eggs"), null);
   assert.equal(normalizeTld("eggs-"), null);
   assert.equal(normalizeTld("egg s"), null);
-  assert.equal(normalizeTld("123"), null, "ambiguous against an IPv4 literal");
   assert.equal(normalizeTld("a".repeat(64)), null);
   assert.equal(normalizeTld(null), null);
   assert.equal(normalizeTld(undefined), null);
 });
 
-test("hostname labels may be numeric even though TLDs may not", () => {
+test("either half of a name may be numeric — but not both", () => {
   assert.equal(normalizeLabel("123"), "123");
-  assert.equal(normalizeTld("123"), null);
+  // .420 and .187 are endings people want, and an ending on its own is never
+  // mistaken for an address.
+  assert.equal(normalizeTld("123"), "123");
   assert.deepEqual(parseMoshpitName("123.eggs"), { label: "123", tld: "eggs" });
+  assert.deepEqual(parseMoshpitName("blue.420"), { label: "blue", tld: "420" });
+
+  // Both halves numeric is where the IPv4 ambiguity actually lives: several
+  // parsers read a two-part dotted number as an abbreviated address.
+  assert.equal(parseMoshpitName("1.420"), null);
+  assert.equal(parseMoshpitName("192.168"), null);
 });
 
 test("reserved names cannot be claimed", () => {
@@ -91,4 +98,30 @@ test("overriding DNS is opt-in, never the default", () => {
   for (const mode of [undefined, "", "clearnet", "typo", null]) {
     assert.notEqual(resolutionPreference({ registered: true, mode }), "moshpit");
   }
+});
+
+test("all-numeric endings", async (t) => {
+  const { normalizeTld, parseMoshpitName } = await import("../src/lib/moshpit-name.mjs");
+
+  await t.test("an ending may be all digits", () => {
+    // .420, .187, .911 are names people want; an ending on its own is never
+    // mistaken for an address.
+    for (const [input, expected] of [[".420", "420"], ["187", "187"], [".911", "911"], ["0", "0"]]) {
+      assert.equal(normalizeTld(input), expected, input);
+    }
+  });
+
+  await t.test("a name is fine when only one half is numeric", () => {
+    assert.deepEqual(parseMoshpitName("blue.420"), { label: "blue", tld: "420" });
+    assert.deepEqual(parseMoshpitName("bud.420"), { label: "bud", tld: "420" });
+    assert.deepEqual(parseMoshpitName("420.blue"), { label: "420", tld: "blue" });
+  });
+
+  await t.test("both halves numeric is refused — that reads as an address", () => {
+    // Several parsers read a two-part dotted number as an abbreviated IPv4,
+    // so `1.420` is genuinely ambiguous where `blue.420` is not.
+    assert.equal(parseMoshpitName("1.420"), null);
+    assert.equal(parseMoshpitName("192.168"), null);
+    assert.equal(parseMoshpitName("0.0"), null);
+  });
 });
