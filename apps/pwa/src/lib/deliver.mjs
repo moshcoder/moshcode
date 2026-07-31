@@ -112,7 +112,10 @@ export async function fanOut(user, approval, onlyKinds = null) {
       else if (c.kind === "telegram") ok = await sendTelegram(c.target, approval);
       else if (c.kind === "push") ok = await sendPush(user, approval);
       else if (c.kind === "webhook") ok = await sendWebhook(c.target, approval);
-      else { console.log(`[${c.kind}:stub] ${approval.message}`); ok = true; } // sms
+      else if (c.kind === "sms" && c.target) {
+        console.log(`[sms:stub] → ${c.target}: ${approval.message}`);
+        ok = true;
+      }
       if (ok) notified.push(c.kind);
     } catch (e) {
       console.error(`deliver ${c.kind} failed:`, e.message);

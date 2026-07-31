@@ -197,6 +197,18 @@ test("api/approvals: a channel that fails to deliver is not charged for", { skip
   assert.equal(await balance("u-partial"), 4); // the 4 held for slack is released
 });
 
+test("api/approvals: an SMS channel without a target is not charged for", { skip: !deps && "apps/pwa deps not installed" }, async () => {
+  const { seedUser, charges, ingest, balance } = await app();
+
+  const key = await seedUser("u-sms-empty", { credits: 12, channels: [["sms", null]] });
+  const res = await ingest(key, "nowhere to send");
+
+  assert.deepEqual(res.body.delivered, []);
+  assert.equal(res.body.charged, 0);
+  assert.deepEqual(await charges("u-sms-empty"), []);
+  assert.equal(await balance("u-sms-empty"), 12);
+});
+
 test("api/approvals: a free-only account is never charged", { skip: !deps && "apps/pwa deps not installed" }, async () => {
   const { seedUser, charges, ingest, balance, webhookUrl, webhookDeliveries } = await app();
 
