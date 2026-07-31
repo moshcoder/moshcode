@@ -142,14 +142,39 @@ export function shortCount(n) {
 }
 
 /**
- * The most a child name may cost per year.
+ * The most a child name should cost per year.
  *
- * PRD 0005 §5 and §10.1, requirement R3: `me.whatever` is capped at $1.99/year.
- * An operator may go lower, including free. The cap is on the annual
- * registration/renewal price only — a one-time Buy Now resale is a transfer of
- * ownership, not a term, and §10.2.4 puts no ceiling on it.
+ * This is the `me.whatever` price — what a buyer pays to mint a name under an
+ * ending someone else holds. It is not the price of `.whatever` itself, which
+ * is a separate thing the registry does not charge for yet.
+ *
+ * $2 flat. PRD 0005 R3 wrote this as $1.99; the extra cent buys nothing but a
+ * price tag that looks like a supermarket shelf, and every number a person has
+ * to reason about here — a default, a cap, a per-line override — reads better
+ * round. The PRD number is superseded by this one.
+ *
+ * The ceiling is on the annual registration/renewal price only. A one-time
+ * Buy Now resale transfers ownership rather than starting a term, and §10.2.4
+ * puts no ceiling on that.
  */
-export const MAX_CHILD_PRICE_USD = 1.99;
+export const MAX_CHILD_PRICE_USD = 2;
+
+/** Alias, for code that reads better naming the thing than the ceiling. */
+export const CHILD_PRICE_USD = MAX_CHILD_PRICE_USD;
+
+/**
+ * What a direct ending costs per year: `.whatever` itself.
+ *
+ * Nothing charges this yet — `registerTld` inserts a row and claiming is free.
+ * It lives here anyway so the two prices sit together and the number is settled
+ * before the checkout that will read it, rather than being invented at the
+ * point someone builds that and having to be reconciled afterwards.
+ *
+ * $5 flat, for the same reason the child price is $2: PRD 0005 §10.1 wrote
+ * these as $4.99 and $1.99, and the trailing cents buy nothing but a price tag
+ * shaped like a supermarket shelf.
+ */
+export const ENDING_PRICE_USD = 5;
 
 /**
  * What names under a newly claimed ending cost unless you say otherwise.
@@ -158,13 +183,12 @@ export const MAX_CHILD_PRICE_USD = 1.99;
  * every buyer, and "I claimed forty and nobody could buy a name under any of
  * them" is the failure that costs something.
  *
- * $2 rather than MAX_CHILD_PRICE_USD: the cap in PRD 0005 R3 arrives with
- * terms and renewals, and until that lands this is an operator's asking price
- * with nothing enforcing a ceiling. A per-line price overrides this, upwards
- * or downwards, and clearing the field still means not for sale — the default
- * is an opinion, not a floor and not a limit.
+ * The cap itself, not a number under it: $2 is already the round, memorable
+ * price this namespace is meant to have, so there is nothing to shade off it
+ * for. A per-line price overrides this in either direction, and clearing the
+ * field still means not for sale — the default is an opinion, not a floor.
  */
-export const DEFAULT_TLD_PRICE_USD = 2;
+export const DEFAULT_TLD_PRICE_USD = MAX_CHILD_PRICE_USD;
 
 /**
  * Pull a list of endings out of whatever someone pasted.
