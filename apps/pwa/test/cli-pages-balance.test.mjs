@@ -41,6 +41,7 @@ async function boot() {
   const { run, get, db } = await import("../src/db.mjs");
   const { sessionMiddleware, csrfGuard } = await import("../src/lib/session.mjs");
   const { cliRouter } = await import("../src/routes/cli.mjs");
+  const { sessionsRouter } = await import("../src/routes/sessions.mjs");
   const { pagesRouter } = await import("../src/routes/pages.mjs");
 
   const app = deps.express();
@@ -50,6 +51,7 @@ async function boot() {
   app.use(sessionMiddleware);
   app.use(csrfGuard);
   app.use(cliRouter);
+  app.use(sessionsRouter);
   app.use(pagesRouter);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -62,6 +64,10 @@ async function boot() {
     [SESSION, "u1", Date.now(), Date.now() + 60_000]);
   await run(`INSERT INTO credit_ledger (id,user_id,delta,reason,created_at) VALUES (?,?,?,?,?)`,
     ["led-1", "u1", CREDITS, "test.seed", Date.now()]);
+  await run(
+    `INSERT INTO cli_sessions (id,user_id,name,status,created_at,last_seen_at) VALUES (?,?,?,?,?,?)`,
+    ["cli-1", "u1", "local", "live", Date.now(), Date.now()],
+  );
 
   return { run, get, db, server, base, cookies };
 }
@@ -96,6 +102,20 @@ test("GET /cli/authorize shows the account's real balance", { skip: !deps && "ap
 test("GET /device shows the account's real balance", { skip: !deps && "apps/pwa deps not installed" }, async () => {
   const { base, cookies } = await app();
   const res = await fetch(`${base}/device`, { headers: { cookie: cookies } });
+  assert.equal(res.status, 200);
+  assert.equal(chipBalance(await res.text()), CREDITS);
+});
+
+test("GET /sessions shows the account's real balance", { skip: !deps && "apps/pwa deps not installed" }, async () => {
+  const { base, cookies } = await app();
+  const res = await fetch(`${base}/sessions`, { headers: { cookie: cookies } });
+  assert.equal(res.status, 200);
+  assert.equal(chipBalance(await res.text()), CREDITS);
+});
+
+test("GET /sessions/:id shows the account's real balance", { skip: !deps && "apps/pwa deps not installed" }, async () => {
+  const { base, cookies } = await app();
+  const res = await fetch(`${base}/sessions/cli-1`, { headers: { cookie: cookies } });
   assert.equal(res.status, 200);
   assert.equal(chipBalance(await res.text()), CREDITS);
 });

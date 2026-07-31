@@ -14,6 +14,7 @@ import { Router } from "express";
 import { get, all, run } from "../db.mjs";
 import { id } from "../lib/crypto.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
+import { balance } from "../lib/credits.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 
@@ -230,7 +231,7 @@ sessionsRouter.get("/sessions", requireAuth, async (req, res) => {
   res.type("html").send(page({
     title: "moshcode ▸ sessions",
     head: SESSION_CSS,
-    body: `${appBar(req.user, 0, req.csrfToken)}
+    body: `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
     <main class="wrap" style="max-width:760px;padding-top:5vh">
       <h1 style="font-size:1.3rem;margin-bottom:4px">Sessions</h1>
       <p class="dim mono" style="font-size:.8rem;margin-bottom:16px">Live mirrors of your running mosh instances.</p>
@@ -246,7 +247,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
   res.type("html").send(page({
     title: `moshcode ▸ ${s.name}`,
     head: SESSION_CSS,
-    body: `${appBar(req.user, 0, req.csrfToken)}
+    body: `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
     <main class="wrap" style="max-width:900px;padding-top:5vh">
       <div class="sess-top" style="margin-bottom:10px">
         <span class="dot ${live ? "on" : "off"}" id="dot"></span>
