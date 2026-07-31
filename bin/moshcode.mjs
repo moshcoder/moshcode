@@ -5,16 +5,18 @@ import path from "node:path";
 import { runScript } from "../src/runtime.mjs";
 import { moshVocabulary } from "../src/commands.mjs";
 import {
-  ENGINES,
   agentLaunchArgs,
   engineList,
+  ENGINES,
   engineStatus,
-  resolveEngine,
   openSession,
+  resolveEngine,
+  resolveExecutable,
   runCmd,
 } from "../src/engines.mjs";
 import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
+import { describeUninstall, uninstallPlan } from "../src/uninstall.mjs";
 import { mcpCommand, skillCommand } from "../src/integrations.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
@@ -150,6 +152,7 @@ usage:
   moshcode skill install <git-url>     install a skill across every engine that
                                        supports it (claude/gemini)
   moshcode install <engine|tool>       install a coding engine or workflow tool
+  moshcode uninstall <engine|tool>     take one back off this machine
   moshcode upgrade [target…]           update moshcode + installed engines/tools
                                        (no args = everything; name targets to
                                        narrow, e.g. \`upgrade ugig\`)
@@ -288,6 +291,59 @@ async function main() {
     if (result.code === 0) console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
     return backToPit(`install ${target}`, result.code);
   }
+  if (cmd === "uninstall" || cmd === "remove") {
+    const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
+    const entry = target
+      && ((Object.hasOwn(ENGINES, target) && ENGINES[target]) || (Object.hasOwn(TOOLS, target) && TOOLS[target]));
+    if (!target || !entry) {
+      console.error(`usage: moshcode uninstall <engine|tool>\nengines:\n${engineList()}\ntools:\n${toolList()}`);
+      process.exit(target ? 1 : 0);
+    }
+
+    const binPath = resolveExecutable(entry.bin, entry.binDirs);
+    const plan = uninstallPlan(entry, { binPath });
+
+    if (plan.kind === "absent" || plan.kind === "refused") {
+      for (const w of plan.warnings) console.error(w);
+      process.exitCode = plan.kind === "refused" ? 1 : 0;
+      return;
+    }
+
+    console.log(`🎸 uninstalling ${target} — ${entry.desc}`);
+    console.log(describeUninstall(plan));
+    if (rest.includes("--dry-run")) return;
+
+    // Removing a binary is not something to do because a flag was left off.
+    // An npm uninstall is reversible with one command and does not ask.
+    if (plan.kind === "binary" && !rest.includes("--yes") && !rest.includes("-y")) {
+      console.error(`\nthis deletes ${binPath}. re-run with --yes to do it.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    for (const step of plan.steps) {
+      if (step.kind === "remove") {
+        try {
+          fs.rmSync(step.path, { force: true });
+          console.log(`\n✓ removed ${step.path}`);
+        } catch (err) {
+          console.error(`could not remove ${step.path}: ${err.message}`);
+          process.exitCode = 1;
+          return;
+        }
+      } else {
+        const result = await runCmd(step.command, step.args);
+        if (!result.ok || result.code !== 0) {
+          console.error(`uninstall failed: ${result.error?.message || `exit ${result.code}`}`);
+          process.exitCode = 1;
+          return;
+        }
+        console.log(`\n✓ ${target} uninstalled. 🤘`);
+      }
+    }
+    return backToPit(`uninstall ${target}`, 0);
+  }
+
   if (cmd === "upgrade" || cmd === "update") {
     console.log("🎸 moshcode upgrade — updating moshcode + installed engines/tools 🤘");
     const results = await runUpgrade(rest);
