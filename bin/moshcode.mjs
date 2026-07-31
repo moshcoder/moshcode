@@ -163,7 +163,7 @@ usage:
   moshcode pwd                         show the current dir + git repo/branch/origin
   moshcode engines [--json]            list engines + install status
   moshcode tools [--json]              list workflow tools + install status
-  moshcode commands                    list built-in moshscript commands
+  moshcode commands [--json]           list built-in moshscript commands
   moshcode help                        this
 
 engines (moshcode is a wrapper — it installs/drives these):
@@ -306,8 +306,16 @@ async function main() {
     return;
   }
   if (cmd === "commands") {
+    const commands = moshVocabulary().all();
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(commands.map(({ name, summary }) => ({
+        name,
+        description: summary,
+      })), null, 2));
+      return;
+    }
     console.log("built-in moshscript commands:");
-    for (const c of moshVocabulary().all()) {
+    for (const c of commands) {
       console.log(`  ${(`${c.name}()`).padEnd(12)} ${c.summary}`);
     }
     return;

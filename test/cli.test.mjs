@@ -42,6 +42,24 @@ for (const command of ["engines", "tools"]) {
   });
 }
 
+test("moshcode commands --json prints the machine-readable vocabulary", () => {
+  const result = spawnSync(process.execPath, [BIN, "commands", "--json"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  const entries = JSON.parse(result.stdout);
+  assert.equal(entries.length, moshVocabulary().all().length);
+  assert.ok(entries.some((entry) => entry.name === "notify"));
+  for (const entry of entries) {
+    assert.deepEqual(Object.keys(entry), ["name", "description"]);
+    assert.equal(typeof entry.name, "string");
+    assert.equal(typeof entry.description, "string");
+    assert.ok(entry.description.length > 0);
+  }
+});
+
 function dryCtx() {
   return { dryRun: true, lines: [], out(l) { this.lines.push(l); } };
 }
