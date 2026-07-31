@@ -118,6 +118,41 @@ test("sessions: a queued command is claimed exactly once", skip, async () => {
   assert.equal(rows[0].status, "claimed");
 });
 
+test("sessions: command acknowledgements require a claimed command", skip, async () => {
+  const { one, run, get } = await app();
+
+  const reg = await one("/api/sessions", { name: "ack-state" });
+  const sid = reg.body.id;
+  await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES ('queued-ack',?,'/status','queued',?)`,
+    [sid, Date.now()]);
+
+  const queued = await one(`/api/sessions/${sid}/commands/queued-ack`, {});
+  assert.equal(queued.status, 409);
+  assert.equal(queued.body.error, "command is not claimed");
+  assert.equal((await get(`SELECT status FROM session_commands WHERE id = 'queued-ack'`)).status, "queued");
+
+  const missing = await one(`/api/sessions/${sid}/commands/missing`, {});
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error, "no such command");
+});
+
+test("sessions: command acknowledgements complete claimed commands idempotently", skip, async () => {
+  const { one, run, get } = await app();
+
+  const reg = await one("/api/sessions", { name: "ack-idempotent" });
+  const sid = reg.body.id;
+  await run(`INSERT INTO session_commands (id,session_id,body,status,created_at,claimed_at) VALUES ('claimed-ack',?,'/status','claimed',?,?)`,
+    [sid, Date.now(), Date.now()]);
+
+  const first = await one(`/api/sessions/${sid}/commands/claimed-ack`, {});
+  assert.equal(first.status, 200);
+  assert.equal((await get(`SELECT status FROM session_commands WHERE id = 'claimed-ack'`)).status, "done");
+
+  const retry = await one(`/api/sessions/${sid}/commands/claimed-ack`, {});
+  assert.equal(retry.status, 200);
+  assert.deepEqual(retry.body, { ok: true });
+});
+
 test("sessions: ending a session marks it ended", skip, async () => {
   const { one, get } = await app();
 

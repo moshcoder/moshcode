@@ -199,8 +199,18 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
 sessionsRouter.post("/api/sessions/:id/commands/:cid", cliAuth, async (req, res) => {
   const session = await ownedSession(req.params.id, req.apiUser.id);
   if (!session) return res.status(404).json({ error: "no such session" });
-  await run(`UPDATE session_commands SET status='done', done_at=? WHERE id=? AND session_id=?`,
+  const completed = await run(
+    `UPDATE session_commands SET status='done', done_at=? WHERE id=? AND session_id=? AND status='claimed'`,
     [Date.now(), req.params.cid, session.id]);
+  if (!completed.rowsAffected) {
+    const command = await get(
+      `SELECT status FROM session_commands WHERE id=? AND session_id=?`,
+      [req.params.cid, session.id]
+    );
+    if (!command) return res.status(404).json({ error: "no such command" });
+    if (command.status === "done") return res.json({ ok: true });
+    return res.status(409).json({ error: "command is not claimed" });
+  }
   publish(session.id, { type: "command-done", id: req.params.cid });
   res.json({ ok: true });
 });
