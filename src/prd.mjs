@@ -249,8 +249,14 @@ export function regenerateIndex(root = process.cwd()) {
   try { body = fs.readFileSync(readme, "utf8"); } catch { return false; }
   const prds = listPrds(root);
   // A `|` in a title would close its table cell early and shift every column
-  // after it, so escape it for the markdown table.
-  const cell = (text) => String(text).replace(/\|/g, "\\|");
+  // after it, so escape it for the markdown table. Escape `\` first: escaping
+  // the pipe alone turns `a\|b` into `a\\|b`, which markdown reads as an escaped
+  // backslash followed by a *live* pipe — the very break this is preventing.
+  // A newline would end the row outright, so flatten it to a space.
+  const cell = (text) => String(text)
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r\n?|\n/g, " ");
   const rows = prds.length
     ? ["| # | Title | Status |", "|---|---|---|",
        ...prds.map((p) => `| [${p.id}](${p.file}) | ${cell(p.title)} | ${cell(p.status)} |`)].join("\n")
