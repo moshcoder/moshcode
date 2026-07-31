@@ -6,6 +6,7 @@ import { id } from "../lib/crypto.mjs";
 import { grant } from "../lib/credits.mjs";
 import { verifySignature } from "../lib/signature.mjs";
 import { requireAuth } from "../lib/session.mjs";
+import { settleNamePurchase } from "../moshpit.mjs";
 
 export const creditsRouter = Router();
 
@@ -66,6 +67,12 @@ creditsRouter.post("/webhooks/coinpay", async (req, res) => {
   const event = req.body?.type || req.body?.event;
   const payId = req.body?.data?.id || req.body?.payment_id || req.body?.id;
   if (event && CONFIRMED_EVENT.test(event) && payId) {
+    // CoinPay is configured with a single webhook URL, so this endpoint is the
+    // entry point for every kind of payment the app takes. A name purchase and
+    // a credit top-up are different rows in different tables; whichever one
+    // this id belongs to is the one that settles.
+    await settleNamePurchase(payId).catch((e) => console.error("[moshpit] settle failed:", e.message));
+
     const p = await get(`SELECT * FROM credit_purchases WHERE id = ? AND status = 'pending'`, [payId]);
     if (p) {
       // Claim the purchase atomically, the same way /cli/token claims auth

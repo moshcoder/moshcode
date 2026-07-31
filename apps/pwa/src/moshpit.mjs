@@ -18,7 +18,7 @@ export {
   normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
-const COLS = `tld, user_id, owner_email, alias_of, created_at`;
+const COLS = `tld, user_id, owner_email, alias_of, price_usd, created_at`;
 
 export async function getTld(tld) {
   return get(`SELECT ${COLS} FROM moshpit_tlds WHERE tld = ?`, [tld]);
@@ -261,6 +261,131 @@ async function ownedName(tldInput, labelInput, userId) {
   if (!existing) return { ok: false, error: `${label}.${tld} is not registered` };
   if (existing.user_id !== userId) return { ok: false, error: `you do not own ${label}.${tld}` };
   return { ok: true, tld, label };
+}
+
+/* ---- selling names under a TLD ---- */
+
+/**
+ * Put a TLD up for sale, or take it down (`null`).
+ *
+ * Minting under someone's namespace without their say-so is exactly what the
+ * registry exists to prevent, so being open for business is an explicit act by
+ * the operator rather than a default. A price of null means closed, and every
+ * TLD that existed before this feature starts there.
+ */
+export async function setTldPrice({ tld: tldInput, userId, priceUsd }) {
+  const tld = normalizeTld(tldInput);
+  if (!tld) return { ok: false, error: "not a valid TLD" };
+  const owner = await getTld(tld);
+  if (!owner) return { ok: false, error: `.${tld} is not registered` };
+  if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
+
+  let price = null;
+  if (priceUsd !== null && priceUsd !== undefined && String(priceUsd).trim() !== "") {
+    price = Number(priceUsd);
+    // NaN/Infinity would be stored verbatim and then charged; a negative or
+    // zero price would let anyone drain the namespace for free.
+    if (!Number.isFinite(price) || price <= 0) return { ok: false, error: "price must be a positive number" };
+    if (price > 1_000_000) return { ok: false, error: "price is implausibly large" };
+    price = Math.round(price * 100) / 100;
+  }
+
+  await run(`UPDATE moshpit_tlds SET price_usd = ? WHERE tld = ?`, [price, tld]);
+  await logAction(tld, userId, price === null ? "unlist" : `list:${price}`);
+  return { ok: true, tld, priceUsd: price };
+}
+
+/** TLDs somebody else holds. `forSale` narrows to the ones actually buyable. */
+export async function listTldsNotOwnedBy(userId, { forSale = false, limit = 200 } = {}) {
+  const sql = `SELECT tld, user_id, owner_email, alias_of, price_usd, created_at
+               FROM moshpit_tlds
+               WHERE user_id IS NOT ?${forSale ? " AND price_usd IS NOT NULL" : ""}
+               ORDER BY price_usd IS NULL, created_at DESC LIMIT ?`;
+  return all(sql, [userId ?? "", limit]);
+}
+
+export async function getTldWithPrice(tld) {
+  return get(`SELECT tld, user_id, owner_email, alias_of, price_usd, created_at FROM moshpit_tlds WHERE tld = ?`, [tld]);
+}
+
+/** How long a checkout holds a name against other buyers. */
+export const RESERVATION_MS = 30 * 60 * 1000;
+
+/**
+ * Is this name buyable right now, and for how much?
+ *
+ * Checked before taking money and again before handing the name over, because
+ * the gap between those two is exactly where someone else's purchase lands.
+ */
+export async function quoteName({ tld: tldInput, label: labelInput, buyerId, now = Date.now() }) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return { ok: false, error: "not a valid name" };
+
+  const owner = await getTldWithPrice(tld);
+  if (!owner) return { ok: false, error: `.${tld} is not registered` };
+  if (owner.user_id === buyerId) return { ok: false, error: `you own .${tld} — mint names under it for free` };
+  if (owner.price_usd === null || owner.price_usd === undefined) {
+    return { ok: false, error: `.${tld} is not for sale` };
+  }
+  if (await getName(tld, label)) return { ok: false, error: `${label}.${tld} is already taken`, taken: true };
+
+  const held = await get(
+    `SELECT id FROM moshpit_name_purchases
+     WHERE tld = ? AND label = ? AND status = 'pending' AND reserved_until > ? LIMIT 1`,
+    [tld, label, now],
+  );
+  if (held) return { ok: false, error: `${label}.${tld} is in someone's checkout right now — try again shortly`, taken: true };
+
+  return { ok: true, tld, label, priceUsd: owner.price_usd, sellerId: owner.user_id };
+}
+
+/** Record a checkout so the webhook can settle it. */
+export async function openNamePurchase({ paymentId, tld, label, userId, amountUsd, now = Date.now() }) {
+  await run(
+    `INSERT INTO moshpit_name_purchases (id, tld, label, user_id, amount_usd, status, created_at, reserved_until)
+     VALUES (?,?,?,?,?, 'pending', ?, ?)`,
+    [paymentId, tld, label, userId, amountUsd, now, now + RESERVATION_MS],
+  );
+}
+
+/**
+ * Hand over a paid-for name. Idempotent on the payment id.
+ *
+ * The claim is a conditional UPDATE for the same reason the credit ledger uses
+ * one: CoinPay retries a webhook it never got an ack for, so two deliveries can
+ * be in flight at once and both read 'pending' before either write lands.
+ *
+ * If the name went to someone else in the meantime the buyer is owed a refund.
+ * That is money against a name they cannot have, so it is recorded as
+ * `refund_due` and logged rather than quietly dropped.
+ */
+export async function settleNamePurchase(paymentId) {
+  const p = await get(`SELECT * FROM moshpit_name_purchases WHERE id = ? AND status = 'pending'`, [paymentId]);
+  if (!p) return { ok: false, error: "no pending purchase for that payment" };
+
+  const claimed = await run(
+    `UPDATE moshpit_name_purchases SET status = 'settling' WHERE id = ? AND status = 'pending'`, [paymentId]);
+  if (!claimed.rowsAffected) return { ok: false, error: "already settled" };
+
+  try {
+    await run(`INSERT INTO moshpit_names (tld, label, user_id, target, created_at) VALUES (?,?,?,?,?)`,
+      [p.tld, p.label, p.user_id, null, Date.now()]);
+  } catch {
+    await run(`UPDATE moshpit_name_purchases SET status = 'refund_due' WHERE id = ?`, [paymentId]);
+    console.error(`[moshpit] ${p.label}.${p.tld} was taken before payment ${paymentId} settled — refund due to ${p.user_id}`);
+    return { ok: false, error: "name was taken before payment settled", refundDue: true };
+  }
+
+  await run(`UPDATE moshpit_name_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
+  await logAction(p.tld, p.user_id, `bought:${p.label}`);
+  return { ok: true, tld: p.tld, label: p.label, userId: p.user_id };
+}
+
+export async function listNamePurchases(userId, limit = 50) {
+  return all(
+    `SELECT id, tld, label, amount_usd, status, created_at FROM moshpit_name_purchases
+     WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`, [userId, limit]);
 }
 
 /* ---- resolution ---- */

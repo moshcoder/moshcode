@@ -19,9 +19,11 @@ import {
   getTld, listTlds, listTldsForUser, registerTld, normalizeLabel,
   setAlias, clearAlias, listExempt, setExempt, clearExempt,
   listNames, registerName, setNameTarget, releaseName,
+  setTldPrice, listTldsNotOwnedBy, quoteName, openNamePurchase,
   resolveMoshpitName, normalizeTld, tldRejection,
   normalizeMode, resolutionPreference,
 } from "../moshpit.mjs";
+import { config } from "../config.mjs";
 
 export const moshpitRouter = Router();
 
@@ -145,6 +147,87 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), released: true });
 });
 
+/* ---- the market ---- */
+
+/** TLDs other people hold. `?for_sale=1` narrows to the buyable ones. */
+moshpitRouter.get("/api/moshpit/market", async (req, res) => {
+  const tlds = await listTldsNotOwnedBy(req.user?.id ?? null, { forSale: Boolean(req.query.for_sale) });
+  res.json({
+    tlds: tlds.map((t) => ({
+      tld: t.tld, alias_of: t.alias_of, price_usd: t.price_usd,
+      for_sale: t.price_usd !== null && t.price_usd !== undefined,
+    })),
+  });
+});
+
+/** What a name would cost, and whether it can be bought at all. */
+moshpitRouter.get("/api/moshpit/tlds/:tld/quote", async (req, res) => {
+  const q = await quoteName({ tld: req.params.tld, label: req.query.label, buyerId: req.user?.id ?? null });
+  if (!q.ok) return bad(res, q.error, q.taken ? 409 : 400);
+  res.json({ tld: q.tld, label: q.label, price_usd: q.priceUsd });
+});
+
+moshpitRouter.put("/api/moshpit/tlds/:tld/price", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await setTldPrice({ tld: req.params.tld, userId: req.user.id, priceUsd: req.body?.price_usd });
+  if (!result.ok) return bad(res, result.error || "could not set that price");
+  res.json({ tld: result.tld, price_usd: result.priceUsd });
+});
+
+/**
+ * Start a CoinPay checkout for `label.tld`.
+ *
+ * The quote is taken again here rather than trusted from the page the buyer was
+ * looking at: prices change, and names get taken, between rendering and
+ * clicking. settleNamePurchase checks a third time, because the gap between
+ * paying and confirming is where the last race lives.
+ */
+async function startCheckout(req, res, { json }) {
+  const q = await quoteName({ tld: req.params.tld, label: req.body?.label, buyerId: req.user.id });
+  if (!q.ok) {
+    return json ? bad(res, q.error, q.taken ? 409 : 400) : back(res, { err: q.error });
+  }
+  if (!config.coinpay.businessId) {
+    const msg = "payments are not configured yet";
+    return json ? bad(res, msg, 503) : back(res, { err: msg });
+  }
+
+  try {
+    const r = await fetch(`${config.coinpay.apiBase}/api/payments/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        business_id: config.coinpay.businessId,
+        amount: q.priceUsd,
+        currency: "USD",
+        payment_method: "both",
+        metadata: { app: "moshcode", kind: "moshpit_name", user_id: req.user.id, tld: q.tld, label: q.label },
+        redirect_url: `${config.origin}/pit?bought=${encodeURIComponent(`${q.label}.${q.tld}`)}`,
+      }),
+    });
+    const pay = await r.json();
+    const payId = pay.id || pay.payment_id;
+    if (!payId) throw new Error("no payment id in response");
+
+    // Recorded before the buyer leaves for the payment page: the webhook can
+    // arrive before they are redirected back, and with no row it has nothing
+    // to settle.
+    await openNamePurchase({ paymentId: payId, tld: q.tld, label: q.label, userId: req.user.id, amountUsd: q.priceUsd });
+
+    const url = pay.hosted_url || pay.url || `${config.coinpay.apiBase}/pay/${payId}`;
+    return json ? res.status(201).json({ payment_id: payId, checkout_url: url, price_usd: q.priceUsd }) : res.redirect(url);
+  } catch (e) {
+    console.error("[moshpit] checkout failed:", e.message);
+    const msg = "could not start checkout";
+    return json ? bad(res, msg, 502) : back(res, { err: msg });
+  }
+}
+
+moshpitRouter.post("/api/moshpit/tlds/:tld/buy", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  return startCheckout(req, res, { json: true });
+});
+
 /**
  * Resolve a name, and say what a resolver should DO with the answer.
  *
@@ -196,13 +279,16 @@ const PIT_CSS = `
 .pit-names{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 .pit-name{background:var(--bg-tint);border-radius:8px;padding:6px 10px;margin-bottom:6px}
 .pit-name .mono{min-width:150px}
+.pit-forsale{border-color:color-mix(in srgb,var(--acid) 35%,var(--line))}
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}`;
 
+const forSale = (t) => t.price_usd !== null && t.price_usd !== undefined;
+
 moshpitRouter.get("/pit", async (req, res) => {
-  const [registry, mine, bal] = await Promise.all([
-    listTlds(50),
+  const [theirs, mine, bal] = await Promise.all([
+    listTldsNotOwnedBy(req.user?.id ?? null, { limit: 100 }),
     req.user ? listTldsForUser(req.user.id) : [],
     req.user ? balance(req.user.id) : 0,
   ]);
@@ -263,13 +349,42 @@ moshpitRouter.get("/pit", async (req, res) => {
               (exemptions.get(t.tld) || []).map((l) => `${esc(l)}.${esc(t.tld)}`).join(" · ") || "none held back"
             }</span>
           </form>` : ""}
+          <form method="post" action="/pit/${esc(t.tld)}/price" class="pit-row">
+            ${csrfInput(req)}
+            <span class="mono faint" style="font-size:.72rem">sell names for $</span>
+            <input name="price_usd" inputmode="decimal" placeholder="0.00"
+                   value="${t.price_usd === null || t.price_usd === undefined ? "" : esc(String(t.price_usd))}"
+                   autocomplete="off" style="min-width:90px">
+            <button class="btn" type="submit">${forSale(t) ? "Update price" : "List for sale"}</button>
+            ${forSale(t) ? `<button class="btn" type="submit" name="unlist" value="1">Unlist</button>` : ""}
+            <span class="mono ${forSale(t) ? "acid" : "faint"}" style="font-size:.72rem">${
+              forSale(t) ? `anyone can buy a name under .${esc(t.tld)}` : "closed — only you can mint here"
+            }</span>
+          </form>
         </div>`).join("")
       : `<p class="dim">You don't hold a TLD yet. Claim one above.</p>`;
 
-  const registryHtml = registry.length
-    ? `<ul class="mono dim" style="line-height:1.9;padding-left:18px">${registry.map((t) =>
-        `<li><span class="acid">.${esc(t.tld)}</span>${t.alias_of ? ` → .${esc(t.alias_of)}` : ""}</li>`).join("")}</ul>`
-    : `<p class="dim">Nothing claimed yet.</p>`;
+  // Sorted so the ones you can actually act on come first.
+  const theirsHtml = theirs.length
+    ? theirs.map((t) => `
+      <div class="pit-tld${forSale(t) ? " pit-forsale" : ""}">
+        <div class="pit-row" style="margin:0;justify-content:space-between">
+          <h3 class="${forSale(t) ? "acid" : "dim"}" style="font-family:var(--mono);font-size:1.05rem;text-transform:none">
+            .${esc(t.tld)}${t.alias_of ? `<span class="faint"> → .${esc(t.alias_of)}</span>` : ""}
+          </h3>
+          <span class="pill${forSale(t) ? " on" : ""}">${forSale(t) ? `$${esc(String(t.price_usd))} a name` : "not for sale"}</span>
+        </div>
+        ${forSale(t) ? (req.user ? `
+        <form method="post" action="/pit/${esc(t.tld)}/buy" class="pit-row">
+          ${csrfInput(req)}
+          <input name="label" placeholder="the name you want" autocomplete="off" spellcheck="false" required>
+          <span class="mono faint">.${esc(t.tld)}</span>
+          <button class="btn acid" type="submit">Buy for $${esc(String(t.price_usd))}</button>
+        </form>`
+        : `<p class="mono faint" style="font-size:.72rem;margin:8px 0 0"><a class="acid" href="/">Sign in</a> to buy a name here.</p>`)
+        : ""}
+      </div>`).join("")
+    : `<p class="dim">Nobody else holds a TLD yet.</p>`;
 
   res.type("html").send(page({
     title: "moshcode ▸ the pit",
@@ -288,9 +403,18 @@ moshpitRouter.get("/pit", async (req, res) => {
   ${msg}
   ${req.user ? claimForm(req) : ""}
   <h2 style="margin-top:34px;font-size:1.2rem">Yours</h2>
+  <p class="dim" style="max-width:62ch;margin:4px 0 14px">
+    Endings you hold. Names under them are yours to mint for nothing — or put a price on the
+    ending and let anyone buy one.
+  </p>
   ${mineHtml}
-  <h2 style="margin-top:34px;font-size:1.2rem">The registry</h2>
-  ${registryHtml}
+  <h2 style="margin-top:34px;font-size:1.2rem">Theirs</h2>
+  <p class="dim" style="max-width:62ch;margin:4px 0 14px">
+    Endings somebody else holds. Where the operator has set a price you can buy a name under it —
+    <span class="mono">foo.whatever</span> without owning <span class="mono">.whatever</span>. Paid in crypto
+    through CoinPay; the name lands the moment the payment confirms.
+  </p>
+  ${theirsHtml}
 </main>${footer}`,
   }));
 });
@@ -337,6 +461,21 @@ moshpitRouter.post("/pit/:tld/names", requireAuth, async (req, res) => {
   if (!result.ok) return back(res, { err: result.error || "could not update that name" });
   back(res, { ok: done });
 });
+
+moshpitRouter.post("/pit/:tld/price", requireAuth, async (req, res) => {
+  const result = await setTldPrice({
+    tld: req.params.tld, userId: req.user.id,
+    priceUsd: req.body?.unlist ? null : req.body?.price_usd,
+  });
+  if (!result.ok) return back(res, { err: result.error || "could not set that price" });
+  back(res, {
+    ok: result.priceUsd === null
+      ? `.${result.tld} is no longer for sale.`
+      : `.${result.tld} names now cost $${result.priceUsd}.`,
+  });
+});
+
+moshpitRouter.post("/pit/:tld/buy", requireAuth, (req, res) => startCheckout(req, res, { json: false }));
 
 moshpitRouter.post("/pit/:tld/exempt", requireAuth, async (req, res) => {
   const result = await setExempt({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
