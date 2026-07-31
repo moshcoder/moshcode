@@ -43,13 +43,25 @@ export function createMirror({
     } catch { return null; }
   };
 
+  // The browser runs a real terminal emulator over this stream, so it has to
+  // know how wide the tty on this end is — otherwise every line wraps at the
+  // wrong column and anything that redraws in place lands crooked.
+  //
+  // Piped output (CI, `mosh | tee`) has no size at all, and half a size is no
+  // use to an emulator, so send nothing rather than nulls: the app keeps
+  // whatever it already had and the page falls back to filling its box.
+  const size = () => {
+    const { columns, rows } = process.stdout;
+    return columns && rows ? { cols: columns, rows } : {};
+  };
+
   async function flush() {
     flushTimer = null;
     if (!sessionId || (!pending && !engineDirty)) return;
     const chunk = pending;
     pending = "";
     engineDirty = false;
-    await post(`/api/sessions/${sessionId}/output`, { chunk, engine });
+    await post(`/api/sessions/${sessionId}/output`, { chunk, engine, ...size() });
   }
 
   function schedule() {
@@ -73,6 +85,19 @@ export function createMirror({
     engine = next;
     engineDirty = true;
     schedule();
+  }
+
+  // Dragging a window edge fires `resize` continuously, so settle first and
+  // send one empty post carrying the final geometry.
+  let resizeTimer = null;
+  function onResize() {
+    if (stopped || !sessionId) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      post(`/api/sessions/${sessionId}/output`, { chunk: "", engine, ...size() });
+    }, 120);
+    resizeTimer.unref?.();
   }
 
   // Long-poll for commands typed on the web. One request parks on the server
@@ -106,9 +131,14 @@ export function createMirror({
         host: os.hostname(),
         version,
         cwd,
+        ...size(),
       });
       if (!r?.id) return false;
       sessionId = r.id;
+      // A resize carries no output of its own, so nudge a flush: the new
+      // geometry rides the next post and the watching browser reshapes with us
+      // instead of waiting for whatever gets printed next.
+      process.stdout.on("resize", onResize);
       pump();
       return true;
     },
@@ -120,14 +150,17 @@ export function createMirror({
       if (!sessionId || stopped) return;
       stopped = true;
       clearTimeout(flushTimer);
+      clearTimeout(resizeTimer);
       flushTimer = null;
+      resizeTimer = null;
+      process.stdout.off?.("resize", onResize);
       try { poll?.abort(); } catch { /* already gone */ }
       // Flush whatever is left before saying goodbye, so the last thing you
       // did is visible in the mirror rather than lost with the process.
       if (pending) {
         const chunk = pending;
         pending = "";
-        await post(`/api/sessions/${sessionId}/output`, { chunk, engine });
+        await post(`/api/sessions/${sessionId}/output`, { chunk, engine, ...size() });
       }
       await post(`/api/sessions/${sessionId}/end`, {});
     },

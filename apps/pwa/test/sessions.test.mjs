@@ -85,6 +85,39 @@ test("sessions: register, then output lands in the scrollback in order", skip, a
   assert.deepEqual(rows.map((r) => Number(r.seq)), [1, 2], "seq must be monotonic per session");
 });
 
+test("sessions: terminal geometry is recorded and updated by later output", skip, async () => {
+  const { one, get } = await app();
+
+  const reg = await one("/api/sessions", { name: "sized", cols: 120, rows: 34 });
+  const first = await get(`SELECT cols, rows FROM cli_sessions WHERE id = ?`, [reg.body.id]);
+  assert.equal(Number(first.cols), 120);
+  assert.equal(Number(first.rows), 34);
+
+  // A window resized mid-run: the next flush carries the new size, and the
+  // browser needs it — the mirror is a real emulator, so stale geometry wraps
+  // every subsequent line at the wrong column.
+  await one(`/api/sessions/${reg.body.id}/output`, { chunk: "wide\n", cols: 200, rows: 50 });
+  const after = await get(`SELECT cols, rows FROM cli_sessions WHERE id = ?`, [reg.body.id]);
+  assert.equal(Number(after.cols), 200);
+  assert.equal(Number(after.rows), 50);
+
+  // Output with no size attached (piped, or an older CLI) must not wipe it.
+  await one(`/api/sessions/${reg.body.id}/output`, { chunk: "quiet\n" });
+  const kept = await get(`SELECT cols, rows FROM cli_sessions WHERE id = ?`, [reg.body.id]);
+  assert.equal(Number(kept.cols), 200);
+  assert.equal(Number(kept.rows), 50);
+});
+
+test("sessions: a nonsense geometry is refused rather than rendered", skip, async () => {
+  const { one, get } = await app();
+
+  // A browser asked to build a screen buffer this size just hangs.
+  const reg = await one("/api/sessions", { name: "bogus", cols: 999999, rows: -3 });
+  const row = await get(`SELECT cols, rows FROM cli_sessions WHERE id = ?`, [reg.body.id]);
+  assert.equal(row.cols, null);
+  assert.equal(row.rows, null);
+});
+
 test("sessions: another user's key cannot read or write the session", skip, async () => {
   const { one, two } = await app();
 

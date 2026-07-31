@@ -33,6 +33,14 @@ const LONG_POLL_MS = Number(process.env.SESSION_POLL_MS || 25 * 1000);
 
 const isLive = (s) => s.status === "live" && Date.now() - Number(s.last_seen_at) < STALE_MS;
 
+// A terminal dimension we're willing to render at. Anything outside this is a
+// typo or a lie from a CLI running without a tty, and a browser asked to build
+// a 100k-column screen buffer simply hangs.
+const dim = (v) => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 && n <= 1000 ? n : null;
+};
+
 // ---- in-process fan-out ----
 // Browsers watching each session, and CLIs parked on a long-poll. Both are
 // best-effort caches in front of the DB: every SSE client replays from
@@ -95,11 +103,13 @@ sessionsRouter.post("/api/sessions", cliAuth, async (req, res) => {
     host: req.body?.host ? String(req.body.host).slice(0, 60) : null,
     version: req.body?.version ? String(req.body.version).slice(0, 20) : null,
     cwd: req.body?.cwd ? String(req.body.cwd).slice(0, 200) : null,
+    cols: dim(req.body?.cols),
+    rows: dim(req.body?.rows),
   };
   await run(
-    `INSERT INTO cli_sessions (id,user_id,name,host,version,cwd,status,created_at,last_seen_at)
-     VALUES (?,?,?,?,?,?,'live',?,?)`,
-    [row.id, row.user_id, row.name, row.host, row.version, row.cwd, now, now]
+    `INSERT INTO cli_sessions (id,user_id,name,host,version,cwd,cols,rows,status,created_at,last_seen_at)
+     VALUES (?,?,?,?,?,?,?,?,'live',?,?)`,
+    [row.id, row.user_id, row.name, row.host, row.version, row.cwd, row.cols, row.rows, now, now]
   );
   res.json({ id: row.id, url: `/sessions/${row.id}` });
 });
@@ -110,8 +120,19 @@ sessionsRouter.post("/api/sessions/:id/output", cliAuth, async (req, res) => {
 
   const chunk = String(req.body?.chunk ?? "");
   const engine = req.body?.engine === undefined ? session.engine : (req.body.engine || null);
+  // Geometry rides along with the output rather than getting its own endpoint,
+  // so a window resized mid-run reaches the browser on the very next flush.
+  const cols = dim(req.body?.cols) ?? (session.cols == null ? null : Number(session.cols));
+  const rows = dim(req.body?.rows) ?? (session.rows == null ? null : Number(session.rows));
+  const resized = cols !== (session.cols == null ? null : Number(session.cols))
+    || rows !== (session.rows == null ? null : Number(session.rows));
   const now = Date.now();
-  await run(`UPDATE cli_sessions SET last_seen_at = ?, engine = ? WHERE id = ?`, [now, engine, session.id]);
+  await run(`UPDATE cli_sessions SET last_seen_at = ?, engine = ?, cols = ?, rows = ? WHERE id = ?`,
+    [now, engine, cols, rows, session.id]);
+  // Before the chunk, never after: the browser has to widen its screen buffer
+  // before the first line written at the new width arrives, or that line wraps
+  // at the old column and stays wrong in the scrollback for good.
+  if (resized) publish(session.id, { type: "size", cols, rows });
 
   if (chunk) {
     // seq is per-session and monotonic so a reconnecting browser can ask for
@@ -231,7 +252,7 @@ sessionsRouter.get("/sessions", requireAuth, async (req, res) => {
           <b>${esc(s.name)}</b>
           <span class="faint mono">${esc(s.version ? "v" + s.version : "")}</span>
         </div>
-        <div class="dim mono sess-meta">${live ? (s.engine ? `▸ ${esc(s.engine)}` : "idle") : "offline"} · ${ago(s.last_seen_at)}${s.cwd ? ` · ${esc(s.cwd)}` : ""}</div>
+        <div class="dim mono sess-meta">${live ? (s.engine ? `▸ ${esc(s.engine)}` : "idle") : "offline"} · ${ago(s.last_seen_at)}${dim(s.cols) && dim(s.rows) ? ` · ${dim(s.cols)}×${dim(s.rows)}` : ""}${s.cwd ? ` · ${esc(s.cwd)}` : ""}</div>
       </div></a>`;
   }).join("") : `<div class="card"><div class="card-body dim mono">
       No mosh instances have checked in yet. Run <span class="acid">mosh</span> on a machine
@@ -254,31 +275,41 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
   const s = await ownedSession(req.params.id, req.user.id);
   if (!s) return res.status(404).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>No such session</h1></main>` }));
   const live = isLive(s);
+  const geo = dim(s.cols) && dim(s.rows) ? `${dim(s.cols)}×${dim(s.rows)}` : "";
   res.type("html").send(page({
     title: `moshcode ▸ ${s.name}`,
-    head: SESSION_CSS,
+    head: `<link rel="stylesheet" href="/vendor/xterm.css">${SESSION_CSS}`,
     body: `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
-    <main class="wrap" style="max-width:900px;padding-top:5vh">
+    <main class="wrap" style="max-width:1100px;padding-top:5vh">
       <div class="sess-top" style="margin-bottom:10px">
         <span class="dot ${live ? "on" : "off"}" id="dot"></span>
         <b>${esc(s.name)}</b>
         <span class="faint mono">${esc(s.version ? "v" + s.version : "")}${s.cwd ? " · " + esc(s.cwd) : ""}</span>
         <a class="faint mono" href="/sessions" style="margin-left:auto">← all sessions</a>
       </div>
-      <div id="term" class="term" aria-live="polite"></div>
+      <div class="term ${live ? "" : "off"}" id="frame">
+        <div id="term"></div>
+      </div>
       <form id="send" method="post" action="/sessions/${esc(s.id)}/commands" class="sendbar">
         ${csrfInput(req)}
-        <input name="body" id="body" placeholder="/agents claude" autocomplete="off" spellcheck="false" ${live ? "" : "disabled"}>
+        <span class="prompt acid mono" aria-hidden="true">❯</span>
+        <input name="body" id="body" placeholder="/agents claude" autocomplete="off" spellcheck="false" autocapitalize="off" ${live ? "" : "disabled"}>
         <button class="btn acid" type="submit" ${live ? "" : "disabled"}>run</button>
       </form>
+      <div class="termbar">
+        <span class="faint mono" id="sendstatus" role="status" aria-live="polite"></span>
+        <span class="faint mono" id="geo" style="margin-left:auto">${esc(geo)}</span>
+      </div>
       <p class="faint mono" style="font-size:.72rem;margin-top:8px">
-        Commands run in the live mosh prompt. Output from an engine that has taken over the
-        terminal (<span class="acid">/agents</span>) stays on that machine — you'll see the
-        hand-off, not the engine's own screen.
+        Type anywhere on the terminal to reach the prompt. Commands run in the live mosh prompt.
+        Output from an engine that has taken over the terminal (<span class="acid">/agents</span>)
+        stays on that machine — you'll see the hand-off, not the engine's own screen.
       </p>
     </main>
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/xterm-addon-fit.js"></script>
     <script>${MIRROR_JS}</script>
-    <script>mirror(${JSON.stringify(s.id)});</script>
+    <script>mirror(${JSON.stringify({ id: s.id, cols: dim(s.cols), rows: dim(s.rows), live })});</script>
     ${footer}`,
   }));
 });
@@ -294,6 +325,14 @@ sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
     "x-accel-buffering": "no",
   });
   res.write(": connected\n\n");
+
+  // Geometry first: the emulator has to be the right size before a single
+  // replayed line reaches it, or the scrollback wraps at the wrong column and
+  // stays wrong. A resize that lands during the replay arrives as a held event
+  // and is flushed behind it, in order.
+  if (s.cols || s.rows) {
+    res.write(`data: ${JSON.stringify({ type: "size", cols: dim(s.cols), rows: dim(s.rows) })}\n\n`);
+  }
 
   // Subscribe BEFORE reading the scrollback, not after. The read is evaluated
   // by the database and the rows then travel back; a chunk committed inside
@@ -372,61 +411,145 @@ const SESSION_CSS = `<style>
   .dot.on { background:#a6ff1a; box-shadow:0 0 8px #a6ff1a; }
   .dot.off { background:#4a4f42; }
   .term {
-    background:#050604; border:1px solid #1d2418; border-radius:8px; padding:12px;
-    height:60vh; min-height:280px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; line-height:1.5; color:#edf2e4;
+    background:#050604; border:1px solid #1d2418; border-radius:8px; padding:10px;
+    overflow:hidden; min-height:120px;
   }
-  .sendbar { display:flex; gap:8px; margin-top:10px; }
+  /* No geometry from the CLI (older mosh): the emulator fills a fixed box instead. */
+  .term.fitmode { height:60vh; min-height:280px; }
+  .term.off { opacity:.6; }
+  .term .xterm { height:100%; }
+  .term .xterm-viewport { background:transparent !important; scrollbar-width:thin; scrollbar-color:#333a25 transparent; }
+  .term .xterm-viewport::-webkit-scrollbar { width:9px; }
+  .term .xterm-viewport::-webkit-scrollbar-thumb { background:#333a25; border-radius:9px; }
+  .sendbar { display:flex; gap:8px; margin-top:10px; align-items:center; }
+  .sendbar .prompt { font-size:1rem; flex:none; }
   .sendbar input { flex:1; font-family:ui-monospace,monospace; }
   .sendbar input:disabled, .sendbar button:disabled { opacity:.45; cursor:not-allowed; }
+  .termbar { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:.72rem; min-height:1.2em; }
 </style>`;
 
-// Rendered client-side: the CLI ships raw ANSI, and colour is most of how the
-// pit reads. Only SGR (colour/bold/dim) is translated; every other escape —
-// cursor moves, clears — is dropped rather than mangled into visible junk.
+// The CLI ships raw ANSI, so the browser runs a real terminal emulator over it
+// (xterm.js) rather than translating a subset to HTML. The old renderer kept
+// colour and dropped everything else, which meant every cursor move, clear and
+// in-place redraw — spinners, progress lines, the pit's own repaints — either
+// vanished or left the text it was rewriting stacked up as duplicates.
 const MIRROR_JS = `
-function mirror(sessionId) {
-  var term = document.getElementById("term"), dot = document.getElementById("dot");
+function mirror(opts) {
+  var sessionId = opts.id;
+  var frame = document.getElementById("frame"), host = document.getElementById("term");
+  var dot = document.getElementById("dot"), geo = document.getElementById("geo");
   var form = document.getElementById("send"), input = document.getElementById("body");
+  var status = document.getElementById("sendstatus");
   var seq = 0;
-  var COLORS = { 30:"#070806",31:"#ff0050",32:"#a6ff1a",33:"#ffd53d",34:"#4d9fff",35:"#c77dff",36:"#4de1e1",37:"#edf2e4",90:"#6b7263",91:"#ff5c88",92:"#c8ff6b",93:"#ffe27a",94:"#8cc0ff",95:"#dcb0ff",96:"#8ff0f0",97:"#ffffff" };
-  function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-  function render(text) {
-    var out = "", open = 0, i = 0;
-    var re = /\\u001b\\[([0-9;]*)m|\\u001b\\[[0-9;?]*[A-Za-z]|\\u001b\\][^\\u0007]*\\u0007/g, m;
-    while ((m = re.exec(text))) {
-      out += esc(text.slice(i, m.index));
-      i = re.lastIndex;
-      if (m[1] === undefined) continue;            // non-SGR escape → drop
-      var codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
-      for (var c = 0; c < codes.length; c++) {
-        var code = codes[c];
-        if (code === 0) { while (open) { out += "</span>"; open--; } }
-        else if (code === 1) { out += '<span style="font-weight:700">'; open++; }
-        else if (code === 2) { out += '<span style="opacity:.65">'; open++; }
-        else if (COLORS[code]) { out += '<span style="color:' + COLORS[code] + '">'; open++; }
-      }
+  // Whether the CLI told us its tty size. If it did we run the emulator at
+  // exactly that geometry and size the font to fit; if it didn't (older mosh)
+  // we fall back to filling the box and accept that wide output wraps early.
+  var known = !!(opts.cols && opts.rows);
+  var FONT_MIN = 6, FONT_MAX = 15, PAD = 20;
+  var fontSize = 13;
+
+  var term = new Terminal({
+    cols: opts.cols || 80,
+    rows: opts.rows || 24,
+    // The mirror is tee'd from a tty's write side, so line ends arrive as bare
+    // \\n — the kernel adds the carriage return further down. Without this
+    // every line would start where the last one ended, staircase-fashion.
+    convertEol: true,
+    cursorBlink: false,
+    disableStdin: true,
+    scrollback: 5000,
+    fontSize: fontSize,
+    fontFamily: 'ui-monospace,"JetBrains Mono","SF Mono",SFMono-Regular,Menlo,Consolas,monospace',
+    theme: {
+      background: "#050604", foreground: "#edf2e4", cursor: "#a6ff1a",
+      selectionBackground: "rgba(166,255,26,.28)", selectionForeground: "#070806",
+      black: "#070806", red: "#ff0050", green: "#a6ff1a", yellow: "#ffd53d",
+      blue: "#4d9fff", magenta: "#c77dff", cyan: "#4de1e1", white: "#edf2e4",
+      brightBlack: "#6b7263", brightRed: "#ff5c88", brightGreen: "#c8ff6b", brightYellow: "#ffe27a",
+      brightBlue: "#8cc0ff", brightMagenta: "#dcb0ff", brightCyan: "#8ff0f0", brightWhite: "#ffffff"
     }
-    out += esc(text.slice(i));
-    while (open) { out += "</span>"; open--; }
-    return out;
+  });
+  var fit = null;
+  try { fit = new FitAddon.FitAddon(); term.loadAddon(fit); } catch (e) { /* addon optional */ }
+  if (!known) frame.classList.add("fitmode");
+  term.open(host);
+
+  function screenEl() { return term.element && term.element.querySelector(".xterm-screen"); }
+
+  // Fit the mirrored geometry into the page by choosing a font size, not by
+  // scaling the element: a CSS transform blurs the glyphs and throws off the
+  // cell maths xterm uses to turn a click into a character, which would break
+  // selecting and copying output.
+  function layout() {
+    if (!known) { try { fit && fit.fit(); } catch (e) { /* not laid out yet */ } return; }
+    var avail = frame.clientWidth - PAD;
+    var maxH = Math.max(200, Math.round(window.innerHeight * 0.7));
+    if (!(avail > 0)) return;
+    for (var pass = 0; pass < 4; pass++) {
+      var el = screenEl();
+      if (!el || !el.offsetWidth) return;
+      var ratio = Math.min(avail / el.offsetWidth, maxH / Math.max(1, el.offsetHeight));
+      var next = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.floor(fontSize * ratio * 20) / 20));
+      if (Math.abs(next - fontSize) < 0.05) break;
+      fontSize = next;
+      term.options.fontSize = next;
+    }
+    frame.style.height = "";
   }
-  function append(chunk) {
-    var stick = term.scrollTop + term.clientHeight >= term.scrollHeight - 40;
-    term.insertAdjacentHTML("beforeend", render(chunk));
-    if (stick) term.scrollTop = term.scrollHeight;
+
+  var pending = false;
+  function relayout() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function () { pending = false; layout(); });
   }
-  function offline() { if (dot) { dot.classList.remove("on"); dot.classList.add("off"); } }
+  window.addEventListener("resize", relayout);
+  layout();
+
+  function setSize(cols, rows) {
+    if (!cols || !rows) return;
+    if (!known) { known = true; frame.classList.remove("fitmode"); }
+    if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+    if (geo) geo.textContent = cols + "×" + rows;
+    relayout();
+  }
+
+  function offline() {
+    if (dot) { dot.classList.remove("on"); dot.classList.add("off"); }
+    frame.classList.add("off");
+    if (input) input.disabled = true;
+    if (form) { var b = form.querySelector("button"); if (b) b.disabled = true; }
+  }
+
+  function flash(msg) { if (status) status.textContent = msg; }
+
   function connect() {
     var es = new EventSource("/sessions/" + sessionId + "/stream?since=" + seq);
     es.onmessage = function (e) {
       var d = JSON.parse(e.data);
-      if (d.type === "out") { seq = d.seq; append(d.chunk); }
-      else if (d.type === "queued") { append("\\u001b[2m\\u001b[36m▸ (web) " + d.body + "\\u001b[0m\\n"); }
+      if (d.type === "out") { seq = d.seq; term.write(d.chunk); }
+      else if (d.type === "size") { setSize(d.cols, d.rows); }
+      // Queued commands are reported beside the terminal, never written into
+      // it: the pit echoes the command itself when it runs, and injecting our
+      // own text would shift whatever the CLI is redrawing out of place.
+      else if (d.type === "queued") { flash("▸ queued: " + d.body); }
+      else if (d.type === "command-done") { flash(""); }
       else if (d.type === "end" || d.type === "offline") { offline(); }
     };
     es.onerror = function () { es.close(); setTimeout(connect, 3000); };
   }
+
+  // Typing on the terminal reaches the prompt below it. The emulator is a
+  // faithful mirror, not a keyboard: the CLI takes whole command lines, so
+  // keystrokes have nowhere to go until you press enter.
+  term.attachCustomKeyEventHandler(function (ev) {
+    if (ev.type !== "keydown" || !input || input.disabled) return true;
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return true; // leave copy/paste alone
+    if (ev.key === "Enter" || ev.key === "Backspace") { input.focus(); return false; }
+    if (ev.key.length === 1) { input.focus(); input.value += ev.key; ev.preventDefault(); return false; }
+    return true;
+  });
+
   if (form) form.addEventListener("submit", function (e) {
     e.preventDefault();
     var body = input.value.trim();
@@ -435,8 +558,13 @@ function mirror(sessionId) {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ body: body, _csrf: form._csrf.value }),
-    }).then(function (r) { if (r.ok) input.value = ""; });
+    }).then(function (r) {
+      if (r.ok) { input.value = ""; flash("▸ sent: " + body); }
+      else { flash("could not send — session may be offline"); }
+    }).catch(function () { flash("could not send — network"); });
   });
+
+  if (!opts.live) offline();
   connect();
 }
 `;
