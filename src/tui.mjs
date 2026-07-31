@@ -18,7 +18,7 @@ import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
-import { banner, hr, acid, ash, bone, dim, ok, err, info, moshcodeVersion } from "./ui.mjs";
+import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
 
@@ -219,7 +219,12 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
   }
   if (agentMode) {
-    console.log(err(`agent mode: ${key} ${agentLaunchArgs(engine).join(" ")}${engine.agentsView ? " — opening its agent view" : " — native approvals/permissions are bypassed or auto-approved"}.`));
+    // An agent view is just a listing — plain info. Anything else means the
+    // engine's own approval prompts are gone, which is worth a warning.
+    const note = `agent mode: ${key} ${agentLaunchArgs(engine).join(" ")}`;
+    console.log(engine.agentsView
+      ? info(`${note} — opening its agent view.`)
+      : warn(`${note} — native approvals/permissions are bypassed or auto-approved.`));
   }
   console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());
