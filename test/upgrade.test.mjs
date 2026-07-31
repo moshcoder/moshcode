@@ -4,7 +4,24 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { planUpgrade, selfSpec } from "../src/upgrade.mjs";
+import { ENGINES, upgradeSpec } from "../src/engines.mjs";
+import { planUpgrade, runUpgrade, selfSpec } from "../src/upgrade.mjs";
+
+// Same trick as withFakeTools, for the cases that turn on a target being
+// installed: only an installed target is asked to update itself, so the
+// fallback path can't be reached without one on PATH.
+async function withFakeBins(names, fn) {
+  const dir = mkdtempSync(path.join(tmpdir(), "moshcode-upgrade-bins-"));
+  for (const name of names) {
+    const file = path.join(dir, name);
+    writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    chmodSync(file, 0o755);
+  }
+  const before = process.env.PATH;
+  process.env.PATH = dir;
+  try { return await fn(); }
+  finally { process.env.PATH = before; }
+}
 
 function withFakeTools(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "moshcode-upgrade-"));
@@ -61,6 +78,71 @@ test("default upgrade includes self and every installed tool", () => {
     assert.ok(plan.items.some(({ key, kind }) => key === "ugig" && kind === "tool"));
     assert.ok(plan.items.some(({ key, kind }) => key === "coinpay" && kind === "tool"));
   });
+});
+
+test("privacycode upgrades by re-running its installer, not its own updater", () => {
+  // `privacycode upgrade` is opencode's updater, and it decides how to update
+  // by recognising where the binary was installed. It knows opencode's
+  // locations, not this fork's ~/.privacycode/bin, so against an install of
+  // ours it reports `Using method: unknown` and aborts every time. Re-running
+  // the installer is what actually moves the version.
+  assert.equal(ENGINES.privacycode.upgrade, undefined, "privacycode must not carry a native updater");
+  assert.deepEqual(upgradeSpec(ENGINES.privacycode), ENGINES.privacycode.install);
+
+  // The same call on plain opencode keeps its updater: that one does know
+  // where opencode puts itself.
+  assert.deepEqual(upgradeSpec(ENGINES.opencode), { cmd: "opencode", args: ["upgrade"] });
+});
+
+test("an explicit privacycode upgrade plans the installer", () => {
+  const plan = planUpgrade(["privacycode"]);
+
+  assert.equal(plan.self, false);
+  assert.deepEqual(plan.items.map(({ key, kind, spec }) => ({ key, kind, spec })), [
+    {
+      key: "privacycode",
+      kind: "engine",
+      spec: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
+    },
+  ]);
+});
+
+test("a refused native updater falls back to the installer", async () => {
+  // opencode's updater picks its method from where the binary was installed,
+  // and reports `Using method: unknown` and gives up when it doesn't
+  // recognise the location — the same on every run, so the target would stay
+  // stranded on an old version. The installer is idempotent; use it.
+  const calls = [];
+  const runCmd = async (cmd, args) => {
+    calls.push(`${cmd} ${args.join(" ")}`);
+    return cmd === "opencode" ? { ok: true, code: 1, signal: null } : { ok: true, code: 0, signal: null };
+  };
+  const logs = [];
+  const results = await withFakeBins(["opencode"], () => runUpgrade(["opencode"], {
+    runCmd, log: (s) => logs.push(s), rule: () => {},
+  }));
+
+  assert.deepEqual(calls, [
+    "opencode upgrade",
+    "bash -c curl -fsSL https://opencode.ai/install | bash",
+  ], "the installer runs only after its own updater refuses");
+  assert.deepEqual(results.map((r) => r.ok), [true], "the fallback result is what counts, not the refusal");
+  assert.ok(logs.some((l) => l.includes("falling back to its installer")), "the fallback must be visible, not silent");
+});
+
+test("a target with no separate updater is not retried", async () => {
+  // claude upgrades with `npm install -g`, which is already the installer.
+  // Retrying it would just run the identical command a second time.
+  const calls = [];
+  const runCmd = async (cmd, args) => {
+    calls.push(`${cmd} ${args.join(" ")}`);
+    return { ok: true, code: 1, signal: null };
+  };
+  const results = await withFakeBins(["claude"], () =>
+    runUpgrade(["claude"], { runCmd, log: () => {}, rule: () => {} }));
+
+  assert.deepEqual(calls, ["npm install -g @anthropic-ai/claude-code"]);
+  assert.deepEqual(results.map((r) => r.ok), [false]);
 });
 
 test("unknown upgrade targets remain visible to the caller", () => {
