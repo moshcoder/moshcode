@@ -78,7 +78,11 @@ test("a missing engine reached through an alias is planned with its installer", 
 test("no missing target is ever planned to run the binary it is missing", () => {
   // The sweep that matters: for EVERY entry with a native updater, the planned
   // command for a not-installed target must not be the absent binary itself.
-  assert.ok(withNativeUpdater.length >= 5, "expected several native updaters");
+  // Cover both code paths rather than counting to a number that moves whenever
+  // an entry gains or loses an updater — privacycode dropped its own once it
+  // turned out it could never update an install of ours.
+  assert.ok(withNativeUpdater.some(([, , kind]) => kind === "engine"), "no engine has a native updater to sweep");
+  assert.ok(withNativeUpdater.some(([, , kind]) => kind === "tool"), "no tool has a native updater to sweep");
   for (const [key, entry, kind] of withNativeUpdater) {
     const item = specOf(key);
     assert.equal(item.installed, false, `${kind} ${key} should not be installed`);
