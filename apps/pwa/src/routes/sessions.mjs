@@ -39,6 +39,10 @@ export function readLongPollMs(value = process.env.SESSION_POLL_MS) {
     : DEFAULT_LONG_POLL_MS;
 }
 const LONG_POLL_MS = readLongPollMs();
+// Lines accepted from one paste. Enough for a real block of commands, few
+// enough that a mis-paste of a whole file can't queue thousands of lines
+// against a prompt that runs them one at a time.
+const MAX_PASTED_LINES = 50;
 
 const isLive = (s) => s.status === "live" && Date.now() - Number(s.last_seen_at) < STALE_MS;
 
@@ -302,7 +306,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
       <form id="send" method="post" action="/sessions/${esc(s.id)}/commands" class="sendbar">
         ${csrfInput(req)}
         <span class="prompt acid mono" aria-hidden="true">❯</span>
-        <input name="body" id="body" placeholder="/agents claude" autocomplete="off" spellcheck="false" autocapitalize="off" ${live ? "" : "disabled"}>
+        <textarea name="body" id="body" rows="1" placeholder="/agents claude — paste a block, enter runs it, shift+enter for a new line" autocomplete="off" spellcheck="false" autocapitalize="off" ${live ? "" : "disabled"}></textarea>
         <button class="btn acid" type="submit" ${live ? "" : "disabled"}>run</button>
       </form>
       <div class="termbar">
@@ -390,16 +394,36 @@ sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
 sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {
   const s = await ownedSession(req.params.id, req.user.id);
   if (!s) return res.status(404).json({ error: "no such session" });
-  const body = String(req.body?.body || "").trim().slice(0, 500);
-  if (!body) return wantsJson(req) ? res.status(400).json({ error: "empty command" }) : res.redirect(`/sessions/${s.id}`);
+  // A pasted block is queued a line at a time. The CLI hands exactly one line
+  // to the prompt per turn — readline resolves on the first line it sees and
+  // would swallow the rest — so splitting here is what makes paste work, and it
+  // works against CLIs that shipped before this did.
+  const lines = String(req.body?.body || "")
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, MAX_PASTED_LINES)
+    .map((line) => line.slice(0, 500));
+  if (!lines.length) return wantsJson(req) ? res.status(400).json({ error: "empty command" }) : res.redirect(`/sessions/${s.id}`);
   if (!isLive(s)) return wantsJson(req) ? res.status(409).json({ error: "session offline" }) : res.redirect(`/sessions/${s.id}`);
 
-  const cid = id();
-  await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,?,'queued',?)`,
-    [cid, s.id, body, Date.now()]);
+  // The CLI drains by created_at, and a paste is fast enough that several
+  // lines land on the same millisecond — which would let a two-line paste run
+  // backwards. Stamp them one apart so the order you pasted is the order they
+  // run.
+  const at = Date.now();
+  const queued = [];
+  for (const [i, body] of lines.entries()) {
+    const cid = id();
+    await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,?,'queued',?)`,
+      [cid, s.id, body, at + i]);
+    queued.push({ id: cid, body });
+    publish(s.id, { type: "queued", id: cid, body });
+  }
   wake(s.id); // release the CLI's long-poll immediately
-  publish(s.id, { type: "queued", id: cid, body });
-  return wantsJson(req) ? res.json({ ok: true, id: cid }) : res.redirect(`/sessions/${s.id}`);
+  return wantsJson(req)
+    ? res.json({ ok: true, id: queued[0].id, queued: queued.length })
+    : res.redirect(`/sessions/${s.id}`);
 });
 
 const wantsJson = (req) => (req.get("accept") || "").includes("application/json");
@@ -430,10 +454,13 @@ const SESSION_CSS = `<style>
   .term .xterm-viewport { background:transparent !important; scrollbar-width:thin; scrollbar-color:#333a25 transparent; }
   .term .xterm-viewport::-webkit-scrollbar { width:9px; }
   .term .xterm-viewport::-webkit-scrollbar-thumb { background:#333a25; border-radius:9px; }
-  .sendbar { display:flex; gap:8px; margin-top:10px; align-items:center; }
-  .sendbar .prompt { font-size:1rem; flex:none; }
-  .sendbar input { flex:1; font-family:ui-monospace,monospace; }
-  .sendbar input:disabled, .sendbar button:disabled { opacity:.45; cursor:not-allowed; }
+  .sendbar { display:flex; gap:8px; margin-top:10px; align-items:flex-start; }
+  .sendbar .prompt { font-size:1rem; flex:none; line-height:2.6; }
+  /* Grows with a pasted block instead of scrolling one line at a time, but
+     stops well short of pushing the terminal off screen. */
+  .sendbar textarea { flex:1; font-family:ui-monospace,monospace; resize:none; overflow-y:auto; max-height:9.5rem; line-height:1.45; padding:11px 13px; }
+  .sendbar textarea:disabled, .sendbar button:disabled { opacity:.45; cursor:not-allowed; }
+  .sendbar button { line-height:1.45; padding:11px 16px; }
   .termbar { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:.72rem; min-height:1.2em; }
 </style>`;
 
@@ -559,17 +586,42 @@ function mirror(opts) {
     return true;
   });
 
+  // The box grows with what you paste. A pasted block that scrolls one line at
+  // a time is impossible to check over before running it on a live machine.
+  function autogrow() {
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = input.scrollHeight + "px";
+  }
+  if (input) {
+    input.addEventListener("input", autogrow);
+    // Enter runs, shift+enter makes a new line. A bare enter has to submit or
+    // the common case — one command — would need a reach for the mouse.
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      if (form.requestSubmit) form.requestSubmit(); else form.dispatchEvent(new Event("submit", { cancelable: true }));
+    });
+    autogrow();
+  }
+
   if (form) form.addEventListener("submit", function (e) {
     e.preventDefault();
     var body = input.value.trim();
     if (!body) return;
+    var lines = body.split(/\\r\\n|\\r|\\n/).filter(function (l) { return l.trim(); });
     fetch(form.action, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ body: body, _csrf: form._csrf.value }),
     }).then(function (r) {
-      if (r.ok) { input.value = ""; flash("▸ sent: " + body); }
-      else { flash("could not send — session may be offline"); }
+      if (!r.ok) { flash("could not send — session may be offline"); return; }
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        input.value = "";
+        autogrow();
+        var n = d.queued || lines.length;
+        flash(n > 1 ? "▸ sent " + n + " lines" : "▸ sent: " + lines[0]);
+      });
     }).catch(function () { flash("could not send — network"); });
   });
 
