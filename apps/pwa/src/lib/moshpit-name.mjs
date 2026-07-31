@@ -44,8 +44,10 @@ export function normalizeTld(input) {
   // registering the wrong thing.
   const label = normalizeLabel(raw);
   if (!label) return null;
-  // All-numeric would be ambiguous against an IPv4 literal in a hostname.
-  if (/^\d+$/.test(label)) return null;
+  // All-numeric endings are fine: `.420`, `.187`, `.911` are names people want,
+  // and an ending on its own is never mistaken for an address. The ambiguity
+  // with an IPv4 literal belongs to the whole hostname — `1.420` reads as one,
+  // `blue.420` cannot — so parseMoshpitName rejects that case and this does not.
   return label;
 }
 
@@ -72,6 +74,13 @@ export function parseMoshpitName(input) {
   const normalizedLabel = normalizeLabel(label);
   const normalizedTld = normalizeTld(tld);
   if (!normalizedLabel || !normalizedTld) return null;
+
+  // `1.420` is indistinguishable from an abbreviated IPv4 literal — several
+  // parsers read a two-part dotted number as an address — so a name whose every
+  // label is numeric is refused. `blue.420` and `420.blue` are unambiguous and
+  // allowed; it takes both halves being numbers to create the collision.
+  if (/^\d+$/.test(normalizedLabel) && /^\d+$/.test(normalizedTld)) return null;
+
   return { label: normalizedLabel, tld: normalizedTld };
 }
 
