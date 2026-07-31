@@ -10,12 +10,13 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
+import { isInstalled } from "../src/engines.mjs";
 import { TOOLS, resolveTool, retry, toolList } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
@@ -135,6 +136,20 @@ test("turso installs from its official script", () => {
   });
   // Re-running the installer fetches the latest, so no separate upgrade spec.
   assert.equal(TOOLS.turso.upgrade, undefined);
+  // That profile append only takes effect in the NEXT shell, so PATH alone shows
+  // turso missing in the session that installed it — binDirs is what makes
+  // `/tools` and `/turso` see the binary the installer just dropped.
+  assert.deepEqual(TOOLS.turso.binDirs, [path.join(homedir(), ".turso")]);
+});
+
+test("tool status finds a binary in the tool's own install dir", () => {
+  // Same shape as turso's ~/.turso: a dir the installer owns that PATH misses.
+  const dir = tempDir("moshcode-tool-bindirs-");
+  const bin = path.join(dir, "moshcode-fake-tool");
+  writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+  chmodSync(bin, 0o755);
+  assert.equal(isInstalled("moshcode-fake-tool"), false);
+  assert.equal(isInstalled("moshcode-fake-tool", [dir]), true);
 });
 
 test("tailscale uses the official installer and native updater", () => {

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { ENGINES, agentLaunchArgs, aiExecArgs, exitReason, pickAiEngine, ranOk, resolveEngine, runCmd } from "../src/engines.mjs";
+import { ENGINES, agentLaunchArgs, aiExecArgs, exitReason, isInstalled, openPassthrough, pickAiEngine, ranOk, resolveEngine, runCmd } from "../src/engines.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 // The autonomous-session bypass flags each engine declares (engine.agentArgs).
@@ -186,4 +186,43 @@ test("engine lookup ignores inherited Object.prototype members", () => {
   assert.equal(resolveEngine("__proto__"), null);
   assert.equal(pickAiEngine("constructor"), null);
   assert.throws(() => aiExecArgs("constructor", "hi"), /no headless mode for "constructor"/);
+});
+
+test("executable lookup searches a tool's own install dir when PATH misses it", async () => {
+  // turso's installer unpacks to $HOME/.turso and only appends that dir to the
+  // shell profile, so PATH alone reports it missing — and /turso fails to launch
+  // it — in the session that installed it. binDirs closes that gap.
+  const dir = tempDir("moshcode-bindirs-");
+  const file = path.join(dir, "faketool");
+  writeFileSync(file, "#!/bin/sh\nexit 0\n");
+  chmodSync(file, 0o755);
+
+  assert.equal(isInstalled("faketool"), false, "not on PATH");
+  assert.equal(isInstalled("faketool", [dir]), true, "found in the install dir");
+  // A missing/absent extra dir is inert, not a crash.
+  assert.equal(isInstalled("faketool", [path.join(dir, "nope")]), false);
+  assert.equal(isInstalled("faketool", []), false);
+
+  const r = await openPassthrough({ bin: "faketool", binDirs: [dir] });
+  assert.equal(r.ok, true);
+  assert.equal(r.code, 0);
+});
+
+test("PATH still wins over a tool's install dir", async () => {
+  // Two copies, different exit codes: whichever one runs identifies itself.
+  const pathDir = tempDir("moshcode-bindirs-path-");
+  const installDir = tempDir("moshcode-bindirs-home-");
+  for (const [dir, code] of [[pathDir, 3], [installDir, 4]]) {
+    const file = path.join(dir, "faketool2");
+    writeFileSync(file, `#!/bin/sh\nexit ${code}\n`);
+    chmodSync(file, 0o755);
+  }
+  const previous = process.env.PATH;
+  process.env.PATH = `${pathDir}${path.delimiter}${previous || ""}`;
+  try {
+    const r = await openPassthrough({ bin: "faketool2", binDirs: [installDir] });
+    assert.equal(r.code, 3, "the PATH copy runs, not the install-dir fallback");
+  } finally {
+    process.env.PATH = previous;
+  }
 });
