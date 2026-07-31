@@ -222,10 +222,19 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     tld ? listNames(tld) : Promise.resolve([]),
     listTlds(200),
   ]);
-  const owner = tld ? await getTld(tld) : null;
+  const owner = tld ? await getTldWithPrice(tld) : null;
+
+  // Quoted rather than assumed: quoteName is the same call the checkout makes,
+  // so an offer shown here is one the next click can actually honour — no
+  // button for a name that is reserved, already sold, or on an ending whose
+  // owner never set a price.
+  const quote = !resolution.name_registered && req.user && tld
+    ? await quoteName({ tld, label: parsed.label, buyerId: req.user.id })
+    : null;
+
   res.status(resolution.name_registered ? 200 : 404).send(page({
     title: resolution.name,
-    body: directory({ resolution, tld, owner, names, tlds }),
+    body: directory({ resolution, tld, owner, names, tlds, quote, user: req.user, req }),
   }));
 });
 
@@ -284,7 +293,7 @@ const unreachable = (resolution, why) => `
  * answer is what does. Live sites first — they are the only entries that go
  * anywhere real — then the rest of the ending, then other endings.
  */
-function directory({ resolution, tld, owner, names, tlds }) {
+function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
   const live = names.filter((n) => n.target);
   const claimed = names.filter((n) => !n.target);
 
@@ -306,8 +315,9 @@ function directory({ resolution, tld, owner, names, tlds }) {
   <p class="dim">
     ${resolution.name_registered
       ? "This name is claimed but does not point anywhere yet."
-      : `Nobody holds this name. <a class="acid" href="/pit">Claim it →</a>`}
+      : "Nobody holds this name."}
   </p>
+  ${resolution.name_registered ? "" : buyBox({ resolution, tld, owner, quote, user, req })}
 
   ${live.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
@@ -328,6 +338,49 @@ function directory({ resolution, tld, owner, names, tlds }) {
 
   <p style="margin-top:26px"><a class="btn acid" href="/pit">the pit →</a></p>
 </section>`;
+}
+
+/**
+ * The offer on an unclaimed name.
+ *
+ * Every branch here is a different reason someone cannot just buy it, and each
+ * says which — "not for sale" and "sign in first" and "you own this ending" are
+ * three different problems and a single greyed-out button would tell you none
+ * of them.
+ *
+ * The price comes from a real quote, so the button is only shown when the
+ * checkout behind it would succeed.
+ */
+function buyBox({ resolution, tld, owner, quote, user, req }) {
+  const name = esc(resolution.name);
+
+  if (!user) {
+    return `<p class="pit-buy"><a class="btn acid" href="/">Sign in to claim ${name} →</a></p>`;
+  }
+  if (owner && owner.user_id === user.id) {
+    // Your own ending: minting is free, so offering to sell it to you would be
+    // charging for something you already have.
+    return `<p class="pit-buy">
+      <span class="dim">.${esc(tld)} is yours — mint this name for nothing.</span>
+      <a class="btn acid" href="/pit?tab=yours">the pit →</a></p>`;
+  }
+  if (!owner) {
+    return `<p class="pit-buy">
+      <span class="dim">Nobody holds .${esc(tld)} either.</span>
+      <a class="btn acid" href="/pit">Claim the whole ending →</a></p>`;
+  }
+  if (!quote?.ok) {
+    const why = quote?.taken ? esc(quote.error) : `.${esc(tld)} is not for sale`;
+    return `<p class="pit-buy"><span class="dim">${why}.</span></p>`;
+  }
+
+  return `
+<form method="post" action="/pit/${esc(tld)}/buy" class="pit-buy">
+  ${csrfInput(req)}
+  <input type="hidden" name="label" value="${esc(quote.label)}">
+  <button class="btn acid" type="submit">Buy ${name} — $${esc(String(quote.priceUsd))}</button>
+  <span class="mono faint" style="font-size:.7rem">one-time, paid in crypto via CoinPay</span>
+</form>`;
 }
 
 /* ---- the keys a name may present ---- */
@@ -701,6 +754,8 @@ const PIT_CSS = `
 .pit-defaults label{display:flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:.72rem;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
 .pit-defaults input{width:11ch;padding:7px 9px;font-size:.78rem}
+.pit-buy{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 4px;
+  padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
 .pit-dir{list-style:none;padding:0;margin:10px 0;display:grid;gap:4px}
 .pit-dir li{font-size:.82rem}
 .pit-dir-row{line-height:2;max-width:70ch}
