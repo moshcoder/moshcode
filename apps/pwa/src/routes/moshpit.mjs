@@ -16,7 +16,7 @@ import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { balance } from "../lib/credits.mjs";
 import {
-  getTld, listTlds, listTldsForUser, registerTld,
+  getTld, listTlds, listTldsForUser, registerTld, normalizeLabel,
   setAlias, clearAlias, listExempt, setExempt, clearExempt,
   listNames, registerName, setNameTarget, releaseName,
   resolveMoshpitName, normalizeTld, tldRejection,
@@ -102,14 +102,14 @@ moshpitRouter.post("/api/moshpit/tlds/:tld/exempt", async (req, res) => {
   if (!req.user) return unauthorized(res);
   const result = await setExempt({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
   if (!result.ok) return bad(res, result.error || "could not exempt that name");
-  res.status(201).json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), exempt: true });
+  res.status(201).json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), exempt: true });
 });
 
 moshpitRouter.delete("/api/moshpit/tlds/:tld/exempt", async (req, res) => {
   if (!req.user) return unauthorized(res);
   const result = await clearExempt({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
   if (!result.ok) return bad(res, result.error || "could not clear that exemption");
-  res.json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), exempt: false });
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), exempt: false });
 });
 
 /* ---- names under a TLD ---- */
@@ -135,14 +135,14 @@ moshpitRouter.put("/api/moshpit/tlds/:tld/names", async (req, res) => {
     tld: req.params.tld, label: req.body?.label, userId: req.user.id, target: req.body?.target,
   });
   if (!result.ok) return bad(res, result.error || "could not retarget that name");
-  res.json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), target: req.body?.target ?? null });
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), target: req.body?.target ?? null });
 });
 
 moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
   if (!req.user) return unauthorized(res);
   const result = await releaseName({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
   if (!result.ok) return bad(res, result.error || "could not release that name");
-  res.json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), released: true });
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), released: true });
 });
 
 /**
@@ -325,13 +325,13 @@ moshpitRouter.post("/pit/:tld/names", requireAuth, async (req, res) => {
   let result, done;
   if (req.body?.release) {
     result = await releaseName(args);
-    done = `${normalizeTld(label)}.${normalizeTld(tld)} released.`;
+    done = `${normalizeLabel(label)}.${normalizeTld(tld)} released.`;
   } else if (req.body?.retarget) {
     result = await setNameTarget({ ...args, target: req.body?.target });
-    done = `${normalizeTld(label)}.${normalizeTld(tld)} updated.`;
+    done = `${normalizeLabel(label)}.${normalizeTld(tld)} updated.`;
   } else {
     result = await registerName({ ...args, target: req.body?.target });
-    done = `${normalizeTld(label)}.${normalizeTld(tld)} is yours.`;
+    done = `${normalizeLabel(label)}.${normalizeTld(tld)} is yours.`;
   }
 
   if (!result.ok) return back(res, { err: result.error || "could not update that name" });
@@ -341,5 +341,5 @@ moshpitRouter.post("/pit/:tld/names", requireAuth, async (req, res) => {
 moshpitRouter.post("/pit/:tld/exempt", requireAuth, async (req, res) => {
   const result = await setExempt({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
   if (!result.ok) return back(res, { err: result.error || "could not exempt that name" });
-  back(res, { ok: `${normalizeTld(req.body?.label)}.${req.params.tld} stays put.` });
+  back(res, { ok: `${normalizeLabel(req.body?.label)}.${req.params.tld} stays put.` });
 });

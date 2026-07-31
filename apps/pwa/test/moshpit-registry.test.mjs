@@ -211,6 +211,25 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     assert.equal(await m.getName("eggs", "blue"), null);
   });
 
+  await t.test("a numeric name can be registered, retargeted and released", async () => {
+    // A TLD may not be all-numeric (ambiguous against an IPv4 literal), but a
+    // label under one carries no such ambiguity -- 123.eggs is a fine name.
+    assert.equal((await m.registerName({ tld: "eggs", label: "123", userId: ALICE, target: "https://n.example" })).ok, true);
+    assert.equal((await m.getName("eggs", "123")).target, "https://n.example");
+
+    assert.equal((await m.setNameTarget({ tld: "eggs", label: "123", userId: ALICE, target: "https://n2.example" })).ok, true);
+    assert.equal((await m.getName("eggs", "123")).target, "https://n2.example");
+
+    assert.equal((await m.resolveMoshpitName("123.eggs")).name_registered, true);
+
+    assert.equal((await m.releaseName({ tld: "eggs", label: "123", userId: ALICE })).ok, true);
+    assert.equal(await m.getName("eggs", "123"), null);
+  });
+
+  await t.test("the TLD itself still may not be numeric", async () => {
+    assert.equal((await m.registerTld({ tld: "123", userId: ALICE })).ok, false);
+  });
+
   await t.test("minting is logged", async () => {
     const log = await m.tldLog();
     assert.ok(log.some((e) => e.action === "name:blue"));
