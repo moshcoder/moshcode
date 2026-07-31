@@ -80,6 +80,10 @@ export function planUpgrade(targets = []) {
       label: key,
       kind: "engine",
       spec: installed ? upgradeSpec(ENGINES[key]) : ENGINES[key].install,
+      // Where to turn when a native updater refuses. Only set when the updater
+      // is something other than the installer, so a fallback can never repeat
+      // the command that just failed.
+      fallback: installed && upgradeSpec(ENGINES[key]) !== ENGINES[key].install ? ENGINES[key].install : null,
       installed,
     });
   };
@@ -93,6 +97,7 @@ export function planUpgrade(targets = []) {
       label: key,
       kind: "tool",
       spec: installed ? toolUpgradeSpec(TOOLS[key]) : TOOLS[key].install,
+      fallback: installed && toolUpgradeSpec(TOOLS[key]) !== TOOLS[key].install ? TOOLS[key].install : null,
       installed,
     });
   };
@@ -133,16 +138,22 @@ export async function runUpgrade(targets = [], io = {}) {
     return [];
   }
 
+  const exec = io.runCmd || runCmd;
+
   const results = [];
-  const run = async (name, spec, note) => {
+  const attempt = async (name, spec, note) => {
     log(`\n⬆ upgrading ${name}${note ? ` ${note}` : ""} — ${spec.cmd} ${spec.args.join(" ")}`);
     rule();
-    const r = await runCmd(spec.cmd, spec.args);
+    const r = await exec(spec.cmd, spec.args);
     rule();
     const ok = ranOk(r);
     log(ok ? `✓ ${name} up to date` : `✗ ${name} upgrade failed (${exitReason(r)})`);
-    results.push({ name, ok, code: r.code, signal: r.signal ?? null });
-    return ok;
+    return { name, ok, code: r.code, signal: r.signal ?? null };
+  };
+  const run = async (name, spec, note) => {
+    const result = await attempt(name, spec, note);
+    results.push(result);
+    return result.ok;
   };
 
   if (self) {
@@ -158,7 +169,20 @@ export async function runUpgrade(targets = [], io = {}) {
       }
     }
   }
-  for (const it of items) await run(it.label, it.spec, it.installed ? "" : "(installing — not present)");
+  for (const it of items) {
+    const result = await attempt(it.label, it.spec, it.installed ? "" : "(installing — not present)");
+    // A native updater that can't tell how the binary got there fails the same
+    // way on every run — an opencode fork living under its own directory, a
+    // binary someone moved, a machine where the installer left no marker. The
+    // installer is idempotent and fetches the latest, so reach for it rather
+    // than leaving the target stranded on an old version.
+    if (!result.ok && it.fallback) {
+      log(`· ${it.label}'s own updater could not do it — falling back to its installer`);
+      results.push(await attempt(it.label, it.fallback, "(installer)"));
+      continue;
+    }
+    results.push(result);
+  }
 
   const failed = results.filter((r) => !r.ok);
   log(`\n${failed.length ? "✗" : "✓"} upgraded ${results.length - failed.length}/${results.length}${failed.length ? ` — failed: ${failed.map((r) => r.name).join(", ")}` : "."} 🤘`);
