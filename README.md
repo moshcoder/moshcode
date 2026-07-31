@@ -57,21 +57,49 @@ autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
 The modes are not identical across providers. In particular, OpenCode `--auto`
 auto-approves permission requests but continues to enforce explicit deny rules.
 
-## Workflow tools: UGig + CoinPay
+## Workflow tools: UGig, CoinPay, and the cloud CLIs
 
-UGig and CoinPay remain independent native CLIs with their own authentication,
+These remain independent native CLIs with their own authentication,
 configuration, command trees, output formats, and release cycles. MoshCode
 installs them and passes control through without reimplementing their APIs.
+
+The primary development toolchain runs through `moshcode` as a
+[dev.profullstack.com](https://dev.profullstack.com/) user.
 
 ```sh
 moshcode tools                    # list tools and native install status
 moshcode tools --json             # machine-readable install status for automation
-moshcode install ugig             # npm install -g ugig
-moshcode install coinpay          # npm install -g @profullstack/coinpay
+moshcode install ugig             # runs the vendor's official install script
+moshcode install coinpay          # same — each tool owns its installer
 
 moshcode ugig --json gigs list    # arguments/output go straight to ugig
 moshcode coinpay wallet balance   # arguments/output go straight to coinpay
 ```
+
+### Cloud + infra CLIs
+
+```sh
+moshcode install railway          # npm i -g @railway/cli
+moshcode install gh               # GitHub release binary → ~/.local/bin
+moshcode install supabase         # GitHub release binary (no global npm package exists)
+moshcode install doppler          # official script, installed user-local (needs gpgv)
+moshcode install doctl            # GitHub release binary → ~/.local/bin
+moshcode install turso            # official script → ~/.turso (new shell to pick up PATH)
+moshcode install tailscale        # official script; system daemon, so it needs root
+
+moshcode gh pr list               # straight through to the native CLI
+moshcode railway up
+moshcode doctl compute droplet list
+```
+
+`gh`, `supabase`, and `doctl` publish no cross-platform install script, so
+MoshCode resolves the latest GitHub release and drops the binary in
+`$MOSHCODE_BIN` (default `~/.local/bin`) — no sudo, no package manager. Set
+`MOSHCODE_BIN` to install elsewhere.
+
+`tailscale` is the exception: it is a system daemon, so its official installer
+goes through your distro's package manager and will ask for sudo (on macOS it
+delegates to the App Store).
 
 Top-level passthrough preserves stdin, stdout, stderr, environment variables,
 the current directory, and the native exit result. That keeps JSON pipelines
@@ -87,6 +115,67 @@ native setup and authentication commands. CoinPay currently requires Node.js
 
 In the TUI, use `/tools`, `/ugig [args…]`, or `/coinpay [args…]`. The native CLI
 owns the terminal until it exits, then MoshCode returns to the pit.
+
+## Browser terminal (`moshcode console`)
+
+A real terminal in the browser — arrow keys, history, full-screen TUIs — because
+the thing on the other end is a real pty, not a log view. moshcode does not
+implement the terminal: [ttyd](https://github.com/tsl0922/ttyd) does, and
+moshcode puts an authenticating proxy in front of it so your `moshcode login` is
+the way in.
+
+Two processes on the box you want a shell on:
+
+```sh
+# 1. ttyd — bound to loopback ONLY. It must never be reachable directly.
+ttyd -i 127.0.0.1 -p 7681 -W login
+
+# 2. the gateway — verifies moshcode tokens, then proxies to ttyd
+moshcode console serve --port 7682 --ttyd 127.0.0.1:7681
+```
+
+Then, from any machine where you have run `moshcode login`:
+
+```sh
+moshcode console --url https://dev.example.com/    # prints an authenticated URL
+```
+
+The token is verified once against `app.moshcode.sh/api/me`, swapped for a
+short-lived HMAC cookie, and stripped from the URL by the redirect, so it does
+not sit in browser history or travel with every request. The websocket carrying
+the terminal is authenticated too — an unauthenticated upgrade is refused before
+it reaches ttyd.
+
+**This is a shell on the internet.** Treat it accordingly:
+
+- Keep ttyd on `127.0.0.1`. The gateway is the only thing that should reach it.
+- `--bind` defaults to `127.0.0.1`. Put the gateway on a **tailnet address**
+  (`moshcode install tailscale`) or behind a reverse proxy with TLS. Binding
+  `0.0.0.0` publishes a login prompt to the whole internet, and moshcode warns
+  when you do it.
+- The gateway's signing secret is per-process, so restarting it logs everyone out.
+
+## Known MCP servers
+
+Some MCP servers are worth remembering by name rather than by npx invocation:
+
+```sh
+moshcode mcp catalog              # what we know how to run
+moshcode mcp add porkbun          # expands to: npx -y @porkbunllc/mcp-server
+```
+
+That registers it across every engine that supports MCP (claude, gemini, codex,
+opencode, privacycode) in one go.
+
+The catalog is a convenience, never a gate — an explicit command always wins, so
+`moshcode mcp add porkbun -- node ./my-fork.js` runs your fork.
+
+**Credentials are named, not registered.** `porkbun` needs `PORKBUN_API_KEY` and
+`PORKBUN_SECRET_API_KEY`; moshcode prints which are missing rather than copying
+them into five engines' config files, which would be five places to leak them
+from and five to rotate. Porkbun's API access is off by default and enabled
+per-domain — and its documentation tools work with no keys at all, which is a
+sensible way to try the server before trusting it with DNS writes.
 
 ## Upgrade everything
 
@@ -219,6 +308,14 @@ chmod +x deploy.mosh
 | `ugig(args…)` | drive the ugig workflow CLI |
 | `coinpay(args…)` | drive the coinpay workflow CLI |
 | `c0mpute(args…)` | drive the c0mpute workflow CLI |
+| `secrets(args…)` | drive the logicsrc secrets CLI |
+| `railway(args…)` | drive the Railway CLI |
+| `gh(args…)` | drive the GitHub CLI |
+| `supabase(args…)` | drive the Supabase CLI |
+| `doppler(args…)` | drive the Doppler CLI |
+| `doctl(args…)` | drive the DigitalOcean CLI |
+| `turso(args…)` | drive the Turso CLI |
+| `tailscale(args…)` | drive the Tailscale CLI |
 | `pwd()` | print the current repo/location |
 | `run(file)` | run another .mosh file (include/compose) |
 

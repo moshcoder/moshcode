@@ -20,6 +20,7 @@ import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
+import { consoleCommand } from "../src/console.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -115,7 +116,11 @@ async function launchEngine(key, engine, args, { agentMode = false } = {}) {
 
 function help() {
   const vocab = moshVocabulary().all();
-  const local = vocab.filter((c) => !["run","agents","start","install","upgrade","mcp","skill","prd","ugig","coinpay","c0mpute","secrets","pwd"].includes(c.name));
+  // Every workflow tool is exposed as a CLI verb, so derive them from TOOLS
+  // rather than repeating the roster here — a tool missing from this list gets
+  // misfiled as a moshscript-only local verb.
+  const cliVerbs = ["run","agents","start","install","upgrade","mcp","skill","prd","pwd", ...Object.keys(TOOLS)];
+  const local = vocab.filter((c) => !cliVerbs.includes(c.name));
   const cli = vocab.filter((c) => !local.includes(c));
   console.log(`moshcode — metal scripting toolkit 🤘
 
@@ -125,7 +130,8 @@ usage:
                                        (bypasses/auto-approves native permissions)
   moshcode start <engine> [args…]      raw engine launch; inject no arguments
   moshcode <engine> [args…]            raw launch shorthand (backward compatible)
-  moshcode <tool> [args…]              transparently invoke ugig, coinpay, c0mpute, or secrets
+  moshcode <tool> [args…]              transparently invoke any workflow tool listed below
+                                       (ugig, coinpay, gh, railway, supabase, doppler, doctl, …)
   moshcode secrets [args…]             manage/view team secrets (wraps the logicsrc CLI:
                                        login, teams, credentials — e.g. \`secrets teams pull acme prod\`)
   moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
@@ -149,6 +155,10 @@ usage:
                                        (browser OAuth+PKCE; --device = headless/CI
                                        code flow) so notify()/ask() reach you
   moshcode whoami | logout             show / clear the logged-in account
+  moshcode console serve               serve a browser terminal on this box (ttyd
+     [--port N] [--ttyd host:port]     behind moshcode login); --bind defaults to
+     [--bind addr]                     127.0.0.1 — put it on a tailnet, not 0.0.0.0
+  moshcode console --url <base>        print that gateway's URL with your login token
   moshcode pwd                         show the current dir + git repo/branch/origin
   moshcode engines [--json]            list engines + install status
   moshcode tools [--json]              list workflow tools + install status
@@ -163,6 +173,8 @@ isolated or trusted workspaces. use \`moshcode start <engine>\` for native defau
 
 tools (native CLI passthrough; each tool owns its auth and output):
 ${toolList()}
+the primary development toolchain is available through \`moshcode\` as a
+dev.profullstack.com user — https://dev.profullstack.com/
 
 moshscript — secretly all JS is legal:
 ${DEFAULT_SCRIPT}
@@ -228,7 +240,18 @@ async function main() {
     return launchEngine(key, engine, rest.slice(1));
   }
   if (cmd === "tools") {
-    printStatus(toolStatus(), rest.includes("--json"));
+    const asJson = rest.includes("--json");
+    printStatus(toolStatus(), asJson);
+    // Never after --json: the note would corrupt output being piped into jq.
+    if (!asJson) {
+      console.log("\nthe primary development toolchain runs through `moshcode` as a");
+      console.log("dev.profullstack.com user — https://dev.profullstack.com/");
+    }
+    return;
+  }
+  if (cmd === "console") {
+    const code = await consoleCommand(rest);
+    if (code) process.exitCode = code;
     return;
   }
   if (cmd === "mcp") {

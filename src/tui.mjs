@@ -132,11 +132,15 @@ function printEngines() {
 }
 
 function printTools() {
-  console.log(bone("  tools") + ash("    — run one with ") + acid("/ugig") + ash(", ") + acid("/coinpay") + ash(", ") + acid("/c0mpute") + ash(", or ") + acid("/secrets"));
+  // Named generically rather than listing every tool: the roster grows, and a
+  // hardcoded list here silently goes stale the moment TOOLS gains an entry.
+  console.log(bone("  tools") + ash("    — run one with ") + acid("/<name>") + ash(", e.g. ") + acid("/gh"));
   for (const tool of toolStatus()) {
     const dot = tool.installed ? acid("●") : ash("○");
     console.log(`   ${dot} ${bone(tool.key.padEnd(9))} ${ash(tool.installed ? "installed" : "not installed — /install " + tool.key)}`);
   }
+  console.log(ash("   the primary dev toolchain runs through moshcode as a dev.profullstack.com user"));
+  console.log(ash("   → ") + acid("https://dev.profullstack.com/"));
 }
 
 function printHelp() {
@@ -145,11 +149,13 @@ function printHelp() {
     `   ${acid("/agents")}            list coding engines`,
     `   ${acid("/agents <name>")}     autonomous launch; bypass/auto-approve native permissions`,
     `   ${acid("/start <name>")}      raw launch; inject no engine arguments`,
-    `   ${acid("/tools")}             list workflow tools (ugig · coinpay · c0mpute · secrets)`,
+    `   ${acid("/tools")}             list workflow tools + install status`,
     `   ${acid("/ugig [args…]")}      hand off to the native UGig CLI`,
     `   ${acid("/coinpay [args…]")}   hand off to the native CoinPay CLI`,
     `   ${acid("/c0mpute [args…]")}   hand off to the native c0mpute CLI`,
     `   ${acid("/secrets [args…]")}   share/view team secrets via logicsrc (login · teams · credentials)`,
+    `   ${acid("/railway")} ${acid("/gh")} ${acid("/supabase")} ${acid("/doppler")} ${acid("/doctl")} ${acid("/turso")} ${acid("/tailscale")}`,
+    ash("                        hand off to the native cloud CLIs (deploys · repos · db · secrets · infra · vpn)"),
     `   ${acid("/mcp install <url>")} register an MCP server across every engine that supports it`,
     `   ${acid("/skill install <url>")} install a skill across every engine that supports it`,
     `   ${acid("/install <name>")}    install an engine or workflow tool`,
@@ -168,6 +174,7 @@ function printHelp() {
     ash("   local verbs: ") + acid("code() mosh() notify() ask() say() sleep() stop() repeat()"),
     ash("   CLI verbs:   ") + acid("agents() start() install() upgrade() mcp() skill() prd()"),
     ash("               ") + acid("ugig() coinpay() c0mpute() secrets() pwd() run() shell()"),
+    ash("               ") + acid("railway() gh() supabase() doppler() doctl() turso() tailscale()"),
     ash("   shebang:     ") + acid("#!/usr/bin/env moshscript") + ash("  (chmod +x to self-run)"),
     "",
     ash("  raw shortcuts: type an engine or tool name by itself, e.g. ") + acid("claude") + ash(" or ") + acid("ugig"),
@@ -196,6 +203,17 @@ async function upgradeAll(targets) {
 // through every call.
 let activeMirror = null;
 
+/**
+ * Where a child's output should be copied to: the live mirror, or nowhere.
+ *
+ * teeOutput only sees what *this* process prints; a child launched with
+ * `stdio: "inherit"` writes straight to the tty and is invisible to it. Handing
+ * this sink down lets the launcher capture the child through a pty instead (see
+ * src/pty.mjs). Returning undefined when nothing is watching is what keeps
+ * unmirrored sessions on the untouched `inherit` path.
+ */
+const childSink = () => (activeMirror ? (chunk) => activeMirror?.write(chunk) : undefined);
+
 async function openEngine(key, engine, args, { agentMode = false } = {}) {
   if (!engine.installed && !args.length) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
@@ -206,7 +224,7 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
   console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());
   activeMirror?.setEngine(key);
-  const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args);
+  const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args, { onOutput: childSink() });
   activeMirror?.setEngine(null);
   console.log(hr());
   if (!r.ok) {
@@ -224,7 +242,7 @@ async function openWorkflowTool(key, tool, args) {
   }
   console.log(info(`opening ${bone(key)} — native CLI owns the terminal until it exits…`));
   console.log(hr());
-  const result = await openTool(tool, args);
+  const result = await openTool(tool, args, { onOutput: childSink() });
   console.log(hr());
   if (!result.ok) {
     console.log(result.error?.code === "ENOENT"

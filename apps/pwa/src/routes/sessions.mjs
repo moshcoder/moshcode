@@ -14,6 +14,7 @@ import { Router } from "express";
 import { get, all, run } from "../db.mjs";
 import { id } from "../lib/crypto.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
+import { balance } from "../lib/credits.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 
@@ -46,15 +47,22 @@ const dim = (v) => {
 // session_output on connect, and every long-poll falls back to a plain query,
 // so a restart (or a second app instance) degrades to polling rather than
 // losing data.
-const watchers = new Map(); // sessionId -> Set<res>
+// A watcher is anything with `send(event)`, not a response: while a browser is
+// still catching up on its scrollback its events go to a buffer instead of the
+// wire. See the stream route.
+const watchers = new Map(); // sessionId -> Set<{ send }>
 const waiters = new Map();  // sessionId -> Set<fn>
 
 function publish(sessionId, event) {
   const set = watchers.get(sessionId);
   if (!set) return;
-  const frame = `data: ${JSON.stringify(event)}\n\n`;
-  for (const res of set) { try { res.write(frame); } catch { /* client vanished */ } }
+  for (const w of set) { try { w.send(event); } catch { /* client vanished */ } }
 }
+
+/** A watcher that writes SSE frames straight to a live response. */
+const sseWatcher = (res) => ({
+  send: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
+});
 
 function wake(sessionId) {
   const set = waiters.get(sessionId);
@@ -212,8 +220,18 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
 sessionsRouter.post("/api/sessions/:id/commands/:cid", cliAuth, async (req, res) => {
   const session = await ownedSession(req.params.id, req.apiUser.id);
   if (!session) return res.status(404).json({ error: "no such session" });
-  await run(`UPDATE session_commands SET status='done', done_at=? WHERE id=? AND session_id=?`,
+  const completed = await run(
+    `UPDATE session_commands SET status='done', done_at=? WHERE id=? AND session_id=? AND status='claimed'`,
     [Date.now(), req.params.cid, session.id]);
+  if (!completed.rowsAffected) {
+    const command = await get(
+      `SELECT status FROM session_commands WHERE id=? AND session_id=?`,
+      [req.params.cid, session.id]
+    );
+    if (!command) return res.status(404).json({ error: "no such command" });
+    if (command.status === "done") return res.json({ ok: true });
+    return res.status(409).json({ error: "command is not claimed" });
+  }
   publish(session.id, { type: "command-done", id: req.params.cid });
   res.json({ ok: true });
 });
@@ -244,25 +262,13 @@ sessionsRouter.get("/sessions", requireAuth, async (req, res) => {
   res.type("html").send(page({
     title: "moshcode ▸ sessions",
     head: SESSION_CSS,
-    body: `${appBar(req.user, 0, req.csrfToken)}
+    body: `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
     <main class="wrap" style="max-width:760px;padding-top:5vh">
       <h1 style="font-size:1.3rem;margin-bottom:4px">Sessions</h1>
       <p class="dim mono" style="font-size:.8rem;margin-bottom:16px">Live mirrors of your running mosh instances.</p>
       ${items}
     </main>${footer}`,
   }));
-});
-
-// The pit is the thing you actually want to look at, so /pit is a shortcut
-// straight into it: the session that checked in most recently and is still
-// live, without stopping at the list on the way.
-sessionsRouter.get("/pit", requireAuth, async (req, res) => {
-  const rows = await all(
-    `SELECT * FROM cli_sessions WHERE user_id = ? ORDER BY last_seen_at DESC LIMIT 20`,
-    [req.user.id]
-  );
-  const open = rows.find(isLive);
-  res.redirect(open ? `/sessions/${open.id}` : "/sessions");
 });
 
 sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
@@ -273,7 +279,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
   res.type("html").send(page({
     title: `moshcode ▸ ${s.name}`,
     head: `<link rel="stylesheet" href="/vendor/xterm.css">${SESSION_CSS}`,
-    body: `${appBar(req.user, 0, req.csrfToken)}
+    body: `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
     <main class="wrap" style="max-width:1100px;padding-top:5vh">
       <div class="sess-top" style="margin-bottom:10px">
         <span class="dot ${live ? "on" : "off"}" id="dot"></span>
@@ -320,22 +326,56 @@ sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
   });
   res.write(": connected\n\n");
 
+  // Geometry first: the emulator has to be the right size before a single
+  // replayed line reaches it, or the scrollback wraps at the wrong column and
+  // stays wrong. A resize that lands during the replay arrives as a held event
+  // and is flushed behind it, in order.
   if (s.cols || s.rows) {
     res.write(`data: ${JSON.stringify({ type: "size", cols: dim(s.cols), rows: dim(s.rows) })}\n\n`);
   }
 
-  const since = Number(req.query.since || 0);
+  // Subscribe BEFORE reading the scrollback, not after. The read is evaluated
+  // by the database and the rows then travel back; a chunk committed inside
+  // that window is in neither the result nor the fan-out, and the mirror only
+  // ever reconnects with the highest seq it has rendered, so the hole never
+  // heals. Events that arrive while the replay is still going are held, then
+  // flushed behind it in order.
+  const held = [];
+  let watcher = { send: (event) => held.push(event) };
+  let ping = null;
+  addTo(watchers, s.id, watcher);
+  // Registered now, not after the replay: a browser that closes the tab mid-read
+  // would otherwise leave its watcher in the map forever.
+  req.on("close", () => { clearInterval(ping); removeFrom(watchers, s.id, watcher); });
+
+  const asked = Number(req.query.since || 0);
+  const since = Number.isFinite(asked) ? asked : 0;
   const back = await all(
     `SELECT seq, chunk FROM session_output WHERE session_id = ? AND seq > ? ORDER BY seq ASC`,
-    [s.id, Number.isFinite(since) ? since : 0]
+    [s.id, since]
   );
-  for (const row of back) res.write(`data: ${JSON.stringify({ type: "out", seq: row.seq, chunk: row.chunk })}\n\n`);
-  if (!isLive(s)) res.write(`data: ${JSON.stringify({ type: "offline" })}\n\n`);
 
-  addTo(watchers, s.id, res);
+  const live = sseWatcher(res);
+  let last = since;
+  for (const row of back) {
+    last = Number(row.seq);
+    live.send({ type: "out", seq: row.seq, chunk: row.chunk });
+  }
+  if (!isLive(s)) live.send({ type: "offline" });
+
+  // Swap the buffer for the wire and drain it. Synchronous, so publish() can't
+  // land between the two. Anything the scrollback already carried is dropped —
+  // subscribing early means a chunk can legitimately be in both.
+  removeFrom(watchers, s.id, watcher);
+  watcher = live;
+  addTo(watchers, s.id, watcher);
+  for (const event of held) {
+    if (event.type === "out" && Number(event.seq) <= last) continue;
+    try { live.send(event); } catch { /* client vanished */ }
+  }
+
   // Proxies drop an idle stream; a comment every 25s is cheaper than a reconnect.
-  const ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* gone */ } }, 25000);
-  req.on("close", () => { clearInterval(ping); removeFrom(watchers, s.id, res); });
+  ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* gone */ } }, 25000);
 });
 
 sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {

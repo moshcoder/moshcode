@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   openSync,
@@ -93,6 +94,78 @@ test("tool registry uses the official native CLI packages", () => {
   assert.match(toolList(), /coinpay/);
   assert.match(toolList(), /c0mpute/);
   assert.match(toolList(), /secrets/);
+});
+
+test("cloud CLIs resolve and are listed as workflow tools", () => {
+  for (const key of ["railway", "gh", "supabase", "doppler", "doctl", "turso", "tailscale"]) {
+    assert.deepEqual(resolveTool(key), [key, TOOLS[key]]);
+    assert.equal(TOOLS[key].bin, key);
+    assert.match(toolList(), new RegExp(key));
+  }
+  // Case-insensitive, like the other tools.
+  assert.deepEqual(resolveTool("GH"), ["gh", TOOLS.gh]);
+});
+
+test("railway installs from the official npm package", () => {
+  // Railway's shell installer needs bash process substitution, which does not
+  // survive `sh -c`, so the npm package is the portable path.
+  assert.deepEqual(TOOLS.railway.install, {
+    cmd: "npm",
+    args: ["install", "-g", "@railway/cli"],
+  });
+});
+
+test("doppler installs user-local and updates natively", () => {
+  // --install-path keeps the binary out of /usr/local/bin, so no sudo prompt.
+  const [flag, script] = TOOLS.doppler.install.args;
+  assert.equal(TOOLS.doppler.install.cmd, "sh");
+  assert.equal(flag, "-c");
+  assert.match(script, /cli\.doppler\.com\/install\.sh/);
+  assert.match(script, /--install-path "\$HOME\/\.local\/bin"/);
+  assert.doesNotMatch(script, /sudo/);
+  assert.deepEqual(TOOLS.doppler.upgrade, { cmd: "doppler", args: ["update"] });
+});
+
+test("turso installs from its official script", () => {
+  // https://github.com/tursodatabase/turso-cli — unpacks to $HOME/.turso and
+  // appends it to the shell profile, so it lands on PATH for the next shell.
+  assert.deepEqual(TOOLS.turso.install, {
+    cmd: "bash",
+    args: ["-c", "curl -sSfL https://get.tur.so/install.sh | bash"],
+  });
+  // Re-running the installer fetches the latest, so no separate upgrade spec.
+  assert.equal(TOOLS.turso.upgrade, undefined);
+});
+
+test("tailscale uses the official installer and native updater", () => {
+  // tailscale is a system daemon, so unlike gh/supabase/doctl it goes through
+  // the vendor script + package manager rather than a user-local binary drop.
+  assert.deepEqual(TOOLS.tailscale.install, {
+    cmd: "sh",
+    args: ["-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
+  });
+  assert.deepEqual(TOOLS.tailscale.upgrade, { cmd: "tailscale", args: ["update"] });
+});
+
+test("release-only CLIs install via the bundled downloader", () => {
+  // gh, supabase, and doctl publish no cross-platform install script, so their
+  // spec runs src/release-install.mjs on this node, not a vendor URL.
+  for (const key of ["gh", "supabase", "doctl"]) {
+    const { cmd, args } = TOOLS[key].install;
+    assert.equal(cmd, process.execPath);
+    assert.match(args[0], /release-install\.mjs$/);
+    assert.ok(existsSync(args[0]), `${args[0]} should exist — it is spawned by \`moshcode install ${key}\``);
+    assert.equal(args[1], key);
+  }
+});
+
+test("every tool exposes an install spec and a passthrough binary", () => {
+  for (const [key, tool] of Object.entries(TOOLS)) {
+    assert.ok(tool.bin, `${key} needs a bin to pass through to`);
+    assert.ok(tool.desc, `${key} needs a description for \`moshcode tools\``);
+    assert.equal(typeof tool.install?.cmd, "string", `${key} needs an install spec`);
+    assert.ok(Array.isArray(tool.install?.args), `${key} install spec needs args`);
+  }
 });
 
 for (const name of ["ugig", "coinpay"]) {

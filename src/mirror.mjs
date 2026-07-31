@@ -15,13 +15,19 @@ import { loadCreds } from "./auth.mjs";
 const FLUSH_MS = 150;      // batch writes so a busy render is one request, not fifty
 const MAX_BUFFER = 16000;  // flush early once a batch gets big
 
-export function createMirror({ version = "", cwd = process.cwd() } = {}) {
-  const creds = loadCreds();
+export function createMirror({
+  version = "",
+  cwd = process.cwd(),
+  fetchImpl = fetch,
+  credentials = loadCreds(),
+} = {}) {
+  const creds = credentials;
   let sessionId = null;
   let stopped = false;
   let pending = "";
   let flushTimer = null;
   let engine = null;
+  let engineDirty = false;
   // The parked long-poll, so stop() can cut it loose instead of leaving the
   // process alive for up to a full poll window after the pit closes.
   let poll = null;
@@ -32,7 +38,7 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
 
   const post = async (path, body, opts = {}) => {
     try {
-      const r = await fetch(`${api}${path}`, { method: "POST", headers, body: JSON.stringify(body), ...opts });
+      const r = await fetchImpl(`${api}${path}`, { method: "POST", headers, body: JSON.stringify(body), ...opts });
       return r.ok ? await r.json().catch(() => ({})) : null;
     } catch { return null; }
   };
@@ -48,9 +54,10 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
 
   async function flush() {
     flushTimer = null;
-    if (!sessionId || !pending) return;
+    if (!sessionId || (!pending && !engineDirty)) return;
     const chunk = pending;
     pending = "";
+    engineDirty = false;
     await post(`/api/sessions/${sessionId}/output`, { chunk, engine, ...size() });
   }
 
@@ -69,7 +76,13 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
   }
 
   /** Note which engine owns the terminal right now (null = back in the pit). */
-  function setEngine(name) { engine = name || null; write(""); schedule(); }
+  function setEngine(name) {
+    const next = name || null;
+    if (next === engine) return;
+    engine = next;
+    engineDirty = true;
+    schedule();
+  }
 
   // Dragging a window edge fires `resize` continuously, so settle first and
   // send one empty post carrying the final geometry.
@@ -92,7 +105,7 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
       let got = null;
       try {
         poll = new AbortController();
-        const r = await fetch(`${api}/api/sessions/${sessionId}/commands`, { headers, signal: poll.signal });
+        const r = await fetchImpl(`${api}/api/sessions/${sessionId}/commands`, { headers, signal: poll.signal });
         got = r.ok ? await r.json() : null;
       } catch { /* network blip or stop() aborting us — handled below */ }
       if (stopped) return;
