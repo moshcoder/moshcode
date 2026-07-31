@@ -173,7 +173,9 @@ const COMMANDS = [
       if (!cmd) throw new Error("moshscript: shell() requires a command string");
       if (ctx.dryRun) {
         ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL -c ${JSON.stringify(cmd)}`);
-        return { ok: true, dryRun: true };
+        // Same R8 contract as the comment above: `code` is always present, so a
+        // script branching on the exit status behaves the same under --dry-run.
+        return { ok: true, code: 0, dryRun: true };
       }
       const sh = process.platform === "win32"
         ? (process.env.COMSPEC || "cmd.exe")

@@ -37,7 +37,10 @@ export function runMoshcode(cmd, args, ctx) {
 
   if (ctx.dryRun) {
     ctx.out(`  ▶ ${cmd}(${args.join(", ")}) → would run: ${printable}`);
-    return { ok: true, dryRun: true };
+    // `code` is part of the R8 contract above ("always"), so dry-run has to
+    // carry it too — otherwise `if (install("x").code !== 0)` reads undefined
+    // and takes the failure branch on a run where nothing was even spawned.
+    return { ok: true, code: 0, dryRun: true };
   }
 
   ctx.out(`  ▶ ${printable}`);
