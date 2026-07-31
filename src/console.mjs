@@ -28,10 +28,14 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // re-auth twice a day
 
 /** Split "host:port" into the pieces net/http want. Defaults to ttyd's port. */
 export function parseTarget(target = DEFAULT_TTYD) {
-  const cleaned = String(target).replace(/^https?:\/\//, "").replace(/\/+$/, "");
-  const [host, port] = cleaned.split(":");
-  return { host: host || "127.0.0.1", port: Number(port || 7681) };
+  const raw = String(target || DEFAULT_TTYD).trim() || DEFAULT_TTYD;
+  const url = new URL(raw.includes("://") ? raw : `http://${raw}`);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  return { host, port: Number(url.port || 7681) };
 }
+
+const targetHostHeader = ({ host, port }) =>
+  `${host.includes(":") ? `[${host}]` : host}:${port}`;
 
 /** Cookies from a raw header — cookie-parser is an express thing and the
  *  websocket upgrade never reaches express. */
@@ -108,7 +112,7 @@ const DENIED = `<!doctype html><meta charset="utf-8"><title>moshcode console</ti
 /** Copy a client request through to ttyd and stream the answer back. */
 function proxyHttp(req, res, target) {
   const upstream = http.request(
-    { host: target.host, port: target.port, method: req.method, path: req.url, headers: { ...req.headers, host: `${target.host}:${target.port}` } },
+    { host: target.host, port: target.port, method: req.method, path: req.url, headers: { ...req.headers, host: targetHostHeader(target) } },
     (up) => { res.writeHead(up.statusCode || 502, up.headers); up.pipe(res); },
   );
   upstream.on("error", () => {
