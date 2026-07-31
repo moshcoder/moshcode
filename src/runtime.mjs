@@ -144,9 +144,18 @@ export async function runScript(source, opts = {}) {
   const scope = makeScope(registry, ctx, control, pending);
   const body = `with (__scope__) {\n${stripShebang(source)}\n}`;
   const fn = new AsyncFunction("__scope__", body);
-  await fn(scope);
-  // Let any un-awaited async verbs (fire-and-forget notify) finish delivering.
-  if (pending.length) await Promise.allSettled(pending);
+  try {
+    await fn(scope);
+  } finally {
+    // Let any un-awaited async verbs (fire-and-forget notify) finish delivering.
+    //
+    // Drained in `finally`, not after the call: a script that throws has already
+    // queued its notify(), and the CLI's catch calls process.exit(1) — which kills
+    // the in-flight POST. Draining only on the success path silently dropped the
+    // failure ping, i.e. exactly the notification the operator most wants.
+    // allSettled never rejects, so this cannot mask the script's own error.
+    if (pending.length) await Promise.allSettled(pending);
+  }
 
   return { iterations: control.ticks, stopped: control.stopped };
 }
