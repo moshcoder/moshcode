@@ -23,6 +23,8 @@ export const CORE_CLI_COMMANDS = [
   { name: "completion", description: "print a shell completion script" },
   { name: "run", description: "run a moshscript" },
   { name: "help", description: "show command help" },
+  { name: "--help", description: "show command help" },
+  { name: "-h", description: "show command help" },
   { name: "version", description: "show the installed version" },
   { name: "--version", description: "show the installed version" },
   { name: "-v", description: "show the installed version" },

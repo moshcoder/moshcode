@@ -55,6 +55,9 @@ test("completion model derives engines, aliases, and tools from their registries
     assert.ok(top.has(name));
     assert.ok(install.has(name));
   }
+  for (const name of ["help", "--help", "-h"]) {
+    assert.ok(top.has(name));
+  }
 
   const upgrade = new Set(names(model.upgrade));
   for (const { name } of UPGRADE_TARGETS) assert.ok(upgrade.has(name));

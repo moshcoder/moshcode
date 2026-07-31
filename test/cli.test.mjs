@@ -22,6 +22,17 @@ test("moshcode --version prints the package version", () => {
   assert.equal(result.stderr, "");
 });
 
+for (const command of ["help", "--help", "-h"]) {
+  test(`moshcode ${command} prints help successfully`, () => {
+    const result = spawnSync(process.execPath, [BIN, command], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /^moshcode .*\n\nusage:/);
+    assert.equal(result.stderr, "");
+  });
+}
+
 for (const command of ["engines", "tools"]) {
   test(`moshcode ${command} --json prints machine-readable install status`, () => {
     const result = spawnSync(process.execPath, [BIN, command, "--json"], {

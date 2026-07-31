@@ -496,7 +496,7 @@ async function main() {
   }
 
   help();
-  if (cmd && cmd !== "help") process.exit(1);
+  if (cmd && !["help", "--help", "-h"].includes(cmd)) process.exit(1);
 }
 
 main();
