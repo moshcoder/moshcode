@@ -38,6 +38,11 @@ export function completionModel() {
     top: uniqueEntries([...CORE_CLI_COMMANDS, ...engines, ...engineAliases, ...tools]),
     engines: uniqueEntries([...engines, ...engineAliases]),
     install,
+    // `uninstall <engine|tool>` resolves its target against the same ENGINES and
+    // TOOLS rosters `install` does, so it offers the same targets. Kept as its
+    // own key rather than reusing `install` so the two can diverge without a
+    // silent surprise in one of them.
+    uninstall: install,
     upgrade: uniqueEntries([
       ...UPGRADE_TARGETS,
       ...engines,
@@ -97,6 +102,13 @@ _moshcode_completion() {
         ;;
       install)
         (( COMP_CWORD == 2 )) && choices="${names(model.install)}"
+        ;;
+      uninstall|remove)
+        if (( COMP_CWORD == 2 )); then
+          choices="${names(model.uninstall)}"
+        elif [[ "$cur" == -* ]]; then
+          choices="--yes -y --dry-run"
+        fi
         ;;
       upgrade|update)
         choices="${names(model.upgrade)}"
@@ -172,6 +184,14 @@ _moshcode() {
         _describe "install target" choices
       else
         _files
+      fi
+      ;;
+    uninstall|remove)
+      if (( CURRENT == 3 )); then
+        choices=(${zshValues(model.uninstall)})
+        _describe "uninstall target" choices
+      else
+        _values "uninstall option" --yes -y --dry-run
       fi
       ;;
     upgrade|update)
@@ -267,6 +287,7 @@ end
 ${fishEntries(atFirstArgument, model.top)}
 ${fishEntries(atSecondToken("agents start"), model.engines)}
 ${fishEntries(atSecondToken("install"), model.install)}
+${fishEntries(atSecondToken("uninstall remove"), model.uninstall)}
 ${fishEntries("__moshcode_command_is upgrade update", model.upgrade)}
 ${fishEntries(atSecondToken("completion"), model.shells)}
 ${fishEntries(atSecondToken("mcp"), model.mcp)}
@@ -276,6 +297,8 @@ complete -c moshcode -n '__moshcode_command_is login' -l device -s d -d 'use dev
 complete -c moshcode -n '__moshcode_command_is engines tools commands' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is run' -l dry-run -d 'show actions without executing'
 complete -c moshcode -n '__moshcode_command_is run' -l max -s n -r -d 'maximum loop count'
+complete -c moshcode -n '__moshcode_command_is uninstall remove' -l yes -s y -d 'confirm deleting a binary'
+complete -c moshcode -n '__moshcode_command_is uninstall remove' -l dry-run -d 'show the plan without removing'
 complete -c moshcode -n '${atSecondToken("console")}' -a 'serve' -d 'serve a browser terminal'
 complete -c moshcode -n '${atSecondToken("console")}' -a '--url' -d 'print a gateway URL'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l port -r -d 'local HTTP port'

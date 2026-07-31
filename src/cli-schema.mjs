@@ -2,6 +2,8 @@ export const CORE_CLI_COMMANDS = [
   { name: "agents", description: "list engines or launch one autonomously" },
   { name: "start", description: "launch an engine with its native defaults" },
   { name: "install", description: "install an engine or workflow tool" },
+  { name: "uninstall", description: "take an engine or workflow tool off this machine" },
+  { name: "remove", description: "alias for uninstall" },
   { name: "upgrade", description: "update moshcode, engines, or tools" },
   { name: "update", description: "alias for upgrade" },
   { name: "mcp", description: "register and inspect MCP servers" },
