@@ -13,6 +13,7 @@ import { creditsRouter } from "./routes/credits.mjs";
 import { cliRouter } from "./routes/cli.mjs";
 import { sessionsRouter } from "./routes/sessions.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
+import { moshpitRouter } from "./routes/moshpit.mjs";
 
 const app = express();
 app.disable("x-powered-by");
@@ -43,6 +44,7 @@ app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
 app.use(pagesRouter);     // /app, /settings
+app.use(moshpitRouter);  // /pit + /api/moshpit/* — the namespace
 
 app.use((req, res) => res.status(404).type("html").send(
   `<body style="background:#070806;color:#edf2e4;font-family:monospace;padding:14vh 24px;text-align:center"><h1 style="color:#a6ff1a">404</h1><p>no such page in the pit.</p><a style="color:#a6ff1a" href="/">back to the pit →</a></body>`));
