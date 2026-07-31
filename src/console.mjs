@@ -34,6 +34,13 @@ export function parseTarget(target = DEFAULT_TTYD) {
   return { host, port: Number(url.port || 7681) };
 }
 
+export function parseConsolePort(input) {
+  const raw = String(input ?? "").trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const port = Number(raw);
+  return Number.isSafeInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
 const targetHostHeader = ({ host, port }) =>
   `${host.includes(":") ? `[${host}]` : host}:${port}`;
 
@@ -218,7 +225,12 @@ export async function consoleCommand(args = []) {
     return 0;
   }
 
-  const port = Number(flag("port", 7682));
+  const rawPort = flag("port", "7682");
+  const port = parseConsolePort(rawPort);
+  if (port === null) {
+    console.error(`--port needs a decimal integer from 1 to 65535, got ${JSON.stringify(rawPort)}`);
+    return 1;
+  }
   const bind = flag("bind", "127.0.0.1");
   const ttyd = flag("ttyd", DEFAULT_TTYD);
   const server = createConsoleServer({ ttyd, api });

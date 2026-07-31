@@ -6,7 +6,7 @@ import http from "node:http";
 import test from "node:test";
 
 import {
-  consoleUrl, createConsoleServer, mintCookie, parseCookies, parseTarget, readCookie, verifyToken,
+  consoleUrl, createConsoleServer, mintCookie, parseConsolePort, parseCookies, parseTarget, readCookie, verifyToken,
 } from "../src/console.mjs";
 
 const SECRET = "test-secret";
@@ -21,6 +21,18 @@ test("parseTarget accepts IPv4, IPv6, bare hosts, and URLs", () => {
     port: 9999,
   });
   assert.deepEqual(parseTarget(), { host: "127.0.0.1", port: 7681 });
+});
+
+test("parseConsolePort accepts decimal TCP ports", () => {
+  assert.equal(parseConsolePort("7682"), 7682);
+  assert.equal(parseConsolePort(" 443 "), 443);
+  assert.equal(parseConsolePort(65535), 65535);
+});
+
+test("parseConsolePort rejects malformed and out-of-range values", () => {
+  for (const value of ["abc", "7682abc", "1e3", "1.5", "0", "-1", "65536", "", "   ", Infinity]) {
+    assert.equal(parseConsolePort(value), null, String(value));
+  }
 });
 
 test("parseCookies reads the raw header the upgrade handler sees", () => {
