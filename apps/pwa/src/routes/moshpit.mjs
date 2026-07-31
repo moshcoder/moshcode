@@ -232,7 +232,12 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     ? await quoteName({ tld, label: parsed.label, buyerId: req.user.id })
     : null;
 
-  res.status(resolution.name_registered ? 200 : 404).send(page({
+  // 200, not 404, even when nobody holds the name. The URL does have a
+  // resource — this directory is the parking page every resolver and the
+  // browser extension send unpointed names to, and it is the answer, not the
+  // absence of one. A 404 makes a working page read as broken to the browser,
+  // to a link checker, and to anything that treats the status before the body.
+  res.status(200).send(page({
     title: resolution.name,
     body: directory({ resolution, tld, owner, names, tlds, quote, user: req.user, req }),
   }));
