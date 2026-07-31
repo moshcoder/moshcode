@@ -155,9 +155,9 @@ function summarize(results) {
 /** Run `/mcp …`. `tokens` are the words after `mcp`. */
 export async function mcpCommand(tokens) {
   const parsed = parseMcp(tokens);
-  if (parsed.list) { printMcpTargets(); return; }
-  if (parsed.showCatalog) { printMcpCatalog(); return; }
-  if (parsed.error) { console.log(err(parsed.error)); return; }
+  if (parsed.list) { printMcpTargets(); return 0; }
+  if (parsed.showCatalog) { printMcpCatalog(); return 0; }
+  if (parsed.error) { console.log(err(parsed.error)); return 1; }
 
   const { spec } = parsed;
   console.log(info(`registering ${bone(spec.name)} → ${ash(spec.target)} across MCP engines…`));
@@ -174,15 +174,16 @@ export async function mcpCommand(tokens) {
   if (spec.headers.length || /^https?:/i.test(spec.target)) {
     console.log(ash("  note: OAuth/HTTP servers may still need per-engine auth (e.g. `opencode mcp auth`, `codex mcp login`)."));
   }
+  return 0;
 }
 
 /** Run `/skill …`. `tokens` are the words after `skill`. */
 export async function skillCommand(tokens) {
   const verb = tokens[0];
-  if (!verb || verb === "list") { printSkillTargets(); return; }
+  if (!verb || verb === "list") { printSkillTargets(); return 0; }
   if (verb !== "install") {
     console.log(err(`unknown skill verb "${verb}" — try ${SKILL_VERBS.map(({ name }) => name).join(" or ")}`));
-    return;
+    return 1;
   }
 
   const rest = tokens.slice(1);
@@ -190,16 +191,17 @@ export async function skillCommand(tokens) {
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--name") {
       const next = flagValue(rest, i, rest[i]);
-      if (next.error) { console.log(err(next.error)); return; }
+      if (next.error) { console.log(err(next.error)); return 1; }
       name = next.value;
       i++;
     }
     else if (!source) source = rest[i];
   }
-  if (!source) { console.log(err("usage: /skill install <git-url|path> [--name <name>]")); return; }
+  if (!source) { console.log(err("usage: /skill install <git-url|path> [--name <name>]")); return 1; }
 
   const spec = { source, name: skillName(source, name) };
   console.log(info(`installing skill ${bone(spec.name)} → ${ash(source)} across skills engines…`));
   const results = await runSkillInstall(planSkillInstall(spec));
   summarize(results);
+  return 0;
 }
