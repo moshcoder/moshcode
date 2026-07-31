@@ -28,20 +28,25 @@ export const RESERVED_TLDS = new Set([
 /** A TLD label: lowercase letters, digits and dashes; no leading/trailing dash. */
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+/** A hostname label. Unlike a TLD, an all-numeric label is valid. */
+export function normalizeLabel(input) {
+  const raw = String(input ?? "").trim().toLowerCase();
+  return raw && raw.length <= 63 && LABEL.test(raw) ? raw : null;
+}
+
 /**
  * Normalise user input into a bare TLD label, or null when it could never be
  * one. Accepts ".eggs", "eggs", " .EGGS " -- people type the dot.
  */
 export function normalizeTld(input) {
   const raw = String(input ?? "").trim().toLowerCase().replace(/^\.+/, "");
-  if (!raw || raw.length > 63) return null;
   // A dot means they gave a domain, not a TLD. Say so rather than silently
   // registering the wrong thing.
-  if (raw.includes(".")) return null;
-  if (!LABEL.test(raw)) return null;
+  const label = normalizeLabel(raw);
+  if (!label) return null;
   // All-numeric would be ambiguous against an IPv4 literal in a hostname.
-  if (/^\d+$/.test(raw)) return null;
-  return raw;
+  if (/^\d+$/.test(label)) return null;
+  return label;
 }
 
 /** Why a TLD cannot be registered, or null when it is fine. */
@@ -64,10 +69,10 @@ export function parseMoshpitName(input) {
   const parts = raw.split(".");
   if (parts.length !== 2) return null;
   const [label, tld] = parts;
-  // Both halves are hostname labels, and normalizeTld already encodes exactly
-  // that rule -- so reuse it rather than keeping a second copy that can drift.
-  if (!normalizeTld(label) || !normalizeTld(tld)) return null;
-  return { label, tld };
+  const normalizedLabel = normalizeLabel(label);
+  const normalizedTld = normalizeTld(tld);
+  if (!normalizedLabel || !normalizedTld) return null;
+  return { label: normalizedLabel, tld: normalizedTld };
 }
 
 /* ---- resolution precedence (tronbrowser.dev) ---- */

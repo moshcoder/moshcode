@@ -11,10 +11,10 @@
 // checkable rather than trusted.
 
 import { get, all, run } from "./db.mjs";
-import { normalizeTld, parseMoshpitName, tldRejection } from "./lib/moshpit-name.mjs";
+import { normalizeLabel, normalizeTld, parseMoshpitName, tldRejection } from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, normalizeTld, parseMoshpitName, tldRejection,
+  RESERVED_TLDS, RESOLVE_MODES, normalizeLabel, normalizeTld, parseMoshpitName, tldRejection,
   normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
@@ -174,7 +174,7 @@ export async function clearExempt({ tld: tldInput, label: labelInput, userId }) 
 
 async function ownedTldAndLabel(tldInput, labelInput, userId) {
   const tld = normalizeTld(tldInput);
-  const label = normalizeTld(labelInput);
+  const label = normalizeLabel(labelInput);
   if (!tld || !label) return { ok: false, error: "not a valid name" };
   const owner = await getTld(tld);
   if (!owner) return { ok: false, error: `.${tld} is not registered` };
