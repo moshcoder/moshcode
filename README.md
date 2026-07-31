@@ -191,6 +191,25 @@ Each target is updated with its own native updater when it has one (e.g.
 `opencode upgrade`, `aider --upgrade`) and re-run through its installer
 otherwise — MoshCode never vendors it. In the TUI: `/upgrade [name…]`.
 
+## Shell completion
+
+MoshCode can print context-aware completion scripts for its commands, engines,
+workflow tools, options, and file arguments. Load the one for your current
+shell:
+
+```sh
+# Bash (~/.bashrc)
+source <(moshcode completion bash)
+
+# Zsh (~/.zshrc, after any existing compinit/Oh My Zsh setup)
+source <(moshcode completion zsh)
+
+# Fish (~/.config/fish/config.fish)
+moshcode completion fish | source
+```
+
+Put the matching line in your shell profile to enable it in future sessions.
+
 ## PRD — plan before you mosh
 
 Write a product requirements doc *first*, then let your coding agents build to it.

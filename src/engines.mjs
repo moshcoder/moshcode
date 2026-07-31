@@ -89,7 +89,7 @@ export function upgradeSpec(engine) {
 }
 
 /** Aliases so `/agents cc` etc. resolve. */
-const ALIASES = {
+export const ENGINE_ALIASES = {
   cc: "claude", "claude-code": "claude", openai: "codex", gpt: "codex", google: "gemini",
   pc: "privacycode", getprivacycode: "privacycode", privacy: "privacycode",
 };
@@ -101,7 +101,7 @@ export function resolveEngine(token) {
   // Own properties only: ENGINES/ALIASES are plain object literals, so a name
   // like `constructor` or `__proto__` would otherwise resolve to something off
   // Object.prototype and be handed on as an engine with no bin/install.
-  const key = Object.hasOwn(ENGINES, t) ? t : Object.hasOwn(ALIASES, t) ? ALIASES[t] : null;
+  const key = Object.hasOwn(ENGINES, t) ? t : Object.hasOwn(ENGINE_ALIASES, t) ? ENGINE_ALIASES[t] : null;
   return key ? [key, ENGINES[key]] : null;
 }
 

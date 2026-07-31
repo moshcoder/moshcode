@@ -9,6 +9,7 @@ import {
   SKILL_ENGINES, planSkillInstall, runSkillInstall, skillName,
 } from "./skills.mjs";
 import { catalogList, resolveCatalog } from "./mcp-catalog.mjs";
+import { MCP_VERBS, SKILL_VERBS } from "./cli-schema.mjs";
 import { acid, ash, bone, ok, err, info } from "./ui.mjs";
 
 function splitKV(pair) {
@@ -34,7 +35,11 @@ export function parseMcp(tokens) {
   const verb = tokens[0];
   if (!verb || verb === "list") return { list: true };
   if (verb === "catalog") return { showCatalog: true };
-  if (verb !== "install" && verb !== "add") return { error: `unknown mcp verb "${verb}" — try install, add, catalog, or list` };
+  const verbSchema = MCP_VERBS.find(({ name }) => name === verb);
+  if (!verbSchema?.acceptsServerSpec) {
+    const choices = MCP_VERBS.map(({ name }) => name);
+    return { error: `unknown mcp verb "${verb}" — try ${choices.slice(0, -1).join(", ")}, or ${choices.at(-1)}` };
+  }
 
   const rest = tokens.slice(1);
   let name, transport, cmdParts = null;
@@ -175,7 +180,10 @@ export async function mcpCommand(tokens) {
 export async function skillCommand(tokens) {
   const verb = tokens[0];
   if (!verb || verb === "list") { printSkillTargets(); return; }
-  if (verb !== "install") { console.log(err(`unknown skill verb "${verb}" — try install or list`)); return; }
+  if (verb !== "install") {
+    console.log(err(`unknown skill verb "${verb}" — try ${SKILL_VERBS.map(({ name }) => name).join(" or ")}`));
+    return;
+  }
 
   const rest = tokens.slice(1);
   let name, source;
