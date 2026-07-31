@@ -130,7 +130,7 @@ function executableCandidates(bin, extraDirs = []) {
   return candidates;
 }
 
-function resolveExecutable(bin, extraDirs = []) {
+export function resolveExecutable(bin, extraDirs = []) {
   for (const candidate of executableCandidates(bin, extraDirs)) {
     try {
       if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
