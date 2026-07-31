@@ -59,6 +59,14 @@ test("TUI /run rejects unknown options before reading a script file", async () =
   assert.doesNotMatch(result.stdout, /can't read --dryrun/);
 });
 
+test("TUI /run rejects unsafe iteration limits", async () => {
+  const result = await runTui("/run --max=9007199254740992\n/quit\n");
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--max needs a positive integer/);
+  assert.doesNotMatch(result.stdout, /usage: \/run/);
+});
+
 test("TUI /run passes positional args through to moshscript argv", () => {
   const dir = mkdtempSync(join(tmpdir(), "moshcode-tui-"));
   mkdirSync(join(dir, "space dir"));

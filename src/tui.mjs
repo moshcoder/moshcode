@@ -325,11 +325,11 @@ async function runFile(args) {
     const a = args[i];
     if (a === "--max" || a === "-n") {
       const v = Number(args[++i]);
-      if (!Number.isInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
+      if (!Number.isSafeInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
       max = v;
     } else if (a.startsWith("--max=")) {
       const v = Number(a.slice("--max=".length));
-      if (!Number.isInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
+      if (!Number.isSafeInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
       max = v;
     } else if (a === "--dry-run") {
       dryRun = true;

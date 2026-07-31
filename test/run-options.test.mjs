@@ -83,7 +83,7 @@ test("run accepts equals-form max option", async () => {
 });
 
 test("run rejects non-decimal max values", async () => {
-  for (const value of ["1e1", "0x2"]) {
+  for (const value of ["1e1", "0x2", "9007199254740992"]) {
     const result = await run([`--max=${value}`, "--dry-run"]);
 
     assert.equal(result.status, 1);
