@@ -50,7 +50,7 @@ function parseMax(value) {
     throw new Error(`moshcode run: --max must be a positive integer, got ${JSON.stringify(value)}`);
   }
   const max = Number(value);
-  if (!Number.isInteger(max) || max < 1) {
+  if (!Number.isSafeInteger(max) || max < 1) {
     throw new Error(`moshcode run: --max must be a positive integer, got ${JSON.stringify(value)}`);
   }
   return max;
