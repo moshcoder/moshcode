@@ -67,6 +67,27 @@ test("TUI /run rejects unsafe iteration limits", async () => {
   assert.doesNotMatch(result.stdout, /usage: \/run/);
 });
 
+test("TUI /run preserves option-like script args after --", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moshcode-tui-separator-"));
+  const script = join(dir, "argv.mosh");
+  writeFileSync(script, "say(JSON.stringify(argv));\n");
+  const scriptArg = script.replaceAll("\\", "/");
+
+  const result = spawnSync(
+    process.execPath,
+    ["bin/moshcode.mjs"],
+    {
+      cwd: join(import.meta.dirname, ".."),
+      input: `/run "${scriptArg}" -- --max 2 --dry-run -n\n/quit\n`,
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.doesNotMatch(result.stdout, /dry run .* narrating/);
+  assert.match(result.stdout, /\["--max","2","--dry-run","-n"\]/);
+});
+
 test("TUI /run passes positional args through to moshscript argv", () => {
   const dir = mkdtempSync(join(tmpdir(), "moshcode-tui-"));
   mkdirSync(join(dir, "space dir"));

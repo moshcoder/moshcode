@@ -406,19 +406,23 @@ async function main() {
   if (cmd === "logout") { logout(); return; }
   if (cmd === "run") {
     let max = 3, dryRun = false;
+    let optionsEnded = false;
     const positional = []; // first is the file; the rest reach the script as argv
     for (let k = 0; k < rest.length; k++) {
       const a = rest[k];
-      if (a === "--max" || a === "-n") {
+      if (!optionsEnded && a === "--") {
+        optionsEnded = true;
+      }
+      else if (!optionsEnded && (a === "--max" || a === "-n")) {
         try { max = parseMax(rest[++k]); }
         catch (e) { console.error(String(e.message || e)); process.exit(1); }
       }
-      else if (a.startsWith("--max=")) {
+      else if (!optionsEnded && a.startsWith("--max=")) {
         try { max = parseMax(a.slice("--max=".length)); }
         catch (e) { console.error(String(e.message || e)); process.exit(1); }
       }
-      else if (a === "--dry-run") dryRun = true;
-      else if (a !== "-" && a.startsWith("-") && positional.length === 0) {
+      else if (!optionsEnded && a === "--dry-run") dryRun = true;
+      else if (!optionsEnded && a !== "-" && a.startsWith("-") && positional.length === 0) {
         console.error(`moshcode run: unknown option ${a}`);
         process.exit(1);
       }
