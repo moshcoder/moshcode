@@ -14,6 +14,7 @@ import { db, get, all, run } from "./db.mjs";
 import {
   BULK_CHUNK,
   BULK_TIME_BUDGET_MS,
+  ENDING_PRICE_USD,
   MAX_BULK_TLDS,
   MAX_CHILD_PRICE_USD,
   normalizeLabel,
@@ -717,4 +718,155 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
   if (left) parts.push(`${left} not attempted — paste them again to carry on`);
 
   return parts.length ? parts.join(". ") + "." : "nothing to claim — paste one ending per line.";
+}
+
+/* ---- buying and renewing an ending ---- */
+
+/** A term is a year. Ten is the ceiling PRD 0005 R6 puts on one checkout. */
+export const TERM_MS = 365 * 24 * 60 * 60 * 1000;
+export const MAX_TERM_YEARS = 10;
+
+const TLD_COLS_FULL = `tld, user_id, owner_email, alias_of, price_usd, term_started_at, expires_at, created_at`;
+
+export async function getTldWithTerm(tld) {
+  return get(`SELECT ${TLD_COLS_FULL} FROM moshpit_tlds WHERE tld = ?`, [tld]);
+}
+
+/**
+ * What it costs to take an unclaimed ending.
+ *
+ * Quoted rather than assumed, and the same call the checkout makes, so an offer
+ * shown anywhere is one the next click can honour. Every refusal names itself:
+ * reserved, already held, and "you already own it" are three different answers
+ * and a single "unavailable" would be none of them.
+ */
+export async function quoteTld({ tld: tldInput, buyerId, years = 1, now = Date.now() }) {
+  const tld = normalizeTld(tldInput);
+  if (!tld) return { ok: false, error: "not a valid TLD — letters, digits and dashes only, no dots" };
+
+  const why = tldRejection(tld);
+  if (why) return { ok: false, error: why };
+
+  const term = Number(years);
+  if (!Number.isInteger(term) || term < 1 || term > MAX_TERM_YEARS) {
+    return { ok: false, error: `a term is 1 to ${MAX_TERM_YEARS} years` };
+  }
+
+  const owner = await getTldWithTerm(tld);
+  if (owner) {
+    if (owner.user_id === buyerId) return { ok: false, error: `.${tld} is already yours`, taken: true };
+    return { ok: false, error: `.${tld} is already registered`, taken: true };
+  }
+
+  // Someone else's open checkout holds it. The UNIQUE constraint is still the
+  // real arbiter at settlement; this only stops two people paying at once.
+  const held = await get(
+    `SELECT id FROM moshpit_tld_purchases
+     WHERE tld = ? AND status = 'pending' AND reserved_until > ? LIMIT 1`,
+    [tld, now],
+  );
+  if (held) return { ok: false, error: `.${tld} is in someone's checkout right now — try again shortly`, taken: true };
+
+  return { ok: true, tld, years: term, priceUsd: Math.round(ENDING_PRICE_USD * term * 100) / 100 };
+}
+
+/** What it costs to keep one you hold. */
+export async function quoteRenewal({ tld: tldInput, userId, years = 1 }) {
+  const tld = normalizeTld(tldInput);
+  if (!tld) return { ok: false, error: "not a valid TLD" };
+
+  const term = Number(years);
+  if (!Number.isInteger(term) || term < 1 || term > MAX_TERM_YEARS) {
+    return { ok: false, error: `a term is 1 to ${MAX_TERM_YEARS} years` };
+  }
+
+  const owner = await getTldWithTerm(tld);
+  if (!owner) return { ok: false, error: `.${tld} is not registered` };
+  if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
+
+  return { ok: true, tld, years: term, priceUsd: Math.round(ENDING_PRICE_USD * term * 100) / 100, expiresAt: owner.expires_at };
+}
+
+export async function openTldPurchase({ paymentId, tld, userId, amountUsd, years = 1, kind = "register", now = Date.now() }) {
+  await run(
+    `INSERT INTO moshpit_tld_purchases (id, tld, user_id, amount_usd, kind, status, years, created_at, reserved_until)
+     VALUES (?,?,?,?,?, 'pending', ?,?,?)`,
+    [paymentId, tld, userId, amountUsd, kind, years, now, now + RESERVATION_MS],
+  );
+}
+
+/**
+ * Hand over a paid-for ending, or extend one. Idempotent on the payment id.
+ *
+ * The claim is a conditional UPDATE for the same reason every other settlement
+ * here uses one: CoinPay retries a webhook it never got an ack for, so two
+ * deliveries can be in flight at once and both read 'pending' before either
+ * write lands.
+ *
+ * A renewal never shortens a term. It extends from whichever is later — the
+ * current expiry or now — so renewing early adds to what is left rather than
+ * throwing it away, and renewing late does not backdate the new term into the
+ * past. PRD 0005 R7.
+ */
+export async function settleTldPurchase(paymentId, now = Date.now()) {
+  const p = await get(`SELECT * FROM moshpit_tld_purchases WHERE id = ? AND status = 'pending'`, [paymentId]);
+  if (!p) return { ok: false, error: "no pending purchase for that payment" };
+
+  const claimed = await run(
+    `UPDATE moshpit_tld_purchases SET status = 'settling' WHERE id = ? AND status = 'pending'`, [paymentId]);
+  if (!claimed.rowsAffected) return { ok: false, error: "already settled" };
+
+  const span = TERM_MS * (p.years || 1);
+
+  if (p.kind === "renew") {
+    const owner = await getTldWithTerm(p.tld);
+    if (!owner || owner.user_id !== p.user_id) {
+      await run(`UPDATE moshpit_tld_purchases SET status = 'refund_due' WHERE id = ?`, [paymentId]);
+      console.error(`[moshpit] .${p.tld} left ${p.user_id} before renewal ${paymentId} settled — refund due`);
+      return { ok: false, error: "ending changed hands before the renewal settled", refundDue: true };
+    }
+    const from = Math.max(owner.expires_at || 0, now);
+    await run(`UPDATE moshpit_tlds SET expires_at = ? WHERE tld = ? AND user_id = ?`,
+      [from + span, p.tld, p.user_id]);
+    await run(`UPDATE moshpit_tld_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
+    await logAction(p.tld, p.user_id, `renew:${p.years}y`);
+    return { ok: true, tld: p.tld, userId: p.user_id, expiresAt: from + span, renewed: true };
+  }
+
+  try {
+    await run(
+      `INSERT INTO moshpit_tlds (tld, user_id, owner_email, owner_key, created_at, term_started_at, expires_at)
+       VALUES (?,?,?,?,?,?,?)`,
+      [p.tld, p.user_id, null, null, now, now, now + span],
+    );
+  } catch {
+    // Claimed by someone else between checkout and confirmation. Real money
+    // against something the buyer cannot have, so it is recorded, not dropped.
+    await run(`UPDATE moshpit_tld_purchases SET status = 'refund_due' WHERE id = ?`, [paymentId]);
+    console.error(`[moshpit] .${p.tld} was taken before payment ${paymentId} settled — refund due to ${p.user_id}`);
+    return { ok: false, error: "ending was taken before payment settled", refundDue: true };
+  }
+
+  await run(`UPDATE moshpit_tld_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
+  await logAction(p.tld, p.user_id, `bought:.${p.tld}`);
+  return { ok: true, tld: p.tld, userId: p.user_id, expiresAt: now + span };
+}
+
+export async function listTldPurchases(userId, limit = 50) {
+  return all(
+    `SELECT id, tld, amount_usd, kind, years, status, created_at FROM moshpit_tld_purchases
+     WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [userId, limit],
+  );
+}
+
+/**
+ * Is this ending inside its term?
+ *
+ * A NULL expiry is not expired. Every ending claimed before terms existed has
+ * one, and treating "no term recorded" as "term ended" would expire a few
+ * hundred namespaces that nobody agreed to put on a clock.
+ */
+export function isExpired(tld, now = Date.now()) {
+  return Boolean(tld?.expires_at) && tld.expires_at <= now;
 }
