@@ -88,6 +88,19 @@ export function parseMcp(tokens) {
     }
   }
 
+  // A token still starting with `-` at this point was never consumed as a flag,
+  // so it is a typo or an engine-native flag moshcode does not take (`-s user`).
+  // Left alone it becomes the server NAME or its command and gets spliced
+  // straight into every engine's own `mcp add` argv. Everything after `--` is
+  // the user's command line and is deliberately not second-guessed.
+  const stray = [name, cmdParts ? null : target]
+    .find((t) => typeof t === "string" && t.startsWith("-"));
+  if (stray) {
+    return {
+      error: `unknown mcp flag "${stray}" — mcp takes --name, -t/--transport, -e/--env, and -H/--header; put a command's own flags after --`,
+    };
+  }
+
   if (verb === "install" && !name) {
     if (target && isRemoteTarget(target)) name = deriveName(target);
     else return { error: "a stdio command server needs an explicit --name" };
