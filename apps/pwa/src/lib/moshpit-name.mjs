@@ -135,13 +135,17 @@ export const MAX_CHILD_PRICE_USD = 1.99;
 /**
  * What names under a newly claimed ending cost unless you say otherwise.
  *
- * The cap, not a round number below it. A default rather than a blank because
- * an unpriced ending is invisible to every buyer, and "I claimed forty and
- * nobody could buy a name under any of them" is the failure that costs
- * something. Clearing the field still means not for sale — the default is an
- * opinion, not a floor.
+ * A default rather than a blank because an unpriced ending is invisible to
+ * every buyer, and "I claimed forty and nobody could buy a name under any of
+ * them" is the failure that costs something.
+ *
+ * $2 rather than MAX_CHILD_PRICE_USD: the cap in PRD 0005 R3 arrives with
+ * terms and renewals, and until that lands this is an operator's asking price
+ * with nothing enforcing a ceiling. A per-line price overrides this, upwards
+ * or downwards, and clearing the field still means not for sale — the default
+ * is an opinion, not a floor and not a limit.
  */
-export const DEFAULT_TLD_PRICE_USD = MAX_CHILD_PRICE_USD;
+export const DEFAULT_TLD_PRICE_USD = 2;
 
 /**
  * Pull a list of endings out of whatever someone pasted.
@@ -159,27 +163,64 @@ export const DEFAULT_TLD_PRICE_USD = MAX_CHILD_PRICE_USD;
  * against yourself.
  */
 export function parseTldList(input, limit = MAX_BULK_TLDS) {
-  const tokens = String(input ?? "")
+  // Records split on newlines, commas and semicolons; fields inside a record
+  // split on whitespace. That keeps `eggs, yeah, oranges` meaning three
+  // endings while letting one line carry settings for the ending it names.
+  const records = String(input ?? "")
     .split("\n")
     .map((line) => line.replace(/#.*$/, ""))
     .join("\n")
-    .split(/[\s,;]+/)
-    .map((t) => t.trim().toLowerCase().replace(/^\.+/, ""))
+    .split(/[\n,;]+/)
+    .map((r) => r.trim())
     .filter(Boolean);
 
   const seen = new Set();
-  const tlds = [];
+  const entries = [];
   let skipped = 0;
 
-  for (const token of tokens) {
-    if (seen.has(token)) continue;
-    seen.add(token);
+  for (const record of records) {
+    const fields = record.split(/\s+/).filter(Boolean);
+    const tld = normalizeToken(fields[0]);
+    if (!tld || seen.has(tld)) continue;
+    seen.add(tld);
+
     // Counted rather than silently dropped: "I pasted 300 and got 200" needs to
     // be visible, or the missing hundred look like they failed for some other
     // reason.
-    if (tlds.length >= limit) { skipped++; continue; }
-    tlds.push(token);
+    if (entries.length >= limit) { skipped++; continue; }
+
+    let priceUsd = null;
+    let aliasOf = null;
+    for (const field of fields.slice(1)) {
+      const price = parsePriceToken(field);
+      // A price is unambiguous — it is the only field that can start with `$`
+      // or be all digits, and an all-numeric ending is rejected anyway. So
+      // anything that is not a price is the ending this one points at.
+      if (price !== null) priceUsd = price;
+      else aliasOf = normalizeToken(field);
+    }
+    entries.push({ tld, aliasOf, priceUsd });
   }
 
-  return { tlds, skipped };
+  // `tlds` alongside `entries` because most callers only want the names, and
+  // making every one of them map over the records would be noise.
+  return { entries, tlds: entries.map((e) => e.tld), skipped };
+}
+
+function normalizeToken(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/^\.+/, "") || null;
+}
+
+/**
+ * `$2`, `$2.00USD`, `2.00`, `USD 2` — a price if it reads as one, else null.
+ *
+ * Forgiving because it is typed by hand in a textarea next to a dollar sign,
+ * and strict about the shape because the alternative reading of a stray token
+ * is "the ending this one points at", which would silently mis-route a name.
+ */
+function parsePriceToken(value) {
+  const raw = String(value ?? "").trim().toLowerCase().replace(/^usd/, "").replace(/usd$/, "").replace(/^\$/, "").trim();
+  if (!raw || !/^\d+(\.\d{1,2})?$/.test(raw)) return null;
+  const price = Number(raw);
+  return Number.isFinite(price) && price > 0 ? price : null;
 }

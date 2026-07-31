@@ -420,13 +420,16 @@ const bulkClaimForm = (req) => `
     <textarea name="tlds" rows="8" spellcheck="false" autocomplete="off" required
       aria-label="endings to claim, one per line"
       placeholder=".eggs
-.yeah
-oranges
-# dots optional · commas or newlines · # comments ignored"></textarea>
+.yeah $5USD
+.toplevel .redirect $2.00USD
+oranges, pears, plums
+# one per line · dots optional · add a price and/or an ending to point at
+# anything on a line beats the defaults below · # comments ignored"></textarea>
     ${claimDefaults(req)}
     <p class="mono faint" style="font-size:.7rem;margin:8px 0 10px">
       Up to ${MAX_BULK_TLDS} at a time. Ones already taken are reported, not fatal —
-      the rest still land. Price and target apply to every ending that lands.
+      the rest still land. The price and target below apply to every ending that
+      lands, unless a line says otherwise.
     </p>
     <button class="btn acid" type="submit">Claim them all</button>
   </form>

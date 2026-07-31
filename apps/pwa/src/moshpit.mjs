@@ -579,7 +579,7 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
 export async function registerTlds({
   input, userId, ownerEmail = null, limit = MAX_BULK_TLDS, priceUsd = null, aliasOf = null,
 }) {
-  const { tlds, skipped } = parseTldList(input, limit);
+  const { entries, skipped } = parseTldList(input, limit);
 
   const claimed = [];
   const mine = [];
@@ -587,7 +587,8 @@ export async function registerTlds({
   const rejected = [];
   const settingsFailed = [];
 
-  for (const tld of tlds) {
+  for (const entry of entries) {
+    const tld = entry.tld;
     const result = await registerTld({ tld, userId, ownerEmail });
     if (result.ok) {
       claimed.push(result.tld.tld);
@@ -595,7 +596,15 @@ export async function registerTlds({
       // than thrown: the ending is already claimed and keeping it is the point.
       // Losing a whole batch because one alias target was wrong would be worse
       // than landing forty endings with no price on them.
-      const failure = await applyTldDefaults({ tld: result.tld.tld, userId, priceUsd, aliasOf });
+      // A value written on the line wins over the form's, in either direction:
+      // the form is the default for the whole paste, the line is what this one
+      // ending is actually worth.
+      const failure = await applyTldDefaults({
+        tld: result.tld.tld,
+        userId,
+        priceUsd: entry.priceUsd ?? priceUsd,
+        aliasOf: entry.aliasOf ?? aliasOf,
+      });
       if (failure) settingsFailed.push({ tld: result.tld.tld, error: failure });
       continue;
     }
@@ -610,7 +619,7 @@ export async function registerTlds({
     rejected.push({ tld, error: result.error });
   }
 
-  return { claimed, mine, taken, rejected, settingsFailed, skipped, attempted: tlds.length };
+  return { claimed, mine, taken, rejected, settingsFailed, skipped, attempted: entries.length };
 }
 
 /**
