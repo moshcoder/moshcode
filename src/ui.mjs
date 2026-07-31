@@ -19,11 +19,13 @@ export const acid = rgb(158, 240, 26);
 export const bone = rgb(238, 242, 232);
 export const ash = rgb(139, 147, 138);
 export const danger = rgb(255, 77, 61);
+export const amber = rgb(255, 213, 61);
 export const spotify = rgb(29, 185, 84);
 export const dim = wrap(2, 22);
 
 export const ok = (s) => acid("✓ ") + s;
 export const err = (s) => danger("✗ ") + s;
+export const warn = (s) => amber("⚠ ") + s;
 export const info = (s) => ash("· ") + s;
 
 export function banner() {
