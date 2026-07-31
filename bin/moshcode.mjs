@@ -21,6 +21,7 @@ import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
 import { consoleCommand } from "../src/console.mjs";
+import { dnsCommand } from "../src/dns.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -287,6 +288,11 @@ async function main() {
     const failed = results.filter((r) => !r.ok).length;
     return backToPit("upgrade", failed ? 1 : 0);
   }
+  if (cmd === "dns") {
+    process.exitCode = (await dnsCommand(rest)) || 0;
+    return;
+  }
+
   if (cmd === "pwd" || cmd === "where") {
     const { cwd, home, git } = locate();
     console.log(tilde(cwd, home));
