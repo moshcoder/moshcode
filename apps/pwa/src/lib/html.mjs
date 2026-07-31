@@ -104,6 +104,7 @@ export function appBar(user, balance, csrf = "") {
   return `<header class="bar"><div class="wrap bar-inner">
     <a class="brand" href="/"><span class="mark">M</span>MOSHCODE<span class="app">app</span></a>
     <div class="bar-right">
+      <a class="btn" href="/pit">The pit</a>
       ${user ? `<span class="bal-chip">◆ <b>${balance.toLocaleString()}</b> cr</span>
       <a class="btn" href="/settings">Settings</a>
       <form method="post" action="/auth/logout" style="margin:0"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="btn">Sign out</button></form>`
@@ -114,6 +115,6 @@ export function appBar(user, balance, csrf = "") {
 
 export const footer = `<footer><div class="wrap foot">
   <div class="brand" style="font-size:.9rem"><span class="mark" style="width:18px;height:18px;font-size:.75rem">M</span>MOSHCODE</div>
-  <div style="display:flex;gap:20px;flex-wrap:wrap"><a href="https://moshcode.sh">moshcode.sh</a><a href="/">Approvals</a><a href="/sessions">Sessions</a><a href="/settings">Settings</a></div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap"><a href="https://moshcode.sh">moshcode.sh</a><a href="/">Approvals</a><a href="/sessions">Sessions</a><a href="/pit">The pit</a><a href="/settings">Settings</a></div>
   <div class="metal">no bugs, only <b>features</b>. 🤘</div>
 </div></footer>`;

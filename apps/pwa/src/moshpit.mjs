@@ -182,6 +182,87 @@ async function ownedTldAndLabel(tldInput, labelInput, userId) {
   return { ok: true, tld, label };
 }
 
+/* ---- names under a TLD ---- */
+
+const NAME_COLS = `tld, label, user_id, target, created_at`;
+
+export async function getName(tld, label) {
+  return get(`SELECT ${NAME_COLS} FROM moshpit_names WHERE tld = ? AND label = ?`, [tld, label]);
+}
+
+export async function listNames(tld, limit = 500) {
+  return all(`SELECT ${NAME_COLS} FROM moshpit_names WHERE tld = ? ORDER BY label LIMIT ?`, [tld, limit]);
+}
+
+export async function listNamesForUser(userId) {
+  return all(`SELECT ${NAME_COLS} FROM moshpit_names WHERE user_id = ? ORDER BY tld, label`, [userId]);
+}
+
+/**
+ * Register `label.tld`.
+ *
+ * Only the TLD's operator may do this. Holding `.eggs` is what buys you the
+ * namespace under it -- if anyone could mint `blue.eggs`, owning the TLD would
+ * mean nothing, and the "sell anything.yourthing" model would have no seller.
+ * Opening a TLD up to public registration is a per-TLD decision that belongs to
+ * its operator, so it is a future flag on the TLD rather than the default here.
+ *
+ * Registration is on the TLD as written, not on what it aliases to. A name has
+ * to live somewhere definite; minting it through an alias would silently create
+ * it under a different TLD than the one asked for, and repointing the alias
+ * later would strand it.
+ */
+export async function registerName({ tld: tldInput, label: labelInput, userId, target = null }) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeTld(labelInput);
+  if (!tld || !label) return { ok: false, error: "not a valid name — letters, digits and dashes only" };
+
+  const owner = await getTld(tld);
+  if (!owner) return { ok: false, error: `.${tld} is not registered` };
+  if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
+
+  try {
+    await run(`INSERT INTO moshpit_names (tld, label, user_id, target, created_at) VALUES (?,?,?,?,?)`,
+      [tld, label, userId, target || null, Date.now()]);
+  } catch {
+    const existing = await getName(tld, label);
+    if (existing) return { ok: false, error: `${label}.${tld} is already registered`, taken: true };
+    return { ok: false, error: "could not register that name" };
+  }
+
+  await logAction(tld, userId, `name:${label}`);
+  return { ok: true, name: await getName(tld, label) };
+}
+
+/** Point an existing name somewhere else. */
+export async function setNameTarget({ tld: tldInput, label: labelInput, userId, target }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`,
+    [target || null, owned.tld, owned.label]);
+  await logAction(owned.tld, userId, `retarget:${owned.label}`);
+  return { ok: true };
+}
+
+/** Give the name back. */
+export async function releaseName({ tld: tldInput, label: labelInput, userId }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  await run(`DELETE FROM moshpit_names WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  await logAction(owned.tld, userId, `unname:${owned.label}`);
+  return { ok: true };
+}
+
+async function ownedName(tldInput, labelInput, userId) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeTld(labelInput);
+  if (!tld || !label) return { ok: false, error: "not a valid name" };
+  const existing = await getName(tld, label);
+  if (!existing) return { ok: false, error: `${label}.${tld} is not registered` };
+  if (existing.user_id !== userId) return { ok: false, error: `you do not own ${label}.${tld}` };
+  return { ok: true, tld, label };
+}
+
 /* ---- resolution ---- */
 
 /**
@@ -198,14 +279,30 @@ export async function resolveMoshpitName(input) {
   const name = `${label}.${tld}`;
 
   const owner = await getTld(tld);
-  if (!owner) return { name, resolved: name, aliased: false, registered: false };
-  if (!owner.alias_of) return { name, resolved: name, aliased: false, registered: true };
+  if (!owner) return { name, resolved: name, aliased: false, registered: false, name_registered: false, target: null };
 
-  // An exempt name outranks the alias. Checked here rather than at write time
-  // because the exemption has to survive the alias being repointed later.
-  if (await isExempt(tld, label)) {
-    return { name, resolved: name, aliased: false, registered: true, exempt: true };
-  }
+  // Where the name ends up: itself, unless the TLD points elsewhere and this
+  // name is not held back from that alias. Exemption is checked at read time,
+  // not write time, so it survives the alias being repointed later.
+  const aliased = Boolean(owner.alias_of) && !(await isExempt(tld, label));
+  const resolvedTld = aliased ? owner.alias_of : tld;
+  const resolved = `${label}.${resolvedTld}`;
 
-  return { name, resolved: `${label}.${owner.alias_of}`, aliased: true, registered: true };
+  // The name is looked up on the TLD it actually resolves to -- that is the one
+  // whose operator mints names there, so it is the only place the answer can
+  // legitimately come from.
+  const entry = await getName(resolvedTld, label);
+
+  return {
+    name,
+    resolved,
+    aliased,
+    // `registered` has always meant "the TLD is claimed", which is what decides
+    // whether the pit has any authority over this name at all. Kept as-is so
+    // existing resolvers do not change behaviour.
+    registered: true,
+    ...(Boolean(owner.alias_of) && !aliased ? { exempt: true } : {}),
+    name_registered: Boolean(entry),
+    target: entry?.target ?? null,
+  };
 }

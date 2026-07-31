@@ -18,6 +18,7 @@ import { balance } from "../lib/credits.mjs";
 import {
   getTld, listTlds, listTldsForUser, registerTld,
   setAlias, clearAlias, listExempt, setExempt, clearExempt,
+  listNames, registerName, setNameTarget, releaseName,
   resolveMoshpitName, normalizeTld, tldRejection,
   normalizeMode, resolutionPreference,
 } from "../moshpit.mjs";
@@ -111,6 +112,39 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/exempt", async (req, res) => {
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), exempt: false });
 });
 
+/* ---- names under a TLD ---- */
+
+moshpitRouter.get("/api/moshpit/tlds/:tld/names", async (req, res) => {
+  const tld = normalizeTld(req.params.tld);
+  if (!tld) return bad(res, "not a valid TLD");
+  res.json({ tld, names: await listNames(tld) });
+});
+
+moshpitRouter.post("/api/moshpit/tlds/:tld/names", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await registerName({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id, target: req.body?.target,
+  });
+  if (!result.ok) return bad(res, result.error || "could not register that name", result.taken ? 409 : 400);
+  res.status(201).json({ name: result.name });
+});
+
+moshpitRouter.put("/api/moshpit/tlds/:tld/names", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await setNameTarget({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id, target: req.body?.target,
+  });
+  if (!result.ok) return bad(res, result.error || "could not retarget that name");
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), target: req.body?.target ?? null });
+});
+
+moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await releaseName({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
+  if (!result.ok) return bad(res, result.error || "could not release that name");
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeTld(req.body?.label), released: true });
+});
+
 /**
  * Resolve a name, and say what a resolver should DO with the answer.
  *
@@ -159,6 +193,9 @@ const PIT_CSS = `
 .pit-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .pit-row input{background:var(--bg-tint);border:1px solid var(--line-2);border-radius:8px;color:var(--text);
   font-family:var(--mono);font-size:.82rem;padding:8px 10px;min-width:120px}
+.pit-names{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+.pit-name{background:var(--bg-tint);border-radius:8px;padding:6px 10px;margin-bottom:6px}
+.pit-name .mono{min-width:150px}
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}`;
@@ -175,6 +212,9 @@ moshpitRouter.get("/pit", async (req, res) => {
   const exemptions = new Map();
   await Promise.all(mine.filter((t) => t.alias_of).map(async (t) => exemptions.set(t.tld, await listExempt(t.tld))));
 
+  const names = new Map();
+  await Promise.all(mine.map(async (t) => names.set(t.tld, await listNames(t.tld))));
+
   const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
     : req.query.ok ? `<p class="pit-msg ok">${esc(req.query.ok)}</p>` : "";
 
@@ -187,6 +227,26 @@ moshpitRouter.get("/pit", async (req, res) => {
           <h3 class="acid">.${esc(t.tld)}</h3>
           <div class="mono faint" style="font-size:.72rem">
             ${t.alias_of ? `points at <span class="acid">.${esc(t.alias_of)}</span>` : "stands on its own"}
+          </div>
+          <div class="pit-names">
+            ${(names.get(t.tld) || []).length
+              ? (names.get(t.tld) || []).map((n) => `
+                <form method="post" action="/pit/${esc(t.tld)}/names" class="pit-row pit-name">
+                  ${csrfInput(req)}
+                  <input type="hidden" name="label" value="${esc(n.label)}">
+                  <span class="mono acid">${esc(n.label)}.${esc(t.tld)}</span>
+                  <input name="target" placeholder="points at…" value="${esc(n.target || "")}" autocomplete="off">
+                  <button class="btn" type="submit" name="retarget" value="1">Save</button>
+                  <button class="btn" type="submit" name="release" value="1">Release</button>
+                </form>`).join("")
+              : `<p class="mono faint" style="font-size:.72rem;margin:6px 0">no names under .${esc(t.tld)} yet</p>`}
+            <form method="post" action="/pit/${esc(t.tld)}/names" class="pit-row">
+              ${csrfInput(req)}
+              <input name="label" placeholder="new name" autocomplete="off" required>
+              <span class="mono faint">.${esc(t.tld)}</span>
+              <input name="target" placeholder="points at… (optional)" autocomplete="off">
+              <button class="btn acid" type="submit">Add name</button>
+            </form>
           </div>
           <form method="post" action="/pit/${esc(t.tld)}/alias" class="pit-row">
             ${csrfInput(req)}
@@ -253,6 +313,29 @@ moshpitRouter.post("/pit/:tld/alias", requireAuth, async (req, res) => {
     : await setAlias({ from: req.params.tld, to: req.body?.to, userId: req.user.id });
   if (!result.ok) return back(res, { err: result.error || "could not update that alias" });
   back(res, { ok: req.body?.clear ? `.${req.params.tld} stands on its own again.` : `.${req.params.tld} now points at .${normalizeTld(req.body?.to)}.` });
+});
+
+// One endpoint for add / retarget / release: all three are the same row, and a
+// single form per name keeps the buttons next to the value they act on.
+moshpitRouter.post("/pit/:tld/names", requireAuth, async (req, res) => {
+  const tld = req.params.tld;
+  const label = req.body?.label;
+  const args = { tld, label, userId: req.user.id };
+
+  let result, done;
+  if (req.body?.release) {
+    result = await releaseName(args);
+    done = `${normalizeTld(label)}.${normalizeTld(tld)} released.`;
+  } else if (req.body?.retarget) {
+    result = await setNameTarget({ ...args, target: req.body?.target });
+    done = `${normalizeTld(label)}.${normalizeTld(tld)} updated.`;
+  } else {
+    result = await registerName({ ...args, target: req.body?.target });
+    done = `${normalizeTld(label)}.${normalizeTld(tld)} is yours.`;
+  }
+
+  if (!result.ok) return back(res, { err: result.error || "could not update that name" });
+  back(res, { ok: done });
 });
 
 moshpitRouter.post("/pit/:tld/exempt", requireAuth, async (req, res) => {
