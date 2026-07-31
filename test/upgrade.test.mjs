@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { ENGINES, upgradeSpec } from "../src/engines.mjs";
 import { planUpgrade, selfSpec } from "../src/upgrade.mjs";
 
 function withFakeTools(fn) {
@@ -61,6 +62,33 @@ test("default upgrade includes self and every installed tool", () => {
     assert.ok(plan.items.some(({ key, kind }) => key === "ugig" && kind === "tool"));
     assert.ok(plan.items.some(({ key, kind }) => key === "coinpay" && kind === "tool"));
   });
+});
+
+test("privacycode upgrades by re-running its installer, not its own updater", () => {
+  // `privacycode upgrade` is opencode's updater, and it decides how to update
+  // by recognising where the binary was installed. It knows opencode's
+  // locations, not this fork's ~/.privacycode/bin, so against an install of
+  // ours it reports `Using method: unknown` and aborts every time. Re-running
+  // the installer is what actually moves the version.
+  assert.equal(ENGINES.privacycode.upgrade, undefined, "privacycode must not carry a native updater");
+  assert.deepEqual(upgradeSpec(ENGINES.privacycode), ENGINES.privacycode.install);
+
+  // The same call on plain opencode keeps its updater: that one does know
+  // where opencode puts itself.
+  assert.deepEqual(upgradeSpec(ENGINES.opencode), { cmd: "opencode", args: ["upgrade"] });
+});
+
+test("an explicit privacycode upgrade plans the installer", () => {
+  const plan = planUpgrade(["privacycode"]);
+
+  assert.equal(plan.self, false);
+  assert.deepEqual(plan.items.map(({ key, kind, spec }) => ({ key, kind, spec })), [
+    {
+      key: "privacycode",
+      kind: "engine",
+      spec: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
+    },
+  ]);
 });
 
 test("unknown upgrade targets remain visible to the caller", () => {

@@ -33,7 +33,12 @@ export const ENGINES = {
     agentArgs: ["--auto"],
     agentsView: ["agent", "list"],
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
-    upgrade: { cmd: "privacycode", args: ["upgrade"] },
+    // Deliberately no native updater. `privacycode upgrade` is opencode's, and
+    // it works out how to update itself by recognising where it was installed —
+    // it knows opencode's own locations, not this fork's ~/.privacycode/bin. It
+    // reports `Using method: unknown` and aborts with "Unknown installation
+    // method", every time, so it can never upgrade an install we made. Falling
+    // through to the installer above is what actually moves the version.
   },
   claude: {
     desc: "Claude Code — Anthropic's agentic CLI",
