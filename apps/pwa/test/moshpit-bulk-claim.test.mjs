@@ -223,12 +223,21 @@ test("the default price", { skip: installed ? false : "pwa dependencies not inst
   const m = await import("../src/moshpit.mjs");
   const uniq = () => `d${randomBytes(4).toString("hex")}`;
 
-  await t.test("is $2, and nothing enforces a ceiling on an override", async () => {
-    const { MAX_CHILD_PRICE_USD } = await import("../src/lib/moshpit-name.mjs");
-    assert.equal(DEFAULT_TLD_PRICE_USD, 2);
-    // PRD 0005 R3 caps a child name at $1.99, but that arrives with terms and
-    // renewals; until then this is an asking price and a line may exceed it.
-    assert.equal(MAX_CHILD_PRICE_USD, 1.99);
+  await t.test("both prices are round, and neither ends in .99", async () => {
+    const { CHILD_PRICE_USD, ENDING_PRICE_USD, MAX_CHILD_PRICE_USD } =
+      await import("../src/lib/moshpit-name.mjs");
+
+    assert.equal(CHILD_PRICE_USD, 2, "foo.bar");
+    assert.equal(ENDING_PRICE_USD, 5, ".bar");
+    assert.equal(DEFAULT_TLD_PRICE_USD, CHILD_PRICE_USD);
+    assert.equal(MAX_CHILD_PRICE_USD, CHILD_PRICE_USD);
+
+    // PRD 0005 §10.1 wrote these as $1.99 and $4.99. Superseded: the trailing
+    // cent buys nothing and every number here is one a person has to reason
+    // about. A regression to .99 should fail rather than ship quietly.
+    for (const price of [CHILD_PRICE_USD, ENDING_PRICE_USD]) {
+      assert.equal(price, Math.round(price), `${price} should be whole dollars`);
+    }
   });
 
   await t.test("an explicit price still wins over it", async () => {
