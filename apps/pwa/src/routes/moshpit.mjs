@@ -17,12 +17,13 @@ import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
+import { landingFor } from "../lib/moshpit-landing.mjs";
 import {
   getTld, listTlds, listTldsForUser, registerTld, normalizeLabel,
   setAlias, clearAlias, listExempt, setExempt, clearExempt,
-  listNames, registerName, setNameTarget, releaseName,
+  listNames, getName, getTldWithPrice, registerName, setNameTarget, releaseName,
   setTldPrice, listTldsNotOwnedBy, quoteName, openNamePurchase,
-  resolveMoshpitName, normalizeTld, tldRejection,
+  resolveMoshpitName, normalizeTld, tldRejection, parseMoshpitName,
   normalizeMode, resolutionPreference,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
@@ -256,13 +257,104 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
 
 /* ---------- the human page ---------- */
 
-const claimForm = (req) => `
+const claimForm = (req, prefill = "") => `
 <form method="post" action="/pit/claim" class="pit-form">
   ${csrfInput(req)}
   <label class="pit-field"><span class="pit-dot">.</span
-    ><input name="tld" placeholder="eggs" aria-label="the TLD you want" autocomplete="off" spellcheck="false" required></label>
+    ><input name="tld" placeholder="eggs" aria-label="the TLD you want" autocomplete="off" spellcheck="false"
+      value="${esc(prefill)}" required></label>
   <button class="btn acid" type="submit">Claim it</button>
 </form>`;
+
+/**
+ * The card someone lands on after typing `mosh.whatever` somewhere.
+ *
+ * A resolver or the gateway sent them here because the name did not resolve to
+ * a site. They have just demonstrated demand for a name, so the page opens
+ * with the shortest path from wanting it to holding it — and says plainly when
+ * there is no such path, rather than inviting them into a flow that does not
+ * exist.
+ */
+const landingCard = (req, landing) => {
+  if (!landing || landing.kind === "none") return "";
+  const name = `<span class="mono acid">${esc(landing.name)}</span>`;
+  const tld = `<span class="mono acid">.${esc(landing.tld)}</span>`;
+
+  if (landing.kind === "claim-tld") {
+    return `<div class="pit-land">
+      <p class="label">you asked for ${esc(landing.name)}</p>
+      <h2>Nobody holds ${tld}.</h2>
+      <p class="pit-copy">Claim the ending and ${name} — plus every other name under it — is yours to
+        point wherever you like. First come, first served, and nobody can take it back.</p>
+      ${req.user ? claimForm(req, landing.tld)
+        : `<p class="pit-copy">Sign in with your moshcode account to claim it — the same login the CLI uses.</p>
+           <p><a class="btn acid" href="/">Sign in →</a></p>`}
+    </div>`;
+  }
+
+  if (landing.kind === "mint-name") {
+    return `<div class="pit-land">
+      <p class="label">you asked for ${esc(landing.name)}</p>
+      <h2>${tld} is yours. ${name} is one click away.</h2>
+      <p class="pit-copy">Register the name and point it at whatever should answer for it — a host, an
+        address, or nothing yet.</p>
+      <form method="post" action="/pit/${esc(landing.tld)}/names" class="pit-row">
+        ${csrfInput(req)}
+        <input type="hidden" name="label" value="${esc(landing.label)}">
+        <span class="mono acid">${esc(landing.name)}</span>
+        <input name="target" placeholder="points at… (optional)" autocomplete="off">
+        <button class="btn acid" type="submit">Register it</button>
+      </form>
+    </div>`;
+  }
+
+  if (landing.kind === "yours") {
+    return `<div class="pit-land">
+      <p class="label">you asked for ${esc(landing.name)}</p>
+      <h2>${name} is already yours.</h2>
+      <p class="pit-copy">It is in your list below — change where it points, or release it.</p>
+    </div>`;
+  }
+
+  if (landing.kind === "taken") {
+    return `<div class="pit-land">
+      <p class="label">you asked for ${esc(landing.name)}</p>
+      <h2>${name} is taken.</h2>
+      <p class="pit-copy">Someone else holds ${tld} and has minted this name${
+        landing.target ? `, pointing it at <span class="mono">${esc(landing.target)}</span>` : ""
+      }. Claim an ending of your own below and you will never have to ask anyone for a name again.</p>
+    </div>`;
+  }
+
+  if (landing.kind === "buy") {
+    const price = esc(String(landing.priceUsd));
+    return `<div class="pit-land">
+      <p class="label">you asked for ${esc(landing.name)}</p>
+      <h2>${name} is free. ${tld} sells names at $${price}.</h2>
+      <p class="pit-copy">Buy it and it is yours to point wherever you like — the operator of the ending
+        keeps the money, and nobody can take the name back.</p>
+      ${req.user ? `
+      <form method="post" action="/pit/${esc(landing.tld)}/buy" class="pit-row">
+        ${csrfInput(req)}
+        <input type="hidden" name="label" value="${esc(landing.label)}">
+        <span class="mono acid">${esc(landing.name)}</span>
+        <button class="btn acid" type="submit">Buy for $${price}</button>
+      </form>`
+      : `<p class="pit-copy">Sign in with your moshcode account to buy it — the same login the CLI uses.</p>
+         <p><a class="btn acid" href="/">Sign in →</a></p>`}
+    </div>`;
+  }
+
+  // not-for-sale: the name is free, but the operator has not put a price on
+  // names under their ending, and `quoteName` refuses without one. Saying so
+  // beats a checkout button that dead-ends.
+  return `<div class="pit-land">
+    <p class="label">you asked for ${esc(landing.name)}</p>
+    <h2>${name} is free, but ${tld} is not selling.</h2>
+    <p class="pit-copy">Whoever holds the ending has not put a price on names under it. Claim an ending
+      of your own below — or take the same label under one that is selling.</p>
+  </div>`;
+};
 
 const PIT_CSS = `
 .pit-form{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;margin:18px 0 8px}
@@ -301,7 +393,11 @@ const PIT_CSS = `
 .pit-steps{margin:0;padding-left:20px;line-height:1.8;max-width:66ch}
 .pit-steps li{margin-bottom:10px}
 .pit-steps code,.pit-copy code{font-family:var(--mono);color:var(--acid);font-size:.86em}
-.pit-copy{max-width:66ch;color:var(--dim)}`;
+.pit-copy{max-width:66ch;color:var(--dim)}
+.pit-land{border:1px solid var(--line-2);border-left:3px solid var(--acid);border-radius:var(--r);
+  background:linear-gradient(180deg,var(--surface),var(--bg-tint));padding:20px 22px;margin:0 0 26px}
+.pit-land h2{font-size:1.35rem;text-transform:none;margin:6px 0 10px}
+.pit-land .pit-form,.pit-land .pit-row{margin-bottom:0}`;
 
 /**
  * The tab strip. `/pit` is the namespace itself and `/pit/dns` is how you
@@ -322,6 +418,24 @@ moshpitRouter.get("/pit", async (req, res) => {
     req.user ? listTldsForUser(req.user.id) : [],
     req.user ? balance(req.user.id) : 0,
   ]);
+
+  // `?name=mosh.whatever` — somebody typed a Moshpit name and ended up here
+  // instead of at a site. Work out what they can actually do about it.
+  const asked = parseMoshpitName(req.query.name);
+  let landing = { kind: "none" };
+  if (asked) {
+    // With the price: a stranger can buy a name under an ending that is listed
+    // for sale (#127), so the card has to know whether this one is.
+    const owner = await getTldWithPrice(asked.tld);
+    const entry = owner ? await getName(asked.tld, asked.label) : null;
+    landing = landingFor(req.query.name, {
+      tldOwned: Boolean(owner),
+      ownedByViewer: Boolean(owner && req.user && owner.user_id === req.user.id),
+      nameRegistered: Boolean(entry),
+      target: entry?.target ?? null,
+      priceUsd: owner?.price_usd ?? null,
+    });
+  }
 
   // Exemptions are only meaningful for a TLD that points somewhere, so only
   // those cost a query.
@@ -431,6 +545,7 @@ moshpitRouter.get("/pit", async (req, res) => {
     you exempt stays exactly where it is.
   </p>
   ${pitTabs("namespace")}
+  ${landingCard(req, landing)}
   ${msg}
   ${req.user ? claimForm(req) : ""}
   <h2 style="margin-top:34px;font-size:1.2rem">Yours</h2>
