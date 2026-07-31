@@ -20,6 +20,7 @@
 // cannot positively identify falls back to today's plain `inherit`.
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 
 /**
  * POSIX single-quote escaping, for argv that has to survive being flattened
@@ -83,11 +84,19 @@ export function ptySpec(cmd, args = [], transcript, flavor) {
  * nothing in perceived latency. Returns a stop() that drains whatever landed
  * after the last tick before closing — the tail of a session is usually the
  * part you care about.
+ *
+ * Bytes are decoded through a StringDecoder rather than per-slice toString:
+ * a slice boundary lands wherever the poll happened to catch the file, which
+ * is regularly in the middle of a multi-byte character. Engines draw their
+ * full-screen UI out of box-drawing characters (three UTF-8 bytes each), so
+ * decoding each slice independently turns them into U+FFFD in the mirror. The
+ * decoder holds the incomplete tail back until the rest of it arrives.
  */
 export function followFile(file, onChunk, { intervalMs = 100 } = {}) {
   let fd = null;
   let offset = 0;
   let stopped = false;
+  let decoder = new StringDecoder("utf8");
 
   const readNew = () => {
     try {
@@ -97,14 +106,19 @@ export function followFile(file, onChunk, { intervalMs = 100 } = {}) {
       }
       const { size } = statSync(file);
       // A transcript only grows; a smaller size means it was rotated or
-      // replaced, so resync rather than read garbage from the middle.
-      if (size < offset) offset = 0;
+      // replaced, so resync rather than read garbage from the middle. Any
+      // half-character held back belongs to the old file, so drop it too.
+      if (size < offset) {
+        offset = 0;
+        decoder = new StringDecoder("utf8");
+      }
       while (offset < size) {
         const buf = Buffer.allocUnsafe(Math.min(65536, size - offset));
         const read = readSync(fd, buf, 0, buf.length, offset);
         if (read <= 0) break;
         offset += read;
-        onChunk(buf.subarray(0, read).toString("utf8"));
+        const text = decoder.write(buf.subarray(0, read));
+        if (text) onChunk(text);
       }
     } catch {
       /* the child owns this file; a transient read error is not our problem */
@@ -119,6 +133,10 @@ export function followFile(file, onChunk, { intervalMs = 100 } = {}) {
     stopped = true;
     clearInterval(timer);
     readNew(); // final drain
+    // Nothing more is coming, so a character still held back really is
+    // truncated. Emit it rather than swallowing the last bytes of a session.
+    const tail = decoder.end();
+    if (tail) onChunk(tail);
     if (fd !== null) {
       try { closeSync(fd); } catch { /* already gone */ }
       fd = null;
