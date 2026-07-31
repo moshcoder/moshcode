@@ -105,9 +105,16 @@ export function resolveEngine(token) {
   return key ? [key, ENGINES[key]] : null;
 }
 
-function executableCandidates(bin) {
+// `extraDirs` are directories a vendor installer drops a binary into without
+// putting it on PATH for the session that ran the install (turso's official
+// script unpacks to $HOME/.turso and only appends it to your shell profile).
+// Searching them after PATH keeps a real `turso` on PATH winning, while still
+// finding the one we just installed.
+function executableCandidates(bin, extraDirs = []) {
   const exts = process.platform === "win32" ? ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";")] : [""];
-  const dirs = path.isAbsolute(bin) || bin.includes(path.sep) ? [""] : (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const dirs = path.isAbsolute(bin) || bin.includes(path.sep)
+    ? [""]
+    : [...(process.env.PATH || "").split(path.delimiter).filter(Boolean), ...extraDirs.filter(Boolean)];
   const seen = new Set();
   const candidates = [];
   for (const dir of dirs) {
@@ -123,8 +130,8 @@ function executableCandidates(bin) {
   return candidates;
 }
 
-function resolveExecutable(bin) {
-  for (const candidate of executableCandidates(bin)) {
+function resolveExecutable(bin, extraDirs = []) {
+  for (const candidate of executableCandidates(bin, extraDirs)) {
     try {
       if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
     } catch { /* keep looking */ }
@@ -141,8 +148,8 @@ function nodeShebang(file) {
   }
 }
 
-function spawnSpec(bin, args = []) {
-  const resolved = resolveExecutable(bin);
+function spawnSpec(bin, args = [], extraDirs = []) {
+  const resolved = resolveExecutable(bin, extraDirs);
   if (!resolved) return { cmd: bin, args };
   if (process.platform === "win32" && path.extname(resolved) === "" && nodeShebang(resolved)) {
     return { cmd: process.execPath, args: [resolved, ...args] };
@@ -150,9 +157,9 @@ function spawnSpec(bin, args = []) {
   return { cmd: resolved, args };
 }
 
-/** Is `bin` an executable on PATH? (cross-platform-ish) */
-export function isInstalled(bin) {
-  return Boolean(resolveExecutable(bin));
+/** Is `bin` an executable on PATH (or in one of `extraDirs`)? (cross-platform-ish) */
+export function isInstalled(bin, extraDirs = []) {
+  return Boolean(resolveExecutable(bin, extraDirs));
 }
 
 // Headless "run one prompt, print the answer, exit" invocation per engine — the
@@ -254,7 +261,9 @@ export function exitReason(r) {
  * Hand the current process streams to an external CLI. Arguments, cwd, and the
  * environment are inherited unchanged unless that target explicitly asks for
  * environment keys to be stripped (Claude uses this to avoid nested-session
- * markers). Resolves { ok, code, signal } when the child exits.
+ * markers). `target.binDirs` extends the executable search past PATH for tools
+ * whose installer drops the binary somewhere PATH won't see until the next
+ * shell. Resolves { ok, code, signal } when the child exits.
  */
 export function openPassthrough(target, args = [], { onOutput } = {}) {
   return new Promise((resolve) => {
@@ -263,7 +272,7 @@ export function openPassthrough(target, args = [], { onOutput } = {}) {
       env = { ...process.env };
       for (const k of target.stripEnv) delete env[k];
     }
-    const spec = spawnSpec(target.bin, args);
+    const spec = spawnSpec(target.bin, args, target.binDirs || []);
 
     // With a mirror attached, run the child under a pseudo-terminal so a copy
     // of its output can be streamed to the session page. `inherit` alone hands

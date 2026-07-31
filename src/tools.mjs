@@ -3,6 +3,7 @@
 // workflows, CoinPay owns payment workflows, c0mpute owns the compute network,
 // the cloud CLIs below own deploys/secrets/infra, and moshcode only conducts
 // their native command lines.
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -91,8 +92,11 @@ export const TOOLS = {
     bin: "turso",
     // https://github.com/tursodatabase/turso-cli — the official installer, which
     // unpacks to $HOME/.turso and appends that dir to your shell profile. It is
-    // therefore on PATH for the NEXT shell, so `moshcode tools` can still show
-    // turso as missing in the session that installed it.
+    // therefore on PATH only for the NEXT shell, so PATH alone would report turso
+    // as missing (and /turso would fail to launch it) in the session that
+    // installed it — and in every already-running one. binDirs searches the
+    // install dir after PATH so the binary is found either way.
+    binDirs: [path.join(homedir(), ".turso")],
     install: { cmd: "bash", args: ["-c", "curl -sSfL https://get.tur.so/install.sh | bash"] },
   },
   tailscale: {
@@ -127,7 +131,7 @@ export function toolStatus() {
   return Object.entries(TOOLS).map(([key, tool]) => ({
     key,
     ...tool,
-    installed: isInstalled(tool.bin),
+    installed: isInstalled(tool.bin, tool.binDirs),
   }));
 }
 
