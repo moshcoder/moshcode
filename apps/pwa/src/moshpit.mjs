@@ -14,7 +14,7 @@ import { get, all, run } from "./db.mjs";
 import { BULK_TIME_BUDGET_MS, MAX_BULK_TLDS, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_TIME_BUDGET_MS, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
   parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 

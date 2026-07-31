@@ -398,3 +398,14 @@ test("a paste bigger than one request can finish", { skip: installed ? false : "
     assert.match(m.summarizeBulkClaim(result), /2 not attempted — paste them again/);
   });
 });
+
+test("a ceiling reads like a rough promise", async () => {
+  const { shortCount, MAX_BULK_TLDS } = await import("../src/lib/moshpit-name.mjs");
+  assert.equal(shortCount(1000), "1k");
+  assert.equal(shortCount(2000), "2k");
+  assert.equal(shortCount(MAX_BULK_TLDS), "1k");
+  // Anything not a round thousand stays exact — "1.2k" would be a lie about
+  // where the ceiling actually is.
+  assert.equal(shortCount(200), "200");
+  assert.equal(shortCount(1500), "1500");
+});

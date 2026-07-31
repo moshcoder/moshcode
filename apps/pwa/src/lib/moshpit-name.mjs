@@ -136,6 +136,11 @@ export const MAX_BULK_TLDS = 1000;
  */
 export const BULK_TIME_BUDGET_MS = 20_000;
 
+/** 1000 -> "1k". A ceiling is a rough promise and should read like one. */
+export function shortCount(n) {
+  return n >= 1000 && n % 1000 === 0 ? `${n / 1000}k` : String(n);
+}
+
 /**
  * The most a child name may cost per year.
  *
