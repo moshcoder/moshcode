@@ -265,10 +265,12 @@ async function main() {
     return;
   }
   if (cmd === "mcp") {
-    return mcpCommand(rest);
+    process.exitCode = (await mcpCommand(rest)) || 0;
+    return;
   }
   if (cmd === "skill" || cmd === "skills") {
-    return skillCommand(rest);
+    process.exitCode = (await skillCommand(rest)) || 0;
+    return;
   }
   if (cmd === "install") {
     const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
