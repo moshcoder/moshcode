@@ -65,28 +65,35 @@ export function planUpgrade(targets = []) {
   const unknown = [];
   const seen = new Set();
 
+  // A native updater (`doppler update`, `aider --upgrade`) is the missing
+  // binary itself, so it cannot be what installs it. When the target is not
+  // present yet, run its installer — that is the command the "(installing —
+  // not present)" note below promises. Installed targets keep the native
+  // updater, which is the whole point of having one.
   const addEngine = (key) => {
     const id = `engine:${key}`;
     if (seen.has(id)) return;
     seen.add(id);
+    const installed = engineByKey[key].installed;
     items.push({
       key,
       label: key,
       kind: "engine",
-      spec: upgradeSpec(ENGINES[key]),
-      installed: engineByKey[key].installed,
+      spec: installed ? upgradeSpec(ENGINES[key]) : ENGINES[key].install,
+      installed,
     });
   };
   const addTool = (key) => {
     const id = `tool:${key}`;
     if (seen.has(id)) return;
     seen.add(id);
+    const installed = toolByKey[key].installed;
     items.push({
       key,
       label: key,
       kind: "tool",
-      spec: toolUpgradeSpec(TOOLS[key]),
-      installed: toolByKey[key].installed,
+      spec: installed ? toolUpgradeSpec(TOOLS[key]) : TOOLS[key].install,
+      installed,
     });
   };
 
