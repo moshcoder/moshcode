@@ -19,6 +19,9 @@ import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import {
+  MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, forwardableHeaders,
+} from "../lib/moshpit-gateway.mjs";
+import {
   addPin,
   clearAlias,
   clearExempt,
@@ -181,6 +184,151 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
   if (!result.ok) return bad(res, result.error || "could not release that name");
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), released: true });
 });
+
+/* ---- serving a name over the clearnet ---- */
+
+/**
+ * GET /n/:name — what a Moshpit name actually shows.
+ *
+ * The destination every resolver and the TronBrowser extension already points
+ * at. Two outcomes: a name with a target is fetched and returned, and a name
+ * without one gets a directory instead of a dead end — what else lives under
+ * this ending, and which other endings are worth a look. A parked name is the
+ * commonest thing anyone will land on, so it is the page that has to earn its
+ * keep.
+ */
+moshpitRouter.get("/n/:name", async (req, res) => {
+  const resolution = await resolveMoshpitName(req.params.name);
+  if (!resolution) return res.status(400).send(page({ title: "moshpit", body: notAName(req.params.name) }));
+
+  const parsed = parseMoshpitName(resolution.resolved);
+  const tld = parsed?.tld;
+
+  if (resolution.target) {
+    const check = await checkTarget(resolution.target);
+    if (!check.ok) {
+      // Named plainly rather than shown as a generic failure: the owner is the
+      // only one who can fix it, and "target is link-local" tells them how.
+      return res.status(502).send(page({
+        title: resolution.name,
+        body: unreachable(resolution, check.error),
+      }));
+    }
+    return proxyToOrigin(req, res, resolution, check);
+  }
+
+  // No target: the directory.
+  const [names, tlds] = await Promise.all([
+    tld ? listNames(tld) : Promise.resolve([]),
+    listTlds(200),
+  ]);
+  const owner = tld ? await getTld(tld) : null;
+  res.status(resolution.name_registered ? 200 : 404).send(page({
+    title: resolution.name,
+    body: directory({ resolution, tld, owner, names, tlds }),
+  }));
+});
+
+/** Fetch the origin and hand the result back, bounded in time and size. */
+async function proxyToOrigin(req, res, resolution, check) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ORIGIN_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(`http://${check.host}:${check.port}${req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/"}`, {
+      headers: forwardableHeaders(req.headers, resolution.resolved),
+      redirect: "manual",
+      signal: controller.signal,
+    });
+
+    // Only what a page needs. Passing the origin's Set-Cookie through would let
+    // a name's owner set cookies on app.moshcode.sh, which is where accounts
+    // live — that is a session-fixation hole, not a feature.
+    const type = upstream.headers.get("content-type");
+    if (type) res.set("content-type", type);
+    res.set("x-moshpit-name", resolution.resolved);
+    res.set("content-security-policy", "sandbox allow-scripts allow-forms allow-popups");
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.length > MAX_BODY_BYTES) {
+      return res.status(502).send(page({ title: resolution.name, body: unreachable(resolution, "response too large") }));
+    }
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    const why = error.name === "AbortError" ? "the origin did not answer in time" : "the origin could not be reached";
+    return res.status(504).send(page({ title: resolution.name, body: unreachable(resolution, why) }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const notAName = (typed) => `
+<section class="pit-panel">
+  <h1 class="acid">not a Moshpit name</h1>
+  <p class="dim"><span class="mono">${esc(typed)}</span> is not one label and one ending.</p>
+  <p><a class="btn acid" href="/pit">the pit →</a></p>
+</section>`;
+
+const unreachable = (resolution, why) => `
+<section class="pit-panel">
+  <h1 class="acid">${esc(resolution.name)}</h1>
+  <p class="dim">This name points somewhere that could not be served: ${esc(why)}.</p>
+  <p class="mono faint" style="font-size:.72rem">Its owner can repoint it from the pit.</p>
+  <p><a class="btn" href="/pit">the pit →</a></p>
+</section>`;
+
+/**
+ * The page a parked name shows.
+ *
+ * Everything here is a link to something else in the namespace, because the
+ * person reading it typed a name that has nothing behind it and the useful
+ * answer is what does. Live sites first — they are the only entries that go
+ * anywhere real — then the rest of the ending, then other endings.
+ */
+function directory({ resolution, tld, owner, names, tlds }) {
+  const live = names.filter((n) => n.target);
+  const claimed = names.filter((n) => !n.target);
+
+  // "Related" without a taxonomy: an alias is an explicit statement by an
+  // operator that two endings belong together, and shared ownership is the
+  // next best signal. Everything else is just the rest of the namespace.
+  const related = tlds.filter((t) =>
+    t.tld !== tld && (t.alias_of === tld || (owner && t.user_id === owner.user_id)));
+  const others = tlds.filter((t) => t.tld !== tld && !related.includes(t)).slice(0, 24);
+
+  const nameLink = (n) =>
+    `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
+  const tldLink = (t) =>
+    `<a class="mono" href="/pit?tab=theirs&q=${esc(t.tld)}">.${esc(t.tld)}</a>`;
+
+  return `
+<section class="pit-panel">
+  <h1 class="acid">${esc(resolution.name)}</h1>
+  <p class="dim">
+    ${resolution.name_registered
+      ? "This name is claimed but does not point anywhere yet."
+      : `Nobody holds this name. <a class="acid" href="/pit">Claim it →</a>`}
+  </p>
+
+  ${live.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
+  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">→ ${esc(n.target)}</span></li>`).join("")}</ul>`
+    : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">No site under .${esc(tld)} points anywhere yet.</p>`}
+
+  ${claimed.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">Also claimed on .${esc(tld)}</h2>
+  <ul class="pit-dir">${claimed.slice(0, 40).map((n) => `<li>${nameLink(n)}</li>`).join("")}</ul>` : ""}
+
+  ${related.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>
+  <p class="pit-dir-row">${related.map(tldLink).join(" · ")}</p>` : ""}
+
+  ${others.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">More endings</h2>
+  <p class="pit-dir-row">${others.map(tldLink).join(" · ")}</p>` : ""}
+
+  <p style="margin-top:26px"><a class="btn acid" href="/pit">the pit →</a></p>
+</section>`;
+}
 
 /* ---- the keys a name may present ---- */
 
@@ -553,6 +701,11 @@ const PIT_CSS = `
 .pit-defaults label{display:flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:.72rem;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
 .pit-defaults input{width:11ch;padding:7px 9px;font-size:.78rem}
+.pit-dir{list-style:none;padding:0;margin:10px 0;display:grid;gap:4px}
+.pit-dir li{font-size:.82rem}
+.pit-dir-row{line-height:2;max-width:70ch}
+.pit-dir-row a{color:var(--dim);text-decoration:none}
+.pit-dir-row a:hover{color:var(--acid)}
 .pit-bulk{margin:0 0 18px;max-width:62ch}
 .pit-bulk summary{font-family:var(--mono);font-size:.74rem;letter-spacing:.08em;color:var(--dim);cursor:pointer;padding:6px 0}
 .pit-bulk summary:hover{color:var(--acid)}
