@@ -19,12 +19,38 @@ import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import {
-  getTld, listTlds, listTldsForUser, registerTld, normalizeLabel,
-  setAlias, clearAlias, listExempt, setExempt, clearExempt,
-  listNames, getName, getTldWithPrice, registerName, setNameTarget, releaseName,
-  setTldPrice, listTldsNotOwnedBy, quoteName, openNamePurchase,
-  resolveMoshpitName, normalizeTld, tldRejection, parseMoshpitName,
-  normalizeMode, resolutionPreference,
+  addPin,
+  clearAlias,
+  clearExempt,
+  getName,
+  getTld,
+  getTldWithPrice,
+  listExempt,
+  listNames,
+  listPins,
+  listTlds,
+  listTldsForUser,
+  listTldsNotOwnedBy,
+  normalizeLabel,
+  normalizeMode,
+  normalizePinKind,
+  normalizeTld,
+  openNamePurchase,
+  parseMoshpitName,
+  PIN_KINDS,
+  pinsForName,
+  quoteName,
+  registerName,
+  registerTld,
+  releaseName,
+  removePin,
+  resolutionPreference,
+  resolveMoshpitName,
+  setAlias,
+  setExempt,
+  setNameTarget,
+  setTldPrice,
+  tldRejection,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
 
@@ -148,6 +174,94 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
   const result = await releaseName({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
   if (!result.ok) return bad(res, result.error || "could not release that name");
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), released: true });
+});
+
+/* ---- the keys a name may present ---- */
+
+/**
+ * GET /api/moshpit/pins?name=scrambled.eggs[&kind=tls] — public.
+ *
+ * The lookup every Moshpit client makes before it will talk to anything. The
+ * status codes carry meaning the body does not, because clients cache on them:
+ *
+ *   400  not a Moshpit name      a definite no, cacheable as long as a real answer
+ *   404  no key published        also definite — nobody has vouched for a key here
+ *   200  { pins: [...] }         the keys a peer may present
+ *
+ * What matters is that both differ from a 5xx or a timeout. A definite no means
+ * refuse the connection; an outage means try again later. A client that treats
+ * them alike either fails closed forever or fails open once, and the second is
+ * how pinning gets quietly defeated.
+ */
+moshpitRouter.get("/api/moshpit/pins", async (req, res) => {
+  const name = String(req.query.name ?? "").trim();
+  if (!name) return bad(res, "name is required");
+
+  const requested = req.query.kind ? String(req.query.kind) : null;
+  const kind = requested ? normalizePinKind(requested) : null;
+  if (requested && !kind) return bad(res, `kind must be one of ${PIN_KINDS.join(", ")}`);
+
+  const found = await pinsForName(name, kind);
+  if (!found) return bad(res, "not a Moshpit name");
+
+  const body = {
+    name: found.name,
+    resolved: found.resolved,
+    tld: found.tld,
+    label: found.label,
+    target: found.target,
+    // A flat array of strings first: that is all a client needs in order to
+    // compare against what a peer actually presented.
+    pins: found.pins.map((p) => p.pin),
+    entries: found.pins.map((p) => ({ pin: p.pin, kind: p.kind, note: p.note })),
+  };
+  return found.pins.length ? res.json(body) : res.status(404).json(body);
+});
+
+/** GET /api/moshpit/tlds/:tld/pins?label=blue — public; pins are public by nature. */
+moshpitRouter.get("/api/moshpit/tlds/:tld/pins", async (req, res) => {
+  const tld = normalizeTld(req.params.tld);
+  const label = normalizeLabel(req.query.label);
+  if (!tld || !label) return bad(res, "tld and label are required");
+
+  const requested = req.query.kind ? String(req.query.kind) : null;
+  const kind = requested ? normalizePinKind(requested) : null;
+  if (requested && !kind) return bad(res, `kind must be one of ${PIN_KINDS.join(", ")}`);
+
+  res.json({ tld, label, pins: await listPins(tld, label, kind) });
+});
+
+/**
+ * POST /api/moshpit/tlds/:tld/pins { label, pin, kind, note? } — publish a key.
+ *
+ * Adds rather than replaces, so rotation has a window: publish the new key
+ * alongside the old, deploy it, then withdraw the old. Replacing outright would
+ * break every client between the write and the deploy.
+ */
+moshpitRouter.post("/api/moshpit/tlds/:tld/pins", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await addPin({
+    tld: req.params.tld,
+    label: req.body?.label,
+    pin: req.body?.pin,
+    kind: req.body?.kind,
+    note: req.body?.note,
+    userId: req.user.id,
+  });
+  // 409 when the pin is already published under another kind: the request was
+  // well formed, it just contradicts what is already there.
+  if (!result.ok) return bad(res, result.error || "could not publish that pin", result.taken ? 409 : 400);
+  res.status(201).json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), kind: req.body?.kind });
+});
+
+/** DELETE /api/moshpit/tlds/:tld/pins { label, pin } — withdraw a key. */
+moshpitRouter.delete("/api/moshpit/tlds/:tld/pins", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await removePin({
+    tld: req.params.tld, label: req.body?.label, pin: req.body?.pin, userId: req.user.id,
+  });
+  if (!result.ok) return bad(res, result.error || "could not withdraw that pin", 404);
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), withdrawn: true });
 });
 
 /* ---- the market ---- */

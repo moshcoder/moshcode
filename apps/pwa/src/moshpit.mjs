@@ -248,6 +248,12 @@ export async function setNameTarget({ tld: tldInput, label: labelInput, userId, 
 export async function releaseName({ tld: tldInput, label: labelInput, userId }) {
   const owned = await ownedName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
+  // Keys go with the name. Deleted explicitly rather than left to the foreign
+  // key, because SQLite only enforces those with `PRAGMA foreign_keys = ON`
+  // and nothing here sets it — so a cascade that looks declared would not fire,
+  // and whoever registered the name next would inherit the previous holder's
+  // published keys.
+  await run(`DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await run(`DELETE FROM moshpit_names WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await logAction(owned.tld, userId, `unname:${owned.label}`);
   return { ok: true };
@@ -430,4 +436,121 @@ export async function resolveMoshpitName(input) {
     name_registered: Boolean(entry),
     target: entry?.target ?? null,
   };
+}
+
+/* ---- the keys a name may present ---- */
+
+const PIN_COLS = `tld, label, pin, kind, note, user_id, created_at`;
+
+export const PIN_KINDS = ["tls", "mtp"];
+
+/**
+ * A pin is SHA-256 over a SubjectPublicKeyInfo, base64 — always 32 bytes, so
+ * always 44 characters ending in one '='. Checked rather than trusted, because
+ * a malformed pin is indistinguishable in effect from a key that simply never
+ * matches: the connection fails, and nothing anywhere says why.
+ */
+export function isPin(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(value)) return false;
+  return Buffer.from(value, "base64").length === 32;
+}
+
+export function normalizePinKind(value) {
+  const kind = String(value ?? "").trim().toLowerCase();
+  return PIN_KINDS.includes(kind) ? kind : null;
+}
+
+export async function listPins(tldInput, labelInput, kind = null) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return [];
+  return kind
+    ? all(`SELECT ${PIN_COLS} FROM moshpit_name_pins WHERE tld = ? AND label = ? AND kind = ?
+           ORDER BY created_at DESC`, [tld, label, kind])
+    : all(`SELECT ${PIN_COLS} FROM moshpit_name_pins WHERE tld = ? AND label = ?
+           ORDER BY kind, created_at DESC`, [tld, label]);
+}
+
+/**
+ * The keys a client should accept for `scrambled.eggs`.
+ *
+ * Aliases are followed first. When `.agentic` points at `.agent`, a client
+ * asking about `foo.agentic` connects to whatever serves `foo.agent`, so the
+ * keys that matter are the ones published there. Answering with the typed
+ * name's own pins would refuse every working connection.
+ *
+ * Returns null when the pit has no authority over the name at all — an
+ * unclaimed TLD is not a Moshpit name, and saying "no key published" about
+ * `example.com` would invite a client to treat clearnet as merely unpinned.
+ */
+export async function pinsForName(input, kind = null) {
+  const resolution = await resolveMoshpitName(input);
+  if (!resolution || !resolution.registered) return null;
+
+  const parsed = parseMoshpitName(resolution.resolved);
+  if (!parsed) return null;
+
+  return {
+    name: resolution.name,
+    resolved: resolution.resolved,
+    tld: parsed.tld,
+    label: parsed.label,
+    name_registered: resolution.name_registered,
+    target: resolution.target,
+    pins: await listPins(parsed.tld, parsed.label, kind),
+  };
+}
+
+/** Publish a key for a name you hold. */
+export async function addPin({ tld: tldInput, label: labelInput, pin, kind: kindInput, note = null, userId }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  if (!isPin(pin)) {
+    return { ok: false, error: "pin must be base64 SHA-256 over a SubjectPublicKeyInfo (44 characters)" };
+  }
+  const kind = normalizePinKind(kindInput);
+  if (!kind) return { ok: false, error: `kind must be one of ${PIN_KINDS.join(", ")}` };
+
+  // The same pin under a second kind is a mistake worth naming. Ignoring it
+  // would leave the operator sure they published an `mtp` key while every
+  // client is still told it is `tls`.
+  const existing = await get(
+    `SELECT kind FROM moshpit_name_pins WHERE tld = ? AND label = ? AND pin = ?`,
+    [owned.tld, owned.label, pin],
+  );
+  if (existing && existing.kind !== kind) {
+    return { ok: false, error: `that pin is already published for ${owned.label}.${owned.tld} as ${existing.kind}`, taken: true };
+  }
+  if (existing) return { ok: true };
+
+  const trimmed = typeof note === "string" && note.trim() ? note.trim().slice(0, 200) : null;
+  await run(
+    `INSERT INTO moshpit_name_pins (${PIN_COLS}) VALUES (?,?,?,?,?,?,?)`,
+    [owned.tld, owned.label, pin, kind, trimmed, userId, Date.now()],
+  );
+  await logAction(owned.tld, userId, `pin:add:${owned.label}:${kind}`);
+  return { ok: true };
+}
+
+/**
+ * Withdraw a key.
+ *
+ * Removing the last pin of a kind is allowed. It leaves the name with no key
+ * published, which clients treat as a refusal rather than as permission — so
+ * this is how a compromised key is taken out of service, and refusing it on the
+ * grounds that it breaks connections would be refusing the point.
+ */
+export async function removePin({ tld: tldInput, label: labelInput, pin, userId }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const result = await run(
+    `DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ? AND pin = ?`,
+    [owned.tld, owned.label, pin],
+  );
+  if (!result.rowsAffected) return { ok: false, error: "that pin is not published for this name" };
+
+  await logAction(owned.tld, userId, `pin:remove:${owned.label}`);
+  return { ok: true };
 }
