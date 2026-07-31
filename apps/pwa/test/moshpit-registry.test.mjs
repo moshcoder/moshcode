@@ -66,7 +66,8 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
 
   await t.test("an unregistered name resolves to itself, unregistered", async () => {
     assert.deepEqual(await m.resolveMoshpitName("who.nothing"),
-      { name: "who.nothing", resolved: "who.nothing", aliased: false, registered: false });
+      { name: "who.nothing", resolved: "who.nothing", aliased: false, registered: false,
+        name_registered: false, target: null });
   });
 
   await t.test("aliasing carries the label across", async () => {
@@ -129,6 +130,83 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     const r = await m.resolveMoshpitName("foo.agentic");
     assert.equal(r.resolved, "foo.agentic");
     assert.equal(r.aliased, false);
+  });
+
+  await t.test("the TLD operator can mint names under it", async () => {
+    const r = await m.registerName({ tld: "eggs", label: "Blue", userId: ALICE, target: "https://example.com" });
+    assert.equal(r.ok, true);
+    assert.equal(r.name.label, "blue");
+    assert.equal(r.name.target, "https://example.com");
+    assert.deepEqual((await m.listNames("eggs")).map((n) => n.label), ["blue"]);
+  });
+
+  await t.test("a name can be reserved before it points anywhere", async () => {
+    assert.equal((await m.registerName({ tld: "eggs", label: "later", userId: ALICE })).ok, true);
+    assert.equal((await m.getName("eggs", "later")).target, null);
+  });
+
+  await t.test("the same name cannot be minted twice", async () => {
+    const r = await m.registerName({ tld: "eggs", label: "blue", userId: ALICE });
+    assert.equal(r.ok, false);
+    assert.equal(r.taken, true);
+  });
+
+  await t.test("nobody else can mint under your TLD", async () => {
+    const r = await m.registerName({ tld: "eggs", label: "stolen", userId: BOB });
+    assert.equal(r.ok, false, "holding the TLD is what buys you the namespace under it");
+    assert.equal(await m.getName("eggs", "stolen"), null);
+  });
+
+  await t.test("names cannot be minted under an unregistered TLD", async () => {
+    assert.equal((await m.registerName({ tld: "nothing", label: "x", userId: ALICE })).ok, false);
+  });
+
+  await t.test("invalid labels are refused", async () => {
+    assert.equal((await m.registerName({ tld: "eggs", label: "a.b", userId: ALICE })).ok, false);
+    assert.equal((await m.registerName({ tld: "eggs", label: "", userId: ALICE })).ok, false);
+  });
+
+  await t.test("resolving a minted name reports it, and its target", async () => {
+    const r = await m.resolveMoshpitName("blue.eggs");
+    assert.equal(r.registered, true, "the TLD is claimed");
+    assert.equal(r.name_registered, true);
+    assert.equal(r.target, "https://example.com");
+  });
+
+  await t.test("an unminted name under a claimed TLD is not registered", async () => {
+    const r = await m.resolveMoshpitName("ghost.eggs");
+    assert.equal(r.registered, true, "the TLD is still claimed");
+    assert.equal(r.name_registered, false);
+    assert.equal(r.target, null);
+  });
+
+  await t.test("a name is looked up on the TLD it resolves to", async () => {
+    // .agentic points at .agents; a name minted on .agents answers for both.
+    await m.setAlias({ from: "agentic", to: "agents", userId: ALICE });
+    await m.registerName({ tld: "agents", label: "foo", userId: ALICE, target: "https://foo.example" });
+
+    const viaAlias = await m.resolveMoshpitName("foo.agentic");
+    assert.equal(viaAlias.resolved, "foo.agents");
+    assert.equal(viaAlias.name_registered, true);
+    assert.equal(viaAlias.target, "https://foo.example");
+    await m.clearAlias("agentic", ALICE);
+  });
+
+  await t.test("retargeting and releasing work, and are owner-only", async () => {
+    assert.equal((await m.setNameTarget({ tld: "eggs", label: "blue", userId: BOB, target: "x" })).ok, false);
+    assert.equal((await m.releaseName({ tld: "eggs", label: "blue", userId: BOB })).ok, false);
+
+    assert.equal((await m.setNameTarget({ tld: "eggs", label: "blue", userId: ALICE, target: "https://new.example" })).ok, true);
+    assert.equal((await m.getName("eggs", "blue")).target, "https://new.example");
+
+    assert.equal((await m.releaseName({ tld: "eggs", label: "blue", userId: ALICE })).ok, true);
+    assert.equal(await m.getName("eggs", "blue"), null);
+  });
+
+  await t.test("minting is logged", async () => {
+    const log = await m.tldLog();
+    assert.ok(log.some((e) => e.action === "name:blue"));
+    assert.ok(log.some((e) => e.action === "unname:blue"));
   });
 
   await t.test("listing is scoped correctly", async () => {
