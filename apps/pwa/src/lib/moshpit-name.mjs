@@ -136,6 +136,17 @@ export const MAX_BULK_TLDS = 1000;
  */
 export const BULK_TIME_BUDGET_MS = 20_000;
 
+/**
+ * How many endings go into one round trip.
+ *
+ * Claiming used to cost six or seven trips per ending — insert, log, read
+ * back, then read-check-write for the price — which is why a 300-ending paste
+ * spent its whole time budget on 54 of them. Batched, the cost is a handful of
+ * trips for the entire paste, so the chunk exists to bound request size rather
+ * than to ration anything.
+ */
+export const BULK_CHUNK = 100;
+
 /** 1000 -> "1k". A ceiling is a rough promise and should read like one. */
 export function shortCount(n) {
   return n >= 1000 && n % 1000 === 0 ? `${n / 1000}k` : String(n);

@@ -350,61 +350,67 @@ test("per-line settings beat the form", { skip: installed ? false : "pwa depende
   });
 });
 
-test("a paste bigger than one request can finish", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+test("a big paste lands in one go", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
   const { migrate } = await import("../src/migrate.mjs");
   await migrate();
   const { run } = await import("../src/db.mjs");
   await run(`INSERT OR IGNORE INTO users (id,email,created_at) VALUES (?,?,?)`, [ALICE, "alice@example.com", Date.now()]);
+  await run(`INSERT OR IGNORE INTO users (id,email,created_at) VALUES (?,?,?)`, [BOB, "bob@example.com", Date.now()]);
   const m = await import("../src/moshpit.mjs");
-  const { BULK_TIME_BUDGET_MS, MAX_BULK_TLDS } = await import("../src/lib/moshpit-name.mjs");
-  const uniq = () => `t${randomBytes(4).toString("hex")}`;
+  const { MAX_BULK_TLDS, BULK_CHUNK } = await import("../src/lib/moshpit-name.mjs");
+  const uniq = () => `z${randomBytes(5).toString("hex")}`;
 
-  await t.test("the ceiling is 1000", () => {
+  await t.test("the ceiling is 1000 and a chunk bounds request size, not throughput", () => {
     assert.equal(MAX_BULK_TLDS, 1000);
-    assert.ok(BULK_TIME_BUDGET_MS > 0);
+    assert.ok(BULK_CHUNK > 0 && BULK_CHUNK <= MAX_BULK_TLDS);
   });
 
-  await t.test("running out of time names what is left instead of dropping it", async () => {
-    const names = Array.from({ length: 5 }, uniq);
-    // A clock that jumps past the budget after the first claim.
-    let calls = 0;
-    const result = await m.registerTlds({
-      input: names.join("\n"), userId: ALICE, budgetMs: 1000,
-      now: () => (calls++ === 0 ? 0 : 99_999),
-    });
-
-    assert.equal(result.claimed.length, 1, "the first one lands");
-    assert.deepEqual(result.remaining, names.slice(1), "the rest are named, not lost");
-    assert.match(m.summarizeBulkClaim(result), /4 not attempted — paste them again/);
-  });
-
-  await t.test("the budget is never checked before the first claim", async () => {
-    // An already-expired clock must still do one, or a slow database means a
-    // paste that claims nothing at all and looks broken.
-    const one = uniq();
-    const result = await m.registerTlds({
-      input: one, userId: ALICE, budgetMs: 0, now: () => 99_999,
-    });
-    assert.deepEqual(result.claimed, [one]);
-    assert.deepEqual(result.remaining, []);
-  });
-
-  await t.test("a paste that fits reports nothing left over", async () => {
-    const names = Array.from({ length: 3 }, uniq);
+  await t.test("300 endings all get claimed — none left over", async () => {
+    // The paste that used to stop at 54 of 313 when every ending cost six
+    // round trips. Nothing is deferred now, so `remaining` stays empty.
+    const names = Array.from({ length: 300 }, uniq);
+    const started = Date.now();
     const result = await m.registerTlds({ input: names.join("\n"), userId: ALICE });
 
-    assert.equal(result.claimed.length, 3);
+    assert.equal(result.claimed.length, 300, "every one landed");
     assert.deepEqual(result.remaining, []);
-    assert.doesNotMatch(m.summarizeBulkClaim(result), /not attempted/);
+    assert.ok(Date.now() - started < 20_000, "and inside what used to be the whole budget");
   });
 
-  await t.test("over the ceiling still counts as left over, not dropped", async () => {
+  await t.test("more than one chunk still reports every ending exactly once", async () => {
+    const names = Array.from({ length: BULK_CHUNK + 7 }, uniq);
+    const result = await m.registerTlds({ input: names.join("\n"), userId: ALICE, chunkSize: 10 });
+
+    assert.equal(result.claimed.length, names.length);
+    assert.equal(new Set(result.claimed).size, names.length, "no ending counted twice across chunks");
+  });
+
+  await t.test("claimed, already-yours and someone-else's are still told apart", async () => {
+    const fresh = uniq(), yours = uniq(), theirs = uniq();
+    await m.registerTld({ tld: yours, userId: ALICE });
+    await m.registerTld({ tld: theirs, userId: BOB });
+
+    const result = await m.registerTlds({ input: [fresh, yours, theirs].join("\n"), userId: ALICE });
+    assert.deepEqual(result.claimed, [fresh]);
+    assert.deepEqual(result.mine, [yours]);
+    assert.deepEqual(result.taken, [theirs]);
+    assert.equal((await m.getTld(theirs)).user_id, BOB, "not stolen by the batch");
+  });
+
+  await t.test("over the ceiling is still reported, not dropped", async () => {
     const names = Array.from({ length: 4 }, uniq);
     const result = await m.registerTlds({ input: names.join("\n"), userId: ALICE, limit: 2 });
 
     assert.equal(result.claimed.length, 2);
     assert.equal(result.skipped, 2);
     assert.match(m.summarizeBulkClaim(result), /2 not attempted — paste them again/);
+  });
+
+  await t.test("a reserved ending never costs a round trip", async () => {
+    const good = uniq();
+    const result = await m.registerTlds({ input: `bank\na\n${good}`, userId: ALICE });
+    assert.deepEqual(result.claimed, [good]);
+    assert.equal(result.rejected.length, 2, "filtered in memory, before any batch");
   });
 });
 
