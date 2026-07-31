@@ -10,11 +10,21 @@
 // without a mirror being able to forge or seize a name, because the order is
 // checkable rather than trusted.
 
-import { get, all, run } from "./db.mjs";
-import { BULK_TIME_BUDGET_MS, MAX_BULK_TLDS, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
+import { db, get, all, run } from "./db.mjs";
+import {
+  BULK_CHUNK,
+  BULK_TIME_BUDGET_MS,
+  MAX_BULK_TLDS,
+  MAX_CHILD_PRICE_USD,
+  normalizeLabel,
+  normalizeTld,
+  parseMoshpitName,
+  parseTldList,
+  tldRejection,
+} from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_CHUNK, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
   parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
@@ -578,11 +588,9 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
  */
 export async function registerTlds({
   input, userId, ownerEmail = null, limit = MAX_BULK_TLDS, priceUsd = null, aliasOf = null,
-  budgetMs = BULK_TIME_BUDGET_MS, now = Date.now,
+  chunkSize = BULK_CHUNK,
 }) {
   const { entries, skipped } = parseTldList(input, limit);
-  const deadline = now() + budgetMs;
-  const remaining = [];
 
   const claimed = [];
   const mine = [];
@@ -590,68 +598,90 @@ export async function registerTlds({
   const rejected = [];
   const settingsFailed = [];
 
-  for (const [index, entry] of entries.entries()) {
-    // Checked before the write, not after: stopping with a claim half-made is
-    // the one outcome worse than stopping early.
-    if (index > 0 && now() >= deadline) {
-      remaining.push(...entries.slice(index).map((e) => e.tld));
-      break;
-    }
-    const tld = entry.tld;
-    const result = await registerTld({ tld, userId, ownerEmail });
-    if (result.ok) {
-      claimed.push(result.tld.tld);
-      // Settings are applied per ending, and a failure here is reported rather
-      // than thrown: the ending is already claimed and keeping it is the point.
-      // Losing a whole batch because one alias target was wrong would be worse
-      // than landing forty endings with no price on them.
-      // A value written on the line wins over the form's, in either direction:
-      // the form is the default for the whole paste, the line is what this one
-      // ending is actually worth.
-      const failure = await applyTldDefaults({
-        tld: result.tld.tld,
-        userId,
-        priceUsd: entry.priceUsd ?? priceUsd,
-        aliasOf: entry.aliasOf ?? aliasOf,
-      });
-      if (failure) settingsFailed.push({ tld: result.tld.tld, error: failure });
-      continue;
-    }
-
-    if (result.taken) {
-      // Re-pasting a list you already claimed should read as "already yours",
-      // not as a collision with a stranger.
-      const owner = await getTld(tld);
-      (owner?.user_id === userId ? mine : taken).push(tld);
-      continue;
-    }
-    rejected.push({ tld, error: result.error });
+  // Validation first, in memory. A reserved or malformed ending never needs a
+  // round trip to be refused, and filtering here keeps the batches below to
+  // things that can actually land.
+  const candidates = [];
+  for (const entry of entries) {
+    const tld = normalizeTld(entry.tld);
+    if (!tld) { rejected.push({ tld: entry.tld, error: "not a valid TLD — letters, digits and dashes only, no dots" }); continue; }
+    const why = tldRejection(tld);
+    if (why) { rejected.push({ tld, error: why }); continue; }
+    candidates.push({ ...entry, tld });
   }
 
-  return { claimed, mine, taken, rejected, settingsFailed, skipped, remaining, attempted: entries.length };
+  const at = Date.now();
+
+  for (const chunk of chunksOf(candidates, chunkSize)) {
+    // One round trip for the whole chunk. `INSERT OR IGNORE` cannot fail on a
+    // name someone already holds, so the batch never rolls back on a
+    // collision, and rowsAffected says which of them landed — which is exactly
+    // the claimed/taken split, without a SELECT per ending.
+    const inserted = await db.batch(
+      chunk.map((c) => ({
+        sql: `INSERT OR IGNORE INTO moshpit_tlds (tld, user_id, owner_email, owner_key, created_at) VALUES (?,?,?,?,?)`,
+        args: [c.tld, userId, ownerEmail, null, at],
+      })),
+      "write",
+    );
+
+    const landed = [];
+    const collided = [];
+    chunk.forEach((c, i) => (inserted[i].rowsAffected ? landed : collided).push(c));
+
+    // Who holds the ones that collided — one query for all of them, so that
+    // "already yours" stays distinguishable from "someone else has it" without
+    // costing a lookup each.
+    if (collided.length) {
+      const owners = await all(
+        `SELECT tld, user_id FROM moshpit_tlds WHERE tld IN (${collided.map(() => "?").join(",")})`,
+        collided.map((c) => c.tld),
+      );
+      const byTld = new Map(owners.map((row) => [row.tld, row.user_id]));
+      for (const c of collided) (byTld.get(c.tld) === userId ? mine : taken).push(c.tld);
+    }
+
+    if (!landed.length) continue;
+    claimed.push(...landed.map((c) => c.tld));
+
+    // Price and alias fold into a single UPDATE per ending rather than the
+    // read-check-write setTldPrice does: ownership was just established by the
+    // INSERT above, so re-reading the row to confirm it would be asking a
+    // question already answered.
+    const updates = [];
+    for (const c of landed) {
+      const price = normalizePrice(c.priceUsd ?? priceUsd);
+      const alias = normalizeTld(c.aliasOf ?? aliasOf);
+      if (price === undefined) { settingsFailed.push({ tld: c.tld, error: "price must be a positive number" }); continue; }
+      const target = alias && alias !== c.tld ? alias : null;
+      if (price === null && !target) continue;
+      updates.push({
+        sql: `UPDATE moshpit_tlds SET price_usd = COALESCE(?, price_usd), alias_of = COALESCE(?, alias_of) WHERE tld = ? AND user_id = ?`,
+        args: [price, target, c.tld, userId],
+      });
+    }
+
+    const logs = landed.map((c) => ({
+      sql: `INSERT INTO moshpit_tld_log (tld, user_id, action, at) VALUES (?,?,?,?)`,
+      args: [c.tld, userId, "register", at],
+    }));
+
+    if (updates.length || logs.length) await db.batch([...updates, ...logs], "write");
+  }
+
+  return { claimed, mine, taken, rejected, settingsFailed, skipped, remaining: [], attempted: entries.length };
 }
 
-/**
- * Apply the whole-list settings to one freshly claimed ending.
- *
- * Returns an error string, or null when there was nothing to do or it worked.
- * Aliasing an ending to itself is silently skipped rather than reported: it is
- * what you get by pasting a list that happens to contain the alias target, and
- * refusing the whole entry over it would be pedantic.
- */
-async function applyTldDefaults({ tld, userId, priceUsd, aliasOf }) {
-  const wantsPrice = priceUsd !== null && priceUsd !== undefined && String(priceUsd).trim() !== "";
-  if (wantsPrice) {
-    const priced = await setTldPrice({ tld, userId, priceUsd });
-    if (!priced.ok) return priced.error;
-  }
+function* chunksOf(list, size) {
+  for (let i = 0; i < list.length; i += size) yield list.slice(i, i + size);
+}
 
-  const target = normalizeTld(aliasOf);
-  if (target && target !== tld) {
-    const aliased = await setAlias({ from: tld, to: target, userId });
-    if (!aliased.ok) return aliased.error;
-  }
-  return null;
+/** null = leave alone, undefined = refuse, a number = set it. */
+function normalizePrice(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0 || price > 1_000_000) return undefined;
+  return Math.round(price * 100) / 100;
 }
 
 /** One line fit for a flash message: what landed, what did not, and why. */
