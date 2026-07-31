@@ -11,10 +11,10 @@
 // checkable rather than trusted.
 
 import { get, all, run } from "./db.mjs";
-import { MAX_BULK_TLDS, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
+import { MAX_BULK_TLDS, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, normalizeLabel, normalizeTld, parseMoshpitName,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
   parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
@@ -292,6 +292,11 @@ export async function setTldPrice({ tld: tldInput, userId, priceUsd }) {
     // NaN/Infinity would be stored verbatim and then charged; a negative or
     // zero price would let anyone drain the namespace for free.
     if (!Number.isFinite(price) || price <= 0) return { ok: false, error: "price must be a positive number" };
+    // Not capped at MAX_CHILD_PRICE_USD here on purpose. PRD 0005 R3 caps the
+    // annual child price at $1.99, but that requirement arrives with terms,
+    // renewals and the ledger, and today this same column also carries prices
+    // set before any cap existed. The forms default to the cap and hint at it;
+    // enforcing it is a migration, not a validation tweak.
     if (price > 1_000_000) return { ok: false, error: "price is implausibly large" };
     price = Math.round(price * 100) / 100;
   }

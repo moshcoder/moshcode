@@ -123,6 +123,27 @@ export function resolutionPreference({ registered, mode }) {
 export const MAX_BULK_TLDS = 200;
 
 /**
+ * The most a child name may cost per year.
+ *
+ * PRD 0005 §5 and §10.1, requirement R3: `me.whatever` is capped at $1.99/year.
+ * An operator may go lower, including free. The cap is on the annual
+ * registration/renewal price only — a one-time Buy Now resale is a transfer of
+ * ownership, not a term, and §10.2.4 puts no ceiling on it.
+ */
+export const MAX_CHILD_PRICE_USD = 1.99;
+
+/**
+ * What names under a newly claimed ending cost unless you say otherwise.
+ *
+ * The cap, not a round number below it. A default rather than a blank because
+ * an unpriced ending is invisible to every buyer, and "I claimed forty and
+ * nobody could buy a name under any of them" is the failure that costs
+ * something. Clearing the field still means not for sale — the default is an
+ * opinion, not a floor.
+ */
+export const DEFAULT_TLD_PRICE_USD = MAX_CHILD_PRICE_USD;
+
+/**
  * Pull a list of endings out of whatever someone pasted.
  *
  * Deliberately forgiving about shape, because the source is a text field and

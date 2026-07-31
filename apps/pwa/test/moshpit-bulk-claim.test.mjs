@@ -210,3 +210,35 @@ test("settings applied to a whole list", { skip: installed ? false : "pwa depend
     assert.equal(line, `.${a} is yours.`);
   });
 });
+
+test("the default price", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+  const { DEFAULT_TLD_PRICE_USD } = await import("../src/lib/moshpit-name.mjs");
+  const m = await import("../src/moshpit.mjs");
+  const uniq = () => `d${randomBytes(4).toString("hex")}`;
+
+  await t.test("is the cap PRD 0005 R3 sets, not a round number below it", async () => {
+    const { MAX_CHILD_PRICE_USD } = await import("../src/lib/moshpit-name.mjs");
+    assert.equal(MAX_CHILD_PRICE_USD, 1.99);
+    assert.equal(DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD);
+  });
+
+  await t.test("an explicit price still wins over it", async () => {
+    const a = uniq();
+    await m.registerTlds({ input: a, userId: ALICE, priceUsd: "0.99" });
+    assert.equal((await m.getTld(a)).price_usd, 0.99);
+  });
+
+  await t.test("free is allowed — the cap is a ceiling, not a floor", async () => {
+    const a = uniq();
+    await m.registerTlds({ input: a, userId: ALICE, priceUsd: "0.01" });
+    assert.equal((await m.getTld(a)).price_usd, 0.01);
+  });
+
+  await t.test("clearing the field still means not for sale", async () => {
+    // The default is the form's opinion, not a floor the library enforces —
+    // otherwise there would be no way to hold an ending off the market.
+    const a = uniq();
+    await m.registerTlds({ input: a, userId: ALICE, priceUsd: "" });
+    assert.equal((await m.getTld(a)).price_usd, null);
+  });
+});
