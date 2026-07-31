@@ -11,10 +11,12 @@
 //   DELETE /api/moshpit/tlds/:tld/exempt      let it follow the alias again
 //   GET    /api/moshpit/resolve?name=&mode=   resolve + precedence for a client resolver
 //   GET    /pit                               the human page
+//   GET    /pit/dns                           how to reach these names from a machine
 import { Router } from "express";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { balance } from "../lib/credits.mjs";
+import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import {
   getTld, listTlds, listTldsForUser, registerTld, normalizeLabel,
   setAlias, clearAlias, listExempt, setExempt, clearExempt,
@@ -282,7 +284,35 @@ const PIT_CSS = `
 .pit-forsale{border-color:color-mix(in srgb,var(--acid) 35%,var(--line))}
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
-.pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}`;
+.pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}
+.pit-tabs{display:flex;gap:4px;margin:22px 0 26px;border-bottom:1px solid var(--line)}
+.pit-tab{font-family:var(--mono);font-size:.76rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
+  padding:11px 15px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.pit-tab:hover{color:var(--text)}
+.pit-tab.on{color:var(--acid);border-bottom-color:var(--acid)}
+.pit-addrs{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0 12px;padding:0;list-style:none}
+.pit-addrs li{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--acid);
+  border-radius:var(--r);padding:12px 16px;display:flex;flex-direction:column;gap:3px}
+/* The address is what people copy, so it gets the size and the contrast. */
+.pit-addrs .ip{font-family:var(--mono);font-size:1.2rem;color:var(--acid);user-select:all}
+.pit-addrs .host{font-family:var(--mono);font-size:.7rem;color:var(--faint)}
+.pit-pre{background:var(--bg-tint);border:1px solid var(--line);border-left:3px solid var(--acid);border-radius:var(--r);
+  padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.75;color:var(--text);margin:14px 0}
+.pit-steps{margin:0;padding-left:20px;line-height:1.8;max-width:66ch}
+.pit-steps li{margin-bottom:10px}
+.pit-steps code,.pit-copy code{font-family:var(--mono);color:var(--acid);font-size:.86em}
+.pit-copy{max-width:66ch;color:var(--dim)}`;
+
+/**
+ * The tab strip. `/pit` is the namespace itself and `/pit/dns` is how you
+ * reach it from a machine — two halves of the same thing, and a link buried in
+ * a paragraph is not how anyone finds the second one.
+ */
+const pitTabs = (active) => `
+<nav class="pit-tabs">
+  <a class="pit-tab${active === "namespace" ? " on" : ""}" href="/pit">Namespace</a>
+  <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>
+</nav>`;
 
 const forSale = (t) => t.price_usd !== null && t.price_usd !== undefined;
 
@@ -400,6 +430,7 @@ moshpitRouter.get("/pit", async (req, res) => {
     <span class="mono">foo.agentic</span> resolve to <span class="mono">foo.agent</span> — while any name
     you exempt stays exactly where it is.
   </p>
+  ${pitTabs("namespace")}
   ${msg}
   ${req.user ? claimForm(req) : ""}
   <h2 style="margin-top:34px;font-size:1.2rem">Yours</h2>
@@ -415,6 +446,118 @@ moshpitRouter.get("/pit", async (req, res) => {
     through CoinPay; the name lands the moment the payment confirms.
   </p>
   ${theirsHtml}
+</main>${footer}`,
+  }));
+});
+
+/**
+ * GET /pit/dns — how to actually reach these names from a machine.
+ *
+ * A namespace nobody can resolve is a list of words. The resolvers answer
+ * Moshpit names from this registry and forward everything else to the ordinary
+ * internet, so the instruction is "change one setting", not "install a
+ * browser".
+ *
+ * The addresses come from the environment (lib/moshpit-resolvers.mjs). When
+ * none are configured this page says so and explains how to run one, rather
+ * than inventing an address for a stranger to paste into their network
+ * settings.
+ */
+moshpitRouter.get("/pit/dns", async (req, res) => {
+  const bal = req.user ? await balance(req.user.id) : 0;
+  const { resolvers, doh, published } = resolverConfig();
+  const first = resolvers[0]?.address ?? "<resolver address>";
+
+  const addresses = published
+    ? `<ul class="pit-addrs">${resolvers.map((r) => `
+        <li><span class="ip">${esc(r.address)}</span>${r.name ? `<span class="host">${esc(r.name)}</span>` : ""}</li>`).join("")}
+       </ul>
+       <p class="pit-copy">
+         Use both, in that order — the second exists so the first can be rebooted without the
+         namespace going with it. You type the <em>addresses</em>: a resolver's own name cannot be
+         looked up until you already have a working resolver.
+       </p>`
+    : `<p class="pit-copy">
+         <span class="acid mono">Not published yet.</span> The resolver is built and tested, but no
+         public instance is announced here — and this page will not invent an address for you to
+         paste into your network settings. Run your own below; it serves every name in the
+         namespace, not just yours.
+       </p>`;
+
+  res.type("html").send(page({
+    title: "moshcode ▸ the pit ▸ dns",
+    head: `<style>${PIT_CSS}</style>`,
+    body: `${appBar(req.user, bal, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px">
+  <p class="label">the moshpit namespace</p>
+  <h1 style="font-size:clamp(2rem,6vw,3.4rem)">One setting. <span class="acid">.anything</span> resolves.</h1>
+  <p class="dim" style="max-width:66ch">
+    These names live outside the traditional DNS root, so a normal browser has nowhere to look them
+    up. These resolvers know where. Point a laptop, a phone or a whole router at one and
+    <span class="mono acid">.eggs</span>, <span class="mono acid">.moshpit</span>,
+    <span class="mono acid">.yeah</span> resolve like any other name — while
+    <span class="mono">.com</span>, <span class="mono">.org</span> and the rest of the internet keep
+    working exactly as before, forwarded on to 8.8.8.8 and 1.1.1.1.
+  </p>
+  ${pitTabs("dns")}
+
+  <h2 style="font-size:1.2rem">The addresses</h2>
+  ${addresses}
+
+  <h2 style="margin-top:34px;font-size:1.2rem">Set it</h2>
+  <ol class="pit-steps dim">
+    <li><b class="acid">macOS</b> — System Settings → Network → your connection → Details → DNS, add it
+      with <code>+</code>, drag it to the top, Save. Or:
+      <code>networksetup -setdnsservers Wi-Fi ${esc(first)}</code></li>
+    <li><b class="acid">Windows</b> — Settings → Network &amp; Internet → your adapter → DNS server
+      assignment → Edit → Manual, IPv4 on, preferred server.</li>
+    <li><b class="acid">Linux</b> — <code>resolvectl dns &lt;interface&gt; ${esc(first)}</code>, or a
+      <code>nameserver</code> line in <code>/etc/resolv.conf</code>.</li>
+    <li><b class="acid">Router</b> — hand it out over DHCP and every device on the network gets the
+      namespace. This is the setup it is really for.</li>
+    <li><b class="acid">A locked-down machine</b> where DNS is not yours to change — use DNS over HTTPS
+      in the browser. Firefox: Privacy &amp; Security → DNS over HTTPS → custom provider. Chrome:
+      Security → Use secure DNS → custom.
+      ${doh ? `The endpoint is <code>${esc(doh)}</code>.` : "An endpoint appears here once a resolver is up."}</li>
+  </ol>
+
+  <h2 style="margin-top:34px;font-size:1.2rem">Check it worked</h2>
+  <pre class="pit-pre"><code>dig +short anything.moshpit     <span class="faint"># an address, not an error</span>
+dig +short example.com          <span class="faint"># the ordinary internet, still fine</span>
+nslookup anything.moshpit       <span class="faint"># the Windows spelling</span></code></pre>
+  <p class="pit-copy" style="font-size:.9rem">
+    A <code>TXT</code> lookup on any Moshpit name reports which registry and gateway answered — the
+    fastest way to tell a resolver problem from a site problem.
+  </p>
+
+  <h2 style="margin-top:34px;font-size:1.2rem">What still breaks</h2>
+  <p class="pit-copy">
+    <code>https://</code> on a Moshpit name will warn. No public certificate authority will issue for
+    <span class="mono">scrambled.eggs</span>, because none of them recognise a namespace that does not
+    descend from the ICANN root. Plain <code>http://</code> works, and so does this site. A
+    certificate authority you opt into is the real answer, and it is not built yet.
+  </p>
+  <p class="pit-copy" style="font-size:.9rem">
+    Clearnet lookups are forwarded to Google and Cloudflare, which is what a forwarder does. Run your
+    own and point it wherever you like if that trade is wrong for you.
+  </p>
+
+  <h2 style="margin-top:34px;font-size:1.2rem">Run your own</h2>
+  <p class="pit-copy">
+    No dependencies, no database, reads this registry over ordinary HTTPS. Nothing about it privileges
+    ours — a private pit points at a different registry, a household one runs on whatever is already
+    on the shelf.
+  </p>
+  <pre class="pit-pre"><code>git clone https://github.com/moshcoder/moshcoding
+cd moshcoding &amp;&amp; bun run dns    <span class="faint"># port 5354, no privileges needed</span>
+
+dig @127.0.0.1 -p 5354 +short anything.moshpit</code></pre>
+  <p class="pit-copy" style="font-size:.9rem">
+    Setup, deployment and the operating notes:
+    <a class="acid" href="https://github.com/moshcoder/moshcoding/blob/master/docs/moshpit-dns.md"
+       target="_blank" rel="noopener noreferrer">docs/moshpit-dns.md</a>.
+    Claim a name first over on <a class="acid" href="/pit">the namespace tab</a>.
+  </p>
 </main>${footer}`,
   }));
 });
