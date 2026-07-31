@@ -188,7 +188,12 @@ export async function skillCommand(tokens) {
   const rest = tokens.slice(1);
   let name, source;
   for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === "--name") name = rest[++i];
+    if (rest[i] === "--name") {
+      const next = flagValue(rest, i, rest[i]);
+      if (next.error) { console.log(err(next.error)); return; }
+      name = next.value;
+      i++;
+    }
     else if (!source) source = rest[i];
   }
   if (!source) { console.log(err("usage: /skill install <git-url|path> [--name <name>]")); return; }
