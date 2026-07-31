@@ -11,10 +11,10 @@
 // checkable rather than trusted.
 
 import { get, all, run } from "./db.mjs";
-import { MAX_BULK_TLDS, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
+import { BULK_TIME_BUDGET_MS, MAX_BULK_TLDS, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_TIME_BUDGET_MS, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
   parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
@@ -578,8 +578,11 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
  */
 export async function registerTlds({
   input, userId, ownerEmail = null, limit = MAX_BULK_TLDS, priceUsd = null, aliasOf = null,
+  budgetMs = BULK_TIME_BUDGET_MS, now = Date.now,
 }) {
   const { entries, skipped } = parseTldList(input, limit);
+  const deadline = now() + budgetMs;
+  const remaining = [];
 
   const claimed = [];
   const mine = [];
@@ -587,7 +590,13 @@ export async function registerTlds({
   const rejected = [];
   const settingsFailed = [];
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
+    // Checked before the write, not after: stopping with a claim half-made is
+    // the one outcome worse than stopping early.
+    if (index > 0 && now() >= deadline) {
+      remaining.push(...entries.slice(index).map((e) => e.tld));
+      break;
+    }
     const tld = entry.tld;
     const result = await registerTld({ tld, userId, ownerEmail });
     if (result.ok) {
@@ -619,7 +628,7 @@ export async function registerTlds({
     rejected.push({ tld, error: result.error });
   }
 
-  return { claimed, mine, taken, rejected, settingsFailed, skipped, attempted: entries.length };
+  return { claimed, mine, taken, rejected, settingsFailed, skipped, remaining, attempted: entries.length };
 }
 
 /**
@@ -654,7 +663,8 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
   // batch report looks like, and the commonest path through this page is one
   // ending typed into one box.
   const onlyClaimed = result.claimed.length === 1 && !result.mine.length && !result.taken.length
-    && !result.rejected.length && !result.settingsFailed?.length && !result.skipped;
+    && !result.rejected.length && !result.settingsFailed?.length && !result.skipped
+    && !result.remaining?.length;
   if (onlyClaimed) return `.${result.claimed[0]} is yours.`;
 
   const parts = [];
@@ -671,7 +681,10 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
     const first = result.settingsFailed[0];
     parts.push(`${result.settingsFailed.length} claimed but not configured (.${first.tld} — ${first.error})`);
   }
-  if (result.skipped) parts.push(`${result.skipped} past the ${limit} limit, not attempted`);
+  // The leftovers are the actionable part, so they say what to do rather than
+  // just how many there were.
+  const left = (result.remaining?.length || 0) + (result.skipped || 0);
+  if (left) parts.push(`${left} not attempted — paste them again to carry on`);
 
   return parts.length ? parts.join(". ") + "." : "nothing to claim — paste one ending per line.";
 }

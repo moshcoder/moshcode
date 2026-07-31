@@ -340,3 +340,61 @@ test("per-line settings beat the form", { skip: installed ? false : "pwa depende
     assert.equal(row.alias_of, hub);
   });
 });
+
+test("a paste bigger than one request can finish", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+  const { migrate } = await import("../src/migrate.mjs");
+  await migrate();
+  const { run } = await import("../src/db.mjs");
+  await run(`INSERT OR IGNORE INTO users (id,email,created_at) VALUES (?,?,?)`, [ALICE, "alice@example.com", Date.now()]);
+  const m = await import("../src/moshpit.mjs");
+  const { BULK_TIME_BUDGET_MS, MAX_BULK_TLDS } = await import("../src/lib/moshpit-name.mjs");
+  const uniq = () => `t${randomBytes(4).toString("hex")}`;
+
+  await t.test("the ceiling is 1000", () => {
+    assert.equal(MAX_BULK_TLDS, 1000);
+    assert.ok(BULK_TIME_BUDGET_MS > 0);
+  });
+
+  await t.test("running out of time names what is left instead of dropping it", async () => {
+    const names = Array.from({ length: 5 }, uniq);
+    // A clock that jumps past the budget after the first claim.
+    let calls = 0;
+    const result = await m.registerTlds({
+      input: names.join("\n"), userId: ALICE, budgetMs: 1000,
+      now: () => (calls++ === 0 ? 0 : 99_999),
+    });
+
+    assert.equal(result.claimed.length, 1, "the first one lands");
+    assert.deepEqual(result.remaining, names.slice(1), "the rest are named, not lost");
+    assert.match(m.summarizeBulkClaim(result), /4 not attempted — paste them again/);
+  });
+
+  await t.test("the budget is never checked before the first claim", async () => {
+    // An already-expired clock must still do one, or a slow database means a
+    // paste that claims nothing at all and looks broken.
+    const one = uniq();
+    const result = await m.registerTlds({
+      input: one, userId: ALICE, budgetMs: 0, now: () => 99_999,
+    });
+    assert.deepEqual(result.claimed, [one]);
+    assert.deepEqual(result.remaining, []);
+  });
+
+  await t.test("a paste that fits reports nothing left over", async () => {
+    const names = Array.from({ length: 3 }, uniq);
+    const result = await m.registerTlds({ input: names.join("\n"), userId: ALICE });
+
+    assert.equal(result.claimed.length, 3);
+    assert.deepEqual(result.remaining, []);
+    assert.doesNotMatch(m.summarizeBulkClaim(result), /not attempted/);
+  });
+
+  await t.test("over the ceiling still counts as left over, not dropped", async () => {
+    const names = Array.from({ length: 4 }, uniq);
+    const result = await m.registerTlds({ input: names.join("\n"), userId: ALICE, limit: 2 });
+
+    assert.equal(result.claimed.length, 2);
+    assert.equal(result.skipped, 2);
+    assert.match(m.summarizeBulkClaim(result), /2 not attempted — paste them again/);
+  });
+});
