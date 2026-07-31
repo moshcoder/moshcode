@@ -11,11 +11,11 @@
 // checkable rather than trusted.
 
 import { get, all, run } from "./db.mjs";
-import { normalizeLabel, normalizeTld, parseMoshpitName, tldRejection } from "./lib/moshpit-name.mjs";
+import { MAX_BULK_TLDS, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName, parseTldList, tldRejection } from "./lib/moshpit-name.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, normalizeLabel, normalizeTld, parseMoshpitName, tldRejection,
-  normalizeMode, resolutionPreference,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
+  parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
 const COLS = `tld, user_id, owner_email, alias_of, price_usd, created_at`;
@@ -292,6 +292,11 @@ export async function setTldPrice({ tld: tldInput, userId, priceUsd }) {
     // NaN/Infinity would be stored verbatim and then charged; a negative or
     // zero price would let anyone drain the namespace for free.
     if (!Number.isFinite(price) || price <= 0) return { ok: false, error: "price must be a positive number" };
+    // Not capped at MAX_CHILD_PRICE_USD here on purpose. PRD 0005 R3 caps the
+    // annual child price at $1.99, but that requirement arrives with terms,
+    // renewals and the ledger, and today this same column also carries prices
+    // set before any cap existed. The forms default to the cap and hint at it;
+    // enforcing it is a migration, not a validation tweak.
     if (price > 1_000_000) return { ok: false, error: "price is implausibly large" };
     price = Math.round(price * 100) / 100;
   }
@@ -553,4 +558,111 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
 
   await logAction(owned.tld, userId, `pin:remove:${owned.label}`);
   return { ok: true };
+}
+
+/* ---- claiming a list of endings at once ---- */
+
+/**
+ * Claim every ending in a pasted list.
+ *
+ * One at a time, not in parallel. `moshpit_tld_log` is the record of who
+ * claimed what first, and a batch that interleaves its writes makes that
+ * ordering meaningless for the endings inside it. Sequential is also the
+ * difference between one slow request and a burst that trips rate limits at
+ * the database.
+ *
+ * Partial success is the normal outcome, not the error case: any real list has
+ * a few names someone already holds. Every ending is attempted and reported on
+ * — the caller gets what landed and what did not, rather than a stop at the
+ * first collision with the rest silently unattempted.
+ */
+export async function registerTlds({
+  input, userId, ownerEmail = null, limit = MAX_BULK_TLDS, priceUsd = null, aliasOf = null,
+}) {
+  const { tlds, skipped } = parseTldList(input, limit);
+
+  const claimed = [];
+  const mine = [];
+  const taken = [];
+  const rejected = [];
+  const settingsFailed = [];
+
+  for (const tld of tlds) {
+    const result = await registerTld({ tld, userId, ownerEmail });
+    if (result.ok) {
+      claimed.push(result.tld.tld);
+      // Settings are applied per ending, and a failure here is reported rather
+      // than thrown: the ending is already claimed and keeping it is the point.
+      // Losing a whole batch because one alias target was wrong would be worse
+      // than landing forty endings with no price on them.
+      const failure = await applyTldDefaults({ tld: result.tld.tld, userId, priceUsd, aliasOf });
+      if (failure) settingsFailed.push({ tld: result.tld.tld, error: failure });
+      continue;
+    }
+
+    if (result.taken) {
+      // Re-pasting a list you already claimed should read as "already yours",
+      // not as a collision with a stranger.
+      const owner = await getTld(tld);
+      (owner?.user_id === userId ? mine : taken).push(tld);
+      continue;
+    }
+    rejected.push({ tld, error: result.error });
+  }
+
+  return { claimed, mine, taken, rejected, settingsFailed, skipped, attempted: tlds.length };
+}
+
+/**
+ * Apply the whole-list settings to one freshly claimed ending.
+ *
+ * Returns an error string, or null when there was nothing to do or it worked.
+ * Aliasing an ending to itself is silently skipped rather than reported: it is
+ * what you get by pasting a list that happens to contain the alias target, and
+ * refusing the whole entry over it would be pedantic.
+ */
+async function applyTldDefaults({ tld, userId, priceUsd, aliasOf }) {
+  const wantsPrice = priceUsd !== null && priceUsd !== undefined && String(priceUsd).trim() !== "";
+  if (wantsPrice) {
+    const priced = await setTldPrice({ tld, userId, priceUsd });
+    if (!priced.ok) return priced.error;
+  }
+
+  const target = normalizeTld(aliasOf);
+  if (target && target !== tld) {
+    const aliased = await setAlias({ from: tld, to: target, userId });
+    if (!aliased.ok) return aliased.error;
+  }
+  return null;
+}
+
+/** One line fit for a flash message: what landed, what did not, and why. */
+export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
+  const show = (list, n = 6) =>
+    list.slice(0, n).map((t) => `.${t}`).join(", ") + (list.length > n ? ` +${list.length - n} more` : "");
+
+  // The single-ending case says the plain thing. "claimed 1 — .eggs." is what a
+  // batch report looks like, and the commonest path through this page is one
+  // ending typed into one box.
+  const onlyClaimed = result.claimed.length === 1 && !result.mine.length && !result.taken.length
+    && !result.rejected.length && !result.settingsFailed?.length && !result.skipped;
+  if (onlyClaimed) return `.${result.claimed[0]} is yours.`;
+
+  const parts = [];
+  if (result.claimed.length) parts.push(`claimed ${result.claimed.length} — ${show(result.claimed)}`);
+  if (result.mine.length) parts.push(`${result.mine.length} already yours`);
+  if (result.taken.length) parts.push(`${result.taken.length} taken by someone else (${show(result.taken)})`);
+  if (result.rejected.length) {
+    // The reason matters more than the count here: "reserved" and "too short"
+    // need different fixes, and a bare number tells you neither.
+    const reasons = result.rejected.slice(0, 3).map((r) => `.${r.tld} — ${r.error}`).join("; ");
+    parts.push(`${result.rejected.length} rejected (${reasons}${result.rejected.length > 3 ? "; …" : ""})`);
+  }
+  if (result.settingsFailed?.length) {
+    const first = result.settingsFailed[0];
+    parts.push(`${result.settingsFailed.length} claimed but not configured (.${first.tld} — ${first.error})`);
+  }
+  if (result.skipped) parts.push(`${result.skipped} past the ${limit} limit, not attempted`);
+
+  return parts.length ? parts.join(". ") + "." : "nothing to claim — paste one ending per line.";
 }

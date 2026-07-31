@@ -22,6 +22,7 @@ import {
   addPin,
   clearAlias,
   clearExempt,
+  DEFAULT_TLD_PRICE_USD,
   getName,
   getTld,
   getTldWithPrice,
@@ -31,6 +32,8 @@ import {
   listTlds,
   listTldsForUser,
   listTldsNotOwnedBy,
+  MAX_BULK_TLDS,
+  MAX_CHILD_PRICE_USD,
   normalizeLabel,
   normalizeMode,
   normalizePinKind,
@@ -42,6 +45,7 @@ import {
   quoteName,
   registerName,
   registerTld,
+  registerTlds,
   releaseName,
   removePin,
   resolutionPreference,
@@ -50,6 +54,7 @@ import {
   setExempt,
   setNameTarget,
   setTldPrice,
+  summarizeBulkClaim,
   tldRejection,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
@@ -371,14 +376,61 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
 
 /* ---------- the human page ---------- */
 
+/**
+ * The settings applied to everything a single submission claims.
+ *
+ * Optional, and blank means "leave it alone" rather than "clear it" — the same
+ * two knobs a claimed ending already has on its own row, offered at the moment
+ * you claim it so a list of forty does not need forty follow-up edits.
+ */
+const claimDefaults = (req) => `
+<div class="pit-defaults">
+  <label>Price each
+    <span class="pit-dot">$</span><input name="price_usd" type="number" min="0.01" step="0.01" max="${MAX_CHILD_PRICE_USD}"
+      value="${DEFAULT_TLD_PRICE_USD}" placeholder="unlisted" autocomplete="off"
+      aria-label="price per name, in dollars — clear it to keep them off the market"></label>
+  <label>Point at
+    <span class="pit-dot">.</span><input name="alias_of" placeholder="nothing"
+      autocomplete="off" spellcheck="false" aria-label="an ending you already hold"></label>
+</div>`;
+
 const claimForm = (req, prefill = "") => `
 <form method="post" action="/pit/claim" class="pit-form">
   ${csrfInput(req)}
   <label class="pit-field"><span class="pit-dot">.</span
     ><input name="tld" placeholder="eggs" aria-label="the TLD you want" autocomplete="off" spellcheck="false"
       value="${esc(prefill)}" required></label>
+  ${claimDefaults(req)}
   <button class="btn acid" type="submit">Claim it</button>
 </form>`;
+
+/**
+ * The same claim, for a list.
+ *
+ * Behind a <details> because one ending at a time is the common case and a
+ * textarea would otherwise be the loudest thing on the page. Open, it accepts
+ * whatever shape the list arrived in — a pasted column, a comma-separated
+ * export, dots on or off.
+ */
+const bulkClaimForm = (req) => `
+<details class="pit-bulk">
+  <summary>…or paste a list</summary>
+  <form method="post" action="/pit/claim-bulk">
+    ${csrfInput(req)}
+    <textarea name="tlds" rows="8" spellcheck="false" autocomplete="off" required
+      aria-label="endings to claim, one per line"
+      placeholder=".eggs
+.yeah
+oranges
+# dots optional · commas or newlines · # comments ignored"></textarea>
+    ${claimDefaults(req)}
+    <p class="mono faint" style="font-size:.7rem;margin:8px 0 10px">
+      Up to ${MAX_BULK_TLDS} at a time. Ones already taken are reported, not fatal —
+      the rest still land. Price and target apply to every ending that lands.
+    </p>
+    <button class="btn acid" type="submit">Claim them all</button>
+  </form>
+</details>`;
 
 /**
  * The card someone lands on after typing `mosh.whatever` somewhere.
@@ -493,6 +545,17 @@ const PIT_CSS = `
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}
+.pit-defaults{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 4px}
+.pit-defaults label{display:flex;align-items:center;gap:6px;font-family:var(--mono);
+  font-size:.72rem;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
+.pit-defaults input{width:11ch;padding:7px 9px;font-size:.78rem}
+.pit-bulk{margin:0 0 18px;max-width:62ch}
+.pit-bulk summary{font-family:var(--mono);font-size:.74rem;letter-spacing:.08em;color:var(--dim);cursor:pointer;padding:6px 0}
+.pit-bulk summary:hover{color:var(--acid)}
+.pit-bulk textarea{width:100%;box-sizing:border-box;background:var(--bg);color:var(--text);
+  border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-family:var(--mono);
+  font-size:.8rem;line-height:1.55;resize:vertical;min-height:9em}
+.pit-bulk textarea:focus{outline:none;border-color:var(--acid)}
 .pit-tabs{display:flex;gap:4px;margin:22px 0 26px;border-bottom:1px solid var(--line)}
 .pit-tab{font-family:var(--mono);font-size:.76rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
   padding:11px 15px;border-bottom:2px solid transparent;margin-bottom:-1px}
@@ -674,7 +737,7 @@ moshpitRouter.get("/pit", async (req, res) => {
   </p>
   ${landingCard(req, landing)}
   ${msg}
-  ${req.user ? claimForm(req) : ""}
+  ${req.user ? claimForm(req) + bulkClaimForm(req) : ""}
   ${pitTabs(tab, { yours: mine.length, theirs: theirs.length, forSale: forSaleCount })}
 
   <section class="pit-panel">
@@ -816,12 +879,33 @@ dig @127.0.0.1 -p 5354 +short anything.moshpit</code></pre>
 const back = (res, params, tab = "yours") =>
   res.redirect(`/pit?${new URLSearchParams({ ...params, tab })}`);
 
-moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
-  const result = await registerTld({
-    tld: req.body?.tld, userId: req.user.id, ownerEmail: req.user.email ?? null,
+/**
+ * Claim a pasted list.
+ *
+ * Reported as `ok` when anything landed at all, even alongside collisions —
+ * a list where 38 of 40 were claimed succeeded, and colouring it as an error
+ * because two were taken would misread the normal case as a failure.
+ */
+moshpitRouter.post("/pit/claim-bulk", requireAuth, async (req, res) => {
+  const result = await registerTlds({
+    input: req.body?.tlds, userId: req.user.id, ownerEmail: req.user.email ?? null,
+    priceUsd: req.body?.price_usd, aliasOf: req.body?.alias_of,
   });
-  if (!result.ok) return back(res, { err: result.error || "could not register that TLD" });
-  back(res, { ok: `.${result.tld.tld} is yours.` });
+  // The flash rides back in the query string, so it has to stay short enough
+  // to survive a URL.
+  const summary = summarizeBulkClaim(result).slice(0, 500);
+  return back(res, result.claimed.length ? { ok: summary } : { err: summary });
+});
+
+moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
+  // One ending goes through the same path as a list of one, so the settings
+  // behave identically either way rather than being a bulk-only feature.
+  const result = await registerTlds({
+    input: req.body?.tld, userId: req.user.id, ownerEmail: req.user.email ?? null,
+    priceUsd: req.body?.price_usd, aliasOf: req.body?.alias_of,
+  });
+  if (!result.claimed.length) return back(res, { err: summarizeBulkClaim(result).slice(0, 500) });
+  back(res, { ok: summarizeBulkClaim(result).slice(0, 500) });
 });
 
 moshpitRouter.post("/pit/:tld/alias", requireAuth, async (req, res) => {

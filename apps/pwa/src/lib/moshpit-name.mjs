@@ -112,3 +112,74 @@ export function resolutionPreference({ registered, mode }) {
   if (!registered) return "clearnet";
   return normalizeMode(mode) === "moshpit" ? "moshpit" : "fallback";
 }
+
+/**
+ * How many endings one paste may claim at a time.
+ *
+ * A cap rather than no cap because this runs one INSERT per ending against a
+ * remote database, and a pasted spreadsheet column is exactly the shape of
+ * input that turns into ten thousand of them by accident.
+ */
+export const MAX_BULK_TLDS = 200;
+
+/**
+ * The most a child name may cost per year.
+ *
+ * PRD 0005 §5 and §10.1, requirement R3: `me.whatever` is capped at $1.99/year.
+ * An operator may go lower, including free. The cap is on the annual
+ * registration/renewal price only — a one-time Buy Now resale is a transfer of
+ * ownership, not a term, and §10.2.4 puts no ceiling on it.
+ */
+export const MAX_CHILD_PRICE_USD = 1.99;
+
+/**
+ * What names under a newly claimed ending cost unless you say otherwise.
+ *
+ * The cap, not a round number below it. A default rather than a blank because
+ * an unpriced ending is invisible to every buyer, and "I claimed forty and
+ * nobody could buy a name under any of them" is the failure that costs
+ * something. Clearing the field still means not for sale — the default is an
+ * opinion, not a floor.
+ */
+export const DEFAULT_TLD_PRICE_USD = MAX_CHILD_PRICE_USD;
+
+/**
+ * Pull a list of endings out of whatever someone pasted.
+ *
+ * Deliberately forgiving about shape, because the source is a text field and
+ * people paste columns, comma-separated exports, and hand-typed lines with the
+ * dot already on. Splitting on any run of whitespace, commas or semicolons
+ * covers all three without asking anyone to reformat first.
+ *
+ * `#` starts a comment to end of line, so a list can be annotated and re-pasted
+ * with the rejects commented out rather than deleted.
+ *
+ * Deduplicated on the normalised form, so `.Eggs`, `eggs` and `EGGS` in one
+ * paste are one claim rather than one claim and two "already taken" errors
+ * against yourself.
+ */
+export function parseTldList(input, limit = MAX_BULK_TLDS) {
+  const tokens = String(input ?? "")
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, ""))
+    .join("\n")
+    .split(/[\s,;]+/)
+    .map((t) => t.trim().toLowerCase().replace(/^\.+/, ""))
+    .filter(Boolean);
+
+  const seen = new Set();
+  const tlds = [];
+  let skipped = 0;
+
+  for (const token of tokens) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    // Counted rather than silently dropped: "I pasted 300 and got 200" needs to
+    // be visible, or the missing hundred look like they failed for some other
+    // reason.
+    if (tlds.length >= limit) { skipped++; continue; }
+    tlds.push(token);
+  }
+
+  return { tlds, skipped };
+}
