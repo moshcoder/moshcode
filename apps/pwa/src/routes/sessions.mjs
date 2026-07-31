@@ -29,7 +29,16 @@ const STALE_MS = 90 * 1000;
 const SCROLLBACK = 400;
 // How long a CLI poll parks waiting for a command. Overridable so tests don't
 // have to sit through a real one.
-const LONG_POLL_MS = Number(process.env.SESSION_POLL_MS || 25 * 1000);
+const DEFAULT_LONG_POLL_MS = 25 * 1000;
+export function readLongPollMs(value = process.env.SESSION_POLL_MS) {
+  const raw = String(value ?? "").trim();
+  if (!/^\d+$/.test(raw)) return DEFAULT_LONG_POLL_MS;
+  const ms = Number(raw);
+  return Number.isSafeInteger(ms) && ms > 0 && ms <= 2_147_483_647
+    ? ms
+    : DEFAULT_LONG_POLL_MS;
+}
+const LONG_POLL_MS = readLongPollMs();
 
 const isLive = (s) => s.status === "live" && Date.now() - Number(s.last_seen_at) < STALE_MS;
 

@@ -70,6 +70,17 @@ test.after(() => {
 
 const skip = { skip: !deps && "apps/pwa deps not installed" };
 
+test("sessions: malformed poll windows fall back instead of creating a hot loop", skip, async () => {
+  const { readLongPollMs } = await import("../src/routes/sessions.mjs");
+
+  for (const value of [null, "", "abc", "300ms", "-1", "0", "1.5", "1e3", "Infinity", "2147483648"]) {
+    assert.equal(readLongPollMs(value), 25_000, String(value));
+  }
+  assert.equal(readLongPollMs(), 300);
+  assert.equal(readLongPollMs(" 300 "), 300);
+  assert.equal(readLongPollMs("2147483647"), 2_147_483_647);
+});
+
 test("sessions: register, then output lands in the scrollback in order", skip, async () => {
   const { one, all } = await app();
 
