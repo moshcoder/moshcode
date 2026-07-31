@@ -22,6 +22,8 @@ import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
 import { consoleCommand } from "../src/console.mjs";
 import { dnsCommand } from "../src/dns.mjs";
+import { completionScript } from "../src/completion.mjs";
+import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -123,7 +125,7 @@ function help() {
   // Every workflow tool is exposed as a CLI verb, so derive them from TOOLS
   // rather than repeating the roster here — a tool missing from this list gets
   // misfiled as a moshscript-only local verb.
-  const cliVerbs = ["run","agents","start","install","upgrade","mcp","skill","prd","pwd", ...Object.keys(TOOLS)];
+  const cliVerbs = [...CORE_CLI_COMMAND_NAMES, ...Object.keys(TOOLS)];
   const local = vocab.filter((c) => !cliVerbs.includes(c.name));
   const cli = vocab.filter((c) => !local.includes(c));
   console.log(`moshcode — metal scripting toolkit 🤘
@@ -167,6 +169,7 @@ usage:
   moshcode engines [--json]            list engines + install status
   moshcode tools [--json]              list workflow tools + install status
   moshcode commands [--json]           list built-in moshscript commands
+  moshcode completion <bash|zsh|fish>  print a shell completion script
   moshcode help                        this
 
 engines (moshcode is a wrapper — it installs/drives these):
@@ -320,6 +323,15 @@ async function main() {
     console.log("built-in moshscript commands:");
     for (const c of commands) {
       console.log(`  ${(`${c.name}()`).padEnd(12)} ${c.summary}`);
+    }
+    return;
+  }
+  if (cmd === "completion") {
+    try {
+      process.stdout.write(completionScript(rest[0]));
+    } catch (e) {
+      console.error(`usage: moshcode completion <bash|zsh|fish>\n${e.message || e}`);
+      process.exitCode = 1;
     }
     return;
   }
