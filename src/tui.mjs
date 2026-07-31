@@ -325,20 +325,23 @@ function printPrds() {
 async function runFile(args) {
   // Parse /run options the same way the CLI does (R3: two entrypoints agree).
   let max, dryRun = false, file = null;
+  let optionsEnded = false;
   const argv = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--max" || a === "-n") {
+    if (!optionsEnded && a === "--") {
+      optionsEnded = true;
+    } else if (!optionsEnded && (a === "--max" || a === "-n")) {
       const v = Number(args[++i]);
       if (!Number.isSafeInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
       max = v;
-    } else if (a.startsWith("--max=")) {
+    } else if (!optionsEnded && a.startsWith("--max=")) {
       const v = Number(a.slice("--max=".length));
       if (!Number.isSafeInteger(v) || v < 1) { console.log(err(`--max needs a positive integer`)); return; }
       max = v;
-    } else if (a === "--dry-run") {
+    } else if (!optionsEnded && a === "--dry-run") {
       dryRun = true;
-    } else if (a.startsWith("-") && !file) {
+    } else if (!optionsEnded && a.startsWith("-") && !file) {
       console.log(err(`unknown option ${a}`));
       return;
     } else if (!file) {

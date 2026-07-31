@@ -273,6 +273,7 @@ moshcode run examples/alive.mosh              # run a script
 moshcode run deploy.mosh --dry-run            # narrate without executing
 moshcode run alive.mosh --max 5               # bound the while loop (default 3)
 moshcode run deploy.mosh staging --fast       # extra args reach the script as argv
+moshcode run deploy.mosh -- --max 5           # -- preserves option-like script args
 moshcode run - < script.mosh                  # pipe/paste from stdin
 moshcode commands                             # list the full vocabulary
 moshcode commands --json                      # machine-readable command metadata

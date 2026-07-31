@@ -136,6 +136,18 @@ test("positional args after the script file reach the script as argv", async () 
   assert.match(result.stdout, /--fast/);
 });
 
+test("run preserves option-like script args after --", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "moshcode-run-separator-"));
+  const script = join(dir, "argv.mosh");
+  writeFileSync(script, "say(JSON.stringify(argv));\n");
+
+  const result = await run([script, "--", "--max", "2", "--dry-run", "-n"]);
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout, /running moshscript \(dry run\)/);
+  assert.match(result.stdout, /\["--max","2","--dry-run","-n"\]/);
+});
+
 test("run reports missing script files without a stack trace", async () => {
   const missing = join(tmpdir(), "moshcode-missing-script.mosh");
   const result = await run([missing, "--dry-run"]);
