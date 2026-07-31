@@ -23,7 +23,7 @@ export const DEFAULT_MAX = 3;
 
 /** Strip a leading `#!…` shebang line so `#!/usr/bin/env moshscript` files parse. */
 export function stripShebang(src) {
-  return src.startsWith("#!") ? src.replace(/^#![^\n]*\r?\n?/, "") : src;
+  return src.replace(/^\uFEFF?#![^\r\n]*(?:\r?\n|$)/, "");
 }
 
 // The loop governor: owns `alive` truthiness and the iteration budget.
