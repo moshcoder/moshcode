@@ -45,12 +45,15 @@ export function createMirror({
 
   // The browser runs a real terminal emulator over this stream, so it has to
   // know how wide the tty on this end is — otherwise every line wraps at the
-  // wrong column and anything that redraws in place lands crooked. Piped output
-  // has no size at all; the app treats null as "unknown" and falls back.
-  const size = () => ({
-    cols: process.stdout.columns || null,
-    rows: process.stdout.rows || null,
-  });
+  // wrong column and anything that redraws in place lands crooked.
+  //
+  // Piped output (CI, `mosh | tee`) has no size at all, and half a size is no
+  // use to an emulator, so send nothing rather than nulls: the app keeps
+  // whatever it already had and the page falls back to filling its box.
+  const size = () => {
+    const { columns, rows } = process.stdout;
+    return columns && rows ? { cols: columns, rows } : {};
+  };
 
   async function flush() {
     flushTimer = null;
