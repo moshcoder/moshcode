@@ -214,7 +214,7 @@ export async function listNamesForUser(userId) {
  */
 export async function registerName({ tld: tldInput, label: labelInput, userId, target = null }) {
   const tld = normalizeTld(tldInput);
-  const label = normalizeTld(labelInput);
+  const label = normalizeLabel(labelInput);
   if (!tld || !label) return { ok: false, error: "not a valid name — letters, digits and dashes only" };
 
   const owner = await getTld(tld);
@@ -255,7 +255,7 @@ export async function releaseName({ tld: tldInput, label: labelInput, userId }) 
 
 async function ownedName(tldInput, labelInput, userId) {
   const tld = normalizeTld(tldInput);
-  const label = normalizeTld(labelInput);
+  const label = normalizeLabel(labelInput);
   if (!tld || !label) return { ok: false, error: "not a valid name" };
   const existing = await getName(tld, label);
   if (!existing) return { ok: false, error: `${label}.${tld} is not registered` };
