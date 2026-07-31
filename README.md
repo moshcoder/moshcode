@@ -256,6 +256,7 @@ moshcode run alive.mosh --max 5               # bound the while loop (default 3)
 moshcode run deploy.mosh staging --fast       # extra args reach the script as argv
 moshcode run - < script.mosh                  # pipe/paste from stdin
 moshcode commands                             # list the full vocabulary
+moshcode commands --json                      # machine-readable command metadata
 ```
 
 No install/build step — it's plain ESM. `node bin/moshcode.mjs …` works too.
