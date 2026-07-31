@@ -139,3 +139,74 @@ test("claiming a pasted list", { skip: installed ? false : "pwa dependencies not
     assert.match(m.summarizeBulkClaim(result), /nothing to claim/);
   });
 });
+
+test("settings applied to a whole list", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+  const { migrate } = await import("../src/migrate.mjs");
+  await migrate();
+  const { run } = await import("../src/db.mjs");
+  await run(`INSERT OR IGNORE INTO users (id,email,created_at) VALUES (?,?,?)`, [ALICE, "alice@example.com", Date.now()]);
+  const m = await import("../src/moshpit.mjs");
+  const uniq = () => `s${randomBytes(4).toString("hex")}`;
+
+  await t.test("a price is set on every ending that lands", async () => {
+    const a = uniq(), b = uniq();
+    const result = await m.registerTlds({ input: `${a}\n${b}`, userId: ALICE, priceUsd: "12.50" });
+
+    assert.equal(result.settingsFailed.length, 0);
+    for (const tld of [a, b]) assert.equal((await m.getTld(tld)).price_usd, 12.5);
+  });
+
+  await t.test("no price leaves them unlisted rather than free", async () => {
+    const a = uniq();
+    await m.registerTlds({ input: a, userId: ALICE });
+    // NULL means not for sale; 0 would mean anyone can drain the namespace.
+    assert.equal((await m.getTld(a)).price_usd, null);
+  });
+
+  await t.test("a bad price is reported, and the ending is still claimed", async () => {
+    const a = uniq();
+    const result = await m.registerTlds({ input: a, userId: ALICE, priceUsd: "-5" });
+
+    assert.deepEqual(result.claimed, [a], "losing the claim over a typo'd price would be worse");
+    assert.equal(result.settingsFailed.length, 1);
+    assert.match(result.settingsFailed[0].error, /positive number/);
+  });
+
+  await t.test("a whole list can be pointed at one ending", async () => {
+    const target = uniq();
+    await m.registerTld({ tld: target, userId: ALICE });
+    const a = uniq(), b = uniq();
+
+    const result = await m.registerTlds({ input: `${a}\n${b}`, userId: ALICE, aliasOf: `.${target}` });
+    assert.equal(result.settingsFailed.length, 0);
+    for (const tld of [a, b]) assert.equal((await m.getTld(tld)).alias_of, target);
+  });
+
+  await t.test("an ending that is its own alias target is skipped, not rejected", async () => {
+    const a = uniq(), b = uniq();
+    // Pasting a list that happens to contain the target is ordinary.
+    const result = await m.registerTlds({ input: `${a}\n${b}`, userId: ALICE, aliasOf: a });
+
+    assert.deepEqual(result.claimed.sort(), [a, b].sort());
+    assert.equal(result.settingsFailed.length, 0);
+    assert.equal((await m.getTld(a)).alias_of, null, "not pointed at itself");
+    assert.equal((await m.getTld(b)).alias_of, a);
+  });
+
+  await t.test("price and target together", async () => {
+    const target = uniq();
+    await m.registerTld({ tld: target, userId: ALICE });
+    const a = uniq();
+
+    await m.registerTlds({ input: a, userId: ALICE, priceUsd: "3", aliasOf: target });
+    const row = await m.getTld(a);
+    assert.equal(row.price_usd, 3);
+    assert.equal(row.alias_of, target);
+  });
+
+  await t.test("one ending still reads as one ending", async () => {
+    const a = uniq();
+    const line = m.summarizeBulkClaim(await m.registerTlds({ input: `.${a}`, userId: ALICE }));
+    assert.equal(line, `.${a} is yours.`);
+  });
+});

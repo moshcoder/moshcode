@@ -374,12 +374,30 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
 
 /* ---------- the human page ---------- */
 
+/**
+ * The settings applied to everything a single submission claims.
+ *
+ * Optional, and blank means "leave it alone" rather than "clear it" — the same
+ * two knobs a claimed ending already has on its own row, offered at the moment
+ * you claim it so a list of forty does not need forty follow-up edits.
+ */
+const claimDefaults = (req) => `
+<div class="pit-defaults">
+  <label>Price each
+    <input name="price_usd" type="number" min="0.01" step="0.01" placeholder="unlisted"
+      autocomplete="off" aria-label="price per name, in dollars"></label>
+  <label>Point at
+    <span class="pit-dot">.</span><input name="alias_of" placeholder="nothing"
+      autocomplete="off" spellcheck="false" aria-label="an ending you already hold"></label>
+</div>`;
+
 const claimForm = (req, prefill = "") => `
 <form method="post" action="/pit/claim" class="pit-form">
   ${csrfInput(req)}
   <label class="pit-field"><span class="pit-dot">.</span
     ><input name="tld" placeholder="eggs" aria-label="the TLD you want" autocomplete="off" spellcheck="false"
       value="${esc(prefill)}" required></label>
+  ${claimDefaults(req)}
   <button class="btn acid" type="submit">Claim it</button>
 </form>`;
 
@@ -402,9 +420,10 @@ const bulkClaimForm = (req) => `
 .yeah
 oranges
 # dots optional · commas or newlines · # comments ignored"></textarea>
+    ${claimDefaults(req)}
     <p class="mono faint" style="font-size:.7rem;margin:8px 0 10px">
       Up to ${MAX_BULK_TLDS} at a time. Ones already taken are reported, not fatal —
-      the rest still land.
+      the rest still land. Price and target apply to every ending that lands.
     </p>
     <button class="btn acid" type="submit">Claim them all</button>
   </form>
@@ -523,6 +542,10 @@ const PIT_CSS = `
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}
+.pit-defaults{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 4px}
+.pit-defaults label{display:flex;align-items:center;gap:6px;font-family:var(--mono);
+  font-size:.72rem;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
+.pit-defaults input{width:11ch;padding:7px 9px;font-size:.78rem}
 .pit-bulk{margin:0 0 18px;max-width:62ch}
 .pit-bulk summary{font-family:var(--mono);font-size:.74rem;letter-spacing:.08em;color:var(--dim);cursor:pointer;padding:6px 0}
 .pit-bulk summary:hover{color:var(--acid)}
@@ -863,6 +886,7 @@ const back = (res, params, tab = "yours") =>
 moshpitRouter.post("/pit/claim-bulk", requireAuth, async (req, res) => {
   const result = await registerTlds({
     input: req.body?.tlds, userId: req.user.id, ownerEmail: req.user.email ?? null,
+    priceUsd: req.body?.price_usd, aliasOf: req.body?.alias_of,
   });
   // The flash rides back in the query string, so it has to stay short enough
   // to survive a URL.
@@ -871,11 +895,14 @@ moshpitRouter.post("/pit/claim-bulk", requireAuth, async (req, res) => {
 });
 
 moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
-  const result = await registerTld({
-    tld: req.body?.tld, userId: req.user.id, ownerEmail: req.user.email ?? null,
+  // One ending goes through the same path as a list of one, so the settings
+  // behave identically either way rather than being a bulk-only feature.
+  const result = await registerTlds({
+    input: req.body?.tld, userId: req.user.id, ownerEmail: req.user.email ?? null,
+    priceUsd: req.body?.price_usd, aliasOf: req.body?.alias_of,
   });
-  if (!result.ok) return back(res, { err: result.error || "could not register that TLD" });
-  back(res, { ok: `.${result.tld.tld} is yours.` });
+  if (!result.claimed.length) return back(res, { err: summarizeBulkClaim(result).slice(0, 500) });
+  back(res, { ok: summarizeBulkClaim(result).slice(0, 500) });
 });
 
 moshpitRouter.post("/pit/:tld/alias", requireAuth, async (req, res) => {

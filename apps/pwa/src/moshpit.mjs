@@ -571,17 +571,29 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
  * — the caller gets what landed and what did not, rather than a stop at the
  * first collision with the rest silently unattempted.
  */
-export async function registerTlds({ input, userId, ownerEmail = null, limit = MAX_BULK_TLDS }) {
+export async function registerTlds({
+  input, userId, ownerEmail = null, limit = MAX_BULK_TLDS, priceUsd = null, aliasOf = null,
+}) {
   const { tlds, skipped } = parseTldList(input, limit);
 
   const claimed = [];
   const mine = [];
   const taken = [];
   const rejected = [];
+  const settingsFailed = [];
 
   for (const tld of tlds) {
     const result = await registerTld({ tld, userId, ownerEmail });
-    if (result.ok) { claimed.push(result.tld.tld); continue; }
+    if (result.ok) {
+      claimed.push(result.tld.tld);
+      // Settings are applied per ending, and a failure here is reported rather
+      // than thrown: the ending is already claimed and keeping it is the point.
+      // Losing a whole batch because one alias target was wrong would be worse
+      // than landing forty endings with no price on them.
+      const failure = await applyTldDefaults({ tld: result.tld.tld, userId, priceUsd, aliasOf });
+      if (failure) settingsFailed.push({ tld: result.tld.tld, error: failure });
+      continue;
+    }
 
     if (result.taken) {
       // Re-pasting a list you already claimed should read as "already yours",
@@ -593,13 +605,43 @@ export async function registerTlds({ input, userId, ownerEmail = null, limit = M
     rejected.push({ tld, error: result.error });
   }
 
-  return { claimed, mine, taken, rejected, skipped, attempted: tlds.length };
+  return { claimed, mine, taken, rejected, settingsFailed, skipped, attempted: tlds.length };
+}
+
+/**
+ * Apply the whole-list settings to one freshly claimed ending.
+ *
+ * Returns an error string, or null when there was nothing to do or it worked.
+ * Aliasing an ending to itself is silently skipped rather than reported: it is
+ * what you get by pasting a list that happens to contain the alias target, and
+ * refusing the whole entry over it would be pedantic.
+ */
+async function applyTldDefaults({ tld, userId, priceUsd, aliasOf }) {
+  const wantsPrice = priceUsd !== null && priceUsd !== undefined && String(priceUsd).trim() !== "";
+  if (wantsPrice) {
+    const priced = await setTldPrice({ tld, userId, priceUsd });
+    if (!priced.ok) return priced.error;
+  }
+
+  const target = normalizeTld(aliasOf);
+  if (target && target !== tld) {
+    const aliased = await setAlias({ from: tld, to: target, userId });
+    if (!aliased.ok) return aliased.error;
+  }
+  return null;
 }
 
 /** One line fit for a flash message: what landed, what did not, and why. */
 export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
   const show = (list, n = 6) =>
     list.slice(0, n).map((t) => `.${t}`).join(", ") + (list.length > n ? ` +${list.length - n} more` : "");
+
+  // The single-ending case says the plain thing. "claimed 1 — .eggs." is what a
+  // batch report looks like, and the commonest path through this page is one
+  // ending typed into one box.
+  const onlyClaimed = result.claimed.length === 1 && !result.mine.length && !result.taken.length
+    && !result.rejected.length && !result.settingsFailed?.length && !result.skipped;
+  if (onlyClaimed) return `.${result.claimed[0]} is yours.`;
 
   const parts = [];
   if (result.claimed.length) parts.push(`claimed ${result.claimed.length} — ${show(result.claimed)}`);
@@ -610,6 +652,10 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
     // need different fixes, and a bare number tells you neither.
     const reasons = result.rejected.slice(0, 3).map((r) => `.${r.tld} — ${r.error}`).join("; ");
     parts.push(`${result.rejected.length} rejected (${reasons}${result.rejected.length > 3 ? "; …" : ""})`);
+  }
+  if (result.settingsFailed?.length) {
+    const first = result.settingsFailed[0];
+    parts.push(`${result.settingsFailed.length} claimed but not configured (.${first.tld} — ${first.error})`);
   }
   if (result.skipped) parts.push(`${result.skipped} past the ${limit} limit, not attempted`);
 
