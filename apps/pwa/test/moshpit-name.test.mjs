@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  RESERVED_TLDS, normalizeTld, tldRejection, parseMoshpitName,
+  RESERVED_TLDS, normalizeLabel, normalizeTld, tldRejection, parseMoshpitName,
   normalizeMode, resolutionPreference,
 } from "../src/lib/moshpit-name.mjs";
 
@@ -29,6 +29,12 @@ test("normalizeTld rejects what could never be a TLD", () => {
   assert.equal(normalizeTld(undefined), null);
 });
 
+test("hostname labels may be numeric even though TLDs may not", () => {
+  assert.equal(normalizeLabel("123"), "123");
+  assert.equal(normalizeTld("123"), null);
+  assert.deepEqual(parseMoshpitName("123.eggs"), { label: "123", tld: "eggs" });
+});
+
 test("reserved names cannot be claimed", () => {
   for (const name of ["bank", "apple", "gov", "moshpit", "com"]) {
     assert.ok(RESERVED_TLDS.has(name), `${name} should be reserved`);
@@ -45,6 +51,7 @@ test("a TLD needs at least two characters", () => {
 test("parseMoshpitName splits exactly one dot", () => {
   assert.deepEqual(parseMoshpitName("foo.agentic"), { label: "foo", tld: "agentic" });
   assert.deepEqual(parseMoshpitName(" FOO.Agentic "), { label: "foo", tld: "agentic" });
+  assert.deepEqual(parseMoshpitName("123.agentic"), { label: "123", tld: "agentic" });
   assert.equal(parseMoshpitName("a.b.c"), null, "the namespace is one level deep");
   assert.equal(parseMoshpitName("nodot"), null);
   assert.equal(parseMoshpitName(""), null);

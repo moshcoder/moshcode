@@ -108,6 +108,14 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     assert.equal((await m.resolveMoshpitName("other.agentic")).resolved, "other.agent");
   });
 
+  await t.test("numeric labels resolve and can be exempted", async () => {
+    assert.equal((await m.resolveMoshpitName("123.agentic")).resolved, "123.agent");
+    assert.equal((await m.setExempt({ tld: "agentic", label: "123", userId: ALICE })).ok, true);
+    const r = await m.resolveMoshpitName("123.agentic");
+    assert.equal(r.resolved, "123.agentic");
+    assert.equal(r.exempt, true);
+  });
+
   await t.test("exemptions survive the alias being repointed", async () => {
     await m.clearAlias("agentic", ALICE);
     await m.setAlias({ from: "agentic", to: "agents", userId: ALICE });
