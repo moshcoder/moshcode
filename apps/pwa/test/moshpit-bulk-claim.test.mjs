@@ -30,11 +30,18 @@ test("parsing a pasted list", async (t) => {
     assert.deepEqual(parseTldList(".eggs\nyeah\n.oranges").tlds, ["eggs", "yeah", "oranges"]);
   });
 
-  await t.test("commas, semicolons and stray whitespace all separate", () => {
+  await t.test("commas and semicolons separate endings", () => {
     // People paste spreadsheet columns and CSV exports; neither should need
     // reformatting first.
-    assert.deepEqual(parseTldList("eggs, yeah ;oranges\t\tmosh").tlds,
-      ["eggs", "yeah", "oranges", "mosh"]);
+    assert.deepEqual(parseTldList("eggs, yeah ;oranges").tlds, ["eggs", "yeah", "oranges"]);
+  });
+
+  await t.test("whitespace inside a line is fields, not more endings", () => {
+    // The cost of per-line settings: `a b` on one line used to be two endings
+    // and is now one ending pointed at another. Commas and newlines are the
+    // separators, which is what the placeholder shows.
+    assert.deepEqual(parseTldList("oranges\t\tmosh").entries,
+      [{ tld: "oranges", aliasOf: "mosh", priceUsd: null }]);
   });
 
   await t.test("# comments to end of line are dropped", () => {
@@ -216,10 +223,12 @@ test("the default price", { skip: installed ? false : "pwa dependencies not inst
   const m = await import("../src/moshpit.mjs");
   const uniq = () => `d${randomBytes(4).toString("hex")}`;
 
-  await t.test("is the cap PRD 0005 R3 sets, not a round number below it", async () => {
+  await t.test("is $2, and nothing enforces a ceiling on an override", async () => {
     const { MAX_CHILD_PRICE_USD } = await import("../src/lib/moshpit-name.mjs");
+    assert.equal(DEFAULT_TLD_PRICE_USD, 2);
+    // PRD 0005 R3 caps a child name at $1.99, but that arrives with terms and
+    // renewals; until then this is an asking price and a line may exceed it.
     assert.equal(MAX_CHILD_PRICE_USD, 1.99);
-    assert.equal(DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD);
   });
 
   await t.test("an explicit price still wins over it", async () => {
@@ -240,5 +249,94 @@ test("the default price", { skip: installed ? false : "pwa dependencies not inst
     const a = uniq();
     await m.registerTlds({ input: a, userId: ALICE, priceUsd: "" });
     assert.equal((await m.getTld(a)).price_usd, null);
+  });
+});
+
+test("a line can carry its own price and target", async (t) => {
+  const { parseTldList } = await import("../src/lib/moshpit-name.mjs");
+
+  await t.test("reads tld, target and price off one line", () => {
+    assert.deepEqual(parseTldList(".toplevel .redirect $2.00USD").entries,
+      [{ tld: "toplevel", aliasOf: "redirect", priceUsd: 2 }]);
+  });
+
+  await t.test("accepts the shapes a person actually types", () => {
+    for (const [text, price] of [
+      [".a $5", 5], [".b $5USD", 5], [".c 5.00", 5], [".d USD5", 5], [".e $1.50", 1.5],
+    ]) {
+      assert.equal(parseTldList(text).entries[0].priceUsd, price, text);
+    }
+  });
+
+  await t.test("order on the line does not matter", () => {
+    assert.deepEqual(parseTldList(".a $5 .b").entries, [{ tld: "a", aliasOf: "b", priceUsd: 5 }]);
+    assert.deepEqual(parseTldList(".a .b $5").entries, [{ tld: "a", aliasOf: "b", priceUsd: 5 }]);
+  });
+
+  await t.test("a bare list still means one ending per entry", () => {
+    // Commas separate records, so this must not read as tld+target+price.
+    assert.deepEqual(parseTldList("eggs, yeah, oranges").tlds, ["eggs", "yeah", "oranges"]);
+    assert.deepEqual(parseTldList("eggs\nyeah").entries.map((e) => e.aliasOf), [null, null]);
+  });
+
+  await t.test("a line with nothing extra inherits the form's settings", () => {
+    const [entry] = parseTldList("plain").entries;
+    assert.equal(entry.priceUsd, null, "null means 'use the default', not 'free'");
+    assert.equal(entry.aliasOf, null);
+  });
+
+  await t.test("junk on a line is read as a target, never as a price", () => {
+    // The safe misreading: a stray token becomes an alias, which fails loudly
+    // against an ending you do not own, rather than silently setting a price.
+    assert.equal(parseTldList(".a hunter2").entries[0].priceUsd, null);
+    assert.equal(parseTldList(".a hunter2").entries[0].aliasOf, "hunter2");
+    assert.equal(parseTldList(".a $0").entries[0].priceUsd, null, "zero is not a price");
+    assert.equal(parseTldList(".a $-5").entries[0].priceUsd, null);
+  });
+
+  await t.test("the limit still counts endings, not fields", () => {
+    const many = Array.from({ length: 5 }, (_, i) => `t${i} .hub $3`).join("\n");
+    const { entries, skipped } = parseTldList(many, 3);
+    assert.equal(entries.length, 3);
+    assert.equal(skipped, 2);
+  });
+});
+
+test("per-line settings beat the form", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+  const { migrate } = await import("../src/migrate.mjs");
+  await migrate();
+  const { run } = await import("../src/db.mjs");
+  await run(`INSERT OR IGNORE INTO users (id,email,created_at) VALUES (?,?,?)`, [ALICE, "alice@example.com", Date.now()]);
+  const m = await import("../src/moshpit.mjs");
+  const uniq = () => `o${randomBytes(4).toString("hex")}`;
+
+  await t.test("a line's price overrides the form's, upwards", async () => {
+    const cheap = uniq(), dear = uniq();
+    await m.registerTlds({ input: `${cheap}\n${dear} $5USD`, userId: ALICE, priceUsd: "2" });
+
+    assert.equal((await m.getTld(cheap)).price_usd, 2, "no line price -> the form's");
+    assert.equal((await m.getTld(dear)).price_usd, 5, "a line price wins, even above the default");
+  });
+
+  await t.test("a line's target overrides the form's", async () => {
+    const hub = uniq(), other = uniq();
+    await m.registerTld({ tld: hub, userId: ALICE });
+    await m.registerTld({ tld: other, userId: ALICE });
+    const a = uniq(), b = uniq();
+
+    await m.registerTlds({ input: `${a}\n${b} .${other}`, userId: ALICE, aliasOf: hub });
+    assert.equal((await m.getTld(a)).alias_of, hub);
+    assert.equal((await m.getTld(b)).alias_of, other);
+  });
+
+  await t.test("a line works with no form defaults at all", async () => {
+    const hub = uniq();
+    await m.registerTld({ tld: hub, userId: ALICE });
+    const a = uniq();
+
+    await m.registerTlds({ input: `${a} .${hub} $3.50`, userId: ALICE });
+    const row = await m.getTld(a);
+    assert.equal(row.price_usd, 3.5);
+    assert.equal(row.alias_of, hub);
   });
 });
