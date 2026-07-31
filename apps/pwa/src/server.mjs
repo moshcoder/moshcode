@@ -28,6 +28,16 @@ app.use(express.static(path.join(config.root, "public"), { maxAge: "1h" }));
 // the @simplewebauthn/browser UMD bundle, served from node_modules (no CDN)
 app.get("/vendor/simplewebauthn-browser.umd.js", (_req, res) =>
   res.sendFile(path.join(config.root, "node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js")));
+// xterm.js — /sessions/:id is a real terminal emulator, not a <div> of text.
+// Same deal as above: shipped from node_modules, never a CDN.
+const vendor = {
+  "/vendor/xterm.js": "node_modules/@xterm/xterm/lib/xterm.js",
+  "/vendor/xterm.css": "node_modules/@xterm/xterm/css/xterm.css",
+  "/vendor/xterm-addon-fit.js": "node_modules/@xterm/addon-fit/lib/addon-fit.js",
+};
+for (const [route, file] of Object.entries(vendor)) {
+  app.get(route, (_req, res) => res.sendFile(path.join(config.root, file), { maxAge: "1h" }));
+}
 
 app.get("/healthz", (_req, res) => res.json({ ok: true, env: config.env }));
 

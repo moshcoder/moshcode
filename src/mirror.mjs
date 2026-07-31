@@ -37,12 +37,21 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
     } catch { return null; }
   };
 
+  // The browser runs a real terminal emulator over this stream, so it has to
+  // know how wide the tty on this end is — otherwise every line wraps at the
+  // wrong column and anything that redraws in place lands crooked. Piped output
+  // has no size at all; the app treats null as "unknown" and falls back.
+  const size = () => ({
+    cols: process.stdout.columns || null,
+    rows: process.stdout.rows || null,
+  });
+
   async function flush() {
     flushTimer = null;
     if (!sessionId || !pending) return;
     const chunk = pending;
     pending = "";
-    await post(`/api/sessions/${sessionId}/output`, { chunk, engine });
+    await post(`/api/sessions/${sessionId}/output`, { chunk, engine, ...size() });
   }
 
   function schedule() {
@@ -61,6 +70,19 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
 
   /** Note which engine owns the terminal right now (null = back in the pit). */
   function setEngine(name) { engine = name || null; write(""); schedule(); }
+
+  // Dragging a window edge fires `resize` continuously, so settle first and
+  // send one empty post carrying the final geometry.
+  let resizeTimer = null;
+  function onResize() {
+    if (stopped || !sessionId) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      post(`/api/sessions/${sessionId}/output`, { chunk: "", engine, ...size() });
+    }, 120);
+    resizeTimer.unref?.();
+  }
 
   // Long-poll for commands typed on the web. One request parks on the server
   // until something is queued, so a command lands in well under a second
@@ -93,9 +115,14 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
         host: os.hostname(),
         version,
         cwd,
+        ...size(),
       });
       if (!r?.id) return false;
       sessionId = r.id;
+      // A resize carries no output of its own, so nudge a flush: the new
+      // geometry rides the next post and the watching browser reshapes with us
+      // instead of waiting for whatever gets printed next.
+      process.stdout.on("resize", onResize);
       pump();
       return true;
     },
@@ -107,14 +134,17 @@ export function createMirror({ version = "", cwd = process.cwd() } = {}) {
       if (!sessionId || stopped) return;
       stopped = true;
       clearTimeout(flushTimer);
+      clearTimeout(resizeTimer);
       flushTimer = null;
+      resizeTimer = null;
+      process.stdout.off?.("resize", onResize);
       try { poll?.abort(); } catch { /* already gone */ }
       // Flush whatever is left before saying goodbye, so the last thing you
       // did is visible in the mirror rather than lost with the process.
       if (pending) {
         const chunk = pending;
         pending = "";
-        await post(`/api/sessions/${sessionId}/output`, { chunk, engine });
+        await post(`/api/sessions/${sessionId}/output`, { chunk, engine, ...size() });
       }
       await post(`/api/sessions/${sessionId}/end`, {});
     },
