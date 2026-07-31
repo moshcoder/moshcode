@@ -84,8 +84,15 @@ test("a leading shebang line is stripped, not executed", async () => {
   assert.deepEqual(calls, ["ran"]);
 });
 
+test("a UTF-8 BOM before a shebang is stripped", async () => {
+  const { calls, registry } = recorder();
+  await runScript(`\uFEFF#!/usr/bin/env moshscript\npush("ran");`, { commands: registry });
+  assert.deepEqual(calls, ["ran"]);
+});
+
 test("stripShebang leaves shebang-less source untouched", () => {
   assert.equal(stripShebang('push("x");'), 'push("x");');
+  assert.equal(stripShebang('\uFEFFpush("x");'), '\uFEFFpush("x");');
   assert.equal(stripShebang("#!/usr/bin/env moshscript\npush();"), "push();");
 });
 
