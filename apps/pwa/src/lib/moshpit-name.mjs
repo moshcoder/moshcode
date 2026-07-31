@@ -114,13 +114,32 @@ export function resolutionPreference({ registered, mode }) {
 }
 
 /**
- * How many endings one paste may claim at a time.
+ * The most endings one paste may claim.
  *
- * A cap rather than no cap because this runs one INSERT per ending against a
- * remote database, and a pasted spreadsheet column is exactly the shape of
- * input that turns into ten thousand of them by accident.
+ * A ceiling rather than no ceiling because this runs one INSERT per ending
+ * against a remote database, and a pasted spreadsheet column is exactly the
+ * shape of input that turns into ten thousand of them by accident.
+ *
+ * It is not the thing that usually stops a paste, though — BULK_TIME_BUDGET_MS
+ * is. A count cannot know how slow the database is today, and the failure it
+ * guards against is a request that dies halfway with no report of what landed.
  */
-export const MAX_BULK_TLDS = 200;
+export const MAX_BULK_TLDS = 1000;
+
+/**
+ * How long claiming may run before it stops and reports.
+ *
+ * Stopping on the clock rather than on a count adapts to the database: a fast
+ * one gets through hundreds, a slow one stops early, and neither ends as a
+ * timed-out request whose result nobody ever sees. Whatever is left is named
+ * so it can be pasted again.
+ */
+export const BULK_TIME_BUDGET_MS = 20_000;
+
+/** 1000 -> "1k". A ceiling is a rough promise and should read like one. */
+export function shortCount(n) {
+  return n >= 1000 && n % 1000 === 0 ? `${n / 1000}k` : String(n);
+}
 
 /**
  * The most a child name may cost per year.

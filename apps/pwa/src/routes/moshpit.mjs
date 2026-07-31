@@ -54,6 +54,7 @@ import {
   setExempt,
   setNameTarget,
   setTldPrice,
+  shortCount,
   summarizeBulkClaim,
   tldRejection,
 } from "../moshpit.mjs";
@@ -427,7 +428,7 @@ oranges, pears, plums
 # anything on a line beats the defaults below · # comments ignored"></textarea>
     ${claimDefaults(req)}
     <p class="mono faint" style="font-size:.7rem;margin:8px 0 10px">
-      Up to ${MAX_BULK_TLDS} at a time. Ones already taken are reported, not fatal —
+      Up to ${shortCount(MAX_BULK_TLDS)} at a time. Ones already taken are reported, not fatal —
       the rest still land. The price and target below apply to every ending that
       lands, unless a line says otherwise.
     </p>
