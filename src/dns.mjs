@@ -38,6 +38,7 @@ export const TYPE_A = 1;
 export const TYPE_AAAA = 28;
 const CLASS_IN = 1;
 const RCODE_OK = 0;
+const RCODE_SERVFAIL = 2;
 const RCODE_NXDOMAIN = 3;
 
 /* ---------------------------------------------------------------- wire codec */
@@ -358,18 +359,107 @@ export function targetAddress(target) {
  * `parkingAddress` is resolved once by the caller (an A record must carry an
  * IP, not a name) and passed in, so the server itself never does clearnet DNS.
  */
+/**
+ * Send a query to an upstream nameserver and hand back its answer verbatim.
+ *
+ * Deliberately a byte proxy rather than a parse-and-rebuild. We forward
+ * question types this bridge has no opinion about — SVCB, SRV, DNSKEY,
+ * whatever arrives — and re-encoding them would mean implementing the whole
+ * record space correctly to avoid corrupting answers we only need to relay.
+ */
+export function forwardQuery(msg, upstream, { timeoutMs = 3000 } = {}) {
+  const [address, portText] = String(upstream).split("#");
+  const port = Number(portText) || 53;
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket(isIP(address) === 6 ? "udp6" : "udp4");
+    let settled = false;
+    const finish = (reply) => {
+      if (settled) return;
+      settled = true;
+      try { socket.close(); } catch { /* already closing */ }
+      resolve(reply);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    timer.unref?.();
+    socket.on("message", (reply) => { clearTimeout(timer); finish(reply); });
+    socket.on("error", () => { clearTimeout(timer); finish(null); });
+    try {
+      socket.send(msg, port, address);
+    } catch {
+      clearTimeout(timer);
+      finish(null);
+    }
+  });
+}
+
+/**
+ * Is this a name we are authoritative for?
+ *
+ * The gate that makes catch-all routing safe. With `Domains=~.` every lookup
+ * on the machine arrives here, and `google.com` is two labels exactly like
+ * `blue.eggs` is — so parsing alone would have us answer for the clearnet.
+ * Only an ending someone has actually claimed is ours; everything else is
+ * forwarded untouched.
+ *
+ * An unknown ending set means "not ours" rather than "ours". Failing that way
+ * round costs a Moshpit name that does not resolve until the registry answers
+ * again; the other way round costs the whole internet on that machine.
+ */
+export function isOurs(name, tldSet) {
+  if (!(tldSet instanceof Set) || tldSet.size === 0) return false;
+  const parsed = parseRegistryName(name);
+  return Boolean(parsed) && tldSet.has(parsed.tld);
+}
+
 export function createServer(options = {}) {
   const {
     port = DEFAULT_PORT,
     host = DEFAULT_HOST,
     ttl = DEFAULT_TTL,
     onQuery = () => {},
+    // Empty by default, which keeps the old behaviour exactly: with no
+    // upstreams there is nothing to forward to, so the bridge stays the
+    // narrow per-ending resolver it has always been and answers only for
+    // names it is authoritative for.
+    upstreams = [],
+    tldSet = null,
+    forwardTimeoutMs = 3000,
   } = options;
   const socket = dgram.createSocket("udp4");
 
   socket.on("message", async (msg, rinfo) => {
     const query = parseQuery(msg);
     if (!query) return; // malformed, or a response — say nothing at all
+
+    // Catch-all routing puts every lookup on the machine through here. Anything
+    // that is not an ending someone has claimed belongs to the ordinary
+    // internet and is relayed byte for byte, including question types this
+    // bridge has no opinion about.
+    if (upstreams.length && !isOurs(query.name, tldSet)) {
+      let relayed = null;
+      for (const upstream of upstreams) {
+        relayed = await forwardQuery(msg, upstream, { timeoutMs: forwardTimeoutMs });
+        if (relayed) break;
+      }
+      onQuery({ name: query.name, type: query.type, address: null, forwarded: true });
+      try {
+        // SERVFAIL, not NXDOMAIN, when every upstream is silent: "I could not
+        // find out" is retried elsewhere, "it does not exist" gets cached and
+        // the name stays broken after the network comes back.
+        socket.send(
+          relayed || Buffer.concat([
+            header(query.id, { rcode: RCODE_SERVFAIL, answers: 0, recursionDesired: query.recursionDesired }),
+            msg.subarray(12, query.questionEnd),
+          ]),
+          rinfo.port,
+          rinfo.address,
+        );
+      } catch {
+        /* client vanished */
+      }
+      return;
+    }
+
     let address = null;
     let exists = false;
     // Only address questions can be answered with an address; everything else
@@ -410,6 +500,74 @@ export function createServer(options = {}) {
  * `~tld` is a routing-only domain: it sends queries for that suffix here
  * without making this resolver the default for anything else on the machine.
  */
+/* ------------------------------------------------- catch-all routing */
+
+/**
+ * Route every lookup here, instead of naming each claimed ending.
+ *
+ * The per-ending form does not scale and fails silently when it stops. Listing
+ * 4586 endings on one `Domains=` line made systemd-resolved take them
+ * alphabetically until it hit its own cap, reject the remaining 3496 with
+ * "Argument list too long" one line at a time in the journal, and report
+ * success. Names past the cut were configured on disk and absent from the
+ * resolver, so `moshcode dns resolve` answered and `curl` did not — with
+ * nothing in between to say why. Every new ending anyone claims makes that
+ * worse.
+ *
+ * `~.` is one entry that never grows. The cost is that this bridge now sees
+ * every lookup on the machine, so it has to be a resolver rather than an
+ * oracle: anything that is not a claimed Moshpit name is forwarded upstream
+ * untouched, and any failure forwards too. Breaking DNS for the whole box is a
+ * far worse outcome than failing to resolve a Moshpit name.
+ */
+export function resolvedCatchAllConf({ host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
+  return [
+    "# Written by `moshcode dns install`. Sends every lookup to the local",
+    "# bridge, which answers Moshpit endings and forwards the rest upstream.",
+    "#",
+    "# Routing each ending by name instead does not survive the registry",
+    "# growing: systemd-resolved caps how many search domains it accepts and",
+    "# drops the rest with no error a caller can see.",
+    "[Resolve]",
+    `DNS=${host}:${port}`,
+    "Domains=~.",
+    "",
+  ].join("\n");
+}
+
+/** The dnsmasq equivalent: one upstream for everything. */
+export function dnsmasqCatchAllConf({ host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
+  return [
+    "# Written by `moshcode dns install`.",
+    "# no-resolv so dnsmasq does not also inherit the upstreams from",
+    "# /etc/resolv.conf, which on a machine running this bridge may point back",
+    "# here and loop.",
+    "no-resolv",
+    `server=${host}#${port}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The machine's real nameservers, for the bridge to forward to.
+ *
+ * Loopback entries are dropped: once routing points at this bridge, whatever
+ * wrote 127.0.0.53 into resolv.conf is the thing sending us the query, and
+ * forwarding back to it is a loop that ends in a timeout rather than an answer.
+ */
+export function parseUpstreams(resolvConf) {
+  const out = [];
+  for (const line of String(resolvConf ?? "").split("\n")) {
+    const m = line.match(/^\s*nameserver\s+(\S+)/i);
+    if (!m) continue;
+    const address = m[1].replace(/%.*$/, "");
+    if (!isIP(address)) continue;
+    if (/^127\./.test(address) || address === "::1") continue;
+    if (!out.includes(address)) out.push(address);
+  }
+  return out;
+}
+
 export function resolvedConf(tlds, { host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
   return [
     "# Written by `moshcode dns install`. Routes Moshpit TLDs to the local",
