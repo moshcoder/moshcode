@@ -969,8 +969,9 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
 
   moshcode dns tlds              list the TLDs claimed in the Pit
   moshcode dns resolve <name>    show what a name resolves to, and why
-  moshcode dns resolve <name> [--open]
+  moshcode dns resolve <name> [--open] [--json]
                                  look a name up; --open opens a parked name in the Pit
+                                 --json prints one stable document for scripts
   moshcode dns start [--port N]  run the resolver in the foreground
                                  also serves parked names over HTTP so \`curl <name>\`
                                  lands on the Pit; --parking-port N, --no-parking-http
@@ -984,6 +985,19 @@ The registry speaks HTTP, not DNS, so nothing outside a browser can reach a
 Moshpit name until this bridge is running and your resolver points at it.
 \`enable\` edits system DNS and needs root (Administrator on Windows); it routes
 only the Moshpit TLDs, so every other name keeps using your normal resolver.`;
+
+function resolveArgument(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--registry" || arg === "--port") {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--registry=") || arg.startsWith("--port=") || arg.startsWith("-")) continue;
+    return arg;
+  }
+  return null;
+}
 
 export async function dnsCommand(args = [], out = console.log) {
   const [sub, ...rest] = args;
@@ -1013,7 +1027,7 @@ export async function dnsCommand(args = [], out = console.log) {
   }
 
   if (sub === "resolve") {
-    const name = rest[0];
+    const name = resolveArgument(rest);
     if (!name) {
       out("usage: moshcode dns resolve <name>");
       return 1;
@@ -1023,21 +1037,31 @@ export async function dnsCommand(args = [], out = console.log) {
     // host that routes by Host and will not answer for it. The Pit does have a
     // page for it, so say so instead of printing an IP that goes nowhere.
     const pitUrl = result.status === "parked" ? pitNameUrl(name, registryBase) : null;
+    const asJson = rest.includes("--json");
     const explain = {
       live: () => `${name} → ${result.target}`,
       parked: () => `${name} → ${pitUrl}  [parked — claimed but not pointed at an IP]`,
       unreachable: () => `${name} → NXDOMAIN  [registry unreachable — not parking a name we could not look up]`,
       "not-a-name": () => `${name} → NXDOMAIN  [not a Moshpit name: needs exactly one label and one TLD]`,
     };
-    out(explain[result.status]());
+    if (asJson) {
+      out(JSON.stringify({
+        name,
+        status: result.status,
+        target: result.target,
+        pitUrl,
+      }, null, 2));
+    } else {
+      out(explain[result.status]());
+    }
 
     // Opt-in rather than automatic: `resolve` is also what scripts and pipes
     // call, and launching a browser out of a lookup would be a surprise.
     if (rest.includes("--open") && pitUrl) {
       if (canOpenBrowser()) {
-        out(`opening ${pitUrl}`);
+        if (!asJson) out(`opening ${pitUrl}`);
         openBrowser(pitUrl);
-      } else {
+      } else if (!asJson) {
         out("(no browser to open here — copy the URL above)");
       }
     }
