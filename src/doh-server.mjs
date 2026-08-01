@@ -18,6 +18,51 @@ import { discoverUpstreams, fetchTlds, DEFAULT_REGISTRY_BASE, parkingAddress } f
 export const DEFAULT_DOH_PORT = 8053;
 export const DOH_PATH = "/dns-query";
 
+/**
+ * Guards on by default here, unlike the UDP bridge.
+ *
+ * The bridge listens on loopback and has one client, where rate limiting is
+ * pure cost. This is meant to be reachable, and an unprotected open resolver
+ * is found by scanners within hours of being published — so the safe
+ * configuration has to be the one you get by not thinking about it.
+ *
+ * The numbers are generous for a person and tight for a script: 20 queries a
+ * second sustained is far more than a browser produces and far less than a
+ * scraper wants.
+ */
+export const DEFAULT_GUARDS = {
+  rateLimit: { perSecond: 20, burst: 40 },
+  ban: { baseMs: 60_000, factor: 2, maxMs: 24 * 60 * 60 * 1000 },
+  // Caps amplification. 1232 is the payload size the DNS flag day settled on
+  // as safe across the internet, so nothing legitimate loses anything.
+  maxResponseBytes: 1232,
+};
+
+/**
+ * Read guard settings off the command line.
+ *
+ * `--no-guards` exists for running behind something that already limits, and
+ * is loud rather than silent: an unlimited open resolver is a decision, and
+ * the caller has to have typed it.
+ */
+export function parseGuardArgs(args = []) {
+  if (args.includes("--no-guards")) return { rateLimit: null, ban: null, maxResponseBytes: 0 };
+  const num = (flag, fallback) => {
+    const at = args.indexOf(flag);
+    if (at < 0) return fallback;
+    const value = Number(args[at + 1]);
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  };
+  return {
+    rateLimit: {
+      perSecond: num("--rate", DEFAULT_GUARDS.rateLimit.perSecond),
+      burst: num("--burst", DEFAULT_GUARDS.rateLimit.burst),
+    },
+    ban: { ...DEFAULT_GUARDS.ban, baseMs: num("--ban-seconds", 60) * 1000 },
+    maxResponseBytes: num("--max-response", DEFAULT_GUARDS.maxResponseBytes),
+  };
+}
+
 /** Read a request body, refusing anything implausible for a DNS message. */
 export function readBody(req, limit = 4096) {
   return new Promise((resolve, reject) => {
@@ -68,6 +113,7 @@ export async function createDohServer({
   onQuery = () => {},
   ...guards
 } = {}) {
+  const applied = { ...DEFAULT_GUARDS, ...guards };
   const handle = handler || createDohHandler({
     registryBase,
     upstreams: await discoverUpstreams(),
@@ -120,6 +166,7 @@ export async function createDohServer({
         port: addr.port,
         address: addr.address,
         url: `http://${addr.address}:${addr.port}${path}`,
+        guards: applied,
         close: () => new Promise((done) => server.close(done)),
       });
     });

@@ -85,3 +85,51 @@ test("the nginx block forwards the client and does not compress", () => {
   assert.match(conf, /^\tlisten \[::\]:443 ssl;$/m);
   assert.match(conf, new RegExp(`location ${DOH_PATH} \\{`));
 });
+
+test("guards are on by default, because an open resolver is found in hours", async () => {
+  const { DEFAULT_GUARDS, parseGuardArgs } = await import("../src/doh-server.mjs");
+
+  // The bridge can default them off — it listens on loopback and has one
+  // client. This is meant to be reachable, so the safe configuration has to be
+  // the one you get by not thinking about it.
+  const defaults = parseGuardArgs([]);
+  assert.deepEqual(defaults.rateLimit, DEFAULT_GUARDS.rateLimit);
+  assert.ok(defaults.ban.baseMs > 0);
+  assert.equal(defaults.maxResponseBytes, 1232, "caps amplification at the flag-day payload size");
+
+  // Tunable without being disabled by accident.
+  const tuned = parseGuardArgs(["--rate", "5", "--burst", "10", "--ban-seconds", "300"]);
+  assert.equal(tuned.rateLimit.perSecond, 5);
+  assert.equal(tuned.rateLimit.burst, 10);
+  assert.equal(tuned.ban.baseMs, 300_000);
+
+  // Turning them off must be explicit — an unlimited open resolver is a
+  // decision, and the caller has to have typed it.
+  const off = parseGuardArgs(["--no-guards"]);
+  assert.equal(off.rateLimit, null);
+  assert.equal(off.ban, null);
+  assert.equal(off.maxResponseBytes, 0);
+
+  // Junk values fall back rather than disabling anything: `--rate banana`
+  // must not quietly become an unlimited resolver.
+  assert.equal(parseGuardArgs(["--rate", "banana"]).rateLimit.perSecond, DEFAULT_GUARDS.rateLimit.perSecond);
+  assert.equal(parseGuardArgs(["--rate", "-5"]).rateLimit.perSecond, DEFAULT_GUARDS.rateLimit.perSecond);
+});
+
+test("a server built with defaults actually enforces them", async (t) => {
+  // Not just parsed — reaching the handler. A default that is read and then
+  // dropped on the floor is worse than no default, because it reads as safe.
+  const server = await createDohServer({ port: 0, rateLimit: { perSecond: 0, burst: 1 } });
+  t.after(() => server.close());
+
+  const ask = () => fetch(`http://127.0.0.1:${server.port}${DOH_PATH}`, {
+    method: "POST",
+    headers: { "content-type": DNS_MESSAGE, "x-forwarded-for": "203.0.113.77" },
+    body: query("blue.eggs"),
+  });
+
+  await ask();
+  const limited = await ask();
+  const body = Buffer.from(await limited.arrayBuffer());
+  assert.equal(body.readUInt16BE(2) & 0x000f, 5, "REFUSED once the burst is spent");
+});

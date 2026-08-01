@@ -27,7 +27,7 @@ import { consoleCommand } from "../src/console.mjs";
 import { dnsCommand } from "../src/dns.mjs";
 import { templateCommand } from "../src/templates.mjs";
 import { serveCommand } from "../src/serve.mjs";
-import { createDohServer, nginxDohSite, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
+import { createDohServer, nginxDohSite, parseGuardArgs, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
 import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
@@ -158,7 +158,8 @@ usage:
   moshcode skill install <git-url>     install a skill across every engine that
                                        supports it (claude/gemini)
   moshcode doh [--port N]              run the DNS-over-HTTPS resolver (loopback;
-                                       put TLS in front of it)
+     [--rate N] [--burst N]            put TLS in front of it). Rate limits and
+     [--ban-seconds N] [--no-guards]   bans are ON by default.
   moshcode doh --nginx <name>          print the reverse-proxy block for it
   moshcode site <name> [--install]     install web-server config for a Moshpit
      [--reload] [--proxy PORT]         name (nginx/Caddy does the serving, not
@@ -398,8 +399,15 @@ async function main() {
       return;
     }
     const portAt = rest.indexOf("--port");
-    const server = await createDohServer({ port: portAt >= 0 ? Number(rest[portAt + 1]) : DEFAULT_DOH_PORT });
+    const server = await createDohServer({
+      port: portAt >= 0 ? Number(rest[portAt + 1]) : DEFAULT_DOH_PORT,
+      ...parseGuardArgs(rest),
+    });
     console.log(`DoH resolver on ${server.url}`);
+    console.log(server.guards.rateLimit
+      ? `  guards: ${server.guards.rateLimit.perSecond}/s per client (burst ${server.guards.rateLimit.burst}), `
+        + `bans double from ${Math.round(server.guards.ban.baseMs / 1000)}s, answers capped at ${server.guards.maxResponseBytes}B`
+      : "  ! guards OFF (--no-guards) — do not expose this without something else limiting it");
     console.log("TLS belongs to whatever holds 443 — see: moshcode doh --nginx <name>");
     console.log("this must not be reachable directly; it has no TLS and trusts X-Forwarded-For");
     return new Promise(() => {});
