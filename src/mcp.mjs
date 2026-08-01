@@ -109,11 +109,20 @@ export function mcpAddArgs(key, spec) {
 }
 
 /**
- * Plan the fan-out: one entry per MCP engine with its native argv or skip
- * reason, annotated with install status. Pure + testable.
+ * Plan the fan-out: one entry per engine with its native argv or skip reason,
+ * annotated with install status. Pure + testable.
+ *
+ * Every engine, not just MCP_ENGINES — R6 requires an engine that cannot
+ * express the server to be skipped *with a stated reason*, and the PRD's own
+ * UX example ends on `· aider  skipped — no MCP support`. Mapping MCP_ENGINES
+ * dropped those engines before they reached the summary, so the fan-out
+ * reported five rows where /mcp list reports six. MCP_ENGINES stays the
+ * capability set (it is what the matrix splits "supported" on); it is only the
+ * iteration that widens. Supported engines keep their existing order.
  */
 export function planMcpAdd(spec, { installedSet } = {}) {
-  return MCP_ENGINES.map((key) => {
+  const rest = Object.keys(ENGINES).filter((key) => !MCP_ENGINES.includes(key));
+  return [...MCP_ENGINES, ...rest].map((key) => {
     const bin = ENGINES[key].bin;
     const installed = installedSet ? installedSet.has(key) : isInstalled(bin);
     return { key, bin, installed, ...mcpAddArgs(key, spec) };
