@@ -506,15 +506,14 @@ function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
   // listing. That is a detour on the one page whose whole job is to say where
   // else this name could live.
   //
-  // An ending the label cannot legally join keeps the old link rather than
-  // producing a /n/ URL that 400s — `1.420` is refused as an address, and a
-  // dead link is worse than a listing.
+  // Every ending here goes to /n/, without exception. A name whose halves are
+  // both numeric is refused by parseMoshpitName as an IPv4 literal, so
+  // /n/420.187 answers 400 — that is accepted deliberately. The namespace is
+  // the destination, and one ending quietly leaving it for a search page is a
+  // worse inconsistency than a link that says plainly it is not a name.
   const label = parseMoshpitName(resolution.resolved)?.label ?? null;
-  const tldLink = (t) => {
-    const carried = label && parseMoshpitName(`${label}.${t.tld}`) ? `${label}.${t.tld}` : null;
-    const href = carried ? `/n/${esc(carried)}` : `/pit?tab=theirs&q=${esc(t.tld)}`;
-    return `<a class="mono" href="${href}">.${esc(t.tld)}</a>`;
-  };
+  const tldLink = (t) =>
+    `<a class="mono" href="/n/${esc(label)}.${esc(t.tld)}">.${esc(t.tld)}</a>`;
 
   return `
 <section class="pit-panel">

@@ -97,20 +97,21 @@ test("names under this ending still link into /n/", skip, async () => {
   assert.ok(res.body.includes('href="/n/420.eggs"'), "the rest of the ending is unchanged");
 });
 
-test("an ending the label cannot legally join keeps the listing link", skip, async () => {
+test("every ending goes to /n/, with no exception", skip, async () => {
   const { get } = await app();
-  // Both halves numeric reads as an abbreviated IPv4, so `420.187` is refused
-  // as a name. A /n/ link there would be a guaranteed 400 — worse than the
-  // listing it replaced.
+  // `420.187` is both halves numeric, which parseMoshpitName refuses as an
+  // IPv4 literal — so this link answers 400. That is the deliberate choice:
+  // one ending slipping out of the namespace into a search page is a worse
+  // inconsistency than a link that says plainly it is not a name.
   const res = await get("/n/420.eggs");
   assert.equal(res.status, 200);
-  assert.ok(!res.body.includes("/n/420.187"), "no link that is certain to 400");
-  assert.ok(res.body.includes("q=187"), "falls back rather than dropping the ending");
+  assert.ok(res.body.includes('href="/n/420.187"'), "no ending leaves /n/");
+  assert.ok(res.body.includes('href="/n/420.yolks"'));
+  assert.ok(!res.body.includes("q=187"), "the listing fallback is gone");
 });
 
-test("a joinable ending still carries across on that same page", skip, async () => {
+test("no related ending falls back to the pit listing", skip, async () => {
   const { get } = await app();
-  // Same page as above: the fallback is per ending, not a whole-page retreat.
-  const res = await get("/n/420.eggs");
-  assert.ok(res.body.includes('href="/n/420.yolks"'));
+  const res = await get("/n/scrambled.eggs");
+  assert.ok(!res.body.includes("tab=theirs"), "every related ending is a /n/ link");
 });
