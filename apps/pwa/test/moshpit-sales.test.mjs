@@ -44,11 +44,28 @@ test("moshpit name sales", { skip: installed ? false : "pwa dependencies not ins
   });
 
   await t.test("a price must be a positive, plausible number", async () => {
-    for (const bad of [0, -5, "abc", Infinity, NaN, 5_000_000]) {
+    // The ceiling is an overflow guard, not a policy price: what an operator
+    // charges is their call, so only nonsense is refused.
+    for (const bad of [0, -5, "abc", Infinity, NaN, 5_000_000_000]) {
       const r = await m.setTldPrice({ tld: "whatever", userId: SELLER, priceUsd: bad });
       assert.equal(r.ok, false, `${bad} should be refused`);
     }
     // A zero or negative price would let anyone drain the namespace for free.
+    assert.equal((await m.getTldWithPrice("whatever")).price_usd, null);
+  });
+
+  await t.test("an operator may ask seven figures for a name", async () => {
+    // $2 is what a new ending defaults to, not the most it may charge — the
+    // form used to cap the input at the default and call it a rule.
+    const r = await m.setTldPrice({ tld: "whatever", userId: SELLER, priceUsd: 1_000_000 });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.priceUsd, 1_000_000);
+
+    const quoted = await m.quoteName({ tld: "whatever", label: "expensive", buyerId: BUYER });
+    assert.equal(quoted.ok, true, "and a buyer can be quoted it");
+    assert.equal(quoted.priceUsd, 1_000_000);
+
+    await m.setTldPrice({ tld: "whatever", userId: SELLER, priceUsd: null });
     assert.equal((await m.getTldWithPrice("whatever")).price_usd, null);
   });
 

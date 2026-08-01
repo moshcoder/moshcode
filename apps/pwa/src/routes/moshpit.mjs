@@ -41,7 +41,7 @@ import {
   listTldsForUser,
   listTldsNotOwnedBy,
   MAX_BULK_TLDS,
-  MAX_CHILD_PRICE_USD,
+  MAX_LISTING_PRICE_USD,
   normalizeLabel,
   normalizeMode,
   normalizePinKind,
@@ -632,9 +632,9 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
 const claimDefaults = (req) => `
 <div class="pit-defaults">
   <label>Price each
-    <span class="pit-dot">$</span><input name="price_usd" type="number" min="0.01" step="0.01" max="${MAX_CHILD_PRICE_USD}"
+    <span class="pit-dot">$</span><input name="price_usd" type="number" min="0.01" step="0.01" max="${MAX_LISTING_PRICE_USD}"
       value="${DEFAULT_TLD_PRICE_USD}" placeholder="unlisted" autocomplete="off"
-      aria-label="price per name, in dollars — clear it to keep them off the market"></label>
+      aria-label="price per name, in dollars — what you charge is yours to set; clear it to keep them off the market"></label>
   <label>Point at
     <span class="pit-dot">.</span><input name="alias_of" placeholder="nothing"
       autocomplete="off" spellcheck="false" aria-label="an ending you already hold"></label>

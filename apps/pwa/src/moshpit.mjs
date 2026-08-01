@@ -29,6 +29,20 @@ export {
   parseTldList, tldRejection, normalizeMode, resolutionPreference,
 } from "./lib/moshpit-name.mjs";
 
+/**
+ * The largest number this column will accept.
+ *
+ * Not a policy cap. What an ending's names cost is the operator's call -- the
+ * defaults ($2 a name, $5 an ending) are a starting point, not a ceiling, and
+ * an ending somebody wants seven figures for is their business. This exists
+ * only so a fat finger or a hostile client cannot park Infinity, a NaN or 1e300
+ * in a column that later gets charged.
+ *
+ * It replaced a $1,000,000 bound, which was low enough to be a policy decision
+ * nobody had made.
+ */
+export const MAX_LISTING_PRICE_USD = 1_000_000_000;
+
 const COLS = `tld, user_id, owner_email, alias_of, price_usd, created_at`;
 
 export async function getTld(tld) {
@@ -334,12 +348,11 @@ export async function setTldPrice({ tld: tldInput, userId, priceUsd }) {
     // NaN/Infinity would be stored verbatim and then charged; a negative or
     // zero price would let anyone drain the namespace for free.
     if (!Number.isFinite(price) || price <= 0) return { ok: false, error: "price must be a positive number" };
-    // Not capped at MAX_CHILD_PRICE_USD here on purpose. PRD 0005 R3 caps the
-    // annual child price at $1.99, but that requirement arrives with terms,
-    // renewals and the ledger, and today this same column also carries prices
-    // set before any cap existed. The forms default to the cap and hint at it;
-    // enforcing it is a migration, not a validation tweak.
-    if (price > 1_000_000) return { ok: false, error: "price is implausibly large" };
+    // Not capped at MAX_CHILD_PRICE_USD on purpose, and the forms no longer
+    // pretend otherwise: $2 is what a new ending defaults to, not the most it
+    // may charge. PRD 0005 R3's annual cap arrives with terms, renewals and the
+    // ledger; this column already carries prices set before any cap existed.
+    if (price > MAX_LISTING_PRICE_USD) return { ok: false, error: "price is implausibly large" };
     price = Math.round(price * 100) / 100;
   }
 
@@ -773,7 +786,7 @@ function* chunksOf(list, size) {
 function normalizePrice(value) {
   if (value === null || value === undefined || String(value).trim() === "") return null;
   const price = Number(value);
-  if (!Number.isFinite(price) || price <= 0 || price > 1_000_000) return undefined;
+  if (!Number.isFinite(price) || price <= 0 || price > MAX_LISTING_PRICE_USD) return undefined;
   return Math.round(price * 100) / 100;
 }
 
