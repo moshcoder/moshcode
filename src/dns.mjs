@@ -290,6 +290,11 @@ export function dnsmasqConf(tlds, { host = DEFAULT_HOST, port = DEFAULT_PORT } =
 
 import { promises as dnsPromises } from "node:dns";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
+import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.mjs";
+// Re-exported: the Pit URL moved to its own module so the parking responder can
+// use it without importing this one back.
+export { pitNameUrl } from "./pit-url.mjs";
+import { pitNameUrl } from "./pit-url.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -297,18 +302,6 @@ import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
   requiredPort, startDaemon, stopDaemon,
 } from "./dns-system.mjs";
-
-/**
- * The Pit's page for a name.
- *
- * Where a parked name actually belongs. The A record can only carry an IP, and
- * the parking host answers on a platform that routes by Host — so an unpointed
- * name never reaches a page over plain HTTP. A person, unlike a resolver, can
- * just be handed the URL.
- */
-export function pitNameUrl(name, registryBase = DEFAULT_REGISTRY_BASE) {
-  return `${registryBase.replace(/\/+$/, "")}/n/${encodeURIComponent(name)}`;
-}
 
 /** The parking host's address — an A record has to carry an IP, not a name. */
 export async function parkingAddress(host = DEFAULT_PARKING_HOST, lookup = dnsPromises.resolve4) {
@@ -331,6 +324,8 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
   moshcode dns resolve <name> [--open]
                                  look a name up; --open opens a parked name in the Pit
   moshcode dns start [--port N]  run the resolver in the foreground
+                                 also serves parked names over HTTP so \`curl <name>\`
+                                 lands on the Pit; --parking-port N, --no-parking-http
   moshcode dns install [--write] print the resolver config without applying it
 
   --dry-run    with enable/disable: print exactly what would be done
@@ -395,7 +390,33 @@ export async function dnsCommand(args = [], out = console.log) {
   }
 
   if (sub === "start") {
-    const park = await parkingAddress();
+    // Serve parked names ourselves when we can. The public parking host routes
+    // by Host header and 404s a name it has never heard of, so pointing at
+    // loopback — where the responder below is listening — is the difference
+    // between `curl <name>` resolving and `curl <name>` working.
+    const parkingHttpPort = Number(flag("parking-port", DEFAULT_PARKING_HTTP_PORT));
+    let parking = null;
+    if (!rest.includes("--no-parking-http")) {
+      try {
+        parking = await createParkingServer({
+          port: parkingHttpPort,
+          registryBase,
+          onRequest: ({ host: h, target }) => out(`  ${h} → ${target}`),
+        });
+      } catch (err) {
+        const why = err?.code === "EACCES"
+          ? `needs privileges to bind port ${parkingHttpPort}`
+          : err?.code === "EADDRINUSE"
+            ? `port ${parkingHttpPort} is already in use`
+            : err?.message || String(err);
+        out(`! parked names will not serve over HTTP — ${why}`);
+        out(`  (run with sudo, or pass --parking-port N and point your client at it)`);
+      }
+    }
+
+    // Loopback when we are answering for parked names; otherwise the public
+    // parking host, which is all there ever was.
+    const park = parking ? parking.address : await parkingAddress();
     if (!park) out("! parking host did not resolve — unpointed names will return NXDOMAIN");
     const server = await createServer({
       port,
@@ -403,6 +424,7 @@ export async function dnsCommand(args = [], out = console.log) {
       parkingAddress: park,
       onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
     });
+    if (parking) out(`parked names → http://${parking.address}:${parking.port} → ${registryBase}/n/<name>`);
     out(`moshpit resolver on ${server.address}:${server.port} (registry ${registryBase})`);
     out("point your resolver here with: moshcode dns install");
     return new Promise(() => {}); // foreground until Ctrl-C
