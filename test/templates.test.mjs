@@ -106,6 +106,34 @@ test("an install that would clobber something writes nothing at all", async () =
   }
 });
 
+test("symbolic links are identified before template files are copied", async (t) => {
+  const root = await tmp();
+  const from = path.join(root, "from");
+  const into = path.join(root, "into");
+  const synthetic = path.join(root, "synthetic.txt");
+  try {
+    await fs.mkdir(from);
+    await fs.mkdir(into);
+    await fs.writeFile(synthetic, "synthetic test data\n");
+    try {
+      await fs.symlink(synthetic, path.join(from, "copied.txt"), "file");
+    } catch (error) {
+      if (error?.code === "EPERM") {
+        t.skip("symbolic links require elevated privileges on this Windows host");
+        return;
+      }
+      throw error;
+    }
+
+    const plan = await installPlan(from, into);
+    assert.deepEqual(plan.files, []);
+    assert.deepEqual(plan.unsafe, ["copied.txt"]);
+    assert.deepEqual(await fs.readdir(into), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("--force overwrites, and only then", async () => {
   const into = await tmp();
   try {
