@@ -39,6 +39,7 @@ export const TYPE_AAAA = 28;
 const CLASS_IN = 1;
 const RCODE_OK = 0;
 const RCODE_SERVFAIL = 2;
+const RCODE_REFUSED = 5;
 const RCODE_NXDOMAIN = 3;
 
 /* ---------------------------------------------------------------- wire codec */
@@ -365,6 +366,199 @@ export function targetAddress(target) {
  * `parkingAddress` is resolved once by the caller (an A record must carry an
  * IP, not a name) and passed in, so the server itself never does clearnet DNS.
  */
+/* ------------------------------------------------------------------ abuse */
+
+// An open forwarding resolver is a DDoS amplifier before it is anything else.
+// The attack does not need a botnet: one host spoofs a victim's source address,
+// sends a small query, and the resolver mails the large answer to the victim.
+// Scanners find open resolvers within hours of them being reachable.
+//
+// That shape defeats most defences worth having. The source address is a lie,
+// so blocking "the client" punishes the victim; there is no session to
+// fingerprint and no user agent to read. What is left is limiting how much
+// amplification any single query can buy, and bounding what one source can
+// extract before we stop answering it.
+
+/** The question type that exists to be abused. */
+export const TYPE_ANY = 255;
+
+/**
+ * A query we will not answer, or null when it is fine.
+ *
+ * ANY asks for every record a name has and is the classic amplification lever:
+ * a 30-byte question for a multi-kilobyte answer. Real clients stopped needing
+ * it years ago, and RFC 8482 blesses refusing it outright.
+ */
+export function refusalReason(query) {
+  if (!query) return null;
+  if (query.type === TYPE_ANY) return "ANY is refused — RFC 8482";
+  return null;
+}
+
+/**
+ * What counts as "the same client" for the purposes of banning one.
+ *
+ * IPv6 is grouped by /64 and this is the whole reason the function exists. A
+ * single v6 address is free to change: any host worth banning has a /64 at
+ * minimum and often a /48, so a ban on one address is defeated by incrementing
+ * it. fail2ban rules written per-address in a v4 world quietly stop working
+ * when the traffic arrives over v6, and the failure is silent — the bans look
+ * like they are being applied, and the abuse continues.
+ *
+ * IPv4 is the address itself. Widening to /24 would be the equivalent move,
+ * but v4 is scarce enough to be shared: a /24 routinely spans unrelated
+ * customers behind carrier NAT, so grouping there punishes the neighbours of
+ * an abuser rather than the abuser.
+ */
+export function clientKey(address) {
+  const raw = String(address ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  // A v4-mapped v6 address is a v4 client arriving on a dual-stack socket.
+  const mapped = raw.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return mapped[1];
+  if (isIP(raw) !== 6) return raw;
+
+  // Expand to the first four groups — the /64 — without a full parse.
+  const [head, tail = ""] = raw.split("::");
+  const left = head ? head.split(":").filter(Boolean) : [];
+  const right = tail ? tail.split(":").filter(Boolean) : [];
+  const groups = raw.includes("::")
+    ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right]
+    : left;
+  if (groups.length < 4) return raw;
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+}
+
+/**
+ * fail2ban for a resolver: repeat offenders wait exponentially longer.
+ *
+ * A flat rate limit is a toll an attacker simply pays — they lose nothing by
+ * being refused, and come straight back. Backoff changes the economics: each
+ * time a source earns another strike its ban doubles, so a persistent source
+ * spends most of its time banned while a client that misbehaves once is
+ * inconvenienced for a minute.
+ *
+ * Strikes decay after a clean spell, so a bad afternoon does not follow a
+ * client forever — without that, the ceiling is permanent and the first
+ * mistake is unforgivable.
+ *
+ * Memory is bounded for the same reason the rate limiter's is: the key space
+ * is attacker-controlled, so an unbounded map is the vulnerability rather than
+ * the mitigation.
+ */
+export function createBanList({
+  baseMs = 60_000,
+  factor = 2,
+  maxMs = 24 * 60 * 60 * 1000,
+  forgetMs = 60 * 60 * 1000,
+  maxClients = 10_000,
+  now = () => Date.now(),
+} = {}) {
+  const records = new Map();
+
+  const touch = (key, record) => {
+    records.delete(key);
+    if (records.size >= maxClients) {
+      const oldest = records.keys().next().value;
+      if (oldest !== undefined) records.delete(oldest);
+    }
+    records.set(key, record);
+  };
+
+  return {
+    /** Record an offence and return the ban it earned. */
+    strike(key) {
+      const at = now();
+      const previous = records.get(key);
+      // A long clean spell wipes the slate; otherwise the count carries.
+      const strikes = previous && at - previous.at < forgetMs ? previous.strikes + 1 : 1;
+      const banMs = Math.min(maxMs, baseMs * factor ** (strikes - 1));
+      const record = { strikes, at, until: at + banMs };
+      touch(key, record);
+      return { strikes, banMs, until: record.until };
+    },
+
+    /** Is this source currently serving a ban? */
+    banned(key) {
+      const record = records.get(key);
+      return Boolean(record) && now() < record.until;
+    },
+
+    get size() {
+      return records.size;
+    },
+  };
+}
+
+/**
+ * Per-source token bucket.
+ *
+ * The bucket map is itself an attack surface and that is the part worth being
+ * careful about: keyed by source address, with spoofed sources, an unbounded
+ * map is a memory exhaustion bug wearing a rate limiter's clothes. So entries
+ * are capped and the least recently seen are dropped when full — evicting a
+ * legitimate client costs it one refilled bucket, while not evicting costs the
+ * process.
+ */
+export function createRateLimiter({
+  perSecond = 20,
+  burst = 40,
+  maxClients = 10_000,
+  now = () => Date.now(),
+} = {}) {
+  const buckets = new Map();
+
+  return {
+    /** True when this source may be answered. */
+    allow(key) {
+      const at = now();
+      let bucket = buckets.get(key);
+      if (bucket) {
+        // Refill for elapsed time, capped at the burst ceiling.
+        bucket.tokens = Math.min(burst, bucket.tokens + ((at - bucket.at) / 1000) * perSecond);
+        bucket.at = at;
+        // Re-inserting moves it to the end, which is what makes the Map's
+        // insertion order usable as a least-recently-seen list.
+        buckets.delete(key);
+      } else {
+        bucket = { tokens: burst, at };
+        if (buckets.size >= maxClients) {
+          const oldest = buckets.keys().next().value;
+          if (oldest !== undefined) buckets.delete(oldest);
+        }
+      }
+      buckets.set(key, bucket);
+
+      if (bucket.tokens < 1) return false;
+      bucket.tokens -= 1;
+      return true;
+    },
+    get size() {
+      return buckets.size;
+    },
+  };
+}
+
+/**
+ * Hold a UDP answer to a size, truncating rather than sending a huge datagram.
+ *
+ * Amplification is a ratio, so the ceiling on an answer is the ceiling on the
+ * attack. A truncated answer sets TC, which tells a real client to ask again
+ * over TCP — where the handshake makes a spoofed source address useless. So the
+ * legitimate case is a retry and the abusive case is a dead end, which is the
+ * asymmetry worth having.
+ */
+export function capResponse(reply, query, limit = 512) {
+  if (!Buffer.isBuffer(reply) || reply.length <= limit) return reply;
+  const header = reply.subarray(0, 12);
+  const truncated = Buffer.from(header);
+  truncated.writeUInt16BE(reply.readUInt16BE(2) | 0x0200, 2); // TC
+  truncated.writeUInt16BE(0, 6); // no answers survive the cut
+  truncated.writeUInt16BE(0, 8);
+  truncated.writeUInt16BE(0, 10);
+  return Buffer.concat([truncated, reply.subarray(12, query.questionEnd)]);
+}
+
 /**
  * Send a query to an upstream nameserver and hand back its answer verbatim.
  *
@@ -431,7 +625,17 @@ export function createServer(options = {}) {
     upstreams = [],
     tldSet = null,
     forwardTimeoutMs = 3000,
+    // Off by default: a loopback bridge has one client and rate limiting it is
+    // pure cost. These matter when the socket is reachable by strangers, which
+    // is a deployment choice rather than a default.
+    rateLimit = null,
+    maxResponseBytes = 0,
+    // Banning is layered on the rate limit rather than replacing it: the limit
+    // decides what an offence is, the ban decides how long it costs.
+    ban = null,
   } = options;
+  const limiter = rateLimit ? createRateLimiter(rateLimit) : null;
+  const bans = ban ? createBanList(ban) : null;
   // The socket family follows the address we were asked to bind, so the caller
   // decides by choosing a host rather than by passing a flag.
   //
@@ -450,6 +654,45 @@ export function createServer(options = {}) {
     const query = parseQuery(msg);
     if (!query) return; // malformed, or a response — say nothing at all
 
+    // REFUSED rather than silence, for both guards below. A dropped packet
+    // costs a real client a full resolver timeout before it tries elsewhere,
+    // and costs an attacker nothing — they were not waiting for the answer.
+    const refuse = () => {
+      try {
+        socket.send(
+          Buffer.concat([
+            header(query.id, { rcode: RCODE_REFUSED, answers: 0, recursionDesired: query.recursionDesired }),
+            msg.subarray(12, query.questionEnd),
+          ]),
+          rinfo.port,
+          rinfo.address,
+        );
+      } catch { /* client vanished */ }
+    };
+
+    const refusal = refusalReason(query);
+    if (refusal) {
+      onQuery({ name: query.name, type: query.type, address: null, refused: refusal });
+      return refuse();
+    }
+    // Grouped by /64 for v6, so moving within a prefix does not shake a ban.
+    const source = clientKey(rinfo.address);
+
+    if (bans?.banned(source)) {
+      onQuery({ name: query.name, type: query.type, address: null, refused: "banned" });
+      return refuse();
+    }
+    if (limiter && !limiter.allow(source)) {
+      const earned = bans?.strike(source);
+      onQuery({
+        name: query.name,
+        type: query.type,
+        address: null,
+        refused: earned ? `banned ${Math.round(earned.banMs / 1000)}s (strike ${earned.strikes})` : "rate limit",
+      });
+      return refuse();
+    }
+
     // Catch-all routing puts every lookup on the machine through here. Anything
     // that is not an ending someone has claimed belongs to the ordinary
     // internet and is relayed byte for byte, including question types this
@@ -466,7 +709,9 @@ export function createServer(options = {}) {
         // find out" is retried elsewhere, "it does not exist" gets cached and
         // the name stays broken after the network comes back.
         socket.send(
-          relayed || Buffer.concat([
+          relayed
+            ? (maxResponseBytes ? capResponse(relayed, query, maxResponseBytes) : relayed)
+            : Buffer.concat([
             header(query.id, { rcode: RCODE_SERVFAIL, answers: 0, recursionDesired: query.recursionDesired }),
             msg.subarray(12, query.questionEnd),
           ]),
