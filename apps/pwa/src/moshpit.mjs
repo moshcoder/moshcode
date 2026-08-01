@@ -49,8 +49,26 @@ export async function getTld(tld) {
   return get(`SELECT ${COLS} FROM moshpit_tlds WHERE tld = ?`, [tld]);
 }
 
-export async function listTlds(limit = 200) {
-  return all(`SELECT ${COLS} FROM moshpit_tlds ORDER BY created_at DESC LIMIT ?`, [limit]);
+/**
+ * The endings everyone holds, newest first.
+ *
+ * Ordered by `created_at DESC, tld` for the same reason `listTldsForUser` is: a
+ * bulk claim writes one timestamp across every ending in it, so `created_at`
+ * alone is not a total order. Without the tiebreak a page boundary landing
+ * inside a batch shows one ending twice and skips another — which is invisible
+ * until someone pages, and is why this could not simply be paged as it stood.
+ */
+export async function listTlds({ limit = 200, offset = 0 } = {}) {
+  return all(
+    `SELECT ${COLS} FROM moshpit_tlds ORDER BY created_at DESC, tld LIMIT ? OFFSET ?`,
+    [limit, offset],
+  );
+}
+
+/** How many endings exist -- so a caller can see there are more than it got. */
+export async function countTlds() {
+  const row = await get(`SELECT COUNT(*) AS n FROM moshpit_tlds`);
+  return Number(row?.n ?? 0);
 }
 
 /**
