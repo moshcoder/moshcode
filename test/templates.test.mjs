@@ -145,6 +145,63 @@ test("a template nobody bundled is a message, not a stack trace", async () => {
   assert.match(lines.join("\n"), /no bundled template/);
 });
 
+/* --------------------------------------------- every template, held to the bar */
+
+// Written as a loop over whatever is bundled rather than a list of names, so a
+// template added later is held to this without anyone remembering to add it.
+// The gap that prompted these: caddy-static shipped without a README while the
+// installer told everyone to "start with README.md".
+
+test("every bundled template has a README, since the installer sends people to it", async () => {
+  const templates = await listTemplates();
+  assert.ok(templates.length > 0, "no templates found at all");
+  for (const { name } of templates) {
+    const readme = path.join(BUNDLED_DIR, name, "README.md");
+    const body = await fs.readFile(readme, "utf8").catch(() => null);
+    assert.ok(body, `${name} has no README.md`);
+    assert.ok(body.trim().length > 200, `${name}'s README is a stub`);
+    assert.match(body, new RegExp(`^# ${name}$`, "m"), `${name}'s README does not name it`);
+  }
+});
+
+test("every manifest names itself and says what it is for", async () => {
+  for (const { name } of await listTemplates()) {
+    const raw = await fs.readFile(path.join(BUNDLED_DIR, name, "template.json"), "utf8");
+    const manifest = JSON.parse(raw);
+    assert.equal(manifest.name, name, `${name}/template.json disagrees with its directory`);
+    assert.ok(manifest.description?.length > 20, `${name} needs a real description`);
+    assert.ok(manifest.vars?.MOSHPIT_NAME, `${name} does not document MOSHPIT_NAME`);
+  }
+});
+
+test("every template documents the two things people get wrong", async () => {
+  // The resolver split and the no-HTTPS limit are the two facts that turn a
+  // working stack into a broken one when they are missing.
+  for (const { name } of await listTemplates()) {
+    const readme = await fs.readFile(path.join(BUNDLED_DIR, name, "README.md"), "utf8");
+    assert.match(readme, /moshcode dns enable/, `${name} never tells visitors to enable the resolver`);
+    assert.match(readme, /No HTTPS/i, `${name} does not warn that there is no HTTPS`);
+  }
+});
+
+test("every bundled systemd unit is installable", async () => {
+  for (const { name } of await listTemplates()) {
+    const deploy = path.join(BUNDLED_DIR, name, "deploy");
+    const units = await fs.readdir(deploy).catch(() => []);
+    assert.ok(units.length > 0, `${name} ships no units`);
+    for (const unit of units.filter((u) => u.endsWith(".service"))) {
+      const body = await fs.readFile(path.join(deploy, unit), "utf8");
+      // A unit missing [Install] enables without error and then never starts
+      // on boot, which is exactly the failure these units exist to prevent.
+      for (const section of ["[Unit]", "[Service]", "[Install]"]) {
+        assert.ok(body.includes(section), `${name}/${unit} has no ${section}`);
+      }
+      assert.match(body, /^ExecStart=/m, `${name}/${unit} has no ExecStart`);
+      assert.match(body, /^WantedBy=/m, `${name}/${unit} would not start on boot`);
+    }
+  }
+});
+
 test("the Caddyfiles keep the scheme that stops Caddy chasing a certificate", async () => {
   // Dropping `http://` makes Caddy try to provision a cert for an ending no CA
   // will issue for, and the site never comes up. Easy to "tidy away" later.
