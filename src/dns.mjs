@@ -158,8 +158,14 @@ function ipv6(address) {
  * query every browser sends alongside the AAAA one has to come back NOERROR
  * with no answers. Answering NXDOMAIN there teaches the resolver the name is
  * gone and takes the AAAA lookup down with it.
+ *
+ * `exists` is that distinction on its own. Holding an address implies the name
+ * exists, so it defaults to exactly that, but the reverse does not hold: a name
+ * can exist and have no address to hand back — because the question was for a
+ * type this bridge does not serve, or because the target is a hostname rather
+ * than an address. Those are NODATA, not NXDOMAIN.
  */
-export function buildResponse(query, buf, address, ttl = DEFAULT_TTL) {
+export function buildResponse(query, buf, address, ttl = DEFAULT_TTL, exists = Boolean(address)) {
   const question = buf.subarray(12, query.questionEnd);
   const wantsV6 = query.type === TYPE_AAAA;
   const rdata = address ? (wantsV6 ? ipv6(address) : ipv4(address)) : null;
@@ -167,8 +173,8 @@ export function buildResponse(query, buf, address, ttl = DEFAULT_TTL) {
   if (!rdata) {
     return Buffer.concat([
       header(query.id, {
-        // We have an address, just not in the family asked for: NODATA.
-        rcode: address ? RCODE_OK : RCODE_NXDOMAIN,
+        // The name is here, we just have nothing to say for this question: NODATA.
+        rcode: exists ? RCODE_OK : RCODE_NXDOMAIN,
         answers: 0,
         recursionDesired: query.recursionDesired,
       }),
@@ -291,18 +297,32 @@ export async function resolveName(
 /* -------------------------------------------------------------------- server */
 
 /**
- * The address to answer with, or null for NXDOMAIN.
+ * What to say about a name: whether it is here at all, and the address to
+ * answer with when there is one.
  *
  * Kept separate from the socket so the policy is testable on its own. A name we
- * could not look up gets NXDOMAIN rather than the parking address: a registry
- * outage must not silently redirect every name on the machine to a parking page.
+ * could not look up is not here rather than parked: a registry outage must not
+ * silently redirect every name on the machine to a parking page.
+ *
+ * `wantsAddress` is false for the questions this bridge does not serve (TXT, MX,
+ * HTTPS/SVCB). Those still need to know the name is here, because saying
+ * NXDOMAIN to one question denies the name for every other one too.
+ */
+export async function answerPolicy(name, options = {}) {
+  const { parkingAddress, wantsAddress = true } = options;
+  const result = await resolveName(name, options);
+  const exists = result.status === "live" || result.status === "parked";
+  if (!exists || !wantsAddress) return { exists, address: null };
+  if (result.status === "live") return { exists, address: targetAddress(result.target) };
+  return { exists, address: parkingAddress || null };
+}
+
+/**
+ * The address to answer with, or null when there is none.
  */
 export async function answerFor(name, options = {}) {
-  const { parkingAddress } = options;
-  const result = await resolveName(name, options);
-  if (result.status === "live") return targetAddress(result.target);
-  if (result.status === "parked") return parkingAddress || null;
-  return null;
+  const { address } = await answerPolicy(name, options);
+  return address;
 }
 
 /**
@@ -351,14 +371,19 @@ export function createServer(options = {}) {
     const query = parseQuery(msg);
     if (!query) return; // malformed, or a response — say nothing at all
     let address = null;
+    let exists = false;
     // Only address questions can be answered with an address; everything else
-    // (MX, TXT, SRV) gets an honest empty NOERROR/NXDOMAIN rather than a lie.
-    if ((query.type === TYPE_A || query.type === TYPE_AAAA) && query.class === CLASS_IN) {
-      address = await answerFor(query.name, options).catch(() => null);
+    // (MX, TXT, HTTPS) gets an honest empty NOERROR rather than a lie. It still
+    // has to be looked up: a browser asks HTTPS/SVCB beside every A and AAAA,
+    // and NXDOMAIN to that one denies the name for the whole page load.
+    if (query.class === CLASS_IN) {
+      const wantsAddress = query.type === TYPE_A || query.type === TYPE_AAAA;
+      const policy = await answerPolicy(query.name, { ...options, wantsAddress }).catch(() => null);
+      if (policy) ({ exists, address } = policy);
     }
     onQuery({ name: query.name, type: query.type, address });
     try {
-      socket.send(buildResponse(query, msg, address, ttl), rinfo.port, rinfo.address);
+      socket.send(buildResponse(query, msg, address, ttl, exists), rinfo.port, rinfo.address);
     } catch {
       /* client vanished — nothing useful to do */
     }
