@@ -253,8 +253,14 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
 
 /* ---- serving a name over the clearnet ---- */
 
-/** The canonical clearnet URL for a name. One name, one indexable address. */
-const nameUrl = (name) => `${config.origin}/n/${encodeURIComponent(name)}`;
+/**
+ * The canonical clearnet URL for a name. One name, one indexable address.
+ *
+ * config.pitOrigin, not config.origin: the pit answers on both hosts with
+ * byte-identical pages, so canonicalising at the app host would name the wrong
+ * one as the original and leave the two competing as duplicates of each other.
+ */
+const nameUrl = (name) => `${config.pitOrigin}/n/${encodeURIComponent(name)}`;
 
 /**
  * Head tags for a name's page.
@@ -299,7 +305,7 @@ Disallow: /app
 Disallow: /settings
 Disallow: /sessions
 
-Sitemap: ${config.origin}/sitemap.xml
+Sitemap: ${config.pitOrigin}/sitemap.xml
 `);
 });
 
@@ -315,7 +321,7 @@ moshpitRouter.get("/sitemap.xml", async (_req, res) => {
 
   // Only whole names. `/n/<ending>` is not a name — it 400s — so listing
   // endings here would advertise URLs that do not resolve.
-  const urls = [`${config.origin}/pit`, ...names.map((n) => nameUrl(`${n.label}.${n.tld}`))];
+  const urls = [`${config.pitOrigin}/pit`, ...names.map((n) => nameUrl(`${n.label}.${n.tld}`))];
 
   res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

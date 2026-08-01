@@ -41,11 +41,20 @@ const port = readPort();
 const origin = (process.env.PUBLIC_ORIGIN || `http://localhost:${port}`).trim().replace(/\/+$/, "");
 const rpID = new URL(origin).hostname;
 
+// The pit answers on its own host as well as the app's, and both serve byte
+// identical pages. Which host a name's page belongs to is a separate question
+// from where WebAuthn and the OAuth callback live, so it gets its own setting
+// rather than riding on `origin` — pointing rpID at the pit would invalidate
+// every passkey already registered.
+const pitOrigin = (process.env.PIT_ORIGIN || origin).trim().replace(/\/+$/, "");
+
 export const config = {
   root: ROOT,
   env: process.env.NODE_ENV || "development",
   port,
   origin,
+  /** Canonical public home of the namespace — /pit and /n/<name>. */
+  pitOrigin,
   // WebAuthn relying party = this host.
   rpID,
   rpName: "moshcode",

@@ -26,7 +26,10 @@ try {
 const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-crawl-test-"));
 process.env.DATABASE_URL = `file:${path.join(workdir, "test.db")}`;
 process.env.SESSION_SECRET = "test-secret";
-process.env.PUBLIC_ORIGIN = "https://pit.example.test";
+// The app and the pit are different hosts serving the same pages; the pit's
+// public face is what these URLs must name.
+process.env.PUBLIC_ORIGIN = "https://app.example.test";
+process.env.PIT_ORIGIN = "https://pit.example.test";
 
 const ORIGIN = "https://pit.example.test";
 
@@ -101,6 +104,14 @@ test("a name's page canonicalises to itself and describes itself", skip, async (
   assert.ok(body.includes(`<link rel="canonical" href="${ORIGIN}/n/scrambled.eggs">`), body.slice(0, 600));
   assert.match(body, /<meta name="description" content="scrambled\.eggs [^"]+">/);
   assert.ok(body.includes(`<meta property="og:url" content="${ORIGIN}/n/scrambled.eggs">`));
+});
+
+test("the app host is never what a pit page canonicalises to", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/scrambled.eggs");
+  // PUBLIC_ORIGIN is a different host that serves identical pages. Naming it
+  // here would point every crawler at the duplicate instead of the original.
+  assert.ok(!body.includes("app.example.test"), "canonicalised at the app host");
 });
 
 test("an unclaimed name still gets indexable head tags", skip, async () => {
