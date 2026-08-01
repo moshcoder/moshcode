@@ -147,8 +147,10 @@ usage:
                                        the while loop (default 3); --dry-run
                                        narrates without executing; extra args
                                        reach the script as argv
+  moshcode mcp list [--json]           show MCP support + install status
   moshcode mcp install <url>           register an MCP server across every engine
   moshcode mcp add <name> <url|cmd>    that supports it (claude/gemini/codex/opencode)
+  moshcode skill list [--json]         show skills support + install status
   moshcode skill install <git-url>     install a skill across every engine that
                                        supports it (claude/gemini)
   moshcode install <engine|tool>       install a coding engine or workflow tool

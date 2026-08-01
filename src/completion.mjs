@@ -119,6 +119,8 @@ _moshcode_completion() {
       mcp)
         if (( COMP_CWORD == 2 )); then
           choices="${names(model.mcp)}"
+        elif [[ "$nested" == "list" && "$cur" == -* ]]; then
+          choices="--json"
         elif ${shellMatches("nested", model.mcpServerSpecs)} && [[ "$cur" == -* ]]; then
           choices="--name --transport -t --env -e --header -H --"
         fi
@@ -126,6 +128,8 @@ _moshcode_completion() {
       skill|skills)
         if (( COMP_CWORD == 2 )); then
           choices="${names(model.skills)}"
+        elif [[ "$nested" == "list" && "$cur" == -* ]]; then
+          choices="--json"
         elif ${shellMatches("nested", model.skillSources)} && [[ "$cur" == -* ]]; then
           choices="--name"
         fi
@@ -208,6 +212,8 @@ _moshcode() {
       if (( CURRENT == 3 )); then
         choices=(${zshValues(model.mcp)})
         _describe "mcp command" choices
+      elif [[ "\${words[3]}" == "list" && "$PREFIX" == -* ]]; then
+        _values "mcp list option" --json
       elif ${shellMatches("{words[3]}", model.mcpServerSpecs)}; then
         if [[ "$PREFIX" == -* ]]; then
           _values "mcp option" --name --transport -t --env -e --header -H --
@@ -220,6 +226,8 @@ _moshcode() {
       if (( CURRENT == 3 )); then
         choices=(${zshValues(model.skills)})
         _describe "skill command" choices
+      elif [[ "\${words[3]}" == "list" && "$PREFIX" == -* ]]; then
+        _values "skill list option" --json
       elif ${shellMatches("{words[3]}", model.skillSources)}; then
         if [[ "$PREFIX" == -* ]]; then _values "skill option" --name; else _files; fi
       fi
@@ -292,6 +300,8 @@ ${fishEntries("__moshcode_command_is upgrade update", model.upgrade)}
 ${fishEntries(atSecondToken("completion"), model.shells)}
 ${fishEntries(atSecondToken("mcp"), model.mcp)}
 ${fishEntries(atSecondToken("skill skills"), model.skills)}
+complete -c moshcode -n '__moshcode_nested_is mcp list' -l json -d 'print JSON'
+complete -c moshcode -n '__moshcode_nested_is skill list; or __moshcode_nested_is skills list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is login' -l browser -s b -d 'use browser authentication'
 complete -c moshcode -n '__moshcode_command_is login' -l device -s d -d 'use device-code authentication'
 complete -c moshcode -n '__moshcode_command_is engines tools commands' -l json -d 'print JSON'

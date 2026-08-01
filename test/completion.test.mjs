@@ -123,7 +123,11 @@ test("bash completion respects argument depth and preserves file fallbacks", () 
   const mcp = bashCompletions(["moshcode", "mcp", ""]);
   assert.ok(mcp.includes("list"));
   assert.ok(mcp.includes("catalog"));
+  assert.ok(bashCompletions(["moshcode", "mcp", "list", "--"]).includes("--json"));
   assert.deepEqual(bashCompletions(["moshcode", "mcp", "install", ""]), []);
+
+  assert.ok(bashCompletions(["moshcode", "skill", "list", "--"]).includes("--json"));
+  assert.ok(bashCompletions(["moshcode", "skills", "list", "--"]).includes("--json"));
 
   assert.deepEqual(bashCompletions(["moshcode", "run", ""]), []);
   assert.ok(bashCompletions(["moshcode", "run", "--"]).includes("--dry-run"));
