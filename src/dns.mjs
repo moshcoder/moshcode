@@ -423,6 +423,7 @@ export function createServer(options = {}) {
     host = DEFAULT_HOST,
     ttl = DEFAULT_TTL,
     onQuery = () => {},
+    onError = () => {},
     // Empty by default, which keeps the old behaviour exactly: with no
     // upstreams there is nothing to forward to, so the bridge stays the
     // narrow per-ending resolver it has always been and answers only for
@@ -488,6 +489,19 @@ export function createServer(options = {}) {
   return new Promise((resolve, reject) => {
     socket.once("error", reject);
     socket.bind(port, host, () => {
+      // The rejector belongs to the bind and only to the bind. Left attached it
+      // stays the socket's one error listener for the life of the resolver, so
+      // the first error after bind called reject() on an already-settled
+      // promise — swallowed, no line logged, while onQuery logs every ordinary
+      // query — and the second found no listener at all and took the process
+      // down. `dns start` runs in the foreground until Ctrl-C, so that is the
+      // one command whose whole job is to stay up. The sibling parking server
+      // already drops its rejector this way (parking-http.mjs).
+      socket.removeListener("error", reject);
+      // Removing it is not enough on its own: with no listener the *first*
+      // error would now be the fatal one. A resolver outlives the transient
+      // failures of the interface underneath it, so report and keep serving.
+      socket.on("error", (err) => onError(err));
       const addr = socket.address();
       resolve({
         port: addr.port,
@@ -822,6 +836,7 @@ export async function dnsCommand(args = [], out = console.log) {
       upstreams,
       tldSet,
       onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
+      onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
     });
     if (parking) out(`parked names → http://${parking.address}:${parking.port} → ${registryBase}/n/<name>`);
     out(`moshpit resolver on ${server.address}:${server.port} (registry ${registryBase})`);
