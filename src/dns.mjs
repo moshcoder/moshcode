@@ -772,6 +772,107 @@ export function createServer(options = {}) {
 /* ------------------------------------------------------- system integration */
 
 /**
+ * Does the bridge on this port actually forward what is not ours?
+ *
+ * The question that matters before writing catch-all routing, and the one the
+ * previous check never asked. It verified that upstreams were discoverable —
+ * a fact about the machine — and inferred from that the bridge would forward.
+ * On a box where the bridge is the only global nameserver, that inference is
+ * the difference between "Moshpit names do not resolve" and "nothing does".
+ *
+ * `dns enable` writes the routing config before starting the bridge, and a
+ * bridge already listening is left alone with "bridge already running" — so an
+ * older build, or one started without upstreams, keeps the port while the new
+ * routing sends it every lookup on the machine. That is exactly how a desktop
+ * loses DNS.
+ *
+ * The probe name has three labels on purpose. A two-label name is a Moshpit
+ * name to any build: an older bridge answers it with the parking address, an
+ * answer, which would read as working forwarding. Three labels cannot be a
+ * Moshpit name, so only a bridge that forwards can produce an answer at all.
+ */
+export const CLEARNET_PROBE = "pit.moshcode.sh";
+
+export function probeForwarding({
+  host = DEFAULT_HOST,
+  port = DEFAULT_PORT,
+  name = CLEARNET_PROBE,
+  timeoutMs = 2000,
+} = {}) {
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket(isIP(host) === 6 ? "udp6" : "udp4");
+    let settled = false;
+    const finish = (answer) => {
+      if (settled) return;
+      settled = true;
+      try { socket.close(); } catch { /* already closing */ }
+      resolve(answer);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref?.();
+
+    socket.on("message", (reply) => {
+      clearTimeout(timer);
+      // An answer at all is the signal: rcode 0 with at least one record.
+      const ok = reply.length > 12
+        && (reply.readUInt16BE(2) & 0x000f) === 0
+        && reply.readUInt16BE(6) > 0;
+      finish(ok);
+    });
+    socket.on("error", () => { clearTimeout(timer); finish(false); });
+
+    const head = Buffer.alloc(12);
+    head.writeUInt16BE(0x7e57, 0);
+    head.writeUInt16BE(0x0100, 2);
+    head.writeUInt16BE(1, 4);
+    const tail = Buffer.alloc(4);
+    tail.writeUInt16BE(TYPE_A, 0);
+    tail.writeUInt16BE(CLASS_IN, 2);
+    try {
+      socket.send(Buffer.concat([head, encodeName(name), tail]), port, host);
+    } catch {
+      clearTimeout(timer);
+      finish(false);
+    }
+  });
+}
+
+/**
+ * Whether catch-all routing is safe to write right now.
+ *
+ * Two conditions, and both are about this machine at this moment rather than
+ * about the build that is installed:
+ *
+ *   - upstreams exist to forward to, and
+ *   - either no bridge holds the port (so `dns enable` starts ours, which
+ *     forwards), or the one holding it demonstrably forwards.
+ *
+ * Anything else falls back to per-ending routing. That routing is worse — it
+ * truncates, silently — but its worst case is Moshpit names not resolving,
+ * where catch-all against a bridge that cannot forward takes the machine off
+ * the internet. Between a feature that does not work and a desktop that cannot
+ * reach anything, the choice is not close.
+ */
+export async function catchAllSafety({ host = DEFAULT_HOST, port = DEFAULT_PORT, probe = probeForwarding } = {}) {
+  const upstreams = await discoverUpstreams();
+  if (!upstreams.length) {
+    return { safe: false, upstreams, why: "no upstream nameservers found to forward to" };
+  }
+  if (await probe({ host, port, name: CLEARNET_PROBE })) {
+    return { safe: true, upstreams, why: "the running bridge forwards" };
+  }
+  // Nothing listening is fine: enable starts ours next, and ours forwards.
+  const held = await probe({ host, port, name: "a.eggs" });
+  if (!held) return { safe: true, upstreams, why: "no bridge is running yet — this one will be ours" };
+
+  return {
+    safe: false,
+    upstreams,
+    why: "a bridge is already running on this port and does not forward — stop it first, then re-run",
+  };
+}
+
+/**
  * The upstreams this machine was using before we touched anything.
  *
  * Read once, before routing is switched, because afterwards resolv.conf may
@@ -1188,6 +1289,23 @@ export async function dnsCommand(args = [], out = console.log) {
       tlds = [];
     }
 
+    // Decided before anything is written, because the routing config is written
+    // first and the bridge is started after — so by the time a bad bridge is
+    // visible, every lookup on the machine is already pointed at it.
+    const safety = sub === "enable"
+      ? await catchAllSafety({ port: wanted })
+      : { safe: false, upstreams: [] };
+    if (sub === "enable") {
+      out(safety.safe
+        ? `routing every lookup here — ${safety.why}`
+        : `routing each ending by name — ${safety.why}`);
+      if (!safety.safe && safety.upstreams.length) {
+        out("  (that list is capped by the resolver and silently truncated; catch-all is the fix,");
+        out("   but not at the price of this machine's DNS)");
+      }
+      out("");
+    }
+
     if (sub === "enable" && !tlds.length) {
       out("no TLDs claimed yet — nothing to route");
       return 1;
@@ -1196,7 +1314,7 @@ export async function dnsCommand(args = [], out = console.log) {
     let plan;
     try {
       plan = sub === "enable"
-        ? enablePlan({ platform, tlds, port: wanted, linuxBackend, upstreams: await discoverUpstreams() })
+        ? enablePlan({ platform, tlds, port: wanted, linuxBackend, upstreams: safety.safe ? safety.upstreams : [] })
         : disablePlan({ platform, tlds, linuxBackend });
     } catch (err) {
       out(err.message);
