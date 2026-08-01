@@ -250,6 +250,17 @@ export async function countNames(tld) {
   return Number(row?.n ?? 0);
 }
 
+/**
+ * Every registered name, for the sitemap.
+ *
+ * Bounded because a sitemap has a hard 50k-URL ceiling and this has to stay one
+ * file; past the limit the tail is dropped rather than paged, which is the
+ * right trade while the namespace is far below it.
+ */
+export async function listAllNames(limit = 20_000) {
+  return all(`SELECT tld, label FROM moshpit_names ORDER BY tld, label LIMIT ?`, [limit]);
+}
+
 export async function listNamesForUser(userId) {
   return all(`SELECT ${NAME_COLS} FROM moshpit_names WHERE user_id = ? ORDER BY tld, label`, [userId]);
 }

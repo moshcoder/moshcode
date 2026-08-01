@@ -35,6 +35,7 @@ import {
   getName,
   getTld,
   getTldWithPrice,
+  listAllNames,
   listExempt,
   listNames,
   listPins,
@@ -252,6 +253,77 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
 
 /* ---- serving a name over the clearnet ---- */
 
+/** The canonical clearnet URL for a name. One name, one indexable address. */
+const nameUrl = (name) => `${config.origin}/n/${encodeURIComponent(name)}`;
+
+/**
+ * Head tags for a name's page.
+ *
+ * These pages are the network's public surface — a name nobody holds is a page
+ * somebody should be able to *find*, which is the whole pitch. So they get a
+ * canonical URL and a description rather than being left to whatever a crawler
+ * infers from a directory listing.
+ *
+ * An aliased name canonicalises to what it resolves to: `.agentic` pointing at
+ * `.agent` means one page, reachable by two names, and saying so keeps the two
+ * from competing as duplicates.
+ */
+function nameHead(resolution) {
+  const canonical = nameUrl(resolution.resolved || resolution.name);
+  const description = resolution.name_registered
+    ? `${resolution.name} is registered on the Moshpit network.`
+    : `${resolution.name} is unclaimed on the Moshpit network — take it in the pit.`;
+  return `<link rel="canonical" href="${esc(canonical)}">
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="${esc(resolution.name)}">
+<meta property="og:url" content="${esc(canonical)}">
+<meta property="og:description" content="${esc(description)}">`;
+}
+
+/**
+ * Crawlers get an explicit invitation rather than an inferred one.
+ *
+ * `/n/` is the point of the network being on the clearnet at all, so it is
+ * named as allowed. The proxied half of a name (`/n/<name>/<path>`) is somebody
+ * else's site reached through us and is not ours to get indexed under this
+ * host, so only the name's own page is offered.
+ */
+moshpitRouter.get("/robots.txt", (_req, res) => {
+  res.type("text/plain").send(`User-agent: *
+Allow: /$
+Allow: /pit
+Allow: /n/
+Disallow: /api/
+Disallow: /app
+Disallow: /settings
+Disallow: /sessions
+
+Sitemap: ${config.origin}/sitemap.xml
+`);
+});
+
+/**
+ * Every name and ending in the pit, as one file.
+ *
+ * Generated rather than stored: the namespace changes whenever somebody claims
+ * something, and a sitemap that lags the registry is worse than none — it
+ * advertises URLs that did not exist yet and omits the ones that do.
+ */
+moshpitRouter.get("/sitemap.xml", async (_req, res) => {
+  const names = await listAllNames();
+
+  // Only whole names. `/n/<ending>` is not a name — it 400s — so listing
+  // endings here would advertise URLs that do not resolve.
+  const urls = [`${config.origin}/pit`, ...names.map((n) => nameUrl(`${n.label}.${n.tld}`))];
+
+  res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.map((u) => `  <url><loc>${esc(u)}</loc></url>`).join("\n")}
+</urlset>
+`);
+});
+
 /**
  * GET /n/:name — what a Moshpit name actually shows.
  *
@@ -304,6 +376,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
   // to a link checker, and to anything that treats the status before the body.
   res.status(200).send(page({
     title: resolution.name,
+    head: nameHead(resolution),
     body: directory({ resolution, tld, owner, names, tlds, quote, user: req.user, req }),
   }));
 });
