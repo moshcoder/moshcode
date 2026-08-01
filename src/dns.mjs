@@ -779,12 +779,30 @@ export function createServer(options = {}) {
  * empty result is the signal to leave routing per-ending: catch-all with
  * nowhere to forward is every lookup on the box failing, not just Moshpit ones.
  */
+export const UPSTREAM_SOURCES = [
+  // systemd-resolved's own uplink file, and the only one with real servers in
+  // it on a systemd machine. /etc/resolv.conf there is a stub pointing at
+  // 127.0.0.53 — which this drops as loopback, correctly, and which left
+  // discovery empty on exactly the platform catch-all routing was built for.
+  // The fallback to per-ending routing kept those machines safe and kept the
+  // feature permanently out of reach; reading only /etc/resolv.conf was the bug.
+  "/run/systemd/resolve/resolv.conf",
+  "/etc/resolv.conf",
+];
+
 export async function discoverUpstreams(readImpl) {
-  const read = readImpl || (async () => {
+  const read = readImpl || (async (path) => {
     const { readFile } = await import("node:fs/promises");
-    return readFile("/etc/resolv.conf", "utf8");
+    return readFile(path, "utf8");
   });
-  return parseUpstreams(await read().catch(() => ""));
+
+  for (const source of UPSTREAM_SOURCES) {
+    const found = parseUpstreams(await read(source).catch(() => ""));
+    // First file with a non-loopback server wins. A stub resolv.conf yields
+    // nothing and we move on rather than concluding there are no upstreams.
+    if (found.length) return found;
+  }
+  return [];
 }
 
 /**
