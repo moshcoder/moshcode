@@ -99,19 +99,30 @@ export function safeEntry(entry) {
 
 /** Every file under `dir`, relative to it. */
 async function walk(dir, base = dir) {
-  const out = [];
+  const files = [];
+  const unsafe = [];
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    return out;
+    return { files, unsafe };
   }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...(await walk(full, base)));
-    else out.push(path.relative(base, full));
+    const relative = path.relative(base, full);
+    if (entry.isSymbolicLink()) {
+      unsafe.push(relative);
+    } else if (entry.isDirectory()) {
+      const nested = await walk(full, base);
+      files.push(...nested.files);
+      unsafe.push(...nested.unsafe);
+    } else if (entry.isFile()) {
+      files.push(relative);
+    } else {
+      unsafe.push(relative);
+    }
   }
-  return out;
+  return { files, unsafe };
 }
 
 /**
@@ -122,7 +133,8 @@ async function walk(dir, base = dir) {
  * stopping is worse than not starting.
  */
 export async function installPlan(from, into) {
-  const files = (await walk(from)).filter((f) => path.basename(f) !== MANIFEST);
+  const walked = await walk(from);
+  const files = walked.files.filter((f) => path.basename(f) !== MANIFEST);
   const conflicts = [];
   for (const file of files) {
     try {
@@ -132,11 +144,15 @@ export async function installPlan(from, into) {
       /* absent, which is what we want */
     }
   }
-  return { files: files.sort(), conflicts: conflicts.sort() };
+  return { files: files.sort(), conflicts: conflicts.sort(), unsafe: walked.unsafe.sort() };
 }
 
 /** Copy the planned files. Directories are created as needed. */
 export async function applyInstall(from, into, files) {
+  for (const file of files) {
+    const stat = await fs.lstat(path.join(from, file));
+    if (!stat.isFile()) throw new Error(`template entry is not a regular file: ${file}`);
+  }
   for (const file of files) {
     const target = path.join(into, file);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -314,7 +330,14 @@ export async function templateCommand(args = [], out = console.log) {
   }
 
   try {
-    const { files, conflicts } = await installPlan(from, into);
+    const { files, conflicts, unsafe } = await installPlan(from, into);
+    if (unsafe.length) {
+      out(`moshcode template install: links and special files are not allowed (${unsafe.length} found):`);
+      for (const file of unsafe.slice(0, 10)) out(`  ${file}`);
+      if (unsafe.length > 10) out(`  … and ${unsafe.length - 10} more`);
+      out("nothing was written. Replace them with ordinary files and try again.");
+      return 1;
+    }
     if (!files.length) {
       out("moshcode template install: that template has no files in it");
       return 1;
