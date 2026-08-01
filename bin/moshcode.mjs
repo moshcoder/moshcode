@@ -126,7 +126,17 @@ async function launchEngine(key, engine, args, { agentMode = false } = {}) {
   return backToPit(key, result.code, result.signal);
 }
 
-function help() {
+/**
+ * `write` decides which stream this lands on, and it matters more than it looks.
+ *
+ * An unknown verb printing help to stdout is how a help banner ends up inside a
+ * config file: `moshcode doh --nginx x > site.conf` on a build without that verb
+ * writes ASCII art where nginx expected directives, and the web server stops
+ * parsing. Help asked for goes to stdout, where it can be piped and paged; help
+ * shown because a command was wrong goes to stderr, so a redirect gets an empty
+ * file and the shell's `&&` stops the chain.
+ */
+function help(write = console.log) {
   const vocab = moshVocabulary().all();
   // Every workflow tool is exposed as a CLI verb, so derive them from TOOLS
   // rather than repeating the roster here — a tool missing from this list gets
@@ -134,7 +144,7 @@ function help() {
   const cliVerbs = [...CORE_CLI_COMMAND_NAMES, ...Object.keys(TOOLS)];
   const local = vocab.filter((c) => !cliVerbs.includes(c.name));
   const cli = vocab.filter((c) => !local.includes(c));
-  console.log(`moshcode — metal scripting toolkit 🤘
+  write(`moshcode — metal scripting toolkit 🤘
 
 usage:
   moshcode                             open the TUI shell (then /agents <engine>)
@@ -235,7 +245,7 @@ async function main() {
   if (cmd === undefined) return tui();
 
   if (cmd === "--version" || cmd === "-v" || cmd === "version") {
-    console.log(moshcodeVersion() || "unknown");
+    write(moshcodeVersion() || "unknown");
     return;
   }
 
@@ -274,8 +284,8 @@ async function main() {
     printStatus(toolStatus(), asJson);
     // Never after --json: the note would corrupt output being piped into jq.
     if (!asJson) {
-      console.log("\nthe primary development toolchain runs through `moshcode` as a");
-      console.log("dev.profullstack.com user — https://dev.profullstack.com/");
+      write("\nthe primary development toolchain runs through `moshcode` as a");
+      write("dev.profullstack.com user — https://dev.profullstack.com/");
     }
     return;
   }
@@ -303,14 +313,14 @@ async function main() {
       process.exit(target ? 1 : 0);
     }
     const { install, desc, bin } = entry;
-    console.log(`🎸 installing ${target} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
+    write(`🎸 installing ${target} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
     const result = await runCmd(install.cmd, install.args);
     if (!result.ok) {
       console.error(`install failed: ${result.error?.message || result.error || "unknown error"}`);
       process.exitCode = 1;
       return;
     }
-    if (result.code === 0) console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
+    if (result.code === 0) write(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
     return backToPit(`install ${target}`, result.code);
   }
   if (cmd === "uninstall" || cmd === "remove") {
@@ -331,8 +341,8 @@ async function main() {
       return;
     }
 
-    console.log(`🎸 uninstalling ${target} — ${entry.desc}`);
-    console.log(describeUninstall(plan));
+    write(`🎸 uninstalling ${target} — ${entry.desc}`);
+    write(describeUninstall(plan));
     if (rest.includes("--dry-run")) return;
 
     // Removing a binary is not something to do because a flag was left off.
@@ -347,7 +357,7 @@ async function main() {
       if (step.kind === "remove") {
         try {
           fs.rmSync(step.path, { force: true });
-          console.log(`\n✓ removed ${step.path}`);
+          write(`\n✓ removed ${step.path}`);
         } catch (err) {
           console.error(`could not remove ${step.path}: ${err.message}`);
           process.exitCode = 1;
@@ -360,7 +370,7 @@ async function main() {
           process.exitCode = 1;
           return;
         }
-        console.log(`\n✓ ${target} uninstalled. 🤘`);
+        write(`\n✓ ${target} uninstalled. 🤘`);
       }
     }
     return backToPit(`uninstall ${target}`, 0);
@@ -383,7 +393,7 @@ async function main() {
       })) || 0;
       return;
     }
-    console.log("🎸 moshcode upgrade — updating moshcode + installed engines/tools 🤘");
+    write("🎸 moshcode upgrade — updating moshcode + installed engines/tools 🤘");
     const results = await runUpgrade(rest);
     const failed = results.filter((r) => !r.ok).length;
     return backToPit("upgrade", failed ? 1 : 0);
@@ -395,7 +405,7 @@ async function main() {
   if (cmd === "doh") {
     const nameAt = rest.indexOf("--nginx");
     if (nameAt >= 0) {
-      console.log(nginxDohSite({ name: rest[nameAt + 1] || "dns.example", port: DEFAULT_DOH_PORT }));
+      write(nginxDohSite({ name: rest[nameAt + 1] || "dns.example", port: DEFAULT_DOH_PORT }));
       return;
     }
     const portAt = rest.indexOf("--port");
@@ -403,13 +413,13 @@ async function main() {
       port: portAt >= 0 ? Number(rest[portAt + 1]) : DEFAULT_DOH_PORT,
       ...parseGuardArgs(rest),
     });
-    console.log(`DoH resolver on ${server.url}`);
-    console.log(server.guards.rateLimit
+    write(`DoH resolver on ${server.url}`);
+    write(server.guards.rateLimit
       ? `  guards: ${server.guards.rateLimit.perSecond}/s per client (burst ${server.guards.rateLimit.burst}), `
         + `bans double from ${Math.round(server.guards.ban.baseMs / 1000)}s, answers capped at ${server.guards.maxResponseBytes}B`
       : "  ! guards OFF (--no-guards) — do not expose this without something else limiting it");
-    console.log("TLS belongs to whatever holds 443 — see: moshcode doh --nginx <name>");
-    console.log("this must not be reachable directly; it has no TLS and trusts X-Forwarded-For");
+    write("TLS belongs to whatever holds 443 — see: moshcode doh --nginx <name>");
+    write("this must not be reachable directly; it has no TLS and trusts X-Forwarded-For");
     return new Promise(() => {});
   }
   if (cmd === "site" || cmd === "serve") {
@@ -423,28 +433,28 @@ async function main() {
 
   if (cmd === "pwd" || cmd === "where") {
     const { cwd, home, git } = locate();
-    console.log(tilde(cwd, home));
+    write(tilde(cwd, home));
     if (git) {
-      console.log(`repo:   ${git.name}${git.branch ? ` (${git.branch})` : ""}`);
-      console.log(`root:   ${tilde(git.root, home)}`);
-      if (git.origin) console.log(`origin: ${git.origin}`);
+      write(`repo:   ${git.name}${git.branch ? ` (${git.branch})` : ""}`);
+      write(`root:   ${tilde(git.root, home)}`);
+      if (git.origin) write(`origin: ${git.origin}`);
     } else {
-      console.log("(not a git repo)");
+      write("(not a git repo)");
     }
     return;
   }
   if (cmd === "commands") {
     const commands = moshVocabulary().all();
     if (rest.includes("--json")) {
-      console.log(JSON.stringify(commands.map(({ name, summary }) => ({
+      write(JSON.stringify(commands.map(({ name, summary }) => ({
         name,
         description: summary,
       })), null, 2));
       return;
     }
-    console.log("built-in moshscript commands:");
+    write("built-in moshscript commands:");
     for (const c of commands) {
-      console.log(`  ${(`${c.name}()`).padEnd(12)} ${c.summary}`);
+      write(`  ${(`${c.name}()`).padEnd(12)} ${c.summary}`);
     }
     return;
   }
@@ -462,7 +472,7 @@ async function main() {
     const browser = rest.includes("--browser") || rest.includes("-b");
     try {
       const { email } = await loginAuto({ device, browser });
-      console.log(`✓ logged in${email ? ` as ${email}` : ""} 🤘 — notify()/ask() will reach you now.`);
+      write(`✓ logged in${email ? ` as ${email}` : ""} 🤘 — notify()/ask() will reach you now.`);
     } catch (e) { console.error(String(e.message || e)); process.exitCode = 1; }
     return;
   }
@@ -502,7 +512,7 @@ async function main() {
       process.exit(1);
     }
 
-    console.log(`🎸 moshcode — running moshscript${dryRun ? " (dry run)" : ""}\n`);
+    write(`🎸 moshcode — running moshscript${dryRun ? " (dry run)" : ""}\n`);
     let result;
     try {
       result = await runScript(src, {
@@ -510,33 +520,33 @@ async function main() {
         max,
         dryRun,
         argv,
-        out: (s) => console.log(s),
+        out: (s) => write(s),
       });
     } catch (e) {
       console.error("\n" + String(e.message || e));
       process.exit(1);
     }
-    console.log(`\n✓ ${result.iterations} loop(s) — no bugs, only features. 🤘`);
+    write(`\n✓ ${result.iterations} loop(s) — no bugs, only features. 🤘`);
     return backToPit("moshscript", 0);
   }
 
   if (cmd === "prd") {
     if (!rest.length) {
       const prds = listPrds();
-      if (!prds.length) { console.log("no PRDs yet — `moshcode prd <idea>` to start one."); return; }
-      for (const p of prds) console.log(`${p.id}  ${p.status.padEnd(9)} ${p.title}`);
+      if (!prds.length) { write("no PRDs yet — `moshcode prd <idea>` to start one."); return; }
+      for (const p of prds) write(`${p.id}  ${p.status.padEnd(9)} ${p.title}`);
       return;
     }
     const idea = rest.join(" ");
     const { id, slug, path: file, existed, bootstrapped } = createPrd(idea);
-    if (bootstrapped) console.log("bootstrapped prd/ — README + 0000-template.md");
-    console.log(existed
+    if (bootstrapped) write("bootstrapped prd/ — README + 0000-template.md");
+    write(existed
       ? `PRD ${id} exists — ${file}`
       : `✓ published prd/${id}-${slug}.md (committed — status: Draft)`);
     const st = engineStatus();
     const chosen = st.find((e) => e.key === "claude" && e.installed) || st.find((e) => e.installed);
-    if (!chosen) { console.log("open an engine to author it — run: moshcode install claude"); return; }
-    console.log(`handing ${id} to ${chosen.key} to author…`);
+    if (!chosen) { write("open an engine to author it — run: moshcode install claude"); return; }
+    write(`handing ${id} to ${chosen.key} to author…`);
     const r = await openSession(ENGINES[chosen.key], [authoringPrompt({ path: file, idea: existed ? "" : idea })]);
     return backToPit(chosen.key, r.code, r.signal);
   }
@@ -565,8 +575,12 @@ async function main() {
     return;
   }
 
-  help();
-  if (cmd && !["help", "--help", "-h"].includes(cmd)) process.exit(1);
+  // A wrong verb is an error, so its help goes to stderr and the exit is
+  // non-zero. Asking for help is not an error, so it goes to stdout.
+  const asked = !cmd || ["help", "--help", "-h"].includes(cmd);
+  if (!asked) console.error(`moshcode: unknown command ${JSON.stringify(cmd)}\n`);
+  help(asked ? console.log : console.error);
+  if (!asked) process.exit(1);
 }
 
 main();
