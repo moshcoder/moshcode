@@ -15,6 +15,7 @@
 import { Router } from "express";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
+import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
@@ -73,6 +74,31 @@ export const moshpitRouter = Router();
 
 const bad = (res, error, status = 400) => res.status(status).json({ error });
 const unauthorized = (res) => res.status(401).json({ error: "sign in first" });
+
+/**
+ * The machine half of the namespace.
+ *
+ * Everything under /api/moshpit is described at the top of this file as an API,
+ * and it was one only if you happened to have a browser cookie. `moshcode`
+ * holds an API key that /api/me and /api/sessions both accept; every endpoint
+ * here answered that same key with 401, so the namespace was the one part of
+ * the product no script could touch.
+ *
+ * Same helper, same keys, same 401 when there is no key -- this is not a new
+ * way in, it stops one router being the exception. A cookie session still wins
+ * when both are present, because that is the caller who is already identified.
+ *
+ * Only /api/moshpit. The /pit pages are browser routes: they are CSRF-guarded
+ * form posts, and a bearer token has no business standing in for a session
+ * there.
+ */
+moshpitRouter.use("/api/moshpit", async (req, _res, next) => {
+  if (!req.user) {
+    const user = await userForApiKey(bearer(req));
+    if (user) req.user = user;
+  }
+  next();
+});
 
 /* ---------- API ---------- */
 
