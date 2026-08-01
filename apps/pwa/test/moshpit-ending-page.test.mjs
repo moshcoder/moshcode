@@ -270,3 +270,15 @@ test("the registry's own labels outrank the starter list", skip, async () => {
   assert.ok(row.indexOf("www.bare") < row.indexOf("docs.bare"), row);
   assert.ok(row.indexOf("docs.bare") < row.indexOf("status.bare"), row);
 });
+
+test("the pointer count reads as English at one and at many", skip, async () => {
+  const { get } = await app();
+
+  // .rank has exactly one ending pointing at it, which read "1 ending point
+  // here" — the noun was pluralised and the verb was not.
+  assert.match((await get("/n/rank")).body, /1 ending points here/);
+
+  // A second pointer flips both halves.
+  const { run } = await import("../src/db.mjs");
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,alias_of,created_at) VALUES ('serp','u1','a@b.c','rank',1)`);
+  assert.match((await get("/n/rank")).body, /2 endings point here/);});
