@@ -23,6 +23,11 @@ try { published = await import("@moshcoder/moshpit-name"); } catch { published =
 const NAMES = [
   "blue.eggs", "a.b.c", "1.2.3.4", "localhost", "", "eggs", "blue.420", "420.blue",
   "1.420", "192.168", "0.0", "-bad.eggs", "bad-.eggs", "x".repeat(64) + ".eggs", "A.EGGS.",
+  // Internal dashes, which the list above never covered. Leading and trailing
+  // ones were checked from the start, so a change to whether a dash is allowed
+  // *inside* a label could land in one copy and not the other and every
+  // assertion here would still pass.
+  "lazy-loaded", "blue.lazy-loaded", "register-me.eggs", "cryp-to", "a-b.c-d", "web3-agents",
 ];
 
 test("vendored namespace rules match the published package", {
@@ -31,6 +36,19 @@ test("vendored namespace rules match the published package", {
   await t.test("every hostname parses the same way", () => {
     for (const n of NAMES) {
       assert.deepEqual(vendored.parseMoshpitName(n), published.parseMoshpitName(n), n);
+    }
+  });
+
+  // normalizeLabel was never compared at all, which left the label half of the
+  // grammar unguarded: parseMoshpitName only exercises it through a full name,
+  // so a label-only divergence surfaces as a missing test rather than a failing
+  // one.
+  await t.test("labels normalise the same way", () => {
+    for (const label of [
+      "california", "123", "a", "", "  Blue  ", "x".repeat(63), "x".repeat(64),
+      "lazy-loaded", "register-me", "-leading", "trailing-", "has space", "UPPER",
+    ]) {
+      assert.equal(vendored.normalizeLabel(label), published.normalizeLabel(label), `normalizeLabel(${label})`);
     }
   });
 

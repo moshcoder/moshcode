@@ -77,7 +77,12 @@ test("vendored DNS bridge matches the published package", {
   });
 
   await t.test("the same hostnames are Moshpit names", () => {
-    for (const h of ["blue.eggs", "a.b.c", "1.2.3.4", "localhost", "", "eggs", "blue.420", "1.420"]) {
+    // The dashed entries matter: whether a dash may appear inside a label is a
+    // rule that has changed, and without them a divergence on it reads as green.
+    for (const h of [
+      "blue.eggs", "a.b.c", "1.2.3.4", "localhost", "", "eggs", "blue.420", "1.420",
+      "blue.lazy-loaded", "register-me.eggs", "a-b.c-d", "-bad.eggs", "bad-.eggs",
+    ]) {
       assert.deepEqual(vendored.parseRegistryName(h), published.parseRegistryName(h), h);
     }
   });
