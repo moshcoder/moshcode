@@ -39,8 +39,28 @@ export async function listTlds(limit = 200) {
   return all(`SELECT ${COLS} FROM moshpit_tlds ORDER BY created_at DESC LIMIT ?`, [limit]);
 }
 
-export async function listTldsForUser(userId) {
-  return all(`SELECT ${COLS} FROM moshpit_tlds WHERE user_id = ? ORDER BY created_at DESC`, [userId]);
+/**
+ * The endings one account holds.
+ *
+ * `limit`/`offset` page it. They are optional because the JSON API hands the
+ * whole list back and a list of strings costs nothing -- it is /pit that cannot
+ * afford it, because every ending it draws brings a form per name with it.
+ *
+ * Ordered by `created_at DESC, tld` rather than `created_at DESC` alone. A bulk
+ * claim writes one timestamp across every ending in it, so `created_at` is not
+ * a total order, and a page boundary landing inside a tie would show the same
+ * ending twice on one page and skip another entirely.
+ */
+export async function listTldsForUser(userId, { limit = null, offset = 0 } = {}) {
+  const page = limit === null ? "" : ` LIMIT ? OFFSET ?`;
+  const args = limit === null ? [userId] : [userId, limit, offset];
+  return all(`SELECT ${COLS} FROM moshpit_tlds WHERE user_id = ? ORDER BY created_at DESC, tld${page}`, args);
+}
+
+/** How many endings the account holds -- for the pager, which needs the total. */
+export async function countTldsForUser(userId) {
+  const row = await get(`SELECT COUNT(*) AS n FROM moshpit_tlds WHERE user_id = ?`, [userId]);
+  return Number(row?.n ?? 0);
 }
 
 /**
@@ -205,6 +225,17 @@ export async function listNames(tld, limit = 500) {
   return all(`SELECT ${NAME_COLS} FROM moshpit_names WHERE tld = ? ORDER BY label LIMIT ?`, [tld, limit]);
 }
 
+/**
+ * How many names live under an ending.
+ *
+ * /pit draws a handful of them per ending and has to say how many it is not
+ * drawing -- "12 shown" with no total reads as "you have 12 names".
+ */
+export async function countNames(tld) {
+  const row = await get(`SELECT COUNT(*) AS n FROM moshpit_names WHERE tld = ?`, [tld]);
+  return Number(row?.n ?? 0);
+}
+
 export async function listNamesForUser(userId) {
   return all(`SELECT ${NAME_COLS} FROM moshpit_names WHERE user_id = ? ORDER BY tld, label`, [userId]);
 }
@@ -317,13 +348,28 @@ export async function setTldPrice({ tld: tldInput, userId, priceUsd }) {
   return { ok: true, tld, priceUsd: price };
 }
 
-/** TLDs somebody else holds. `forSale` narrows to the ones actually buyable. */
-export async function listTldsNotOwnedBy(userId, { forSale = false, limit = 200 } = {}) {
+/**
+ * TLDs somebody else holds. `forSale` narrows to the ones actually buyable.
+ *
+ * `tld` breaks the tie for the same reason it does in listTldsForUser: a bulk
+ * claim shares one timestamp, and paging through a partial order loses rows.
+ */
+export async function listTldsNotOwnedBy(userId, { forSale = false, limit = 200, offset = 0 } = {}) {
   const sql = `SELECT tld, user_id, owner_email, alias_of, price_usd, created_at
                FROM moshpit_tlds
                WHERE user_id IS NOT ?${forSale ? " AND price_usd IS NOT NULL" : ""}
-               ORDER BY price_usd IS NULL, created_at DESC LIMIT ?`;
-  return all(sql, [userId ?? "", limit]);
+               ORDER BY price_usd IS NULL, created_at DESC, tld LIMIT ? OFFSET ?`;
+  return all(sql, [userId ?? "", limit, offset]);
+}
+
+/** How many endings somebody else holds -- the Theirs pager needs the total. */
+export async function countTldsNotOwnedBy(userId, { forSale = false } = {}) {
+  const row = await get(
+    `SELECT COUNT(*) AS n FROM moshpit_tlds
+     WHERE user_id IS NOT ?${forSale ? " AND price_usd IS NOT NULL" : ""}`,
+    [userId ?? ""],
+  );
+  return Number(row?.n ?? 0);
 }
 
 export async function getTldWithPrice(tld) {

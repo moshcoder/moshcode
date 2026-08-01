@@ -25,6 +25,9 @@ import {
   addPin,
   clearAlias,
   clearExempt,
+  countNames,
+  countTldsForUser,
+  countTldsNotOwnedBy,
   DEFAULT_TLD_PRICE_USD,
   getName,
   getTld,
@@ -774,6 +777,8 @@ const PIT_CSS = `
   font-size:.8rem;line-height:1.55;resize:vertical;min-height:9em}
 .pit-bulk textarea:focus{outline:none;border-color:var(--acid)}
 .pit-tabs{display:flex;gap:4px;margin:22px 0 26px;border-bottom:1px solid var(--line)}
+.pit-pager{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:22px 0 4px;font-size:.72rem}
+.pit-pager .btn[aria-disabled]{opacity:.4;pointer-events:none}
 .pit-tab{font-family:var(--mono);font-size:.76rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
   padding:11px 15px;border-bottom:2px solid transparent;margin-bottom:-1px}
 .pit-tab:hover{color:var(--text)}
@@ -814,12 +819,67 @@ const pitTabs = (active, counts = null) => `
 
 const forSale = (t) => t.price_usd !== null && t.price_usd !== undefined;
 
+/**
+ * How much of the namespace one page may draw.
+ *
+ * /pit ships no script at all, and it still locked browsers up: the page grew
+ * as endings x names-under-them, and neither end was bounded. Every name is a
+ * form with a CSRF field, two inputs and two buttons, so an account holding 50
+ * endings with 100 names each rendered 3 MiB of HTML and 36k elements. Nothing
+ * has to be slow for that to jam -- it is the DOM, and the sticky blurred app
+ * bar repainting over it on every scroll frame.
+ *
+ * So the page shows a window and says what it is not showing. `?tld=` opens one
+ * ending in full, which is also where the "show all N" links go -- and where
+ * TronBrowser's `mosh.<tld>` already pointed, on a page that until now ignored
+ * the parameter and drew everything anyway.
+ */
+const TLDS_PER_PAGE = 20;
+const NAMES_PER_TLD = 10;
+const NAMES_FOCUSED = 250;
+
+/** `?page=` as a 1-based page number; anything unreadable is page 1. */
+const pageParam = (value) => {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 1 ? n : 1;
+};
+
+/** Prev/next for a window into `total` rows, or nothing when it all fits. */
+const pager = ({ page, total, perPage, href }) => {
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  if (pages <= 1) return "";
+  const link = (n, label) => `<a class="btn" href="${href(n)}">${label}</a>`;
+  return `<nav class="pit-pager">
+    ${page > 1 ? link(page - 1, "← Newer") : `<span class="btn faint" aria-disabled="true">← Newer</span>`}
+    <span class="mono faint">page ${page} of ${pages} · ${total} endings</span>
+    ${page < pages ? link(page + 1, "Older →") : `<span class="btn faint" aria-disabled="true">Older →</span>`}
+  </nav>`;
+};
+
 moshpitRouter.get("/pit", async (req, res) => {
-  const [theirs, mine, bal] = await Promise.all([
-    listTldsNotOwnedBy(req.user?.id ?? null, { limit: 100 }),
-    req.user ? listTldsForUser(req.user.id) : [],
+  // An unknown ?tab= falls back to Yours rather than rendering an empty page.
+  const tab = req.query.tab === "theirs" ? "theirs" : "yours";
+  const pageNo = pageParam(req.query.page);
+
+  // `?tld=` opens a single ending in full. Only meaningful for one you hold --
+  // Theirs is one row per ending and has nothing to expand.
+  const wanted = normalizeTld(req.query.tld) || null;
+  const focused = tab === "yours" && req.user && wanted
+    ? await getTld(wanted).then((t) => (t && t.user_id === req.user.id ? t : null))
+    : null;
+
+  const [theirs, theirsTotal, mine, mineTotal, bal] = await Promise.all([
+    tab === "theirs"
+      ? listTldsNotOwnedBy(req.user?.id ?? null, { limit: TLDS_PER_PAGE, offset: (pageNo - 1) * TLDS_PER_PAGE })
+      : [],
+    countTldsNotOwnedBy(req.user?.id ?? null),
+    req.user && !focused
+      ? listTldsForUser(req.user.id, { limit: TLDS_PER_PAGE, offset: (pageNo - 1) * TLDS_PER_PAGE })
+      : [],
+    req.user ? countTldsForUser(req.user.id) : 0,
     req.user ? balance(req.user.id) : 0,
   ]);
+  const shown = focused ? [focused] : mine;
 
   // `?name=mosh.whatever` — somebody typed a Moshpit name and ended up here
   // instead of at a site. Work out what they can actually do about it.
@@ -839,18 +899,22 @@ moshpitRouter.get("/pit", async (req, res) => {
     });
   }
 
-  // An unknown ?tab= falls back to Yours rather than rendering an empty page.
-  const tab = req.query.tab === "theirs" ? "theirs" : "yours";
-  const forSaleCount = theirs.filter(forSale).length;
+  const forSaleCount = await countTldsNotOwnedBy(req.user?.id ?? null, { forSale: true });
 
-  // Per-TLD detail is only needed by the panel actually on screen, and only
-  // Yours has any: Theirs is one row per ending.
+  // Per-TLD detail is only needed by the endings actually on screen, and only
+  // Yours has any: Theirs is one row per ending. That is the whole fix -- this
+  // used to run one listNames per ending the account held, however many that
+  // was, and then render every row it got back.
   const exemptions = new Map();
   const names = new Map();
+  const nameTotals = new Map();
   if (tab === "yours") {
     // Exemptions are only meaningful for a TLD that points somewhere.
-    await Promise.all(mine.filter((t) => t.alias_of).map(async (t) => exemptions.set(t.tld, await listExempt(t.tld))));
-    await Promise.all(mine.map(async (t) => names.set(t.tld, await listNames(t.tld))));
+    await Promise.all(shown.filter((t) => t.alias_of).map(async (t) => exemptions.set(t.tld, await listExempt(t.tld))));
+    await Promise.all(shown.map(async (t) => {
+      names.set(t.tld, await listNames(t.tld, focused ? NAMES_FOCUSED : NAMES_PER_TLD));
+      nameTotals.set(t.tld, await countNames(t.tld));
+    }));
   }
 
   const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
@@ -859,12 +923,13 @@ moshpitRouter.get("/pit", async (req, res) => {
   const mineHtml = !req.user
     ? `<p class="dim">Sign in with your moshcode account to claim one — the same login the CLI uses.</p>
        <p><a class="btn acid" href="/">Sign in →</a></p>`
-    : mine.length
-      ? mine.map((t) => `
+    : shown.length
+      ? shown.map((t) => `
         <div class="pit-tld">
           <h3 class="acid">.${esc(t.tld)}</h3>
           <div class="mono faint" style="font-size:.72rem">
             ${t.alias_of ? `points at <span class="acid">.${esc(t.alias_of)}</span>` : "stands on its own"}
+            · ${nameTotals.get(t.tld) ?? 0} name${(nameTotals.get(t.tld) ?? 0) === 1 ? "" : "s"}
           </div>
           <div class="pit-names">
             ${(names.get(t.tld) || []).length
@@ -878,6 +943,12 @@ moshpitRouter.get("/pit", async (req, res) => {
                   <button class="btn" type="submit" name="release" value="1">Release</button>
                 </form>`).join("")
               : `<p class="mono faint" style="font-size:.72rem;margin:6px 0">no names under .${esc(t.tld)} yet</p>`}
+            ${(nameTotals.get(t.tld) ?? 0) > (names.get(t.tld) || []).length ? `
+            <p class="mono faint" style="font-size:.72rem;margin:6px 0">
+              ${(names.get(t.tld) || []).length} of ${nameTotals.get(t.tld)} shown${focused
+                ? ` — this ending holds more than the ${NAMES_FOCUSED} a page will draw`
+                : ` · <a class="acid" href="/pit?tld=${encodeURIComponent(t.tld)}">open .${esc(t.tld)} on its own →</a>`}
+            </p>` : ""}
             <form method="post" action="/pit/${esc(t.tld)}/names" class="pit-row">
               ${csrfInput(req)}
               <input name="label" placeholder="new name" autocomplete="off" required>
@@ -955,15 +1026,24 @@ moshpitRouter.get("/pit", async (req, res) => {
   ${landingCard(req, landing)}
   ${msg}
   ${req.user ? claimForm(req) + bulkClaimForm(req) : ""}
-  ${pitTabs(tab, { yours: mine.length, theirs: theirs.length, forSale: forSaleCount })}
+  ${pitTabs(tab, { yours: mineTotal, theirs: theirsTotal, forSale: forSaleCount })}
 
   <section class="pit-panel">
   ${tab === "yours" ? `
+    ${focused ? `
+    <p class="dim" style="max-width:62ch;margin:0 0 14px">
+      <a class="acid" href="/pit">← all ${mineTotal} of your endings</a> · showing
+      <span class="mono acid">.${esc(focused.tld)}</span> on its own.
+    </p>` : `
     <p class="dim" style="max-width:62ch;margin:0 0 14px">
       Endings you hold. Names under them are yours to mint for nothing — or put a price on the
       ending and let anyone buy one.
-    </p>
+    </p>`}
     ${mineHtml}
+    ${focused ? "" : pager({
+      page: pageNo, total: mineTotal, perPage: TLDS_PER_PAGE,
+      href: (n) => `/pit?tab=yours&page=${n}`,
+    })}
   ` : `
     <p class="dim" style="max-width:62ch;margin:0 0 14px">
       Endings somebody else holds. Where the operator has set a price you can buy a name under it —
@@ -971,6 +1051,10 @@ moshpitRouter.get("/pit", async (req, res) => {
       through CoinPay; the name lands the moment the payment confirms.
     </p>
     ${theirsHtml}
+    ${pager({
+      page: pageNo, total: theirsTotal, perPage: TLDS_PER_PAGE,
+      href: (n) => `/pit?tab=theirs&page=${n}`,
+    })}
   `}
   </section>
 </main>${footer}`,
