@@ -16,6 +16,7 @@ import {
 } from "../src/engines.mjs";
 import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
+import { selfUpdateCommand } from "../src/selfupdate.mjs";
 import { describeUninstall, uninstallPlan } from "../src/uninstall.mjs";
 import { mcpCommand, skillCommand } from "../src/integrations.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
@@ -163,6 +164,9 @@ usage:
      [--into dir] [--force]            owner/repo, or a .tar.gz); nothing is run
   moshcode install <engine|tool>       install a coding engine or workflow tool
   moshcode uninstall <engine|tool>     take one back off this machine
+  moshcode update --check              say whether a newer release exists
+  moshcode update --if-newer           install only when there is one
+  moshcode update --timer [--install]  check on a schedule (default 15min)
   moshcode upgrade [target…]           update moshcode + installed engines/tools
                                        (no args = everything; name targets to
                                        narrow, e.g. \`upgrade ugig\`)
@@ -358,6 +362,22 @@ async function main() {
   }
 
   if (cmd === "upgrade" || cmd === "update") {
+    // --check, --if-newer and --timer never reinstall blindly: a scheduled run
+    // that re-fetches Node, bun and the tarball to discover nothing changed is
+    // minutes of network and disk for no reason.
+    if (rest.some((a) => ["--check", "--if-newer", "--timer"].includes(a))) {
+      const { promises: fsp } = await import("node:fs");
+      const { execFile } = await import("node:child_process");
+      process.exitCode = (await selfUpdateCommand(rest, console.log, {
+        upgrade: async () => {
+          const results = await runUpgrade(rest.filter((a) => !a.startsWith("--")));
+          return results.filter((r) => !r.ok).length ? 1 : 0;
+        },
+        write: (path, body) => fsp.writeFile(path, body),
+        runner: (cmd2, args2) => new Promise((res) => execFile(cmd2, args2, () => res({ ok: true }))),
+      })) || 0;
+      return;
+    }
     console.log("🎸 moshcode upgrade — updating moshcode + installed engines/tools 🤘");
     const results = await runUpgrade(rest);
     const failed = results.filter((r) => !r.ok).length;
