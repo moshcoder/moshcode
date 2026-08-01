@@ -9,16 +9,16 @@ importers:
   .:
     devDependencies:
       '@moshcoder/moshpit-dns':
-        specifier: ^0.2.1
-        version: 0.2.1
+        specifier: ^0.2.2
+        version: 0.2.2
 
 packages:
 
-  '@moshcoder/moshpit-dns@0.2.1':
-    resolution: {integrity: sha512-GwTWmI31aNz58ddIgF+3BnOWPsjL+Lgg5NyBpRbDgYjYA6Y+94LVzGIJeMp/jFvjo/0EOTWAQfHldEijwcoMUA==}
+  '@moshcoder/moshpit-dns@0.2.2':
+    resolution: {integrity: sha512-xoCAVzFX7CKeCEgAO58VI8eHViduwEFiiMbPWqE14YyPwltk9fk8XI4v1zL9jaU3tJYVK/yRUCuKf4BhJG1tGg==}
     engines: {node: '>=20'}
     hasBin: true
 
 snapshots:
 
-  '@moshcoder/moshpit-dns@0.2.1': {}
+  '@moshcoder/moshpit-dns@0.2.2': {}
