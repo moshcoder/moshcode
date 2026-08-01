@@ -24,6 +24,7 @@ import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
 import { consoleCommand } from "../src/console.mjs";
 import { dnsCommand } from "../src/dns.mjs";
+import { templateCommand } from "../src/templates.mjs";
 import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
@@ -153,6 +154,9 @@ usage:
   moshcode skill list [--json]         show skills support + install status
   moshcode skill install <git-url>     install a skill across every engine that
                                        supports it (claude/gemini)
+  moshcode template list               starting stacks for a Moshpit-hosted service
+  moshcode template install <name>     copy one here (also takes a git URL,
+     [--into dir] [--force]            owner/repo, or a .tar.gz); nothing is run
   moshcode install <engine|tool>       install a coding engine or workflow tool
   moshcode uninstall <engine|tool>     take one back off this machine
   moshcode upgrade [target…]           update moshcode + installed engines/tools
@@ -356,6 +360,10 @@ async function main() {
   }
   if (cmd === "dns") {
     process.exitCode = (await dnsCommand(rest)) || 0;
+    return;
+  }
+  if (cmd === "template" || cmd === "templates") {
+    process.exitCode = (await templateCommand(rest)) || 0;
     return;
   }
 

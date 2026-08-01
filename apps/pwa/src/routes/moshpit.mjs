@@ -1370,6 +1370,10 @@ function hostingHelp() {
     server_name seo.rank;
     root /var/www/seo.rank;
 }</div>
+  <p class="pit-copy" style="font-size:.84rem">Or skip the typing —
+    <code>moshcode template install bun-caddy-sqlite</code> writes the Caddyfile, the systemd
+    units and a Bun + SQLite service already wired up this way.
+    <code>moshcode template list</code> shows what there is.</p>
   <p class="pit-copy" style="font-size:.84rem">Check it with <code>moshcode dns resolve seo.rank</code>,
     then <code>curl -6 http://seo.rank/</code>. A port other than 80 only works in the
     <code>/n/</code> view — DNS carries an address and has nowhere to put a port, so the browser

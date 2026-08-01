@@ -1,0 +1,16 @@
+# Caddy serving files at a Moshpit name.
+#
+# The `http://` is required and is not a style choice. A Moshpit ending is not
+# in the public DNS root, so no certificate authority will issue for it — leave
+# the scheme off and Caddy will try to provision a certificate, fail, and never
+# bring the site up. Everything served at a Moshpit name is plain HTTP.
+
+http://{$MOSHPIT_NAME:foo.whatever} {
+	root * {$SITE_ROOT:/srv/moshpit-site}
+	file_server
+	encode gzip
+
+	log {
+		output file /var/log/caddy/moshpit-site.log
+	}
+}

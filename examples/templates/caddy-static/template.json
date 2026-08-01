@@ -1,0 +1,8 @@
+{
+  "name": "caddy-static",
+  "description": "Caddy serving a static site at a Moshpit name — no runtime, no service to keep alive",
+  "vars": {
+    "MOSHPIT_NAME": "the registered name to serve, e.g. foo.whatever",
+    "SITE_ROOT": "directory of files to serve (default /srv/moshpit-site)"
+  }
+}
