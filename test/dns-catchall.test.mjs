@@ -243,3 +243,37 @@ test("the shortfall reproduces the failure that started this", async () => {
   assert.equal(shortfall.missing.length, 3496);
   assert.equal(shortfall.missing[0], "t1090");
 });
+
+/* -------------------------------------- catch-all only when it is safe */
+
+test("catch-all routing is written only when there is somewhere to forward", async () => {
+  const { enablePlan } = await import("../src/dns-system.mjs");
+  const conf = (plan) => plan.steps.find((s) => s.path?.includes("moshpit.conf"))?.content ?? "";
+
+  // With upstreams: one line that never grows.
+  const withUp = enablePlan({ platform: "linux", tlds: ["eggs", "hacker"], upstreams: ["67.207.67.3"] });
+  assert.match(conf(withUp), /^Domains=~\.$/m);
+
+  // Without: the per-ending list, which cannot take the machine's DNS with it.
+  // Getting this backwards sends every lookup to a bridge with nowhere to
+  // forward, and the whole box loses DNS rather than just Moshpit names.
+  const withoutUp = enablePlan({ platform: "linux", tlds: ["eggs", "hacker"], upstreams: [] });
+  assert.match(conf(withoutUp), /^Domains=~eggs ~hacker$/m);
+  assert.doesNotMatch(conf(withoutUp), /~\./);
+
+  // Same rule for dnsmasq.
+  const dnsmasqOn = enablePlan({ platform: "linux", linuxBackend: "dnsmasq", tlds: ["eggs"], upstreams: ["1.1.1.1"] });
+  assert.match(conf(dnsmasqOn), /^no-resolv$/m);
+  const dnsmasqOff = enablePlan({ platform: "linux", linuxBackend: "dnsmasq", tlds: ["eggs"], upstreams: [] });
+  assert.match(conf(dnsmasqOff), /^server=\/eggs\//m);
+  assert.doesNotMatch(dnsmasqOff.steps.map((s) => s.content).join(""), /no-resolv/);
+});
+
+test("upstreams are read before routing is switched, and loopback is dropped", async () => {
+  const { discoverUpstreams } = await import("../src/dns.mjs");
+  const resolv = "nameserver 127.0.0.53\nnameserver 67.207.67.3\nnameserver 67.207.67.2\n";
+  assert.deepEqual(await discoverUpstreams(async () => resolv), ["67.207.67.3", "67.207.67.2"]);
+  // An unreadable resolv.conf must read as "no upstreams", which keeps routing
+  // per-ending rather than pointing everything at a bridge that cannot forward.
+  assert.deepEqual(await discoverUpstreams(async () => { throw new Error("nope"); }), []);
+});
