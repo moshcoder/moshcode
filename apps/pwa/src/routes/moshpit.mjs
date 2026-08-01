@@ -28,6 +28,7 @@ import {
   clearAlias,
   clearExempt,
   countNames,
+  countTlds,
   countTldsForUser,
   countSearchTlds,
   countTldsNotOwnedBy,
@@ -140,9 +141,49 @@ moshpitRouter.get("/api/moshpit/tlds", async (req, res) => {
     });
   }
 
-  if (mine) return res.json({ tlds: await listTldsForUser(req.user.id) });
-  res.json({ tlds: await listTlds() });
+  // `total` on every answer, because the alternative is what this used to do:
+  // hand back 200 rows out of thousands with nothing in the response saying so.
+  // A client cannot tell a complete list from a truncated one by looking at it,
+  // and reading "absent from the list" as "does not exist" is the mistake that
+  // shape invites.
+  const { limit, offset } = pageParams(req.query);
+
+  if (mine) {
+    // Unpaged by default, as it has always been: this is the answer to "what do
+    // I hold", and imposing a page size on it now would truncate the one call
+    // that was telling the whole truth.
+    const tlds = await listTldsForUser(req.user.id, limit === null ? {} : { limit, offset });
+    return res.json({ total: await countTldsForUser(req.user.id), limit, offset, tlds });
+  }
+
+  // The default page size is the 200 this always applied — kept so existing
+  // callers see no change in what arrives, only in being told there is more.
+  const applied = limit ?? DEFAULT_PAGE;
+  const tlds = await listTlds({ limit: applied, offset });
+  res.json({ total: await countTlds(), limit: applied, offset, tlds });
 });
+
+/**
+ * `?limit=` and `?offset=`, or null for "as it comes".
+ *
+ * These were read on the `?q=` branch and ignored everywhere else, so paging
+ * the plain list did nothing at all — every page came back as page one, which
+ * looks exactly like a list that happens to have 200 things in it.
+ *
+ * The ceiling is a real limit rather than a suggestion: without one, `?limit=`
+ * is a way to ask the database for every row it has, and the pager exists
+ * precisely so nobody has to.
+ */
+const MAX_PAGE = 1000;
+const DEFAULT_PAGE = 200;
+
+function pageParams(query) {
+  const raw = Number.parseInt(query.limit, 10);
+  const limit = Number.isInteger(raw) && raw > 0 ? Math.min(MAX_PAGE, raw) : null;
+  const offsetRaw = Number.parseInt(query.offset, 10);
+  const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+  return { limit, offset };
+}
 
 moshpitRouter.post("/api/moshpit/tlds", async (req, res) => {
   if (!req.user) return unauthorized(res);
@@ -363,7 +404,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
   // No target: the directory.
   const [names, tlds] = await Promise.all([
     tld ? listNames(tld) : Promise.resolve([]),
-    listTlds(200),
+    listTlds({ limit: 200 }),
   ]);
   const owner = tld ? await getTldWithPrice(tld) : null;
 
