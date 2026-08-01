@@ -204,6 +204,40 @@ Each target is updated with its own native updater when it has one (e.g.
 `opencode upgrade`, `aider --upgrade`) and re-run through its installer
 otherwise — MoshCode never vendors it. In the TUI: `/upgrade [name…]`.
 
+## Hosting at a Moshpit name (`moshcode template`)
+
+Claim `foo.whatever` in [the Pit](https://pit.moshcode.sh/pit), then scaffold
+something to put behind it:
+
+```sh
+moshcode template list                        # what there is
+moshcode template install bun-caddy-sqlite    # into the current directory
+moshcode template install caddy-static --into /srv/site
+moshcode template install owner/repo          # or a git URL, or a .tar.gz
+```
+
+| template | what you get |
+|---|---|
+| `bun-caddy-sqlite` | Bun service + Caddy + SQLite — a local file in dev, Turso in prod, same client |
+| `caddy-static` | Caddy and a directory of files. No runtime, nothing to keep alive. |
+
+Each writes a Caddyfile, systemd units, and a README. **Nothing in a template is
+executed on install** — including the bundled ones. `install <url>` takes a
+stranger's URL, so the files are copied and what to run is yours to decide.
+
+The one fact that catches everyone: **the machine serving the name never
+resolves it, and every machine visiting it must.** Serving is a `Host` header
+match and nothing more; visitors need `sudo moshcode dns enable` or the name
+resolves to nothing.
+
+A name points at an **IPv6 address** (bare — no scheme, brackets or port) or a
+hostname. IPv4 literals are refused: an A record on a small host is usually
+leased or NATed, and a name pointed at one goes stale silently.
+
+Full walkthrough, including the layer-by-layer way to debug it and the limits
+worth knowing before you build:
+**[docs/hosting-a-moshpit-name.md](docs/hosting-a-moshpit-name.md)**.
+
 ## Shell completion
 
 MoshCode can print context-aware completion scripts for its commands, engines,
