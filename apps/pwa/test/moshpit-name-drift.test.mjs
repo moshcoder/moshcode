@@ -60,9 +60,32 @@ test("vendored namespace rules match the published package", {
       ".Eggs\nEGGS\neggs",
       "",
     ];
+    // The vendored copy reads `blue.eggs` as a name under `.eggs`; the published
+    // package still refuses anything with a dot. That is a capability the copy
+    // has and the package has not yet released, not a rule they disagree on — so
+    // the comparison drops the fields that carry it and holds the two to the
+    // same behaviour on everything an ending-only paste can express.
+    //
+    // Delete this shim, and the pastes below, when @moshcoder/moshpit-name ships
+    // name parsing: at that point the two must agree on names as well, and a
+    // straight deepEqual is the stronger test.
+    const sharedRules = (result) => ({
+      ...result,
+      names: undefined,
+      entries: result.entries.map(({ label, ...rest }) => rest),
+    });
     for (const paste of pastes) {
-      assert.deepEqual(vendored.parseTldList(paste), published.parseTldList(paste), JSON.stringify(paste));
+      assert.deepEqual(
+        sharedRules(vendored.parseTldList(paste)),
+        sharedRules(published.parseTldList(paste)),
+        JSON.stringify(paste),
+      );
     }
+
+    // What the published package cannot do yet, asserted against the copy alone
+    // so the gap is recorded rather than assumed.
+    assert.deepEqual(vendored.parseTldList("blue.eggs").names, [{ tld: "eggs", label: "blue" }]);
+    assert.deepEqual(published.parseTldList("blue.eggs").tlds, ["blue.eggs"]);
   });
 
   await t.test("resolution precedence agrees across the whole input space", () => {

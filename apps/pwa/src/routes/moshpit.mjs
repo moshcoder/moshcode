@@ -1440,6 +1440,10 @@ const back = (res, params, tab = "yours") =>
  * Reported as `ok` when anything landed at all, even alongside collisions —
  * a list where 38 of 40 were claimed succeeded, and colouring it as an error
  * because two were taken would misread the normal case as a failure.
+ *
+ * A name counts as landing. Pasting `blue.eggs` under an ending you already
+ * hold claims no ending at all, and judging that paste by the ending count
+ * alone would flash red over a registration that worked.
  */
 moshpitRouter.post("/pit/claim-bulk", requireAuth, async (req, res) => {
   const result = await registerTlds({
@@ -1449,7 +1453,8 @@ moshpitRouter.post("/pit/claim-bulk", requireAuth, async (req, res) => {
   // The flash rides back in the query string, so it has to stay short enough
   // to survive a URL.
   const summary = summarizeBulkClaim(result).slice(0, 500);
-  return back(res, result.claimed.length ? { ok: summary } : { err: summary });
+  const landed = result.claimed.length || result.names.length;
+  return back(res, landed ? { ok: summary } : { err: summary });
 });
 
 moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
@@ -1459,7 +1464,9 @@ moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
     input: req.body?.tld, userId: req.user.id, ownerEmail: req.user.email ?? null,
     priceUsd: req.body?.price_usd, aliasOf: req.body?.alias_of,
   });
-  if (!result.claimed.length) return back(res, { err: summarizeBulkClaim(result).slice(0, 500) });
+  if (!result.claimed.length && !result.names.length) {
+    return back(res, { err: summarizeBulkClaim(result).slice(0, 500) });
+  }
   back(res, { ok: summarizeBulkClaim(result).slice(0, 500) });
 });
 

@@ -224,6 +224,14 @@ export const DEFAULT_TLD_PRICE_USD = MAX_CHILD_PRICE_USD;
  * Deduplicated on the normalised form, so `.Eggs`, `eggs` and `EGGS` in one
  * paste are one claim rather than one claim and two "already taken" errors
  * against yourself.
+ *
+ * Both halves of the namespace come through the same field. `eggs` and `.eggs`
+ * are the ending; `blue.eggs` and `.blue.eggs` are a name under it. The leading
+ * dot is decoration in either case — people type the shape they saw written
+ * down, and refusing one spelling of the thing they already own would be a
+ * distinction without a difference. Which one a line meant is recorded on the
+ * entry rather than resolved here, because parsing is not the place that knows
+ * who holds `.eggs`.
  */
 export function parseTldList(input, limit = MAX_BULK_TLDS) {
   // Records split on newlines, commas and semicolons; fields inside a record
@@ -243,9 +251,13 @@ export function parseTldList(input, limit = MAX_BULK_TLDS) {
 
   for (const record of records) {
     const fields = record.split(/\s+/).filter(Boolean);
-    const tld = normalizeToken(fields[0]);
-    if (!tld || seen.has(tld)) continue;
-    seen.add(tld);
+    const target = parseListToken(fields[0]);
+    if (!target) continue;
+    // Keyed on the whole thing, so `.eggs` and `blue.eggs` in one paste are two
+    // entries rather than one swallowing the other.
+    const key = target.label ? `${target.label}.${target.tld}` : target.tld;
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     // Counted rather than silently dropped: "I pasted 300 and got 200" needs to
     // be visible, or the missing hundred look like they failed for some other
@@ -262,12 +274,35 @@ export function parseTldList(input, limit = MAX_BULK_TLDS) {
       if (price !== null) priceUsd = price;
       else aliasOf = normalizeToken(field);
     }
-    entries.push({ tld, aliasOf, priceUsd });
+    entries.push({ tld: target.tld, label: target.label, aliasOf, priceUsd });
   }
 
   // `tlds` alongside `entries` because most callers only want the names, and
-  // making every one of them map over the records would be noise.
-  return { entries, tlds: entries.map((e) => e.tld), skipped };
+  // making every one of them map over the records would be noise. `names` is
+  // the same courtesy for the other half, and the two are disjoint: an entry is
+  // an ending or a name under one, never both.
+  return {
+    entries,
+    tlds: entries.filter((e) => !e.label).map((e) => e.tld),
+    names: entries.filter((e) => e.label).map((e) => ({ tld: e.tld, label: e.label })),
+    skipped,
+  };
+}
+
+/**
+ * One pasted token, as the ending or the name it was written as.
+ *
+ * A token that reads as neither comes back as an ending carrying its own bad
+ * text — `a.b.c` is not silently dropped, it is handed on so the caller can
+ * reject it by name and say why. Losing it here would turn "you pasted
+ * something wrong" into a line that never appears in the report at all.
+ */
+function parseListToken(value) {
+  const raw = normalizeToken(value);
+  if (!raw) return null;
+  if (!raw.includes(".")) return { tld: raw, label: null };
+  const name = parseMoshpitName(raw);
+  return name ? { tld: name.tld, label: name.label } : { tld: raw, label: null };
 }
 
 function normalizeToken(value) {
