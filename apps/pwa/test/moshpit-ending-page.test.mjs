@@ -44,6 +44,17 @@ async function boot() {
   await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('torklink','parked','u1',NULL,1)`);
   // An ending held with nothing under it, to prove the empty case reads right.
   await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('bare','u1','a@b.c',1)`);
+  // An alias pointing at torklink, and an ending owned by somebody else: the
+  // two sides of "related" and the thing that must not be called related.
+  await run(`INSERT OR REPLACE INTO users (id,email,created_at) VALUES ('u2','c@d.e',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,alias_of,created_at) VALUES ('torlink','u1','a@b.c','torklink',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('stranger','u2','c@d.e',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('elsewhere','u2','c@d.e',1)`);
+  // `www` twice and `docs` once, so "most-used first" has something to order.
+  // Deliberately not under .bare, which has to stay empty for the empty case.
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('stranger','www','u2',NULL,1)`);
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('elsewhere','www','u2',NULL,1)`);
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('stranger','docs','u2',NULL,1)`);
 
   const app = deps.express();
   app.use((req, _res, next) => { req.csrfToken = () => "csrf"; next(); });
@@ -149,4 +160,86 @@ test("the sitemap now lists endings as well as names", skip, async () => {
 
   assert.ok(body.includes(`<loc>${PIT}/n/torklink</loc>`), "endings resolve now, so advertise them");
   assert.ok(body.includes(`<loc>${PIT}/n/pointed.torklink</loc>`));
+});
+
+// ---- the ending as a directory ----
+//
+// "Nothing lives under .eggs yet" was the whole page for a young ending: true,
+// and nothing to do about it. The name page had answered the other two
+// questions — what is near this, and what could go here — since it shipped;
+// the ending page, which is where somebody actually decides, had neither.
+
+test("an ending lists the endings related to it", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/torklink");
+
+  assert.match(body, /Related endings/);
+  // Aliased to it, and owned by the same person: both are related.
+  assert.match(body, /href="\/n\/torlink"/);
+  assert.match(body, /href="\/n\/bare"/);
+});
+
+test("related endings link to the ending, not to a search", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/torklink");
+
+  // There is no label to carry across on an ending's page, so each one goes to
+  // its own page — which is a page now, and used to be a 400.
+  assert.doesNotMatch(body, /href="\/pit\?tab=theirs/);
+});
+
+test("an ending held by somebody else is listed, but not as related", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/torklink");
+
+  assert.match(body, /More endings/);
+  const related = body.slice(body.indexOf("Related endings"), body.indexOf("More endings"));
+  assert.doesNotMatch(related, /href="\/n\/stranger"/, "a stranger's ending is not related");
+  assert.match(body, /href="\/n\/stranger"/);
+});
+
+test("an ending never lists itself", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/torklink");
+
+  assert.doesNotMatch(body, /href="\/n\/torklink"/, "the page you are on is not somewhere else to go");
+});
+
+test("an empty ending suggests names rather than stopping at 'nothing here'", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  assert.match(body, /Nothing lives under \.bare yet/);
+  // What the rest of the registry actually took, most-used first.
+  assert.match(body, /www\.bare/);
+  assert.match(body, /docs\.bare/);
+});
+
+test("a suggestion goes to the claim box with the name filled in", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  // The same path the "See if it is free" form posts to, so the shortcut and
+  // the form cannot disagree about what happens next.
+  assert.match(body, /href="\/pit\?name=www\.bare"/);
+});
+
+test("a name already taken is never suggested", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/torklink");
+
+  // `parked.torklink` exists; offering it would only ever answer "taken".
+  assert.doesNotMatch(body, /href="\/pit\?name=parked\.torklink"/);
+  assert.doesNotMatch(body, /href="\/pit\?name=pointed\.torklink"/);
+});
+
+test("the registry's own labels outrank the starter list", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  const row = body.slice(body.indexOf("Still free under"), body.indexOf("Related endings"));
+  // `www` is taken twice elsewhere and `docs` once, so www comes first — and
+  // both beat a starter label nobody has taken.
+  assert.ok(row.indexOf("www.bare") < row.indexOf("docs.bare"), row);
+  assert.ok(row.indexOf("docs.bare") < row.indexOf("status.bare"), row);
 });

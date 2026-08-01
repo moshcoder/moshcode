@@ -53,6 +53,7 @@ import {
   parseMoshpitName,
   PIN_KINDS,
   pinsForName,
+  popularLabels,
   quoteName,
   registerName,
   registerTld,
@@ -67,6 +68,7 @@ import {
   setNameTarget,
   setTldPrice,
   shortCount,
+  suggestedLabels,
   summarizeBulkClaim,
   tldRejection,
 } from "../moshpit.mjs";
@@ -395,11 +397,22 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     const ending = normalizeTld(String(req.params.name || "").replace(/^\.+/, ""));
     const owner = ending ? await getTldWithPrice(ending) : null;
     if (owner) {
-      const names = await listNames(ending);
+      // The same three questions the name page answers, asked of an ending:
+      // what is under it, what is near it, and what could go under it next.
+      const [names, tlds, popular] = await Promise.all([
+        listNames(ending),
+        listTlds({ limit: 200 }),
+        popularLabels(),
+      ]);
+      const suggestions = suggestedLabels({
+        tld: ending,
+        taken: names.map((n) => n.label),
+        popular,
+      });
       return res.status(200).send(page({
         title: `.${ending}`,
         head: endingHead(ending, owner),
-        body: endingDirectory({ tld: ending, owner, names, user: req.user, req }),
+        body: endingDirectory({ tld: ending, owner, names, tlds, suggestions, user: req.user, req }),
       }));
     }
     // Still 400 for an ending nobody holds: otherwise every typo under /n/
@@ -504,12 +517,26 @@ function endingHead(tld, owner) {
  * ending's price and a box to pick a name under it — and the listing is the
  * whole ending rather than "what else lives near the name you asked for".
  */
-function endingDirectory({ tld, owner, names, user, req }) {
+function endingDirectory({ tld, owner, names, tlds = [], suggestions = [], user, req }) {
   const live = names.filter((n) => n.target);
   const claimed = names.filter((n) => !n.target);
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
   const mine = Boolean(user && owner.user_id === user.id);
+
+  // Same rule as the name page: an alias is an operator saying two endings
+  // belong together, and shared ownership is the next best signal. There is no
+  // label to carry across here, so each one links to its own ending page.
+  const related = tlds.filter((t) =>
+    t.tld !== tld && (t.alias_of === tld || t.tld === owner.alias_of || t.user_id === owner.user_id));
+  const others = tlds.filter((t) => t.tld !== tld && !related.includes(t)).slice(0, 24);
+  const tldLink = (t) => `<a class="mono" href="/n/${esc(t.tld)}">.${esc(t.tld)}</a>`;
+
+  // A suggestion goes to the claim box with the name already filled in, which
+  // is the same path the "See if it is free" form takes — so the offer and the
+  // shortcut cannot disagree about what happens next.
+  const suggestionLink = (label) =>
+    `<a class="mono" href="/pit?name=${encodeURIComponent(`${label}.${tld}`)}">${esc(label)}.${esc(tld)}</a>`;
 
   return `
 <section class="pit-panel">
@@ -540,6 +567,21 @@ function endingDirectory({ tld, owner, names, user, req }) {
   <ul class="pit-dir">${claimed.map((n) => `<li>${nameLink(n)}</li>`).join("")}</ul>` : ""}
 
   ${names.length ? "" : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">Nothing lives under .${esc(tld)} yet.</p>`}
+
+  ${suggestions.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">${mine ? `Yours to mint` : `Still free under .${esc(tld)}`}</h2>
+  <p class="mono faint" style="font-size:.72rem">${mine
+    ? "You hold this ending, so these cost nothing."
+    : "Nobody has taken these yet."}</p>
+  <p class="pit-dir-row">${suggestions.map(suggestionLink).join(" · ")}</p>` : ""}
+
+  ${related.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>
+  <p class="pit-dir-row">${related.map(tldLink).join(" · ")}</p>` : ""}
+
+  ${others.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">More endings</h2>
+  <p class="pit-dir-row">${others.map(tldLink).join(" · ")}</p>` : ""}
 
   <p style="margin-top:26px"><a class="btn" href="/pit">the pit &rarr;</a></p>
 </section>`;

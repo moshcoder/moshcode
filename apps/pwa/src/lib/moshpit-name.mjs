@@ -84,6 +84,59 @@ export function parseMoshpitName(input) {
   return { label: normalizedLabel, tld: normalizedTld };
 }
 
+/**
+ * Labels worth offering under an ending that has nothing under it yet.
+ *
+ * A new ending's page is empty by definition, and "nothing lives here yet" is a
+ * true sentence that gives its holder nothing to do. These are the names a
+ * person reaches for first when they point an ending at something real.
+ *
+ * A starting point, not a taxonomy: what people actually take under other
+ * endings outranks this list wherever the registry has enough of it to say.
+ */
+export const STARTER_LABELS = [
+  "www", "app", "api", "docs", "blog", "home", "shop", "mail", "dev", "status", "hello", "go",
+];
+
+/**
+ * What to suggest someone take under an ending.
+ *
+ * `popular` is what the rest of the registry has already taken, most-used
+ * first — a real signal about what this namespace is for, and better than any
+ * list written up front. STARTER_LABELS fills the gap while the registry is
+ * young, which is exactly when an ending's page is emptiest and the suggestion
+ * matters most.
+ *
+ * Anything already taken under this ending is dropped: suggesting a name whose
+ * only outcome is "already taken" wastes the one click the page is asking for.
+ *
+ * Every suggestion is checked as a whole name rather than as a label, because
+ * whether it is usable depends on the ending — `1.420` is refused as an IPv4
+ * literal where `1.eggs` is fine, and only parseMoshpitName knows that.
+ */
+export function suggestedLabels({ tld, taken = [], popular = [], limit = 12 } = {}) {
+  const ending = normalizeTld(tld);
+  if (!ending) return [];
+
+  const used = new Set();
+  for (const label of taken) {
+    const normalized = normalizeLabel(label);
+    if (normalized) used.add(normalized);
+  }
+
+  const out = [];
+  for (const candidate of [...popular, ...STARTER_LABELS]) {
+    if (out.length >= limit) break;
+    const label = normalizeLabel(candidate);
+    if (!label || used.has(label)) continue;
+    // The name has to be one the registry would actually accept.
+    if (!parseMoshpitName(`${label}.${ending}`)) continue;
+    used.add(label);
+    out.push(label);
+  }
+  return out;
+}
+
 /* ---- resolution precedence (tronbrowser.dev) ---- */
 
 /** The two ways a resolver can be configured to treat a moshpit answer. */
