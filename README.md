@@ -253,6 +253,9 @@ source <(moshcode completion zsh)
 
 # Fish (~/.config/fish/config.fish)
 moshcode completion fish | source
+
+# PowerShell (add to $PROFILE for future sessions)
+moshcode completion powershell | Out-String | Invoke-Expression
 ```
 
 Put the matching line in your shell profile to enable it in future sessions.

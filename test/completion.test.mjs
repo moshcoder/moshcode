@@ -152,12 +152,13 @@ _moshcode_completion
 
 test("completion normalizes shell names and rejects unsupported values", () => {
   assert.equal(completionScript(" BASH "), completionScript("bash"));
+  assert.equal(completionScript("pwsh"), completionScript("powershell"));
   assert.throws(() => completionScript(), /unsupported shell/);
-  assert.throws(() => completionScript("powershell"), /choose: bash, zsh, fish/);
+  assert.throws(() => completionScript("nu"), /choose: bash, zsh, fish, powershell/);
 
   const result = spawnSync(process.execPath, [BIN, "completion"], {
     encoding: "utf8",
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /usage: moshcode completion <bash\|zsh\|fish>/);
+  assert.match(result.stderr, /usage: moshcode completion <bash\|zsh\|fish\|powershell>/);
 });

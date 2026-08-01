@@ -178,7 +178,8 @@ usage:
   moshcode engines [--json]            list engines + install status
   moshcode tools [--json]              list workflow tools + install status
   moshcode commands [--json]           list built-in moshscript commands
-  moshcode completion <bash|zsh|fish>  print a shell completion script
+  moshcode completion <bash|zsh|fish|powershell>
+                                       print a shell completion script
   moshcode help                        this
 
 engines (moshcode is a wrapper — it installs/drives these):
@@ -398,7 +399,7 @@ async function main() {
     try {
       process.stdout.write(completionScript(rest[0]));
     } catch (e) {
-      console.error(`usage: moshcode completion <bash|zsh|fish>\n${e.message || e}`);
+      console.error(`usage: moshcode completion <bash|zsh|fish|powershell>\n${e.message || e}`);
       process.exitCode = 1;
     }
     return;
