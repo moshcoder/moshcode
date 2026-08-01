@@ -18,6 +18,7 @@ import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
+import { tldQuery } from "../lib/moshpit-search.mjs";
 import {
   MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, forwardableHeaders,
 } from "../lib/moshpit-gateway.mjs";
@@ -27,6 +28,7 @@ import {
   clearExempt,
   countNames,
   countTldsForUser,
+  countSearchTlds,
   countTldsNotOwnedBy,
   DEFAULT_TLD_PRICE_USD,
   getName,
@@ -56,6 +58,7 @@ import {
   removePin,
   resolutionPreference,
   resolveMoshpitName,
+  searchTlds,
   setAlias,
   setExempt,
   setNameTarget,
@@ -73,11 +76,44 @@ const unauthorized = (res) => res.status(401).json({ error: "sign in first" });
 
 /* ---------- API ---------- */
 
+/**
+ * The registry, optionally filtered.
+ *
+ * `?q=` is what the filter box on /pit calls on every (debounced) keystroke:
+ * `eggs` is a substring, `def*` is a glob, and tldQuery() decides which. It
+ * answers with a name count per ending so the results can say how big each one
+ * is without a second round trip per row.
+ *
+ * Unauthenticated and cheap on purpose -- the registry is public, and a filter
+ * that only worked signed in would not help anyone deciding whether to sign up.
+ * `?scope=` narrows to yours or everybody else's; yours needs a session, the
+ * rest does not.
+ */
 moshpitRouter.get("/api/moshpit/tlds", async (req, res) => {
-  if (req.query.mine) {
-    if (!req.user) return unauthorized(res);
-    return res.json({ tlds: await listTldsForUser(req.user.id) });
+  const mine = Boolean(req.query.mine) || req.query.scope === "mine";
+  if (mine && !req.user) return unauthorized(res);
+
+  const filter = tldQuery(req.query.q);
+  if (filter) {
+    const scope = mine ? "mine" : req.query.scope === "theirs" ? "theirs" : "all";
+    const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+    const tlds = await searchTlds(filter.like, {
+      scope, userId: req.user?.id ?? null, exact: filter.exact, limit,
+    });
+    return res.json({
+      query: filter.query,
+      total: await countSearchTlds(filter.like, { scope, userId: req.user?.id ?? null }),
+      tlds: tlds.map((t) => ({
+        tld: t.tld,
+        alias_of: t.alias_of,
+        price_usd: t.price_usd,
+        name_count: Number(t.name_count ?? 0),
+        mine: Boolean(req.user && t.user_id === req.user.id),
+      })),
+    });
   }
+
+  if (mine) return res.json({ tlds: await listTldsForUser(req.user.id) });
   res.json({ tlds: await listTlds() });
 });
 
@@ -777,6 +813,11 @@ const PIT_CSS = `
   font-size:.8rem;line-height:1.55;resize:vertical;min-height:9em}
 .pit-bulk textarea:focus{outline:none;border-color:var(--acid)}
 .pit-tabs{display:flex;gap:4px;margin:22px 0 26px;border-bottom:1px solid var(--line)}
+.pit-filter{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 16px}
+.pit-filter input[name=q]{flex:1;min-width:220px}
+.pit-hits{display:flex;flex-direction:column;gap:2px;margin:0 0 18px}
+.pit-hit{display:flex;justify-content:space-between;gap:12px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;text-decoration:none;font-size:.78rem}
+.pit-hit:hover{border-color:var(--acid)}
 .pit-pager{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:22px 0 4px;font-size:.72rem}
 .pit-pager .btn[aria-disabled]{opacity:.4;pointer-events:none}
 .pit-tab{font-family:var(--mono);font-size:.76rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
@@ -808,14 +849,136 @@ const PIT_CSS = `
  *
  * `counts` is omitted on /pit/dns, which does not load the registry.
  */
-const pitTabs = (active, counts = null) => `
+const pitTabs = (active, counts = null, query = "") => {
+  // Switching tabs keeps the filter: having typed `def*` once, being handed the
+  // unfiltered other half is the surprising outcome, not the helpful one.
+  const q = query ? `&q=${encodeURIComponent(query)}` : "";
+  return `
 <nav class="pit-tabs">
-  <a class="pit-tab${active === "yours" ? " on" : ""}" href="/pit?tab=yours">Yours${
+  <a class="pit-tab${active === "yours" ? " on" : ""}" href="/pit?tab=yours${q}">Yours${
     counts ? `<span class="count">${counts.yours}</span>` : ""}</a>
-  <a class="pit-tab${active === "theirs" ? " on" : ""}" href="/pit?tab=theirs">Theirs${
+  <a class="pit-tab${active === "theirs" ? " on" : ""}" href="/pit?tab=theirs${q}">Theirs${
     counts ? `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>` : ""}</a>
   <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>
 </nav>`;
+};
+
+/**
+ * The filter box.
+ *
+ * A real GET form, so it works with the script blocked, on a browser that never
+ * ran it, and in a bookmark. The script below upgrades it to filter as you
+ * type; everything it does, submitting the form also does, just with a page
+ * load in the middle.
+ */
+const filterBox = (tab, query, scope) => `
+<form class="pit-filter" method="get" action="/pit" role="search" data-pit-filter data-scope="${esc(scope)}">
+  <input type="hidden" name="tab" value="${esc(tab)}">
+  <input name="q" value="${esc(query)}" autocomplete="off" spellcheck="false"
+         placeholder="filter endings — eggs, .def*" aria-label="Filter endings"
+         data-pit-filter-input>
+  <button class="btn" type="submit">Filter</button>
+  ${query ? `<a class="btn" href="/pit?tab=${esc(tab)}">Clear</a>` : ""}
+  <span class="mono faint" style="font-size:.7rem">
+    <code>eggs</code> anywhere in the name · <code>def*</code> starts with
+  </span>
+</form>
+<div class="pit-hits" data-pit-hits hidden></div>`;
+
+/**
+ * The live half of the filter.
+ *
+ * Deliberately small, and the only script this page carries -- /pit locked
+ * browsers up once already and it managed that with no JavaScript at all, so
+ * the bar for adding some is that it makes the DOM smaller rather than larger.
+ * This does: it answers "which endings match" in a dozen rows instead of a page
+ * load.
+ *
+ * Debounced at 200ms, and the in-flight request is aborted when the next
+ * keystroke lands. Without the abort a slow answer for `de` can arrive after
+ * the fast one for `def*` and overwrite it, so the list flickers back to a
+ * query nobody is typing any more.
+ *
+ * Plain ES5-ish JS with no template literals: it is embedded in a template
+ * literal, and a backtick in here would end the string it lives in.
+ */
+const PIT_FILTER_JS = String.raw`
+(function () {
+  var form = document.querySelector('[data-pit-filter]');
+  var input = document.querySelector('[data-pit-filter-input]');
+  var out = document.querySelector('[data-pit-hits]');
+  if (!form || !input || !out) return;
+
+  var scope = form.getAttribute('data-scope') || 'all';
+  var DEBOUNCE_MS = 200;
+  var timer = null, inflight = null, rendered = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function hide() { out.hidden = true; out.innerHTML = ''; rendered = null; }
+
+  function row(t) {
+    // Yours opens on its own; anybody else's filters Theirs down to it, which
+    // is the panel that carries the buy form.
+    var href = t.mine
+      ? '/pit?tld=' + encodeURIComponent(t.tld)
+      : '/pit?tab=theirs&q=' + encodeURIComponent(t.tld);
+    var note = t.mine
+      ? t.name_count + (t.name_count === 1 ? ' name' : ' names')
+      : (t.price_usd === null || t.price_usd === undefined ? 'not for sale' : '$' + t.price_usd + ' a name');
+    var alias = t.alias_of ? '<span class="faint"> to .' + esc(t.alias_of) + '</span>' : '';
+    return '<a class="pit-hit" href="' + href + '">' +
+      '<span class="mono acid">.' + esc(t.tld) + alias + '</span>' +
+      '<span class="mono faint">' + esc(note) + '</span></a>';
+  }
+
+  function render(data) {
+    var tlds = data.tlds || [];
+    if (!tlds.length) {
+      out.innerHTML = '<p class="mono faint" style="margin:0;font-size:.72rem">nothing here matches ' +
+        esc(data.query) + '</p>';
+      out.hidden = false;
+      return;
+    }
+    var more = data.total > tlds.length
+      ? '<p class="mono faint" style="margin:8px 0 0;font-size:.72rem">' + tlds.length + ' of ' +
+        data.total + ' shown - press Enter for all of them</p>'
+      : '';
+    out.innerHTML = tlds.map(row).join('') + more;
+    out.hidden = false;
+  }
+
+  function run() {
+    var q = input.value.trim();
+    if (!q) { hide(); return; }
+    if (q === rendered) return;
+    if (inflight) inflight.abort();
+    var ctl = new AbortController();
+    inflight = ctl;
+    fetch('/api/moshpit/tlds?limit=12&scope=' + encodeURIComponent(scope) + '&q=' + encodeURIComponent(q),
+      { signal: ctl.signal, headers: { accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (ctl.signal.aborted || !data) return;
+        rendered = q;
+        render(data);
+      })
+      .catch(function () { /* aborted, or offline: leave the last answer up */ });
+  }
+
+  function schedule() { clearTimeout(timer); timer = setTimeout(run, DEBOUNCE_MS); }
+
+  input.addEventListener('keyup', schedule);
+  input.addEventListener('input', schedule);   // paste and IME never fire keyup
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { input.value = ''; hide(); }
+  });
+})();
+`;
 
 const forSale = (t) => t.price_usd !== null && t.price_usd !== undefined;
 
@@ -868,18 +1031,28 @@ moshpitRouter.get("/pit", async (req, res) => {
     ? await getTld(wanted).then((t) => (t && t.user_id === req.user.id ? t : null))
     : null;
 
+  // `?q=` filters the panel. The live filter is a script talking to the JSON
+  // API, but the query still belongs in the URL: without it the filter would be
+  // unbookmarkable, unshareable, and gone the moment the script failed to load.
+  const filter = tldQuery(req.query.q);
+  const offset = (pageNo - 1) * TLDS_PER_PAGE;
+  const window = { limit: TLDS_PER_PAGE, offset };
+  const search = (scope) => searchTlds(filter.like, { scope, userId: req.user?.id ?? null, exact: filter.exact, ...window });
+  const searchTotal = (scope) => countSearchTlds(filter.like, { scope, userId: req.user?.id ?? null });
+
   const [theirs, theirsTotal, mine, mineTotal, bal] = await Promise.all([
-    tab === "theirs"
-      ? listTldsNotOwnedBy(req.user?.id ?? null, { limit: TLDS_PER_PAGE, offset: (pageNo - 1) * TLDS_PER_PAGE })
-      : [],
-    countTldsNotOwnedBy(req.user?.id ?? null),
-    req.user && !focused
-      ? listTldsForUser(req.user.id, { limit: TLDS_PER_PAGE, offset: (pageNo - 1) * TLDS_PER_PAGE })
-      : [],
-    req.user ? countTldsForUser(req.user.id) : 0,
+    tab !== "theirs" ? []
+      : filter ? search("theirs")
+      : listTldsNotOwnedBy(req.user?.id ?? null, window),
+    filter ? searchTotal("theirs") : countTldsNotOwnedBy(req.user?.id ?? null),
+    !req.user || focused ? []
+      : filter ? search("mine")
+      : listTldsForUser(req.user.id, window),
+    req.user ? (filter ? searchTotal("mine") : countTldsForUser(req.user.id)) : 0,
     req.user ? balance(req.user.id) : 0,
   ]);
   const shown = focused ? [focused] : mine;
+  const qs = filter ? `&q=${encodeURIComponent(filter.query)}` : "";
 
   // `?name=mosh.whatever` — somebody typed a Moshpit name and ended up here
   // instead of at a site. Work out what they can actually do about it.
@@ -1026,7 +1199,8 @@ moshpitRouter.get("/pit", async (req, res) => {
   ${landingCard(req, landing)}
   ${msg}
   ${req.user ? claimForm(req) + bulkClaimForm(req) : ""}
-  ${pitTabs(tab, { yours: mineTotal, theirs: theirsTotal, forSale: forSaleCount })}
+  ${pitTabs(tab, { yours: mineTotal, theirs: theirsTotal, forSale: filter ? 0 : forSaleCount }, filter?.query ?? "")}
+  ${filterBox(tab, filter?.query ?? "", req.user ? (tab === "theirs" ? "theirs" : "mine") : "all")}
 
   <section class="pit-panel">
   ${tab === "yours" ? `
@@ -1042,7 +1216,7 @@ moshpitRouter.get("/pit", async (req, res) => {
     ${mineHtml}
     ${focused ? "" : pager({
       page: pageNo, total: mineTotal, perPage: TLDS_PER_PAGE,
-      href: (n) => `/pit?tab=yours&page=${n}`,
+      href: (n) => `/pit?tab=yours&page=${n}${qs}`,
     })}
   ` : `
     <p class="dim" style="max-width:62ch;margin:0 0 14px">
@@ -1053,11 +1227,12 @@ moshpitRouter.get("/pit", async (req, res) => {
     ${theirsHtml}
     ${pager({
       page: pageNo, total: theirsTotal, perPage: TLDS_PER_PAGE,
-      href: (n) => `/pit?tab=theirs&page=${n}`,
+      href: (n) => `/pit?tab=theirs&page=${n}${qs}`,
     })}
   `}
   </section>
-</main>${footer}`,
+</main>${footer}
+<script>${PIT_FILTER_JS}</script>`,
   }));
 });
 

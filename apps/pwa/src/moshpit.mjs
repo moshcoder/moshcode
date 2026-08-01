@@ -372,6 +372,52 @@ export async function countTldsNotOwnedBy(userId, { forSale = false } = {}) {
   return Number(row?.n ?? 0);
 }
 
+/**
+ * Which half of the namespace a search is looking at.
+ *
+ * The filter sits inside a tab, so it searches what that tab shows: Yours means
+ * yours, Theirs means everybody else's. A filter that returned rows the panel
+ * underneath it cannot display would be worse than no filter.
+ */
+const searchScope = (scope, userId) =>
+  scope === "mine" ? { where: " AND user_id = ?", args: [userId ?? ""] }
+  : scope === "theirs" ? { where: " AND user_id IS NOT ?", args: [userId ?? ""] }
+  : { where: "", args: [] };
+
+/**
+ * Endings matching a LIKE pattern from tldQuery().
+ *
+ * `exact` sorts a dead-on hit to the top and shorter names above longer ones,
+ * so typing `eggs` puts `.eggs` above `.eggsalad` instead of burying it in
+ * alphabetical order.
+ *
+ * The name count comes back on the same row rather than one query per result:
+ * this runs on every keystroke, and N+1 on a keyup handler is how a filter box
+ * becomes the next thing that makes the page unusable.
+ */
+export async function searchTlds(like, { scope = "all", userId = null, exact = "", limit = 20, offset = 0 } = {}) {
+  const s = searchScope(scope, userId);
+  return all(
+    `SELECT t.tld, t.user_id, t.owner_email, t.alias_of, t.price_usd, t.created_at,
+            (SELECT COUNT(*) FROM moshpit_names n WHERE n.tld = t.tld) AS name_count
+     FROM moshpit_tlds t
+     WHERE t.tld LIKE ?${s.where.replace(/user_id/g, "t.user_id")}
+     ORDER BY t.tld = ? DESC, length(t.tld), t.tld
+     LIMIT ? OFFSET ?`,
+    [like, ...s.args, exact, limit, offset],
+  );
+}
+
+/** How many endings match — the pager needs a total the window cannot give it. */
+export async function countSearchTlds(like, { scope = "all", userId = null } = {}) {
+  const s = searchScope(scope, userId);
+  const row = await get(
+    `SELECT COUNT(*) AS n FROM moshpit_tlds WHERE tld LIKE ?${s.where}`,
+    [like, ...s.args],
+  );
+  return Number(row?.n ?? 0);
+}
+
 export async function getTldWithPrice(tld) {
   return get(`SELECT tld, user_id, owner_email, alias_of, price_usd, created_at FROM moshpit_tlds WHERE tld = ?`, [tld]);
 }
