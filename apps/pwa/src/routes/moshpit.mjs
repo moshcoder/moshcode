@@ -470,7 +470,7 @@ async function proxyToOrigin(req, res, resolution, check) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ORIGIN_TIMEOUT_MS);
   try {
-    const upstream = await fetch(`http://${check.host}:${check.port}${req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/"}`, {
+    const upstream = await fetch(`${check.origin}${req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/"}`, {
       headers: forwardableHeaders(req.headers, resolution.resolved),
       redirect: "manual",
       signal: controller.signal,
@@ -1030,7 +1030,7 @@ const landingCard = (req, landing) => {
         ${csrfInput(req)}
         <input type="hidden" name="label" value="${esc(landing.label)}">
         <span class="mono acid">${esc(landing.name)}</span>
-        <input name="target" placeholder="points at… (optional)" autocomplete="off">
+        <input name="target" placeholder="points at… (IPv6 or hostname, optional)" autocomplete="off">
         <button class="btn acid" type="submit">Register it</button>
       </form>
     </div>`;
@@ -1332,6 +1332,51 @@ const pager = ({ page, total, perPage, href }) => {
   </nav>`;
 };
 
+/**
+ * What to put in "points at", and what has to be listening at the other end.
+ *
+ * This sits next to the field rather than on a docs page because the field is
+ * a bare text input whose one hint is a placeholder, and the thing it wants —
+ * an address that a web server is already virtual-hosting the name on — is not
+ * guessable from "points at…". Collapsed by default: the answer is three lines
+ * once you know it, and this list is only in the way afterwards.
+ */
+function hostingHelp() {
+  return `<details class="pit-bulk">
+  <summary>how do I host a site at a name I hold?</summary>
+  <ol class="pit-steps dim">
+    <li><strong>Put your server's IPv6 address in "points at".</strong> Just the address —
+      <code>2606:4700:4700::1111</code>. IPv4 literals are refused: an A record on a small host
+      is usually leased or NATed and goes stale without telling anyone. A hostname
+      (<code>box.example.com</code>) works too.</li>
+    <li><strong>Turn the resolver on, on any machine that should reach the name:</strong>
+      <code>sudo moshcode dns enable</code>. Moshpit endings are not in the public DNS root, so
+      nothing resolves them until this is running — it answers <code>AAAA</code> for your names
+      out of the registry and leaves every other lookup alone.</li>
+    <li><strong>Serve the name on that address, port 80.</strong> The browser connects straight to
+      your box and sends <code>Host: name.ending</code> — nothing proxies, nothing redirects, so
+      your web server needs a block that answers to the name.</li>
+  </ol>
+  <p class="pit-copy" style="font-size:.84rem">Caddy — the <code>http://</code> is required, not a
+    typo: no public CA will issue a certificate for an ending that is not in the DNS root, so
+    automatic HTTPS has to stay off.</p>
+  <div class="pit-pre">http://seo.rank {
+    root * /var/www/seo.rank
+    file_server
+}</div>
+  <p class="pit-copy" style="font-size:.84rem">nginx:</p>
+  <div class="pit-pre">server {
+    listen [::]:80;
+    server_name seo.rank;
+    root /var/www/seo.rank;
+}</div>
+  <p class="pit-copy" style="font-size:.84rem">Check it with <code>moshcode dns resolve seo.rank</code>,
+    then <code>curl -6 http://seo.rank/</code>. A port other than 80 only works in the
+    <code>/n/</code> view — DNS carries an address and has nowhere to put a port, so the browser
+    goes to 80 whatever the target says.</p>
+</details>`;
+}
+
 moshpitRouter.get("/pit", async (req, res) => {
   // An unknown ?tab= falls back to Yours rather than rendering an empty page.
   const tab = req.query.tab === "theirs" ? "theirs" : "yours";
@@ -1424,7 +1469,7 @@ moshpitRouter.get("/pit", async (req, res) => {
                   ${csrfInput(req)}
                   <input type="hidden" name="label" value="${esc(n.label)}">
                   <span class="mono acid">${esc(n.label)}.${esc(t.tld)}</span>
-                  <input name="target" placeholder="points at…" value="${esc(n.target || "")}" autocomplete="off">
+                  <input name="target" placeholder="points at… (IPv6 or hostname)" value="${esc(n.target || "")}" autocomplete="off">
                   <button class="btn" type="submit" name="retarget" value="1">Save</button>
                   <button class="btn" type="submit" name="release" value="1">Release</button>
                 </form>`).join("")
@@ -1439,7 +1484,7 @@ moshpitRouter.get("/pit", async (req, res) => {
               ${csrfInput(req)}
               <input name="label" placeholder="new name" autocomplete="off" required>
               <span class="mono faint">.${esc(t.tld)}</span>
-              <input name="target" placeholder="points at… (optional)" autocomplete="off">
+              <input name="target" placeholder="points at… (IPv6 or hostname, optional)" autocomplete="off">
               <button class="btn acid" type="submit">Add name</button>
             </form>
           </div>
@@ -1526,6 +1571,7 @@ moshpitRouter.get("/pit", async (req, res) => {
       Endings you hold. Names under them are yours to mint for nothing — or put a price on the
       ending and let anyone buy one.
     </p>`}
+    ${hostingHelp()}
     ${mineHtml}
     ${focused ? "" : pager({
       page: pageNo, total: mineTotal, perPage: TLDS_PER_PAGE,

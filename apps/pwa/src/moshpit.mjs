@@ -11,6 +11,7 @@
 // checkable rather than trusted.
 
 import { db, get, all, run } from "./db.mjs";
+import { normalizeTarget } from "./lib/moshpit-gateway.mjs";
 import {
   BULK_CHUNK,
   BULK_TIME_BUDGET_MS,
@@ -325,9 +326,15 @@ export async function registerName({ tld: tldInput, label: labelInput, userId, t
   if (!owner) return { ok: false, error: `.${tld} is not registered` };
   if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
 
+  // Checked on the way in, not only on the way out. A target that fails is a
+  // name that looks minted and serves nothing, and the owner finds out from a
+  // visitor rather than from the form they typed it into.
+  const dest = normalizeTarget(target);
+  if (!dest.ok) return { ok: false, error: dest.error };
+
   try {
     await run(`INSERT INTO moshpit_names (tld, label, user_id, target, created_at) VALUES (?,?,?,?,?)`,
-      [tld, label, userId, target || null, Date.now()]);
+      [tld, label, userId, dest.target, Date.now()]);
   } catch {
     const existing = await getName(tld, label);
     if (existing) return { ok: false, error: `${label}.${tld} is already registered`, taken: true };
@@ -342,8 +349,10 @@ export async function registerName({ tld: tldInput, label: labelInput, userId, t
 export async function setNameTarget({ tld: tldInput, label: labelInput, userId, target }) {
   const owned = await ownedName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
+  const dest = normalizeTarget(target);
+  if (!dest.ok) return { ok: false, error: dest.error };
   await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`,
-    [target || null, owned.tld, owned.label]);
+    [dest.target, owned.tld, owned.label]);
   await logAction(owned.tld, userId, `retarget:${owned.label}`);
   return { ok: true };
 }

@@ -16,6 +16,7 @@
 // testable without binding a port.
 
 import dgram from "node:dgram";
+import { isIP } from "node:net";
 
 export const DEFAULT_REGISTRY_BASE = "https://pit.moshcode.sh";
 export const DEFAULT_PARKING_HOST = "moshcoding.com";
@@ -26,7 +27,8 @@ export const DEFAULT_HOST = "127.0.0.1";
 // somewhere. A stale A record is the one failure mode users cannot debug.
 export const DEFAULT_TTL = 30;
 
-const TYPE_A = 1;
+export const TYPE_A = 1;
+export const TYPE_AAAA = 28;
 const CLASS_IN = 1;
 const RCODE_OK = 0;
 const RCODE_NXDOMAIN = 3;
@@ -108,22 +110,71 @@ function ipv4(address) {
   return Buffer.from(bytes);
 }
 
-/** Build an A-record response, or NXDOMAIN when `address` is null. */
+/**
+ * 16 bytes of AAAA rdata.
+ *
+ * `isIP` has already ruled on the grammar, so the work here is expanding what
+ * the text form is allowed to leave out: the `::` run of zero groups, and the
+ * trailing dotted-quad an IPv4-mapped address is written with.
+ */
+function ipv6(address) {
+  const raw = String(address).trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (isIP(raw) !== 6) return null;
+
+  let text = raw;
+  const mapped = text.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) {
+    const octets = mapped[2].split(".").map(Number);
+    text = `${mapped[1]}${(((octets[0] << 8) | octets[1]) >>> 0).toString(16)}:${(((octets[2] << 8) | octets[3]) >>> 0).toString(16)}`;
+  }
+
+  const [head, tail] = text.split("::");
+  const left = head ? head.split(":").filter(Boolean) : [];
+  const right = tail ? tail.split(":").filter(Boolean) : [];
+  const groups = text.includes("::")
+    ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+    : left;
+  if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+
+  const buf = Buffer.alloc(16);
+  groups.forEach((group, i) => buf.writeUInt16BE(parseInt(group, 16), i * 2));
+  return buf;
+}
+
+/**
+ * Build an address-record response for the family the query asked for.
+ *
+ * Three outcomes, and the difference between the last two is the whole reason
+ * this is not a one-liner. NXDOMAIN says the name does not exist, and a
+ * resolver is entitled to apply that to every record type at once. A name
+ * pointed at an IPv6 address *does* exist — it just has no A record — so the A
+ * query every browser sends alongside the AAAA one has to come back NOERROR
+ * with no answers. Answering NXDOMAIN there teaches the resolver the name is
+ * gone and takes the AAAA lookup down with it.
+ */
 export function buildResponse(query, buf, address, ttl = DEFAULT_TTL) {
   const question = buf.subarray(12, query.questionEnd);
-  const rdata = address ? ipv4(address) : null;
+  const wantsV6 = query.type === TYPE_AAAA;
+  const rdata = address ? (wantsV6 ? ipv6(address) : ipv4(address)) : null;
+
   if (!rdata) {
     return Buffer.concat([
-      header(query.id, { rcode: RCODE_NXDOMAIN, answers: 0, recursionDesired: query.recursionDesired }),
+      header(query.id, {
+        // We have an address, just not in the family asked for: NODATA.
+        rcode: address ? RCODE_OK : RCODE_NXDOMAIN,
+        answers: 0,
+        recursionDesired: query.recursionDesired,
+      }),
       question,
     ]);
   }
+
   const answer = Buffer.alloc(12);
   answer.writeUInt16BE(0xc00c, 0); // pointer to the question's name
-  answer.writeUInt16BE(TYPE_A, 2);
+  answer.writeUInt16BE(wantsV6 ? TYPE_AAAA : TYPE_A, 2);
   answer.writeUInt16BE(CLASS_IN, 4);
   answer.writeUInt32BE(ttl, 6);
-  answer.writeUInt16BE(4, 10);
+  answer.writeUInt16BE(rdata.length, 10);
   return Buffer.concat([
     header(query.id, { rcode: RCODE_OK, answers: 1, recursionDesired: query.recursionDesired }),
     question,
@@ -242,8 +293,35 @@ export async function resolveName(
 export async function answerFor(name, options = {}) {
   const { parkingAddress } = options;
   const result = await resolveName(name, options);
-  if (result.status === "live") return result.target;
+  if (result.status === "live") return targetAddress(result.target);
   if (result.status === "parked") return parkingAddress || null;
+  return null;
+}
+
+/**
+ * The bare address inside a stored target, or null when there isn't one.
+ *
+ * Targets are typed by hand and come back from the registry as `2606:...`,
+ * `[2606:...]:8080`, `example.com`, or with a scheme still attached. A record
+ * carries an address and nothing else, so the port is dropped here — a name
+ * whose target names a non-default port cannot be served by the resolver path
+ * at all, because there is no way to say "port 8080" in an A or AAAA record and
+ * the browser will go to 80 regardless. A hostname target is null for the same
+ * reason: turning it into an address would mean this bridge doing clearnet DNS.
+ */
+export function targetAddress(target) {
+  const raw = String(target || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!raw) return null;
+
+  const bracketed = raw.match(/^\[([0-9a-f:.]+)\](?::\d+)?$/i);
+  const host = bracketed ? bracketed[1] : raw;
+  if (isIP(host)) return host;
+
+  const at = host.lastIndexOf(":");
+  if (at > 0 && /^\d+$/.test(host.slice(at + 1))) {
+    const bare = host.slice(0, at);
+    if (isIP(bare) === 4) return bare;
+  }
   return null;
 }
 
@@ -266,9 +344,9 @@ export function createServer(options = {}) {
     const query = parseQuery(msg);
     if (!query) return; // malformed, or a response — say nothing at all
     let address = null;
-    // Only A/IN questions can be answered with an address; everything else
-    // (AAAA, MX, TXT) gets an honest empty NOERROR/NXDOMAIN rather than a lie.
-    if (query.type === TYPE_A && query.class === CLASS_IN) {
+    // Only address questions can be answered with an address; everything else
+    // (MX, TXT, SRV) gets an honest empty NOERROR/NXDOMAIN rather than a lie.
+    if ((query.type === TYPE_A || query.type === TYPE_AAAA) && query.class === CLASS_IN) {
       address = await answerFor(query.name, options).catch(() => null);
     }
     onQuery({ name: query.name, type: query.type, address });

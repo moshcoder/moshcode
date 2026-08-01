@@ -13,6 +13,7 @@ import {
   parseRegistryName,
   resolveName,
   resolvedConf,
+  targetAddress,
 } from "../src/dns.mjs";
 
 /** A minimal A/IN query, the way a resolver would send it. */
@@ -179,4 +180,74 @@ test("the server answers a real query over UDP", async (t) => {
 
   assert.equal(reply.readUInt16BE(6), 1, "answered");
   assert.deepEqual([...reply.subarray(reply.length - 4)], [198, 51, 100, 9], "parked → parking IP");
+});
+
+/* ------------------------------------------------------------- IPv6 targets */
+
+test("buildResponse answers an AAAA query with 16 bytes of address", () => {
+  const buf = query("a.eggs", { type: 28 });
+  const res = buildResponse(parseQuery(buf), buf, "2606:4700:4700::1111", 30);
+  assert.equal(res.readUInt16BE(6), 1, "one answer");
+  assert.equal(res.readUInt16BE(2) & 0x000f, 0, "RCODE 0");
+  const rdata = res.subarray(res.length - 16);
+  assert.equal(rdata.length, 16);
+  assert.deepEqual([...rdata], [
+    0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0, 0,
+    0, 0, 0, 0, 0, 0, 0x11, 0x11,
+  ]);
+  // The record type in the answer must be AAAA, not the A it was copied from.
+  assert.equal(res.readUInt16BE(res.length - 16 - 12 + 2), 28);
+});
+
+test("the :: run expands to exactly the zero groups it stands for", () => {
+  const cases = {
+    "::1": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    "::": new Array(16).fill(0),
+    "2001:db8::": [0x20, 0x01, 0x0d, 0xb8, ...new Array(12).fill(0)],
+    "2001:db8:0:0:0:0:0:1": [0x20, 0x01, 0x0d, 0xb8, ...new Array(11).fill(0), 1],
+  };
+  for (const [address, bytes] of Object.entries(cases)) {
+    const buf = query("a.eggs", { type: 28 });
+    const res = buildResponse(parseQuery(buf), buf, address, 30);
+    assert.deepEqual([...res.subarray(res.length - 16)], bytes, address);
+  }
+});
+
+test("an A query for an IPv6 name is NODATA, not NXDOMAIN", () => {
+  // Browsers ask for A and AAAA together. NXDOMAIN on the A half tells the
+  // resolver the name does not exist at all, which is entitled to poison the
+  // AAAA answer alongside it -- the name resolves, then stops resolving, and
+  // the cause is three layers from the symptom.
+  const buf = query("a.eggs", { type: 1 });
+  const res = buildResponse(parseQuery(buf), buf, "2606:4700:4700::1111", 30);
+  assert.equal(res.readUInt16BE(6), 0, "no answers");
+  assert.equal(res.readUInt16BE(2) & 0x000f, 0, "RCODE 0 -- the name exists");
+});
+
+test("a name nobody holds is still NXDOMAIN, in both families", () => {
+  for (const type of [1, 28]) {
+    const buf = query("a.eggs", { type });
+    const res = buildResponse(parseQuery(buf), buf, null);
+    assert.equal(res.readUInt16BE(2) & 0x000f, 3, `RCODE 3 for type ${type}`);
+  }
+});
+
+test("targetAddress digs the address out of what owners actually type", () => {
+  assert.equal(targetAddress("2606:4700:4700::1111"), "2606:4700:4700::1111");
+  assert.equal(targetAddress("[2606:4700:4700::1111]:8080"), "2606:4700:4700::1111");
+  assert.equal(targetAddress("http://[2606:4700::1]/"), "2606:4700::1");
+  assert.equal(targetAddress("203.0.113.7"), "203.0.113.7", "old IPv4 rows still answer");
+  assert.equal(targetAddress("203.0.113.7:8080"), "203.0.113.7");
+  // A hostname is not an address, and resolving it here would mean this bridge
+  // doing clearnet DNS on behalf of whoever typed it.
+  assert.equal(targetAddress("box.example.com"), null);
+  assert.equal(targetAddress(""), null);
+  assert.equal(targetAddress(null), null);
+});
+
+test("answerFor hands the bridge a bare address, not the stored target", async () => {
+  const address = await answerFor("a.eggs", {
+    fetchImpl: okJson({ name_registered: true, target: "[2606:4700:4700::1111]:8080" }),
+  });
+  assert.equal(address, "2606:4700:4700::1111");
 });
