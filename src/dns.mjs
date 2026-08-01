@@ -22,6 +22,13 @@ export const DEFAULT_PARKING_HOST = "moshcoding.com";
 export const DEFAULT_PORT = 5354;
 export const DEFAULT_HOST = "127.0.0.1";
 
+export function parseDnsPort(input) {
+  const raw = String(input ?? "").trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const port = Number(raw);
+  return Number.isSafeInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
 // Short, because a name's target can change the moment its owner points it
 // somewhere. A stale A record is the one failure mode users cannot debug.
 export const DEFAULT_TTL = 30;
@@ -377,12 +384,19 @@ export async function dnsCommand(args = [], out = console.log) {
     const i = rest.indexOf(`--${name}`);
     return i >= 0 && rest[i + 1] ? rest[i + 1] : fallback;
   };
-  const port = Number(flag("port", DEFAULT_PORT));
   const registryBase = flag("registry", DEFAULT_REGISTRY_BASE);
 
   if (!sub || sub === "help" || sub === "--help") {
     out(USAGE);
     return 0;
+  }
+
+  const portIndex = rest.indexOf("--port");
+  const rawPort = portIndex >= 0 ? rest[portIndex + 1] : DEFAULT_PORT;
+  const port = parseDnsPort(rawPort);
+  if (port === null) {
+    out(`--port needs a decimal integer from 1 to 65535, got ${JSON.stringify(rawPort)}`);
+    return 1;
   }
 
   if (sub === "tlds") {
@@ -428,7 +442,13 @@ export async function dnsCommand(args = [], out = console.log) {
     // by Host header and 404s a name it has never heard of, so pointing at
     // loopback — where the responder below is listening — is the difference
     // between `curl <name>` resolving and `curl <name>` working.
-    const parkingHttpPort = Number(flag("parking-port", DEFAULT_PARKING_HTTP_PORT));
+    const parkingPortIndex = rest.indexOf("--parking-port");
+    const rawParkingHttpPort = parkingPortIndex >= 0 ? rest[parkingPortIndex + 1] : DEFAULT_PARKING_HTTP_PORT;
+    const parkingHttpPort = parseDnsPort(rawParkingHttpPort);
+    if (parkingHttpPort === null) {
+      out(`--parking-port needs a decimal integer from 1 to 65535, got ${JSON.stringify(rawParkingHttpPort)}`);
+      return 1;
+    }
     let parking = null;
     if (!rest.includes("--no-parking-http")) {
       try {
