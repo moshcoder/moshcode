@@ -496,8 +496,25 @@ function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
 
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
-  const tldLink = (t) =>
-    `<a class="mono" href="/pit?tab=theirs&q=${esc(t.tld)}">.${esc(t.tld)}</a>`;
+  // An ending in this list goes to the name you are already reading, under that
+  // ending — from scrambled.eggs, `.yolks` is /n/scrambled.yolks. The label is
+  // the question the visitor asked; the ending is the only part being offered
+  // as an alternative, so carrying the label across is what "related" is for.
+  //
+  // These used to point at /pit?tab=theirs&q=, which answers a different
+  // question: it leaves the name behind and drops you in the operator's
+  // listing. That is a detour on the one page whose whole job is to say where
+  // else this name could live.
+  //
+  // An ending the label cannot legally join keeps the old link rather than
+  // producing a /n/ URL that 400s — `1.420` is refused as an address, and a
+  // dead link is worse than a listing.
+  const label = parseMoshpitName(resolution.resolved)?.label ?? null;
+  const tldLink = (t) => {
+    const carried = label && parseMoshpitName(`${label}.${t.tld}`) ? `${label}.${t.tld}` : null;
+    const href = carried ? `/n/${esc(carried)}` : `/pit?tab=theirs&q=${esc(t.tld)}`;
+    return `<a class="mono" href="${href}">.${esc(t.tld)}</a>`;
+  };
 
   return `
 <section class="pit-panel">
