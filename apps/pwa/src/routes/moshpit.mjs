@@ -496,8 +496,24 @@ function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
 
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
+  // An ending in this list goes to the name you are already reading, under that
+  // ending — from scrambled.eggs, `.yolks` is /n/scrambled.yolks. The label is
+  // the question the visitor asked; the ending is the only part being offered
+  // as an alternative, so carrying the label across is what "related" is for.
+  //
+  // These used to point at /pit?tab=theirs&q=, which answers a different
+  // question: it leaves the name behind and drops you in the operator's
+  // listing. That is a detour on the one page whose whole job is to say where
+  // else this name could live.
+  //
+  // Every ending here goes to /n/, without exception. A name whose halves are
+  // both numeric is refused by parseMoshpitName as an IPv4 literal, so
+  // /n/420.187 answers 400 — that is accepted deliberately. The namespace is
+  // the destination, and one ending quietly leaving it for a search page is a
+  // worse inconsistency than a link that says plainly it is not a name.
+  const label = parseMoshpitName(resolution.resolved)?.label ?? null;
   const tldLink = (t) =>
-    `<a class="mono" href="/pit?tab=theirs&q=${esc(t.tld)}">.${esc(t.tld)}</a>`;
+    `<a class="mono" href="/n/${esc(label)}.${esc(t.tld)}">.${esc(t.tld)}</a>`;
 
   return `
 <section class="pit-panel">
