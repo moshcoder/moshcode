@@ -358,11 +358,15 @@ Sitemap: ${config.pitOrigin}/sitemap.xml
  * advertises URLs that did not exist yet and omits the ones that do.
  */
 moshpitRouter.get("/sitemap.xml", async (_req, res) => {
-  const names = await listAllNames();
+  const [names, tlds] = await Promise.all([listAllNames(), listTlds({ limit: 5000 })]);
 
-  // Only whole names. `/n/<ending>` is not a name — it 400s — so listing
-  // endings here would advertise URLs that do not resolve.
-  const urls = [`${config.pitOrigin}/pit`, ...names.map((n) => nameUrl(`${n.label}.${n.tld}`))];
+  // Endings are listed now that `/n/<ending>` is a page rather than a 400 — an
+  // ending with names under it is exactly the sort of thing worth finding.
+  const urls = [
+    `${config.pitOrigin}/pit`,
+    ...tlds.map((t) => nameUrl(t.tld)),
+    ...names.map((n) => nameUrl(`${n.label}.${n.tld}`)),
+  ];
 
   res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -383,7 +387,25 @@ ${urls.map((u) => `  <url><loc>${esc(u)}</loc></url>`).join("\n")}
  */
 moshpitRouter.get("/n/:name", async (req, res) => {
   const resolution = await resolveMoshpitName(req.params.name);
-  if (!resolution) return res.status(400).send(page({ title: "moshpit", body: notAName(req.params.name) }));
+  if (!resolution) {
+    // `/n/torklink` and `/n/.torklink` are an ending, not a name — and an
+    // ending somebody holds is a real thing with names under it. It answered
+    // "not a Moshpit name", which is true of the string and useless about the
+    // registry. A leading dot is how people write endings, so accept it.
+    const ending = normalizeTld(String(req.params.name || "").replace(/^\.+/, ""));
+    const owner = ending ? await getTldWithPrice(ending) : null;
+    if (owner) {
+      const names = await listNames(ending);
+      return res.status(200).send(page({
+        title: `.${ending}`,
+        head: endingHead(ending, owner),
+        body: endingDirectory({ tld: ending, owner, names, user: req.user, req }),
+      }));
+    }
+    // Still 400 for an ending nobody holds: otherwise every typo under /n/
+    // becomes a page, and the pit already answers "claim it" for a whole name.
+    return res.status(400).send(page({ title: "moshpit", body: notAName(req.params.name) }));
+  }
 
   const parsed = parseMoshpitName(resolution.resolved);
   const tld = parsed?.tld;
@@ -458,6 +480,69 @@ async function proxyToOrigin(req, res, resolution, check) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Head tags for an ending's page — the same treatment a name's page gets. */
+function endingHead(tld, owner) {
+  const canonical = `${config.pitOrigin}/n/${encodeURIComponent(tld)}`;
+  const description = owner?.price_usd != null
+    ? `Names under .${tld} on the Moshpit network cost $${owner.price_usd}.`
+    : `.${tld} is claimed on the Moshpit network.`;
+  return `<link rel="canonical" href="${esc(canonical)}">
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="website">
+<meta property="og:title" content=".${esc(tld)}">
+<meta property="og:url" content="${esc(canonical)}">
+<meta property="og:description" content="${esc(description)}">`;
+}
+
+/**
+ * The page for an ending somebody holds.
+ *
+ * Deliberately not the name directory with a blank label: what a visitor can do
+ * here is different. There is no specific name to buy, so the offer is the
+ * ending's price and a box to pick a name under it — and the listing is the
+ * whole ending rather than "what else lives near the name you asked for".
+ */
+function endingDirectory({ tld, owner, names, user, req }) {
+  const live = names.filter((n) => n.target);
+  const claimed = names.filter((n) => !n.target);
+  const nameLink = (n) =>
+    `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
+  const mine = Boolean(user && owner.user_id === user.id);
+
+  return `
+<section class="pit-panel">
+  <h1 class="acid">.${esc(tld)}</h1>
+  <p class="dim">
+    ${mine ? "You hold this ending." : "Somebody holds this ending."}
+    ${owner.price_usd != null
+      ? `Names under it cost <span class="mono acid">$${esc(String(owner.price_usd))}</span>.`
+      : "Names under it are not for sale right now."}
+  </p>
+  ${owner.alias_of
+    ? `<p class="mono faint" style="font-size:.72rem">Points at <a class="mono" href="/n/${esc(owner.alias_of)}">.${esc(owner.alias_of)}</a>.</p>`
+    : ""}
+
+  ${owner.price_usd != null && !mine ? `
+  <form method="get" action="/pit" class="pit-form" style="margin-top:18px">
+    <label class="pit-field"><input name="name" placeholder="yourname.${esc(tld)}"
+      aria-label="the name you want under this ending" autocomplete="off" spellcheck="false" required></label>
+    <button class="btn acid" type="submit">See if it is free</button>
+  </form>` : ""}
+
+  ${live.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
+  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">&rarr; ${esc(n.target)}</span></li>`).join("")}</ul>` : ""}
+
+  ${claimed.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">Claimed, not pointed anywhere</h2>
+  <ul class="pit-dir">${claimed.map((n) => `<li>${nameLink(n)}</li>`).join("")}</ul>` : ""}
+
+  ${names.length ? "" : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">Nothing lives under .${esc(tld)} yet.</p>`}
+
+  <p style="margin-top:26px"><a class="btn" href="/pit">the pit &rarr;</a></p>
+</section>`;
 }
 
 const notAName = (typed) => `
