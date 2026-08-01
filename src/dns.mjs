@@ -289,6 +289,7 @@ export function dnsmasqConf(tlds, { host = DEFAULT_HOST, port = DEFAULT_PORT } =
 /* ----------------------------------------------------------------- the verb */
 
 import { promises as dnsPromises } from "node:dns";
+import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -296,6 +297,18 @@ import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
   requiredPort, startDaemon, stopDaemon,
 } from "./dns-system.mjs";
+
+/**
+ * The Pit's page for a name.
+ *
+ * Where a parked name actually belongs. The A record can only carry an IP, and
+ * the parking host answers on a platform that routes by Host — so an unpointed
+ * name never reaches a page over plain HTTP. A person, unlike a resolver, can
+ * just be handed the URL.
+ */
+export function pitNameUrl(name, registryBase = DEFAULT_REGISTRY_BASE) {
+  return `${registryBase.replace(/\/+$/, "")}/n/${encodeURIComponent(name)}`;
+}
 
 /** The parking host's address — an A record has to carry an IP, not a name. */
 export async function parkingAddress(host = DEFAULT_PARKING_HOST, lookup = dnsPromises.resolve4) {
@@ -315,6 +328,8 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
 
   moshcode dns tlds              list the TLDs claimed in the Pit
   moshcode dns resolve <name>    show what a name resolves to, and why
+  moshcode dns resolve <name> [--open]
+                                 look a name up; --open opens a parked name in the Pit
   moshcode dns start [--port N]  run the resolver in the foreground
   moshcode dns install [--write] print the resolver config without applying it
 
@@ -354,14 +369,28 @@ export async function dnsCommand(args = [], out = console.log) {
       return 1;
     }
     const result = await resolveName(name, { registryBase });
-    const park = result.status === "parked" ? await parkingAddress() : null;
+    // A parked name has no page at its own address — the A record points at a
+    // host that routes by Host and will not answer for it. The Pit does have a
+    // page for it, so say so instead of printing an IP that goes nowhere.
+    const pitUrl = result.status === "parked" ? pitNameUrl(name, registryBase) : null;
     const explain = {
       live: () => `${name} → ${result.target}`,
-      parked: () => `${name} → ${park || "(parking host unresolvable)"}  [parked — claimed but not pointed at an IP]`,
+      parked: () => `${name} → ${pitUrl}  [parked — claimed but not pointed at an IP]`,
       unreachable: () => `${name} → NXDOMAIN  [registry unreachable — not parking a name we could not look up]`,
       "not-a-name": () => `${name} → NXDOMAIN  [not a Moshpit name: needs exactly one label and one TLD]`,
     };
     out(explain[result.status]());
+
+    // Opt-in rather than automatic: `resolve` is also what scripts and pipes
+    // call, and launching a browser out of a lookup would be a surprise.
+    if (rest.includes("--open") && pitUrl) {
+      if (canOpenBrowser()) {
+        out(`opening ${pitUrl}`);
+        openBrowser(pitUrl);
+      } else {
+        out("(no browser to open here — copy the URL above)");
+      }
+    }
     return result.status === "live" || result.status === "parked" ? 0 : 1;
   }
 
