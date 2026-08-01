@@ -20,6 +20,21 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * What a freshly installed site contains before anyone has written anything.
+ *
+ * A new root with nothing in it serves 404, which is indistinguishable from a
+ * broken install at exactly the moment someone is trying to tell those apart.
+ * So the default is a page that says the name resolved and the server answered
+ * — the two facts a first visit is a test of — and says what to replace.
+ *
+ * caddy-static is the starter because it is the one with no runtime: seeding a
+ * Bun service would leave a root whose index.html is a lie about what is
+ * running. Pick another with --template, or --empty to seed nothing.
+ */
+export const DEFAULT_TEMPLATE = "caddy-static";
 
 /** Where each server keeps drop-in site config. */
 const SERVERS = {
@@ -132,7 +147,7 @@ export function caddySite({ name, root, proxy }) {
  * Returned rather than done, so `--write` is the only thing that touches the
  * machine and everything before it can be read first.
  */
-export function servePlan({ name, server, root, proxy, reload = false }) {
+export function servePlan({ name, server, root, proxy, reload = false, seed = null }) {
   const target = SERVERS[server];
   if (!target) return { ok: false, error: `no supported web server found — install nginx or caddy` };
 
@@ -140,7 +155,12 @@ export function servePlan({ name, server, root, proxy, reload = false }) {
   const content = server === "nginx" ? nginxSite({ name, root, proxy }) : caddySite({ name, root, proxy });
 
   const steps = [{ kind: "write", path: file, content, why: `answer to ${name} without redirecting it` }];
-  if (!proxy) steps.push({ kind: "mkdir", path: root, why: "somewhere for the files to live" });
+  if (!proxy) {
+    steps.push({ kind: "mkdir", path: root, why: "somewhere for the files to live" });
+    // Only when the root is new. Seeding over someone's site would be the
+    // worst kind of helpful.
+    if (seed) steps.push({ kind: "seed", path: root, from: seed, why: "a page that says it worked, rather than a 404" });
+  }
   // Validation runs whether or not we reload: a config that does not parse is
   // worth knowing about now rather than the next time anything touches nginx,
   // which may be a reboot and may be someone else.
@@ -160,6 +180,10 @@ const USAGE = `moshcode site — install web-server config for a Moshpit name
   moshcode site <name> --install --reload  ...and make it live now
   moshcode site <name> --proxy 3000        reverse-proxy a local port instead
   moshcode site <name> --root <dir>        where the files live
+  moshcode site <name> --template <name>   which starter page to seed (see
+                                           \`moshcode template list\`)
+  moshcode site <name> --empty             seed nothing; serve a 404 until you
+                                           put something there
 
 moshcode does not serve anything itself. This writes a config file for the web
 server already on this machine; nginx or Caddy does the serving.
@@ -168,7 +192,7 @@ The name still has to point at this machine — set that in the Pit, and check
 it with \`moshcode dns resolve <name>\`. This only makes the box answer to it.`;
 
 export async function serveCommand(args = [], out = console.log, deps = {}) {
-  const { detect = detectServer, write = fs.writeFile, mkdir = fs.mkdir, runner = null } = deps;
+  const { detect = detectServer, write = fs.writeFile, mkdir = fs.mkdir, copy = fs.cp, runner = null } = deps;
   const [name, ...rest] = args;
 
   if (!name || name === "help" || name === "--help" || name === "-h") {
@@ -187,6 +211,13 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
     return 1;
   }
   const root = flag("--root") || `/srv/${name}`;
+  const template = rest.includes("--empty") ? null : (flag("--template") || DEFAULT_TEMPLATE);
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const seedFrom = template ? path.join(here, "..", "examples", "templates", template, "site") : null;
+  // An empty root serves 404, which reads as a broken install. Seed only when
+  // there is nothing there to overwrite.
+  const rootEmpty = !(await fs.readdir(root).catch(() => []))?.length;
+  const seed = seedFrom && rootEmpty && (await fs.stat(seedFrom).catch(() => null)) ? seedFrom : null;
 
   const server = await detect();
   if (server && typeof server === "object" && server.unknown) {
@@ -195,7 +226,7 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
     out("  install nginx or caddy, or add the equivalent block by hand.");
     return 1;
   }
-  const plan = servePlan({ name, server, root, proxy: proxy ? Number(proxy) : null, reload: rest.includes("--reload") });
+  const plan = servePlan({ name, server, root, proxy: proxy ? Number(proxy) : null, reload: rest.includes("--reload"), seed });
   if (!plan.ok) {
     out(`moshcode site: ${plan.error}`);
     return 1;
@@ -221,6 +252,7 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
     try {
       if (step.kind === "write") await write(step.path, step.content);
       else if (step.kind === "mkdir") await mkdir(step.path, { recursive: true });
+      else if (step.kind === "seed") await copy(step.from, step.path, { recursive: true, force: false });
       else if (step.kind === "run" && runner) {
         const result = await runner(step.command, step.args);
         if (!result?.ok) {

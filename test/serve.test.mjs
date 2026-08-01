@@ -121,3 +121,35 @@ test("a name that is not a Moshpit name is refused before anything else", async 
     assert.equal(code, 1, bad);
   }
 });
+
+test("a fresh site is seeded, because an empty root is a 404 that reads as broken", async () => {
+  // The moment someone is trying to tell "the name resolved" from "the install
+  // failed" is exactly the moment an empty root answers 404 and refuses to
+  // help them tell the difference.
+  const plan = servePlan({ name: "blue.eggs", server: "nginx", root: "/srv/x", seed: "/tpl/site" });
+  const seed = plan.steps.find((s) => s.kind === "seed");
+  assert.ok(seed, "seeded by default");
+  assert.equal(seed.from, "/tpl/site");
+
+  // Proxying has no root to seed.
+  const proxied = servePlan({ name: "blue.eggs", server: "nginx", proxy: 3000, seed: "/tpl/site" });
+  assert.equal(proxied.steps.some((s) => s.kind === "seed"), false);
+
+  // --empty resolves to no seed at all.
+  const empty = servePlan({ name: "blue.eggs", server: "nginx", root: "/srv/x", seed: null });
+  assert.equal(empty.steps.some((s) => s.kind === "seed"), false);
+});
+
+test("an existing site is never seeded over", async () => {
+  // Overwriting someone's index.html would be the worst kind of helpful.
+  const lines = [];
+  let seeded = false;
+  await serveCommand(["blue.eggs", "--root", "/etc"], (l) => lines.push(l), {
+    detect: async () => "nginx",
+    write: async () => {},
+    mkdir: async () => {},
+    copy: async () => { seeded = true; },
+  });
+  assert.equal(seeded, false, "/etc is not empty, so nothing is seeded");
+  assert.doesNotMatch(lines.join("\n"), /seed /);
+});
