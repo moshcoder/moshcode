@@ -155,7 +155,20 @@ it reaches ttyd.
   when you do it.
 - The gateway's signing secret is per-process, so restarting it logs everyone out.
 
-## Known MCP servers
+## MCP and Agent Skills
+
+See which installed engines can handle MCP servers or Agent Skills. Add
+`--json` when another tool needs the capability matrix:
+
+```sh
+moshcode mcp list --json
+moshcode skill list --json
+```
+
+Each row reports `installed` and `supported` separately, so an installed engine
+without that integration primitive remains visible rather than looking absent.
+
+### Known MCP servers
 
 Some MCP servers are worth remembering by name rather than by npx invocation:
 

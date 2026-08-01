@@ -91,7 +91,8 @@ test("parseMcp: add takes an explicit name; flags and stdio parse", () => {
 
 test("parseMcp: a stdio install without a name errors", () => {
   assert.ok(parseMcp(["install", "--", "npx", "srv"]).error);
-  assert.ok(parseMcp(["list"]).list);
+  assert.deepEqual(parseMcp(["list"]), { list: true, json: false });
+  assert.deepEqual(parseMcp(["list", "--json"]), { list: true, json: true });
   assert.ok(parseMcp(["bogus"]).error);
 });
 

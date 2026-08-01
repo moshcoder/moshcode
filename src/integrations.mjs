@@ -33,7 +33,7 @@ function flagValue(rest, index, flag) {
 /** Parse `/mcp` tokens (after the `mcp` word) into { list } | { spec } | { error }. */
 export function parseMcp(tokens) {
   const verb = tokens[0];
-  if (!verb || verb === "list") return { list: true };
+  if (!verb || verb === "list") return { list: true, json: tokens.slice(1).includes("--json") };
   if (verb === "catalog") return { showCatalog: true };
   const verbSchema = MCP_VERBS.find(({ name }) => name === verb);
   if (!verbSchema?.acceptsServerSpec) {
@@ -125,6 +125,27 @@ export function parseMcp(tokens) {
 const DOT = { installed: acid("●"), missing: ash("○") };
 function line(key, statusText) { return `   ${bone(key.padEnd(9))} ${statusText}`; }
 
+function integrationTargetStatus(supportedKeys, { installedSet } = {}) {
+  const supported = new Set(supportedKeys);
+  const keys = [...supportedKeys, ...Object.keys(ENGINES).filter((key) => !supported.has(key))];
+  return keys.map((key) => ({
+    name: key,
+    binary: ENGINES[key].bin,
+    installed: installedSet ? installedSet.has(key) : isInstalled(ENGINES[key].bin),
+    supported: supported.has(key),
+  }));
+}
+
+/** MCP capability and install status for every engine. */
+export function mcpTargetStatus(options) {
+  return integrationTargetStatus(MCP_ENGINES, options);
+}
+
+/** Skills capability and install status for every engine. */
+export function skillTargetStatus(options) {
+  return integrationTargetStatus(SKILL_ENGINES, options);
+}
+
 /** Print the known-server catalog. */
 export function printMcpCatalog() {
   console.log(bone("  known mcp servers") + ash("  — register one with ") + acid("/mcp add <name>"));
@@ -132,27 +153,24 @@ export function printMcpCatalog() {
 }
 
 /** Print the MCP support matrix + install status. */
-export function printMcpTargets() {
+export function printMcpTargets(json = false) {
+  const targets = mcpTargetStatus();
+  if (json) { console.log(JSON.stringify(targets, null, 2)); return; }
   console.log(bone("  mcp") + ash("  — register a server everywhere with ") + acid("/mcp install <url>"));
-  for (const key of MCP_ENGINES) {
-    const dot = isInstalled(ENGINES[key].bin) ? DOT.installed : DOT.missing;
-    console.log(`   ${dot} ${bone(key.padEnd(9))} ${ash("mcp add supported")}`);
+  for (const target of targets) {
+    const dot = target.supported && target.installed ? DOT.installed : DOT.missing;
+    console.log(`   ${dot} ${bone(target.name.padEnd(9))} ${ash(target.supported ? "mcp add supported" : "no MCP support")}`);
   }
-  console.log(`   ${DOT.missing} ${bone("aider".padEnd(9))} ${ash("no MCP support")}`);
 }
 
 /** Print the skills support matrix + install status. */
-export function printSkillTargets() {
+export function printSkillTargets(json = false) {
+  const targets = skillTargetStatus();
+  if (json) { console.log(JSON.stringify(targets, null, 2)); return; }
   console.log(bone("  skills") + ash("  — install a skill everywhere with ") + acid("/skill install <git-url>"));
-  for (const key of SKILL_ENGINES) {
-    const dot = isInstalled(ENGINES[key].bin) ? DOT.installed : DOT.missing;
-    console.log(`   ${dot} ${bone(key.padEnd(9))} ${ash("skills supported")}`);
-  }
-  // The engines with no skills primitive are whatever ENGINES has left over.
-  // Derived, not hardcoded: a hardcoded list silently drops any engine added
-  // later, so the matrix stops showing every engine moshcode supports.
-  for (const key of Object.keys(ENGINES).filter((k) => !SKILL_ENGINES.includes(k))) {
-    console.log(`   ${DOT.missing} ${bone(key.padEnd(9))} ${ash("no skills primitive")}`);
+  for (const target of targets) {
+    const dot = target.supported && target.installed ? DOT.installed : DOT.missing;
+    console.log(`   ${dot} ${bone(target.name.padEnd(9))} ${ash(target.supported ? "skills supported" : "no skills primitive")}`);
   }
 }
 
@@ -168,7 +186,7 @@ function summarize(results) {
 /** Run `/mcp …`. `tokens` are the words after `mcp`. */
 export async function mcpCommand(tokens) {
   const parsed = parseMcp(tokens);
-  if (parsed.list) { printMcpTargets(); return 0; }
+  if (parsed.list) { printMcpTargets(parsed.json); return 0; }
   if (parsed.showCatalog) { printMcpCatalog(); return 0; }
   if (parsed.error) { console.log(err(parsed.error)); return 1; }
 
@@ -193,7 +211,7 @@ export async function mcpCommand(tokens) {
 /** Run `/skill …`. `tokens` are the words after `skill`. */
 export async function skillCommand(tokens) {
   const verb = tokens[0];
-  if (!verb || verb === "list") { printSkillTargets(); return 0; }
+  if (!verb || verb === "list") { printSkillTargets(tokens.slice(1).includes("--json")); return 0; }
   if (verb !== "install") {
     console.log(err(`unknown skill verb "${verb}" — try ${SKILL_VERBS.map(({ name }) => name).join(" or ")}`));
     return 1;
