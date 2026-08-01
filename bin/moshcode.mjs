@@ -25,6 +25,7 @@ import { tui } from "../src/tui.mjs";
 import { consoleCommand } from "../src/console.mjs";
 import { dnsCommand } from "../src/dns.mjs";
 import { templateCommand } from "../src/templates.mjs";
+import { serveCommand } from "../src/serve.mjs";
 import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
@@ -154,6 +155,9 @@ usage:
   moshcode skill list [--json]         show skills support + install status
   moshcode skill install <git-url>     install a skill across every engine that
                                        supports it (claude/gemini)
+  moshcode site <name> [--install]     install web-server config for a Moshpit
+     [--reload] [--proxy PORT]         name (nginx/Caddy does the serving, not
+     [--root DIR]                      moshcode); shows the plan by default
   moshcode template list               starting stacks for a Moshpit-hosted service
   moshcode template install <name>     copy one here (also takes a git URL,
      [--into dir] [--force]            owner/repo, or a .tar.gz); nothing is run
@@ -361,6 +365,10 @@ async function main() {
   }
   if (cmd === "dns") {
     process.exitCode = (await dnsCommand(rest)) || 0;
+    return;
+  }
+  if (cmd === "site" || cmd === "serve") {
+    process.exitCode = (await serveCommand(rest)) || 0;
     return;
   }
   if (cmd === "template" || cmd === "templates") {
