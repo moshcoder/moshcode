@@ -50,7 +50,14 @@ export function enablePlan({
   host = "127.0.0.1",
   port = 5354,
   linuxBackend = "systemd-resolved",
+  // Catch-all routing is opt-in and conditional, never assumed. Sending every
+  // lookup on the machine to the bridge is only safe if the bridge can forward
+  // the ones that are not ours — so the caller passes the upstreams it found,
+  // and an empty list keeps the per-ending routing that cannot break anything
+  // beyond Moshpit names. Getting this backwards takes the whole box offline.
+  upstreams = [],
 }) {
+  const catchAll = Array.isArray(upstreams) && upstreams.length > 0;
   const clean = [...new Set((tlds || []).map((t) => String(t).replace(/^\.+/, "").toLowerCase()).filter(Boolean))];
   if (!clean.length) throw new Error("no TLDs to route");
 
@@ -80,8 +87,16 @@ export function enablePlan({
       steps: [
         write(
           "/etc/dnsmasq.d/moshpit.conf",
-          ["# Written by `moshcode dns enable`.", ...clean.map((t) => `server=/${t}/${host}#${port}`), ""].join("\n"),
-          "route the Moshpit TLDs",
+          catchAll
+            ? [
+              "# Written by `moshcode dns enable`.",
+              "# no-resolv so dnsmasq does not also inherit upstreams that point back here.",
+              "no-resolv",
+              `server=${host}#${port}`,
+              "",
+            ].join("\n")
+            : ["# Written by `moshcode dns enable`.", ...clean.map((t) => `server=/${t}/${host}#${port}`), ""].join("\n"),
+          catchAll ? "send every lookup to the bridge, which forwards what is not ours" : "route the Moshpit TLDs",
         ),
         run("systemctl", ["restart", "dnsmasq"], "dnsmasq reads its config at start"),
       ],
@@ -99,15 +114,31 @@ export function enablePlan({
       steps: [
         write(
           "/etc/systemd/resolved.conf.d/moshpit.conf",
-          [
-            "# Written by `moshcode dns enable`. Routes Moshpit TLDs to the local",
-            "# bridge; every other name keeps using your normal resolver.",
-            "[Resolve]",
-            `DNS=${host}:${port}`,
-            `Domains=${clean.map((t) => `~${t}`).join(" ")}`,
-            "",
-          ].join("\n"),
-          "route the Moshpit TLDs, and nothing else",
+          catchAll
+            ? [
+              "# Written by `moshcode dns enable`. Sends every lookup to the local",
+              "# bridge, which answers claimed Moshpit endings and forwards the rest",
+              "# upstream untouched.",
+              "#",
+              "# Naming each ending instead does not survive the registry growing:",
+              "# systemd-resolved caps how many search domains it accepts and drops",
+              "# the remainder with no error a caller can see.",
+              "[Resolve]",
+              `DNS=${host}:${port}`,
+              "Domains=~.",
+              "",
+            ].join("\n")
+            : [
+              "# Written by `moshcode dns enable`. Routes Moshpit TLDs to the local",
+              "# bridge; every other name keeps using your normal resolver.",
+              "[Resolve]",
+              `DNS=${host}:${port}`,
+              `Domains=${clean.map((t) => `~${t}`).join(" ")}`,
+              "",
+            ].join("\n"),
+          catchAll
+            ? "send every lookup to the bridge, which forwards what is not ours"
+            : "route the Moshpit TLDs, and nothing else",
         ),
         run("systemctl", ["restart", "systemd-resolved"], "drop-ins are read at start"),
       ],

@@ -501,6 +501,22 @@ export function createServer(options = {}) {
 /* ------------------------------------------------------- system integration */
 
 /**
+ * The upstreams this machine was using before we touched anything.
+ *
+ * Read once, before routing is switched, because afterwards resolv.conf may
+ * point at us and the real servers are no longer discoverable from it. An
+ * empty result is the signal to leave routing per-ending: catch-all with
+ * nowhere to forward is every lookup on the box failing, not just Moshpit ones.
+ */
+export async function discoverUpstreams(readImpl) {
+  const read = readImpl || (async () => {
+    const { readFile } = await import("node:fs/promises");
+    return readFile("/etc/resolv.conf", "utf8");
+  });
+  return parseUpstreams(await read().catch(() => ""));
+}
+
+/**
  * The routing suffixes the resolver actually accepted.
  *
  * Not the same question as what we wrote, which is the whole point. Writing a
@@ -792,10 +808,19 @@ export async function dnsCommand(args = [], out = console.log) {
     // parking host, which is all there ever was.
     const park = parking ? parking.address : await parkingAddress();
     if (!park) out("! parking host did not resolve — unpointed names will return NXDOMAIN");
+    // Without these the bridge answers only for endings it is authoritative
+    // for, which is correct for per-ending routing and fatal for catch-all.
+    const upstreams = await discoverUpstreams();
+    const tldSet = new Set(await fetchTlds({ registryBase }).catch(() => []));
+    if (upstreams.length) out(`forwarding non-Moshpit lookups to ${upstreams.join(", ")}`);
+    else out("! no upstreams found in /etc/resolv.conf — this bridge can only answer Moshpit names");
+
     const server = await createServer({
       port,
       registryBase,
       parkingAddress: park,
+      upstreams,
+      tldSet,
       onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
     });
     if (parking) out(`parked names → http://${parking.address}:${parking.port} → ${registryBase}/n/<name>`);
@@ -857,7 +882,7 @@ export async function dnsCommand(args = [], out = console.log) {
     let plan;
     try {
       plan = sub === "enable"
-        ? enablePlan({ platform, tlds, port: wanted, linuxBackend })
+        ? enablePlan({ platform, tlds, port: wanted, linuxBackend, upstreams: await discoverUpstreams() })
         : disablePlan({ platform, tlds, linuxBackend });
     } catch (err) {
       out(err.message);
