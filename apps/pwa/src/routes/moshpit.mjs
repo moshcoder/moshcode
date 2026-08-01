@@ -985,6 +985,13 @@ moshpitRouter.get("/pit", async (req, res) => {
  * internet, so the instruction is "change one setting", not "install a
  * browser".
  *
+ * There is a second route, and leaving it off this page was a hole: TronBrowser
+ * asks this registry over ordinary HTTPS before every navigation, so it needs no
+ * network settings at all. It is listed after the resolvers because it only
+ * fixes the browser -- curl, git and everything else on the machine still
+ * resolve through DNS -- but it is the only route that works where DNS is
+ * somebody else's to configure, and the only one that does not warn on https://.
+ *
  * The addresses come from the environment (lib/moshpit-resolvers.mjs). When
  * none are configured this page says so and explains how to run one, rather
  * than inventing an address for a stranger to paste into their network
@@ -1025,6 +1032,8 @@ moshpitRouter.get("/pit/dns", async (req, res) => {
     <span class="mono acid">.yeah</span> resolve like any other name — while
     <span class="mono">.com</span>, <span class="mono">.org</span> and the rest of the internet keep
     working exactly as before, forwarded on to 8.8.8.8 and 1.1.1.1.
+    If the DNS settings on the machine are not yours to change,
+    <a class="acid" href="#tron">TronBrowser</a> resolves the same namespace without touching them.
   </p>
   ${pitTabs("dns")}
 
@@ -1045,8 +1054,41 @@ moshpitRouter.get("/pit/dns", async (req, res) => {
     <li><b class="acid">A locked-down machine</b> where DNS is not yours to change — use DNS over HTTPS
       in the browser. Firefox: Privacy &amp; Security → DNS over HTTPS → custom provider. Chrome:
       Security → Use secure DNS → custom.
-      ${doh ? `The endpoint is <code>${esc(doh)}</code>.` : "An endpoint appears here once a resolver is up."}</li>
+      ${doh ? `The endpoint is <code>${esc(doh)}</code>.` : "An endpoint appears here once a resolver is up."}
+      Or run <a class="acid" href="#tron">TronBrowser</a>, which changes no network settings at all.</li>
   </ol>
+
+  <h2 id="tron" style="margin-top:34px;font-size:1.2rem">Or change nothing: <span class="acid">TronBrowser</span></h2>
+  <p class="pit-copy">
+    <a class="acid" href="https://tronbrowser.dev" target="_blank" rel="noopener noreferrer">TronBrowser</a>
+    resolves these names itself. Before every navigation it asks this registry, over ordinary HTTPS, who
+    holds the name you typed. Nothing in your network settings changes, nothing needs admin rights, and
+    it works on a machine where DNS is somebody else's to configure.
+  </p>
+  <pre class="pit-pre"><code>curl -fsSL https://tronbrowser.dev/install.sh | sh   <span class="faint"># macOS, Linux — Windows: the releases page</span>
+tron http://scrambled.eggs                          <span class="faint"># or type it in the address bar</span></code></pre>
+  <ol class="pit-steps dim">
+    <li><b class="acid">Nothing to configure for a new ending.</b> <span class="mono">.eggs</span>,
+      <span class="mono">.moshpit</span>, <span class="mono">.yeah</span> resolve out of the box — the
+      legacy root has never heard of them, so there is nothing to conflict with.</li>
+    <li><b class="acid">Contested names are a setting.</b> Settings → Name resolution → <em>When a name
+      exists in both</em>. <b>Clearnet wins</b> is the default and never redirects a domain that already
+      works; <b>Moshpit wins</b> lets a registered name override the clearnet one. It is the same
+      decision the resolvers make with <code>MOSHPIT_RESOLVE_MODE</code>, taken per browser instead of
+      per network.</li>
+    <li><b class="acid">Claim from the address bar.</b> <code>mosh.eggs</code> opens the Pit for
+      <span class="mono acid">.eggs</span>. <code>mosh.</code><em>anything</em> is reserved, so nobody
+      can register that label and impersonate the page you register on.</li>
+    <li><b class="acid">Your own pit</b> — Settings → Name resolution → Registry (advanced). Point it at
+      the registry you run and it is looked up exactly like this one.</li>
+    <li><b class="acid">Needs 3.8.8 or newer.</b> Older builds sent a claimed-but-unpointed name to a URL
+      that has never existed, so parking 404'd. <code>tron upgrade</code> — and a stale address left in
+      settings by one of those builds is discarded on the way, rather than outliving the fix.</li>
+  </ol>
+  <p class="pit-copy" style="font-size:.9rem">
+    It fixes the browser, not the machine: <code>curl</code>, <code>git</code> and everything else still
+    go through DNS. On a machine you control, run both.
+  </p>
 
   <h2 style="margin-top:34px;font-size:1.2rem">Check it worked</h2>
   <pre class="pit-pre"><code>dig +short anything.moshpit     <span class="faint"># an address, not an error</span>
@@ -1056,13 +1098,24 @@ nslookup anything.moshpit       <span class="faint"># the Windows spelling</span
     A <code>TXT</code> lookup on any Moshpit name reports which registry and gateway answered — the
     fastest way to tell a resolver problem from a site problem.
   </p>
+  <p class="pit-copy" style="font-size:.9rem">
+    On the browser route there is nothing to <code>dig</code>: resolution never touches DNS. Open
+    <code>mosh.eggs</code> — if the Pit loads, the browser is talking to this registry.
+  </p>
 
   <h2 style="margin-top:34px;font-size:1.2rem">What still breaks</h2>
   <p class="pit-copy">
-    <code>https://</code> on a Moshpit name will warn. No public certificate authority will issue for
-    <span class="mono">scrambled.eggs</span>, because none of them recognise a namespace that does not
-    descend from the ICANN root. Plain <code>http://</code> works, and so does this site. A
-    certificate authority you opt into is the real answer, and it is not built yet.
+    <code>https://</code> on a Moshpit name will warn <em>on the resolver route</em>. No public
+    certificate authority will issue for <span class="mono">scrambled.eggs</span>, because none of them
+    recognise a namespace that does not descend from the ICANN root. Plain <code>http://</code> works,
+    and so does this site. A certificate authority you opt into is the real answer, and it is not built
+    yet.
+  </p>
+  <p class="pit-copy" style="font-size:.9rem">
+    TronBrowser sidesteps it rather than solving it: it rewrites the navigation to this registry's own
+    <code>https://</code> host, so the certificate is one the browser already trusts. The address bar
+    shows where it landed, not what you typed — an honest trade, and the reason the two routes are
+    documented separately.
   </p>
   <p class="pit-copy" style="font-size:.9rem">
     Clearnet lookups are forwarded to Google and Cloudflare, which is what a forwarder does. Run your
