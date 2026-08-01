@@ -36,6 +36,7 @@ import {
   getName,
   getTld,
   getTldWithPrice,
+  listAliasesTo,
   listAllNames,
   listExempt,
   listNames,
@@ -395,11 +396,15 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     const ending = normalizeTld(String(req.params.name || "").replace(/^\.+/, ""));
     const owner = ending ? await getTldWithPrice(ending) : null;
     if (owner) {
-      const names = await listNames(ending);
+      const [names, aliasesTo, sameOwner] = await Promise.all([
+        listNames(ending),
+        listAliasesTo(ending),
+        listTldsForUser(owner.user_id, { limit: 50 }),
+      ]);
       return res.status(200).send(page({
         title: `.${ending}`,
         head: endingHead(ending, owner),
-        body: endingDirectory({ tld: ending, owner, names, user: req.user, req }),
+        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, user: req.user, req }),
       }));
     }
     // Still 400 for an ending nobody holds: otherwise every typo under /n/
@@ -504,12 +509,38 @@ function endingHead(tld, owner) {
  * ending's price and a box to pick a name under it — and the listing is the
  * whole ending rather than "what else lives near the name you asked for".
  */
-function endingDirectory({ tld, owner, names, user, req }) {
+function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], user, req }) {
   const live = names.filter((n) => n.target);
   const claimed = names.filter((n) => !n.target);
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
+  // An ending links to its own page — there is no label to carry across here,
+  // which is what makes this different from the name directory's version.
+  const endingLink = (t) => `<a class="mono" href="/n/${esc(t.tld)}">.${esc(t.tld)}</a>`;
   const mine = Boolean(user && owner.user_id === user.id);
+
+  // Aliases are an explicit statement that two endings belong together, so they
+  // are named as pointers rather than folded into "related". Shared ownership
+  // is the next best signal and fills the rest.
+  const pointedHereBy = aliasesTo.filter((t) => t.tld !== tld);
+  const alreadyShown = new Set([tld, owner.alias_of, ...pointedHereBy.map((t) => t.tld)]);
+  const related = sameOwner.filter((t) => !alreadyShown.has(t.tld)).slice(0, 24);
+
+  // Facts already public through /api/moshpit/tlds, gathered where somebody
+  // deciding whether to buy under this ending will actually see them. Owner
+  // email is deliberately not among them: the API exposing it is not a reason
+  // to put it on a page built to be crawled.
+  const claimedOn = Number(owner.created_at)
+    ? new Date(Number(owner.created_at)).toISOString().slice(0, 10)
+    : null;
+  const facts = [
+    `${names.length} name${names.length === 1 ? "" : "s"}`,
+    `${live.length} pointed somewhere`,
+    owner.price_usd != null ? `$${owner.price_usd} a name` : "not for sale",
+    owner.alias_of ? `points at .${owner.alias_of}` : null,
+    pointedHereBy.length ? `${pointedHereBy.length} ending${pointedHereBy.length === 1 ? "" : "s"} point here` : null,
+    claimedOn ? `claimed ${claimedOn}` : null,
+  ].filter(Boolean);
 
   return `
 <section class="pit-panel">
@@ -520,9 +551,13 @@ function endingDirectory({ tld, owner, names, user, req }) {
       ? `Names under it cost <span class="mono acid">$${esc(String(owner.price_usd))}</span>.`
       : "Names under it are not for sale right now."}
   </p>
+  <p class="mono faint" style="font-size:.72rem">${facts.map(esc).join(" &middot; ")}</p>
+
   ${owner.alias_of
-    ? `<p class="mono faint" style="font-size:.72rem">Points at <a class="mono" href="/n/${esc(owner.alias_of)}">.${esc(owner.alias_of)}</a>.</p>`
+    ? `<p class="mono faint" style="font-size:.72rem">.${esc(tld)} &rarr; <a class="mono acid" href="/n/${esc(owner.alias_of)}">.${esc(owner.alias_of)}</a> &mdash; names here resolve under that ending.</p>`
     : ""}
+  ${pointedHereBy.length ? `
+  <p class="mono faint" style="font-size:.72rem">Pointed here by ${pointedHereBy.map((t) => `${endingLink(t)} &rarr; .${esc(tld)}`).join(" &middot; ")}</p>` : ""}
 
   ${owner.price_usd != null && !mine ? `
   <form method="get" action="/pit" class="pit-form" style="margin-top:18px">
@@ -540,6 +575,10 @@ function endingDirectory({ tld, owner, names, user, req }) {
   <ul class="pit-dir">${claimed.map((n) => `<li>${nameLink(n)}</li>`).join("")}</ul>` : ""}
 
   ${names.length ? "" : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">Nothing lives under .${esc(tld)} yet.</p>`}
+
+  ${related.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>
+  <p class="pit-dir-row">${related.map(endingLink).join(" &middot; ")}</p>` : ""}
 
   <p style="margin-top:26px"><a class="btn" href="/pit">the pit &rarr;</a></p>
 </section>`;

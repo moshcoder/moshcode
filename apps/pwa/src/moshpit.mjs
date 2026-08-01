@@ -460,6 +460,21 @@ export async function countSearchTlds(like, { scope = "all", userId = null } = {
   return Number(row?.n ?? 0);
 }
 
+/**
+ * Endings pointing at this one.
+ *
+ * The inverse of `alias_of`, which was only ever asked as "does anything point
+ * here" before a repoint. An ending's page wants the list: `.seo → .rank` is a
+ * real relationship and the only way to find it was to read every other row.
+ */
+export async function listAliasesTo(tld, limit = 100) {
+  return all(
+    `SELECT tld, user_id, owner_email, alias_of, price_usd, created_at
+     FROM moshpit_tlds WHERE alias_of = ? ORDER BY tld LIMIT ?`,
+    [normalizeTld(tld) || "", limit],
+  );
+}
+
 export async function getTldWithPrice(tld) {
   return get(`SELECT tld, user_id, owner_email, alias_of, price_usd, created_at FROM moshpit_tlds WHERE tld = ?`, [tld]);
 }
