@@ -230,6 +230,13 @@ resolves it, and every machine visiting it must.** Serving is a `Host` header
 match and nothing more; visitors need `sudo moshcode dns enable` or the name
 resolves to nothing.
 
+Use JSON when a script needs to distinguish a live, parked, invalid, or
+temporarily unreachable name without parsing terminal text:
+
+```sh
+moshcode dns resolve foo.whatever --json
+```
+
 A name points at an **IPv6 address** (bare — no scheme, brackets or port) or a
 hostname. IPv4 literals are refused: an A record on a small host is usually
 leased or NATed, and a name pointed at one goes stale silently.
