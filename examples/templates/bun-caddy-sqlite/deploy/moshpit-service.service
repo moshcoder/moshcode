@@ -1,0 +1,38 @@
+# The Bun service. Nothing Moshpit-specific here — it is a plain unit, and the
+# name it answers to is Caddy's problem, not this process's.
+#
+#   sudo cp deploy/moshpit-service.service /etc/systemd/system/
+#   sudo systemctl enable --now moshpit-service
+
+[Unit]
+Description=Bun service published at a Moshpit name
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/moshpit-service
+ExecStart=/usr/bin/env bun src/server.ts
+EnvironmentFile=-/etc/moshpit-service.env
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+
+# ProtectSystem=strict makes the whole filesystem read-only, so the local
+# SQLite file needs somewhere it is allowed to live. StateDirectory creates
+# /var/lib/moshpit-service and hands it to the dynamic user. Unset DB_PATH and
+# point TURSO_DATABASE_URL somewhere instead if the database is hosted.
+StateDirectory=moshpit-service
+Environment=DB_PATH=/var/lib/moshpit-service/app.db
+
+Restart=always
+RestartSec=2
+
+# No reason for a web service to be root or to read anyone's home directory.
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

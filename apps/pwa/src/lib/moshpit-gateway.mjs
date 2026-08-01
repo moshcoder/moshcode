@@ -104,6 +104,67 @@ export function parseTarget(target) {
   return { host: raw, port: 80 };
 }
 
+/** A hostname target: dotted, and every label a legal DNS label. */
+const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+
+/**
+ * Bracket an IPv6 host so it can go in a URL.
+ *
+ * `http://2606:4700::1111:80/` is not a URL — the colons in the address are
+ * indistinguishable from the port separator, and `new URL` rejects it. Every
+ * place that turns a target back into a URL has to go through here.
+ */
+export function urlHost(host) {
+  return isIP(host) === 6 ? `[${host}]` : host;
+}
+
+/** The origin URL to fetch, with an IPv6 host bracketed. */
+export function originUrl({ host, port }) {
+  return `http://${urlHost(host)}:${port}`;
+}
+
+/**
+ * Validate what an owner typed into "points at", and return the form to store.
+ *
+ * IP literals must be IPv6. An A record is a commitment to an address that a
+ * name's owner usually does not own for long — IPv4 on a small host is leased,
+ * NATed, or shared, and a name pointed at one goes stale silently. Every host
+ * worth pointing a Moshpit name at has a stable /64 to spare, so the registry
+ * asks for the address that will still be theirs next month. Hostnames stay
+ * allowed: the address behind them is someone else's problem to keep current.
+ *
+ * Empty is not an error. A name with no target is a name waiting to be pointed,
+ * which is the state every name starts in and a state owners return it to.
+ */
+export function normalizeTarget(input) {
+  const raw = String(input ?? "").trim();
+  if (!raw) return { ok: true, target: null };
+
+  const parsed = parseTarget(raw);
+  if (!parsed) return { ok: false, error: "not a usable target" };
+
+  const version = isIP(parsed.host);
+  if (version === 4) {
+    return {
+      ok: false,
+      error: "IPv4 addresses are not accepted — point the name at an IPv6 address, or at a hostname",
+    };
+  }
+
+  if (version === 6) {
+    const why = blockedReason(parsed.host);
+    if (why) return { ok: false, error: `that address is ${why} — a target has to be reachable from the public internet` };
+    // Stored bare when it is just an address, so anything reading the column
+    // gets something it can use as an address without unwrapping it first.
+    // Brackets appear only when a port forces them to.
+    return { ok: true, target: parsed.port === 80 ? parsed.host.toLowerCase() : `[${parsed.host.toLowerCase()}]:${parsed.port}` };
+  }
+
+  if (!HOSTNAME.test(parsed.host)) return { ok: false, error: "not a usable target" };
+  const host = parsed.host.toLowerCase();
+  return { ok: true, target: parsed.port === 80 ? host : `${host}:${parsed.port}` };
+}
+
 /**
  * Is this target safe to fetch, and at what address?
  *
@@ -118,7 +179,7 @@ export async function checkTarget(target, { resolve = dns.lookup } = {}) {
     const why = blockedReason(parsed.host);
     return why
       ? { ok: false, error: `target is ${why}` }
-      : { ok: true, host: parsed.host, port: parsed.port, addresses: [parsed.host] };
+      : { ok: true, host: parsed.host, port: parsed.port, origin: originUrl(parsed), addresses: [parsed.host] };
   }
 
   let addresses;
@@ -133,7 +194,13 @@ export async function checkTarget(target, { resolve = dns.lookup } = {}) {
     const why = blockedReason(address);
     if (why) return { ok: false, error: `target resolves to ${why}` };
   }
-  return { ok: true, host: parsed.host, port: parsed.port, addresses: addresses.map((a) => a.address) };
+  return {
+    ok: true,
+    host: parsed.host,
+    port: parsed.port,
+    origin: originUrl(parsed),
+    addresses: addresses.map((a) => a.address),
+  };
 }
 
 /** Headers worth passing to the origin. Everything else is dropped. */

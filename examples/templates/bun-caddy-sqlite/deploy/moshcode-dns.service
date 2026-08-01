@@ -1,0 +1,39 @@
+# The Moshpit resolver, kept running across reboots.
+#
+# `moshcode dns enable` sets up two halves: a systemd-resolved drop-in that
+# routes Moshpit endings at the bridge, and the bridge process itself. The
+# drop-in is a file and survives a reboot on its own. The process does not —
+# so after a restart the routing still points at a port with nothing behind it,
+# and every Moshpit name stops resolving with no obvious cause. This unit is
+# the missing half.
+#
+#   sudo cp deploy/moshcode-dns.service /etc/systemd/system/
+#   sudo systemctl enable --now moshcode-dns
+#
+# Install this on machines that need to REACH Moshpit names. A box that only
+# serves one does not need it — Caddy answers whatever Host header arrives and
+# never resolves its own name.
+
+[Unit]
+Description=Moshpit DNS bridge
+After=network-online.target
+Wants=network-online.target
+Before=systemd-resolved.service
+
+[Service]
+Type=simple
+# Port 5354 is unprivileged, so this does not need root. The trade-off is that
+# the parking responder cannot take port 80 and falls back to the public
+# parking address — which only affects names that point nowhere yet.
+ExecStart=/usr/bin/env moshcode dns start --port 5354
+Restart=always
+RestartSec=2
+
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

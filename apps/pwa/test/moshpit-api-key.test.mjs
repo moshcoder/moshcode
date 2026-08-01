@@ -142,11 +142,19 @@ test("api key: names can be minted and pointed from a script", skip, async () =>
   const { one } = await app();
   assert.equal((await one("POST", "/api/moshpit/tlds/held/names", { label: "blue" })).status, 201);
 
-  const pointed = await one("PUT", "/api/moshpit/tlds/held/names", { label: "blue", target: "203.0.113.7" });
+  const pointed = await one("PUT", "/api/moshpit/tlds/held/names", {
+    label: "blue", target: "2606:4700:4700::1111",
+  });
   assert.equal(pointed.status, 200, pointed.text);
 
   const resolved = await one("GET", "/api/moshpit/resolve?name=blue.held");
-  assert.equal(resolved.json.target, "203.0.113.7");
+  assert.equal(resolved.json.target, "2606:4700:4700::1111");
+
+  // The IPv6 rule holds for scripts too, or the API becomes the way around it.
+  const v4 = await one("PUT", "/api/moshpit/tlds/held/names", { label: "blue", target: "198.51.100.7" });
+  assert.equal(v4.status, 400, v4.text);
+  const still = await one("GET", "/api/moshpit/resolve?name=blue.held");
+  assert.equal(still.json.target, "2606:4700:4700::1111", "a refused target left the old one alone");
 });
 
 test("api key: the browser routes are still browser routes", skip, async () => {

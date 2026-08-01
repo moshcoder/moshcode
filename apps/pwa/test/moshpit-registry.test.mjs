@@ -144,7 +144,7 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     const r = await m.registerName({ tld: "eggs", label: "Blue", userId: ALICE, target: "https://example.com" });
     assert.equal(r.ok, true);
     assert.equal(r.name.label, "blue");
-    assert.equal(r.name.target, "https://example.com");
+    assert.equal(r.name.target, "example.com");
     assert.deepEqual((await m.listNames("eggs")).map((n) => n.label), ["blue"]);
   });
 
@@ -178,7 +178,7 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     const r = await m.resolveMoshpitName("blue.eggs");
     assert.equal(r.registered, true, "the TLD is claimed");
     assert.equal(r.name_registered, true);
-    assert.equal(r.target, "https://example.com");
+    assert.equal(r.target, "example.com");
   });
 
   await t.test("an unminted name under a claimed TLD is not registered", async () => {
@@ -196,7 +196,7 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     const viaAlias = await m.resolveMoshpitName("foo.agentic");
     assert.equal(viaAlias.resolved, "foo.agents");
     assert.equal(viaAlias.name_registered, true);
-    assert.equal(viaAlias.target, "https://foo.example");
+    assert.equal(viaAlias.target, "foo.example");
     await m.clearAlias("agentic", ALICE);
   });
 
@@ -205,7 +205,7 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     assert.equal((await m.releaseName({ tld: "eggs", label: "blue", userId: BOB })).ok, false);
 
     assert.equal((await m.setNameTarget({ tld: "eggs", label: "blue", userId: ALICE, target: "https://new.example" })).ok, true);
-    assert.equal((await m.getName("eggs", "blue")).target, "https://new.example");
+    assert.equal((await m.getName("eggs", "blue")).target, "new.example");
 
     assert.equal((await m.releaseName({ tld: "eggs", label: "blue", userId: ALICE })).ok, true);
     assert.equal(await m.getName("eggs", "blue"), null);
@@ -215,10 +215,10 @@ test("moshpit registry", { skip: installed ? false : "pwa dependencies not insta
     // A TLD may not be all-numeric (ambiguous against an IPv4 literal), but a
     // label under one carries no such ambiguity -- 123.eggs is a fine name.
     assert.equal((await m.registerName({ tld: "eggs", label: "123", userId: ALICE, target: "https://n.example" })).ok, true);
-    assert.equal((await m.getName("eggs", "123")).target, "https://n.example");
+    assert.equal((await m.getName("eggs", "123")).target, "n.example");
 
     assert.equal((await m.setNameTarget({ tld: "eggs", label: "123", userId: ALICE, target: "https://n2.example" })).ok, true);
-    assert.equal((await m.getName("eggs", "123")).target, "https://n2.example");
+    assert.equal((await m.getName("eggs", "123")).target, "n2.example");
 
     assert.equal((await m.resolveMoshpitName("123.eggs")).name_registered, true);
 

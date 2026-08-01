@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  blockedReason, checkTarget, forwardableHeaders, parseTarget,
+  blockedReason, checkTarget, forwardableHeaders, normalizeTarget, originUrl, parseTarget, urlHost,
 } from "../src/lib/moshpit-gateway.mjs";
 
 test("addresses that must never be fetched", () => {
@@ -92,7 +92,13 @@ test("one bad address among good ones fails the whole target", async () => {
 test("a public hostname passes and reports where it went", async () => {
   const resolve = async () => [{ address: "93.184.216.34" }];
   const result = await checkTarget("example.com:8080", { resolve });
-  assert.deepEqual(result, { ok: true, host: "example.com", port: 8080, addresses: ["93.184.216.34"] });
+  assert.deepEqual(result, {
+    ok: true,
+    host: "example.com",
+    port: 8080,
+    origin: "http://example.com:8080",
+    addresses: ["93.184.216.34"],
+  });
 });
 
 test("a name that does not resolve is refused", async () => {
@@ -121,4 +127,54 @@ test("credentials are never forwarded to an origin", () => {
   // The origin virtual-hosts on the name; the TCP connection only knows an IP.
   assert.equal(headers.host, "blue.eggs");
   assert.equal(headers["x-moshpit-name"], "blue.eggs");
+});
+
+/* --------------------------------------------------------- what may be stored */
+
+test("an IPv6 target survives the round trip into a fetchable URL", async () => {
+  // The bug this pins: `http://2606:4700::1111:80/` is not a URL. Unbracketed,
+  // the address's own colons are indistinguishable from the port separator, so
+  // fetch rejected it and every IPv6 name 504'd with "could not be reached".
+  const stored = normalizeTarget("2606:4700:4700::1111");
+  assert.equal(stored.target, "2606:4700:4700::1111");
+
+  const result = await checkTarget(stored.target);
+  assert.equal(result.ok, true);
+  assert.equal(result.origin, "http://[2606:4700:4700::1111]:80");
+  assert.doesNotThrow(() => new URL(`${result.origin}/`));
+  assert.equal(urlHost("203.0.114.9"), "203.0.114.9");
+  assert.equal(originUrl({ host: "box.example.com", port: 8080 }), "http://box.example.com:8080");
+});
+
+test("IPv4 literals are refused, and the message says what to use instead", () => {
+  const result = normalizeTarget("203.0.114.9");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /IPv6/);
+});
+
+test("empty is not an error — a name may wait to be pointed", () => {
+  for (const empty of ["", "   ", null, undefined]) {
+    assert.deepEqual(normalizeTarget(empty), { ok: true, target: null });
+  }
+});
+
+test("a port forces brackets, and only then", () => {
+  assert.equal(normalizeTarget("2606:4700::1111").target, "2606:4700::1111");
+  assert.equal(normalizeTarget("[2606:4700::1111]:8080").target, "[2606:4700::1111]:8080");
+  assert.equal(normalizeTarget("http://[2606:4700::1111]:8080/").target, "[2606:4700::1111]:8080");
+});
+
+test("hostnames stay allowed, lowercased, scheme stripped", () => {
+  assert.equal(normalizeTarget("https://Box.Example.COM/").target, "box.example.com");
+  assert.equal(normalizeTarget("box.example.com:8443").target, "box.example.com:8443");
+  assert.equal(normalizeTarget("not a hostname").ok, false);
+  // A bare label has no dot, so it cannot be a public name.
+  assert.equal(normalizeTarget("localhost").ok, false);
+});
+
+test("an unroutable IPv6 address is refused at the form, not at fetch time", () => {
+  // Storing it would mint a name that looks live and 502s for every visitor.
+  for (const addr of ["::1", "fe80::1", "fd00::1", "ff02::1"]) {
+    assert.equal(normalizeTarget(addr).ok, false, addr);
+  }
 });

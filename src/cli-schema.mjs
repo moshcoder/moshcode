@@ -15,6 +15,8 @@ export const CORE_CLI_COMMANDS = [
   { name: "logout", description: "clear the logged-in account" },
   { name: "console", description: "serve or connect to the browser terminal" },
   { name: "dns", description: "manage DNS records" },
+  { name: "template", description: "scaffold a stack for a Moshpit-hosted service" },
+  { name: "templates", description: "alias for template" },
   { name: "pwd", description: "show the current directory and git context" },
   { name: "where", description: "alias for pwd" },
   { name: "engines", description: "list engines and installation status" },

@@ -1,0 +1,10 @@
+{
+  "name": "bun-caddy-sqlite",
+  "description": "Bun service + Caddy + SQLite (local file or Turso), published at a Moshpit name over IPv6",
+  "vars": {
+    "MOSHPIT_NAME": "the registered name to serve, e.g. foo.whatever",
+    "APP_ADDR": "where Bun listens, loopback only (default 127.0.0.1:3000)",
+    "TURSO_DATABASE_URL": "libsql:// URL for a hosted database; omit to use a local file",
+    "TURSO_AUTH_TOKEN": "token for the Turso database, required when the URL is remote"
+  }
+}
