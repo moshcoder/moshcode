@@ -65,6 +65,15 @@ test("vendored namespace rules match the published package", {
     }
   });
 
+  await t.test("both copies read a name under an ending the same way", () => {
+    // The half of a paste that is not an ending. This drifting is how
+    // `blue.eggs` becomes a name in one copy and an unregistrable string in
+    // the other, which is the bug the two of them were changed to fix.
+    for (const paste of ["blue.eggs", ".me.whatever\nfoo\nbar.foo", "a.b.c", "1.420", ".eggs\nblue.eggs"]) {
+      assert.deepEqual(vendored.parseTldList(paste), published.parseTldList(paste), JSON.stringify(paste));
+    }
+  });
+
   await t.test("resolution precedence agrees across the whole input space", () => {
     for (const registered of [true, false]) {
       for (const mode of ["clearnet", "moshpit", "nonsense"]) {

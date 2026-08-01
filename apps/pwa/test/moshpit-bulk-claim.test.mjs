@@ -41,7 +41,7 @@ test("parsing a pasted list", async (t) => {
     // and is now one ending pointed at another. Commas and newlines are the
     // separators, which is what the placeholder shows.
     assert.deepEqual(parseTldList("oranges\t\tmosh").entries,
-      [{ tld: "oranges", aliasOf: "mosh", priceUsd: null }]);
+      [{ tld: "oranges", label: null, aliasOf: "mosh", priceUsd: null }]);
   });
 
   await t.test("# comments to end of line are dropped", () => {
@@ -51,6 +51,42 @@ test("parsing a pasted list", async (t) => {
 
   await t.test("case and leading dots are one ending, not three", () => {
     assert.deepEqual(parseTldList(".Eggs\nEGGS\neggs").tlds, ["eggs"]);
+  });
+
+  await t.test("all four shapes of a pasted line are understood", () => {
+    // `foo`, `bar.foo`, `.whatever` and `.foo.whatever` — the ending and the
+    // name under it, each with and without the decorative leading dot. Anything
+    // with a dot used to be refused outright as "not a valid TLD", which
+    // described the field rather than the mistake.
+    const { tlds, names } = parseTldList("foo\nbar.foo\n.whatever\n.foo.whatever");
+    assert.deepEqual(tlds, ["foo", "whatever"]);
+    assert.deepEqual(names, [
+      { tld: "foo", label: "bar" },
+      { tld: "whatever", label: "foo" },
+    ]);
+  });
+
+  await t.test("an ending and a name under it are two entries, not one", () => {
+    // Deduplication keys on the whole thing. `.eggs` and `blue.eggs` share a
+    // TLD and nothing else, and collapsing them would drop whichever came second.
+    const { tlds, names } = parseTldList(".eggs\nblue.eggs\neggs\nblue.eggs");
+    assert.deepEqual(tlds, ["eggs"]);
+    assert.deepEqual(names, [{ tld: "eggs", label: "blue" }]);
+  });
+
+  await t.test("a name carries per-line settings the same way an ending does", () => {
+    assert.deepEqual(parseTldList("blue.eggs $5 mosh").entries,
+      [{ tld: "eggs", label: "blue", aliasOf: "mosh", priceUsd: 5 }]);
+  });
+
+  await t.test("something that is neither is kept, to be rejected by name", () => {
+    // `a.b.c` is not a name and not an ending. Dropping it in the parser would
+    // leave it out of the report entirely, so it survives as its own bad text
+    // for registerTlds to refuse and say why.
+    const { entries, tlds, names } = parseTldList("a.b.c");
+    assert.deepEqual(names, []);
+    assert.deepEqual(tlds, ["a.b.c"]);
+    assert.equal(entries[0].label, null);
   });
 
   await t.test("blank input yields nothing rather than a phantom entry", () => {
@@ -117,13 +153,56 @@ test("claiming a pasted list", { skip: installed ? false : "pwa dependencies not
 
   await t.test("reserved and malformed endings are rejected with their reason", async () => {
     const good = uniq();
-    const result = await m.registerTlds({ input: `bank\na\n${good}\nfoo.bar`, userId: ALICE });
+    const result = await m.registerTlds({ input: `bank\na\n${good}\na.b.c`, userId: ALICE });
 
     assert.deepEqual(result.claimed, [good], "one bad entry must not sink the list");
     const rejected = Object.fromEntries(result.rejected.map((r) => [r.tld, r.error]));
     assert.match(rejected.bank, /reserved/);
     assert.match(rejected.a, /at least 2/);
-    assert.ok("foo.bar" in rejected, "a domain is not an ending");
+    // Two labels is a name and one is an ending; three is neither, and it is
+    // refused by name rather than dropped out of the report.
+    assert.ok("a.b.c" in rejected, "three labels is neither an ending nor a name");
+  });
+
+  await t.test("a pasted name claims the ending it needs, then registers under it", async () => {
+    const ending = uniq();
+    const result = await m.registerTlds({ input: `blue.${ending}`, userId: ALICE });
+
+    assert.deepEqual(result.claimed, [ending], "the ending a name needs is claimed for you");
+    assert.deepEqual(result.names, [`blue.${ending}`]);
+    assert.equal(result.rejected.length, 0);
+    assert.equal((await m.getName(ending, "blue")).user_id, ALICE);
+  });
+
+  await t.test("the ending is claimed once when both halves are pasted", async () => {
+    const ending = uniq();
+    const result = await m.registerTlds({ input: `.${ending}\nblue.${ending}\ngreen.${ending}`, userId: ALICE });
+
+    assert.deepEqual(result.claimed, [ending]);
+    assert.deepEqual(result.names.sort(), [`blue.${ending}`, `green.${ending}`].sort());
+  });
+
+  await t.test("a name under someone else's ending says who owns it, not 'no dots'", async () => {
+    // The report this replaces said "not a valid TLD — letters, digits and
+    // dashes only, no dots", which sent you off to fix a paste that was fine.
+    const theirs = uniq();
+    await m.registerTld({ tld: theirs, userId: BOB });
+
+    const result = await m.registerTlds({ input: `blue.${theirs}`, userId: ALICE });
+    assert.deepEqual(result.names, []);
+    assert.equal(result.namesRejected.length, 1);
+    assert.match(result.namesRejected[0].error, /do not own/);
+    assert.equal((await m.getTld(theirs)).user_id, BOB, "not stolen on the way past");
+  });
+
+  await t.test("re-pasting a name you hold reads as already yours", async () => {
+    const ending = uniq();
+    await m.registerTlds({ input: `blue.${ending}`, userId: ALICE });
+
+    const again = await m.registerTlds({ input: `blue.${ending}`, userId: ALICE });
+    assert.deepEqual(again.namesMine, [`blue.${ending}`]);
+    assert.equal(again.names.length, 0);
+    assert.equal(again.namesTaken.length, 0);
   });
 
   await t.test("the summary names what happened", async () => {
@@ -266,7 +345,7 @@ test("a line can carry its own price and target", async (t) => {
 
   await t.test("reads tld, target and price off one line", () => {
     assert.deepEqual(parseTldList(".toplevel .redirect $2.00USD").entries,
-      [{ tld: "toplevel", aliasOf: "redirect", priceUsd: 2 }]);
+      [{ tld: "toplevel", label: null, aliasOf: "redirect", priceUsd: 2 }]);
   });
 
   await t.test("accepts the shapes a person actually types", () => {
@@ -278,8 +357,8 @@ test("a line can carry its own price and target", async (t) => {
   });
 
   await t.test("order on the line does not matter", () => {
-    assert.deepEqual(parseTldList(".a $5 .b").entries, [{ tld: "a", aliasOf: "b", priceUsd: 5 }]);
-    assert.deepEqual(parseTldList(".a .b $5").entries, [{ tld: "a", aliasOf: "b", priceUsd: 5 }]);
+    assert.deepEqual(parseTldList(".a $5 .b").entries, [{ tld: "a", label: null, aliasOf: "b", priceUsd: 5 }]);
+    assert.deepEqual(parseTldList(".a .b $5").entries, [{ tld: "a", label: null, aliasOf: "b", priceUsd: 5 }]);
   });
 
   await t.test("a bare list still means one ending per entry", () => {

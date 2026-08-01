@@ -714,17 +714,49 @@ export async function registerTlds({
   const taken = [];
   const rejected = [];
   const settingsFailed = [];
+  const names = [];
+  const namesMine = [];
+  const namesTaken = [];
+  const namesRejected = [];
 
   // Validation first, in memory. A reserved or malformed ending never needs a
   // round trip to be refused, and filtering here keeps the batches below to
   // things that can actually land.
   const candidates = [];
+  const nameCandidates = [];
   for (const entry of entries) {
     const tld = normalizeTld(entry.tld);
     if (!tld) { rejected.push({ tld: entry.tld, error: "not a valid TLD — letters, digits and dashes only, no dots" }); continue; }
     const why = tldRejection(tld);
     if (why) { rejected.push({ tld, error: why }); continue; }
+
+    if (entry.label) {
+      const label = normalizeLabel(entry.label);
+      if (!label) {
+        namesRejected.push({ tld: `${entry.label}.${tld}`, error: "not a valid name — letters, digits and dashes only" });
+        continue;
+      }
+      nameCandidates.push({ tld, label });
+      continue;
+    }
+
     candidates.push({ ...entry, tld });
+  }
+
+  // A name has nowhere to live until its ending exists, so the endings the
+  // pasted names imply are claimed alongside the ones pasted outright. Pasting
+  // `blue.eggs` when you hold nothing means you wanted `.eggs` too — the
+  // alternative is refusing the line and making the operator paste the halves
+  // in two passes, in the right order, to get the same result.
+  //
+  // Implied or explicit, a claim is a claim: these land in `claimed` and are
+  // reported like any other, because quietly acquiring an ending someone did
+  // not read themselves asking for is the one outcome worth being loud about.
+  const wanted = new Set(candidates.map((c) => c.tld));
+  for (const { tld } of nameCandidates) {
+    if (wanted.has(tld)) continue;
+    wanted.add(tld);
+    candidates.push({ tld, aliasOf: null, priceUsd: null });
   }
 
   const at = Date.now();
@@ -786,7 +818,28 @@ export async function registerTlds({
     if (updates.length || logs.length) await db.batch([...updates, ...logs], "write");
   }
 
-  return { claimed, mine, taken, rejected, settingsFailed, skipped, remaining: [], attempted: entries.length };
+  // Names last, once every ending above has settled. `registerName` re-checks
+  // ownership rather than trusting the loop: an ending in this batch may have
+  // gone to someone else a moment ago, and "you do not own .agent" is the
+  // honest report for a name under it — not the "no dots allowed" that the
+  // parser used to give, which described the paste rather than the problem.
+  for (const { tld, label } of nameCandidates) {
+    const full = `${label}.${tld}`;
+    const result = await registerName({ tld, label, userId });
+    if (result.ok) { names.push(full); continue; }
+    if (result.taken) {
+      const existing = await getName(tld, label);
+      (existing && existing.user_id === userId ? namesMine : namesTaken).push(full);
+      continue;
+    }
+    namesRejected.push({ tld: full, error: result.error });
+  }
+
+  return {
+    claimed, mine, taken, rejected, settingsFailed,
+    names, namesMine, namesTaken, namesRejected,
+    skipped, remaining: [], attempted: entries.length,
+  };
 }
 
 function* chunksOf(list, size) {
@@ -809,14 +862,35 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
   // The single-ending case says the plain thing. "claimed 1 — .eggs." is what a
   // batch report looks like, and the commonest path through this page is one
   // ending typed into one box.
-  const onlyClaimed = result.claimed.length === 1 && !result.mine.length && !result.taken.length
-    && !result.rejected.length && !result.settingsFailed?.length && !result.skipped
-    && !result.remaining?.length;
+  // A name is shown as written — `blue.eggs`, not `.blue.eggs` — because the
+  // leading dot belongs to an ending and putting one on a name would spell it
+  // as something you cannot claim.
+  const showNames = (list, n = 6) =>
+    list.slice(0, n).join(", ") + (list.length > n ? ` +${list.length - n} more` : "");
+
+  const nameCount = result.names?.length || 0;
+  const quiet = !result.mine.length && !result.taken.length && !result.rejected.length
+    && !result.settingsFailed?.length && !result.skipped && !result.remaining?.length
+    && !result.namesMine?.length && !result.namesTaken?.length && !result.namesRejected?.length;
+
+  const onlyClaimed = quiet && result.claimed.length === 1 && !nameCount;
   if (onlyClaimed) return `.${result.claimed[0]} is yours.`;
+
+  // The same plain sentence for the other half. Claiming `.eggs` on the way to
+  // `blue.eggs` is one intention, so it reads as one result rather than as a
+  // claim report with a name bolted to it.
+  if (quiet && nameCount === 1 && result.claimed.length <= 1) return `${result.names[0]} is yours.`;
 
   const parts = [];
   if (result.claimed.length) parts.push(`claimed ${result.claimed.length} — ${show(result.claimed)}`);
+  if (nameCount) parts.push(`registered ${nameCount} — ${showNames(result.names)}`);
   if (result.mine.length) parts.push(`${result.mine.length} already yours`);
+  if (result.namesMine?.length) parts.push(`${result.namesMine.length} name${result.namesMine.length > 1 ? "s" : ""} already yours`);
+  if (result.namesTaken?.length) parts.push(`${result.namesTaken.length} name${result.namesTaken.length > 1 ? "s" : ""} taken by someone else (${showNames(result.namesTaken)})`);
+  if (result.namesRejected?.length) {
+    const reasons = result.namesRejected.slice(0, 3).map((r) => `${r.tld} — ${r.error}`).join("; ");
+    parts.push(`${result.namesRejected.length} name${result.namesRejected.length > 1 ? "s" : ""} rejected (${reasons}${result.namesRejected.length > 3 ? "; …" : ""})`);
+  }
   if (result.taken.length) parts.push(`${result.taken.length} taken by someone else (${show(result.taken)})`);
   if (result.rejected.length) {
     // The reason matters more than the count here: "reserved" and "too short"
