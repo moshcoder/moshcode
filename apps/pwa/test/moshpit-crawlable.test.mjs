@@ -82,7 +82,7 @@ test("robots.txt invites crawlers to /n/ and points at the sitemap", skip, async
   assert.match(body, /^Disallow: \/api\//m);
 });
 
-test("the sitemap lists every registered name, and nothing that 400s", skip, async () => {
+test("the sitemap lists every registered name, and the endings too", skip, async () => {
   const { get } = await app();
   const { status, type, body } = await get("/sitemap.xml");
 
@@ -92,8 +92,10 @@ test("the sitemap lists every registered name, and nothing that 400s", skip, asy
   assert.ok(body.includes(`<loc>${ORIGIN}/n/poached.eggs</loc>`), body);
   assert.ok(body.includes(`<loc>${ORIGIN}/pit</loc>`), body);
 
-  // `/n/eggs` is an ending, not a name — it 400s, so it must not be advertised.
-  assert.ok(!body.includes(`<loc>${ORIGIN}/n/eggs</loc>`), "an ending is not a name");
+  // `/n/eggs` used to 400, so advertising it would have been a broken link.
+  // It is a page now — the ending's own directory — and an ending with names
+  // under it is the most findable thing the network has.
+  assert.ok(body.includes(`<loc>${ORIGIN}/n/eggs</loc>`), "an ending is a page now");
 });
 
 test("a name's page canonicalises to itself and describes itself", skip, async () => {
