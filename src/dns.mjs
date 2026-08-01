@@ -432,7 +432,19 @@ export function createServer(options = {}) {
     tldSet = null,
     forwardTimeoutMs = 3000,
   } = options;
-  const socket = dgram.createSocket("udp4");
+  // The socket family follows the address we were asked to bind, so the caller
+  // decides by choosing a host rather than by passing a flag.
+  //
+  // `ipv6Only: false` is what makes `::` serve both families from one socket:
+  // the kernel accepts IPv4 clients on it and reports them as `::ffff:1.2.3.4`,
+  // which `socket.send` understands, so the reply path needs no special case.
+  // Without it a v6 bind is v6-only and every IPv4 client silently gets nothing.
+  //
+  // The default stays 127.0.0.1, so a machine that upgrades keeps exactly the
+  // loopback-only v4 listener it had. Serving other hosts is a deliberate act.
+  const socket = isIP(host) === 6
+    ? dgram.createSocket({ type: "udp6", ipv6Only: false, reuseAddr: true })
+    : dgram.createSocket({ type: "udp4", reuseAddr: true });
 
   socket.on("message", async (msg, rinfo) => {
     const query = parseQuery(msg);
