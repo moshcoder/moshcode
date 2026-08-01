@@ -205,7 +205,13 @@ export function parseRegistryName(hostname) {
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
   const parts = host.split(".");
   if (parts.length !== 2) return null;
-  const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  // Letters and digits only, matching the registry. A dash is the cheapest way
+  // to mint a look-alike of an ending someone else holds, and in a namespace
+  // one level deep and first come first served there is nowhere to retreat to.
+  // Keeping the rule here identical to the registry's matters more than the
+  // rule itself: a name this bridge accepts and the registry rejects resolves
+  // to a page that says it does not exist.
+  const LABEL = /^[a-z0-9]{1,63}$/;
   const [label, tld] = parts;
   if (!LABEL.test(label) || !LABEL.test(tld)) return null;
   return { label, tld };

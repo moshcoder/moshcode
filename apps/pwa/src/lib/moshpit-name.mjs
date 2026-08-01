@@ -26,7 +26,18 @@ export const RESERVED_TLDS = new Set([
 ]);
 
 /** A TLD label: lowercase letters, digits and dashes; no leading/trailing dash. */
-const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+// Letters and digits only — no dashes, though DNS would allow them.
+//
+// A dash is the cheapest way to mint a near-miss of a name someone else holds.
+// `.crypto` and `.cryp-to` read as the same ending at a glance and sort next to
+// each other, so allowing dashes turns every claimed ending into a family of
+// look-alikes worth squatting. The namespace is one level deep and first come
+// first served, which makes that the whole attack: there is no second level to
+// retreat to and no dispute process to appeal it.
+//
+// The cost is real names nobody can have — `lazy-loaded` cannot be an ending.
+// That is the trade, and it is cheaper than policing look-alikes forever.
+const LABEL = /^[a-z0-9]{1,63}$/;
 
 /** A hostname label. Unlike a TLD, an all-numeric label is valid. */
 export function normalizeLabel(input) {

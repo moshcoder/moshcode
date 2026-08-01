@@ -13,7 +13,7 @@ test("normalizeTld accepts what people actually type", () => {
   assert.equal(normalizeTld("eggs"), "eggs");
   assert.equal(normalizeTld(".eggs"), "eggs");
   assert.equal(normalizeTld("  .EGGS  "), "eggs");
-  assert.equal(normalizeTld("web3-agents"), "web3-agents");
+  assert.equal(normalizeTld("web3agents"), "web3agents");
 });
 
 test("normalizeTld rejects what could never be a TLD", () => {
@@ -124,4 +124,23 @@ test("all-numeric endings", async (t) => {
     assert.equal(parseMoshpitName("192.168"), null);
     assert.equal(parseMoshpitName("0.0"), null);
   });
+});
+
+test("dashes are not part of a Moshpit name", () => {
+  // A dash is the cheapest way to mint a near-miss of an ending someone else
+  // holds — `.cryp-to` beside `.crypto` — and a namespace one level deep with
+  // no dispute process has nowhere to put the argument.
+  assert.equal(normalizeTld("lazy-loaded"), null);
+  assert.equal(normalizeTld("cryp-to"), null);
+  assert.equal(normalizeLabel("register-me"), null);
+  assert.equal(normalizeLabel("-leading"), null);
+  assert.equal(normalizeLabel("trailing-"), null);
+
+  // Unchanged either side of the dot.
+  assert.equal(normalizeTld("oranges"), "oranges");
+  assert.equal(normalizeTld("420"), "420");
+  assert.equal(normalizeLabel("california"), "california");
+  assert.equal(normalizeLabel("123"), "123");
+  assert.equal(normalizeLabel("a".repeat(63)), "a".repeat(63));
+  assert.equal(normalizeLabel("a".repeat(64)), null);
 });

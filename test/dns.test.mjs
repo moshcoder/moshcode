@@ -251,3 +251,15 @@ test("answerFor hands the bridge a bare address, not the stored target", async (
   });
   assert.equal(address, "2606:4700:4700::1111");
 });
+
+test("dashes are not part of a Moshpit name", () => {
+  // Cheap look-alikes of an ending someone already holds. The namespace is one
+  // level deep and first come first served, so `.cryp-to` next to `.crypto` has
+  // nowhere to be appealed to.
+  assert.equal(parseRegistryName("blue.lazy-loaded"), null);
+  assert.equal(parseRegistryName("register-me.eggs"), null);
+  assert.equal(parseRegistryName("a-b.c-d"), null);
+  // Still fine either side of the dot.
+  assert.deepEqual(parseRegistryName("california.oranges"), { label: "california", tld: "oranges" });
+  assert.deepEqual(parseRegistryName("123.420"), { label: "123", tld: "420" });
+});
