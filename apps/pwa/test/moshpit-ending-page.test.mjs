@@ -44,17 +44,18 @@ async function boot() {
   await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('torklink','parked','u1',NULL,1)`);
   // An ending held with nothing under it, to prove the empty case reads right.
   await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('bare','u1','a@b.c',1)`);
-  // An alias pointing at torklink, and an ending owned by somebody else: the
-  // two sides of "related" and the thing that must not be called related.
-  await run(`INSERT OR REPLACE INTO users (id,email,created_at) VALUES ('u2','c@d.e',1)`);
-  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,alias_of,created_at) VALUES ('torlink','u1','a@b.c','torklink',1)`);
-  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('stranger','u2','c@d.e',1)`);
-  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('elsewhere','u2','c@d.e',1)`);
+  // .seo points at .rank — the relationship an ending's page has to show.
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('rank','u1','a@b.c',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,alias_of,created_at) VALUES ('seo','u1','a@b.c','rank',1)`);
+  // Somebody else's ending, so "related" cannot just mean "every ending".
+  await run(`INSERT OR REPLACE INTO users (id,email,created_at) VALUES ('u2','x@y.z',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('theirs','u2','x@y.z',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('elsewhere','u2','x@y.z',1)`);
   // `www` twice and `docs` once, so "most-used first" has something to order.
   // Deliberately not under .bare, which has to stay empty for the empty case.
-  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('stranger','www','u2',NULL,1)`);
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('theirs','www','u2',NULL,1)`);
   await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('elsewhere','www','u2',NULL,1)`);
-  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('stranger','docs','u2',NULL,1)`);
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('theirs','docs','u2',NULL,1)`);
 
   const app = deps.express();
   app.use((req, _res, next) => { req.csrfToken = () => "csrf"; next(); });
@@ -162,48 +163,74 @@ test("the sitemap now lists endings as well as names", skip, async () => {
   assert.ok(body.includes(`<loc>${PIT}/n/pointed.torklink</loc>`));
 });
 
-// ---- the ending as a directory ----
-//
-// "Nothing lives under .eggs yet" was the whole page for a young ending: true,
-// and nothing to do about it. The name page had answered the other two
-// questions — what is near this, and what could go here — since it shipped;
-// the ending page, which is where somebody actually decides, had neither.
-
-test("an ending lists the endings related to it", skip, async () => {
+test("an ending shows what points at it", skip, async () => {
   const { get } = await app();
-  const { body } = await get("/n/torklink");
+  const { body } = await get("/n/rank");
+
+  // `.seo → .rank` is a real relationship and was invisible from either side.
+  assert.match(body, /Pointed here by/);
+  assert.match(body, /href="\/n\/seo"/);
+});
+
+test("an ending shows where it points", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/seo");
+
+  assert.match(body, /href="\/n\/rank"/);
+  assert.match(body, /names here resolve under that ending/);
+});
+
+test("related endings are the owner's others, not the whole namespace", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/rank");
 
   assert.match(body, /Related endings/);
-  // Aliased to it, and owned by the same person: both are related.
-  assert.match(body, /href="\/n\/torlink"/);
-  assert.match(body, /href="\/n\/bare"/);
+  assert.match(body, /href="\/n\/torklink"/, "same owner");
+  assert.doesNotMatch(body, /href="\/n\/theirs"/, "somebody else's ending is not related");
 });
 
-test("related endings link to the ending, not to a search", skip, async () => {
+test("an ending is not listed as related to itself, nor twice", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/rank");
+
+  const selfLinks = (body.match(/href="\/n\/rank"/g) || []).length;
+  assert.equal(selfLinks, 0, "the page you are on is not a link to itself");
+  // .seo is already named as a pointer; it must not repeat under Related.
+  const seoLinks = (body.match(/href="\/n\/seo"/g) || []).length;
+  assert.equal(seoLinks, 1, "shown once, as a pointer");
+});
+
+test("the page states the public facts about the ending", skip, async () => {
   const { get } = await app();
   const { body } = await get("/n/torklink");
 
-  // There is no label to carry across on an ending's page, so each one goes to
-  // its own page — which is a page now, and used to be a 400.
-  assert.doesNotMatch(body, /href="\/pit\?tab=theirs/);
+  assert.match(body, /2 names/);
+  assert.match(body, /1 pointed somewhere/);
+  assert.match(body, /\$5 a name/);
+  assert.match(body, /claimed \d{4}-\d{2}-\d{2}/);
 });
 
-test("an ending held by somebody else is listed, but not as related", skip, async () => {
+test("an ending nobody sells says so rather than showing a price", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  assert.match(body, /0 names/);
+  assert.match(body, /not for sale/);
+});
+
+test("owner email is never put on a page built to be crawled", skip, async () => {
   const { get } = await app();
   const { body } = await get("/n/torklink");
 
-  assert.match(body, /More endings/);
-  const related = body.slice(body.indexOf("Related endings"), body.indexOf("More endings"));
-  assert.doesNotMatch(related, /href="\/n\/stranger"/, "a stranger's ending is not related");
-  assert.match(body, /href="\/n\/stranger"/);
+  // The registry API exposes it; that is not a reason to make it indexable.
+  assert.doesNotMatch(body, /a@b\.c/);
 });
 
-test("an ending never lists itself", skip, async () => {
-  const { get } = await app();
-  const { body } = await get("/n/torklink");
-
-  assert.doesNotMatch(body, /href="\/n\/torklink"/, "the page you are on is not somewhere else to go");
-});
+// ---- what could go here next ----
+//
+// "Nothing lives under .eggs yet" was the whole page for a young ending: true,
+// and nothing to do about it. What is under an ending and what is near it were
+// both answered; what could go under it next was not.
 
 test("an empty ending suggests names rather than stopping at 'nothing here'", skip, async () => {
   const { get } = await app();

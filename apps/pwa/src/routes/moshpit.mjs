@@ -36,6 +36,7 @@ import {
   getName,
   getTld,
   getTldWithPrice,
+  listAliasesTo,
   listAllNames,
   listExempt,
   listNames,
@@ -397,13 +398,14 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     const ending = normalizeTld(String(req.params.name || "").replace(/^\.+/, ""));
     const owner = ending ? await getTldWithPrice(ending) : null;
     if (owner) {
-      // The same three questions the name page answers, asked of an ending:
-      // what is under it, what is near it, and what could go under it next.
-      const [names, tlds, popular] = await Promise.all([
+      const [names, aliasesTo, sameOwner, popular] = await Promise.all([
         listNames(ending),
-        listTlds({ limit: 200 }),
+        listAliasesTo(ending),
+        listTldsForUser(owner.user_id, { limit: 50 }),
         popularLabels(),
       ]);
+      // What could go under it next — the third question, after what is under
+      // it and what is near it.
       const suggestions = suggestedLabels({
         tld: ending,
         taken: names.map((n) => n.label),
@@ -412,7 +414,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
       return res.status(200).send(page({
         title: `.${ending}`,
         head: endingHead(ending, owner),
-        body: endingDirectory({ tld: ending, owner, names, tlds, suggestions, user: req.user, req }),
+        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, suggestions, user: req.user, req }),
       }));
     }
     // Still 400 for an ending nobody holds: otherwise every typo under /n/
@@ -517,20 +519,38 @@ function endingHead(tld, owner) {
  * ending's price and a box to pick a name under it — and the listing is the
  * whole ending rather than "what else lives near the name you asked for".
  */
-function endingDirectory({ tld, owner, names, tlds = [], suggestions = [], user, req }) {
+function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], user, req }) {
   const live = names.filter((n) => n.target);
   const claimed = names.filter((n) => !n.target);
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
+  // An ending links to its own page — there is no label to carry across here,
+  // which is what makes this different from the name directory's version.
+  const endingLink = (t) => `<a class="mono" href="/n/${esc(t.tld)}">.${esc(t.tld)}</a>`;
   const mine = Boolean(user && owner.user_id === user.id);
 
-  // Same rule as the name page: an alias is an operator saying two endings
-  // belong together, and shared ownership is the next best signal. There is no
-  // label to carry across here, so each one links to its own ending page.
-  const related = tlds.filter((t) =>
-    t.tld !== tld && (t.alias_of === tld || t.tld === owner.alias_of || t.user_id === owner.user_id));
-  const others = tlds.filter((t) => t.tld !== tld && !related.includes(t)).slice(0, 24);
-  const tldLink = (t) => `<a class="mono" href="/n/${esc(t.tld)}">.${esc(t.tld)}</a>`;
+  // Aliases are an explicit statement that two endings belong together, so they
+  // are named as pointers rather than folded into "related". Shared ownership
+  // is the next best signal and fills the rest.
+  const pointedHereBy = aliasesTo.filter((t) => t.tld !== tld);
+  const alreadyShown = new Set([tld, owner.alias_of, ...pointedHereBy.map((t) => t.tld)]);
+  const related = sameOwner.filter((t) => !alreadyShown.has(t.tld)).slice(0, 24);
+
+  // Facts already public through /api/moshpit/tlds, gathered where somebody
+  // deciding whether to buy under this ending will actually see them. Owner
+  // email is deliberately not among them: the API exposing it is not a reason
+  // to put it on a page built to be crawled.
+  const claimedOn = Number(owner.created_at)
+    ? new Date(Number(owner.created_at)).toISOString().slice(0, 10)
+    : null;
+  const facts = [
+    `${names.length} name${names.length === 1 ? "" : "s"}`,
+    `${live.length} pointed somewhere`,
+    owner.price_usd != null ? `$${owner.price_usd} a name` : "not for sale",
+    owner.alias_of ? `points at .${owner.alias_of}` : null,
+    pointedHereBy.length ? `${pointedHereBy.length} ending${pointedHereBy.length === 1 ? "" : "s"} point here` : null,
+    claimedOn ? `claimed ${claimedOn}` : null,
+  ].filter(Boolean);
 
   // A suggestion goes to the claim box with the name already filled in, which
   // is the same path the "See if it is free" form takes — so the offer and the
@@ -547,9 +567,13 @@ function endingDirectory({ tld, owner, names, tlds = [], suggestions = [], user,
       ? `Names under it cost <span class="mono acid">$${esc(String(owner.price_usd))}</span>.`
       : "Names under it are not for sale right now."}
   </p>
+  <p class="mono faint" style="font-size:.72rem">${facts.map(esc).join(" &middot; ")}</p>
+
   ${owner.alias_of
-    ? `<p class="mono faint" style="font-size:.72rem">Points at <a class="mono" href="/n/${esc(owner.alias_of)}">.${esc(owner.alias_of)}</a>.</p>`
+    ? `<p class="mono faint" style="font-size:.72rem">.${esc(tld)} &rarr; <a class="mono acid" href="/n/${esc(owner.alias_of)}">.${esc(owner.alias_of)}</a> &mdash; names here resolve under that ending.</p>`
     : ""}
+  ${pointedHereBy.length ? `
+  <p class="mono faint" style="font-size:.72rem">Pointed here by ${pointedHereBy.map((t) => `${endingLink(t)} &rarr; .${esc(tld)}`).join(" &middot; ")}</p>` : ""}
 
   ${owner.price_usd != null && !mine ? `
   <form method="get" action="/pit" class="pit-form" style="margin-top:18px">
@@ -573,15 +597,11 @@ function endingDirectory({ tld, owner, names, tlds = [], suggestions = [], user,
   <p class="mono faint" style="font-size:.72rem">${mine
     ? "You hold this ending, so these cost nothing."
     : "Nobody has taken these yet."}</p>
-  <p class="pit-dir-row">${suggestions.map(suggestionLink).join(" · ")}</p>` : ""}
+  <p class="pit-dir-row">${suggestions.map(suggestionLink).join(" &middot; ")}</p>` : ""}
 
   ${related.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>
-  <p class="pit-dir-row">${related.map(tldLink).join(" · ")}</p>` : ""}
-
-  ${others.length ? `
-  <h2 class="acid" style="font-size:.9rem;margin-top:22px">More endings</h2>
-  <p class="pit-dir-row">${others.map(tldLink).join(" · ")}</p>` : ""}
+  <p class="pit-dir-row">${related.map(endingLink).join(" &middot; ")}</p>` : ""}
 
   <p style="margin-top:26px"><a class="btn" href="/pit">the pit &rarr;</a></p>
 </section>`;
