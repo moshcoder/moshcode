@@ -501,6 +501,59 @@ export function createServer(options = {}) {
 /* ------------------------------------------------------- system integration */
 
 /**
+ * The routing suffixes the resolver actually accepted.
+ *
+ * Not the same question as what we wrote, which is the whole point. Writing a
+ * config is not the same as the resolver honouring it, and systemd-resolved
+ * caps how many search domains it will take: handed 4586 it accepted 1090
+ * alphabetically, rejected the rest one journal line at a time with "Argument
+ * list too long", and reported success. Status compared what it had written
+ * against what the registry claimed, saw the same number twice, and said
+ * everything was fine while 76% of endings did not resolve.
+ *
+ * So this asks the resolver instead of the file.
+ */
+export function parseResolvectlDomains(text) {
+  const seen = new Set();
+  for (const match of String(text ?? "").matchAll(/~([a-z0-9-]+)/gi)) {
+    seen.add(match[1].toLowerCase());
+  }
+  return [...seen];
+}
+
+/**
+ * What routing the running resolver has, or null when we cannot ask it.
+ *
+ * Null is "unknown", never "none": a machine using dnsmasq, or not systemd at
+ * all, has no resolvectl and must not be told its routing is missing.
+ */
+export async function acceptedDomains(runner) {
+  const run = runner || (async () => {
+    const { execFile } = await import("node:child_process");
+    return new Promise((resolve) => {
+      execFile("resolvectl", ["domain"], { timeout: 5000 }, (err, stdout) =>
+        resolve(err ? null : String(stdout)));
+    });
+  });
+  const output = await run().catch(() => null);
+  return output === null || output === undefined ? null : parseResolvectlDomains(output);
+}
+
+/**
+ * Whether the resolver kept everything it was given, and what it dropped.
+ *
+ * `missing` is capped in what callers print, not here — the whole list is the
+ * evidence, and an ending that is absent is exactly the thing someone is
+ * searching the output for.
+ */
+export function routingShortfall(written, accepted) {
+  if (!Array.isArray(accepted)) return null;
+  const have = new Set(accepted);
+  const missing = written.filter((tld) => !have.has(tld));
+  return { written: written.length, accepted: accepted.length, missing };
+}
+
+/**
  * systemd-resolved drop-in routing just the Moshpit TLDs at the bridge.
  *
  * `~tld` is a routing-only domain: it sends queries for that suffix here
@@ -887,10 +940,23 @@ export async function dnsCommand(args = [], out = console.log) {
     // — a name claimed after you enabled simply does not resolve.
     if (routed && known && platform === "linux") {
       const conf = await readFile(marker, "utf8").catch(() => "");
-      const routedCount = (conf.match(/~[a-z0-9-]+/g) || []).length;
-      if (routedCount && routedCount !== known.length) {
+      const written = [...new Set((conf.match(/~[a-z0-9-]+/g) || []).map((t) => t.slice(1).toLowerCase()))];
+      if (written.length && written.length !== known.length) {
         out("");
-        out(`! routing covers ${routedCount} TLDs but ${known.length} are claimed — re-run \`sudo moshcode dns enable\``);
+        out(`! routing covers ${written.length} TLDs but ${known.length} are claimed — re-run \`sudo moshcode dns enable\``);
+      }
+
+      // The check that was missing. Comparing the file against the registry
+      // compares two things we control and agrees with itself; the resolver is
+      // the one that gets a vote, and it silently declines to take them all.
+      const shortfall = routingShortfall(written, await acceptedDomains());
+      if (shortfall && shortfall.missing.length) {
+        out("");
+        out(`! wrote ${shortfall.written} endings, the resolver accepted ${shortfall.accepted} — ${shortfall.missing.length} are not routed`);
+        out(`  missing: ${shortfall.missing.slice(0, 8).join(" ")}${shortfall.missing.length > 8 ? ` … and ${shortfall.missing.length - 8} more` : ""}`);
+        out("  systemd-resolved caps how many search domains it takes and drops the rest:");
+        out("    journalctl -u systemd-resolved | grep 'Argument list too long'");
+        out("  a name in that list answers `moshcode dns resolve` and fails `curl`.");
       }
     }
     return 0;

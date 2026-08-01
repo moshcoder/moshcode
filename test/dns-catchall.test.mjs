@@ -203,3 +203,43 @@ test("loopback nameservers are dropped when finding upstreams", () => {
   assert.deepEqual(parseUpstreams(""), []);
   assert.deepEqual(parseUpstreams(null), []);
 });
+
+/* ---------------------------------------- noticing that the resolver said no */
+
+test("routingShortfall names what the resolver refused to take", async () => {
+  const { parseResolvectlDomains, routingShortfall, acceptedDomains } = await import("../src/dns.mjs");
+
+  // Verbatim shape of `resolvectl domain`: a Global line, wrapped, plus links.
+  const output = [
+    "Global: ~eggs ~oranges ~2600",
+    "        ~abex ~acid",
+    "Link 2 (eth0): ~eggs",
+  ].join("\n");
+  assert.deepEqual(parseResolvectlDomains(output).sort(), ["2600", "abex", "acid", "eggs", "oranges"]);
+
+  // The real failure: written and claimed agreed, so the old check was silent.
+  const written = ["eggs", "oranges", "hacker", "rank", "zombies"];
+  const shortfall = routingShortfall(written, ["eggs", "oranges"]);
+  assert.equal(shortfall.written, 5);
+  assert.equal(shortfall.accepted, 2);
+  assert.deepEqual(shortfall.missing, ["hacker", "rank", "zombies"]);
+
+  // Everything accepted is not a shortfall.
+  assert.deepEqual(routingShortfall(written, written).missing, []);
+
+  // Unknown is never "none": a box without resolvectl must not be told its
+  // routing is missing.
+  assert.equal(routingShortfall(written, null), null);
+  assert.equal(await acceptedDomains(async () => null), null);
+  assert.deepEqual(await acceptedDomains(async () => "Global: ~eggs"), ["eggs"]);
+});
+
+test("the shortfall reproduces the failure that started this", async () => {
+  const { routingShortfall } = await import("../src/dns.mjs");
+  // 4586 written, 1090 accepted, alphabetically — which is how ~hacker went
+  // missing while `moshcode dns resolve chovy.hacker` kept answering.
+  const written = Array.from({ length: 4586 }, (_, i) => `t${String(i).padStart(4, "0")}`);
+  const shortfall = routingShortfall(written, written.slice(0, 1090));
+  assert.equal(shortfall.missing.length, 3496);
+  assert.equal(shortfall.missing[0], "t1090");
+});
