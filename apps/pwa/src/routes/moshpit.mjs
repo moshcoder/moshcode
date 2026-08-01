@@ -670,7 +670,8 @@ const claimForm = (req, prefill = "") => `
 <form method="post" action="/pit/claim" class="pit-form">
   ${csrfInput(req)}
   <label class="pit-field"><span class="pit-dot">.</span
-    ><input name="tld" placeholder="eggs" aria-label="the TLD you want" autocomplete="off" spellcheck="false"
+    ><input name="tld" placeholder="eggs — or scrambled.eggs"
+      aria-label="the ending you want, or a whole name under it" autocomplete="off" spellcheck="false"
       value="${esc(prefill)}" required></label>
   ${claimDefaults(req)}
   <button class="btn acid" type="submit">Claim it</button>
@@ -1452,7 +1453,46 @@ moshpitRouter.post("/pit/claim-bulk", requireAuth, async (req, res) => {
   return back(res, result.claimed.length ? { ok: summary } : { err: summary });
 });
 
+/**
+ * `scrambled.eggs` typed into the claim box, rather than the bare `eggs` it
+ * was built for.
+ *
+ * Someone who wants a name should not have to know that holding it is two
+ * steps — claim the ending, then mint the name under it. Do both, in that
+ * order, and report the name they actually asked for.
+ *
+ * Someone else's ending is the one case this cannot finish: minting under it
+ * is not ours to do, and whether it is for sale, taken, or simply unlisted is
+ * a question `landingFor` already answers. Hand them that card instead of
+ * inventing a second, thinner version of it here.
+ */
+async function claimFullName(req, res, { label, tld }) {
+  const owner = await getTld(tld);
+  if (owner && owner.user_id !== req.user.id) {
+    return res.redirect(`/pit?${new URLSearchParams({ name: `${label}.${tld}` })}`);
+  }
+
+  if (!owner) {
+    const claim = await registerTlds({
+      input: tld, userId: req.user.id, ownerEmail: req.user.email ?? null,
+      priceUsd: req.body?.price_usd, aliasOf: req.body?.alias_of,
+    });
+    // Lost the ending to a race, or it was reserved/malformed — either way the
+    // name underneath it cannot follow.
+    if (!claim.claimed.length) return back(res, { err: summarizeBulkClaim(claim).slice(0, 500) });
+  }
+
+  const minted = await registerName({ tld, label, userId: req.user.id, target: null });
+  if (!minted.ok) return back(res, { err: minted.error || "could not register that name" });
+  back(res, { ok: `${label}.${tld} is yours.` });
+}
+
 moshpitRouter.post("/pit/claim", requireAuth, async (req, res) => {
+  // A whole name reaches registerTlds() as a dotted token it can only reject,
+  // so it forks off before the list path rather than failing as a bad ending.
+  const asked = parseMoshpitName(req.body?.tld);
+  if (asked) return claimFullName(req, res, asked);
+
   // One ending goes through the same path as a list of one, so the settings
   // behave identically either way rather than being a bulk-only feature.
   const result = await registerTlds({
