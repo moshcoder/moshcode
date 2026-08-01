@@ -148,11 +148,45 @@ export function parseRegistryName(hostname) {
 }
 
 /** The TLDs currently claimed in the Pit — what we route to this resolver. */
+/** The registry's own ceiling on one page. Asking for more just gets this. */
+const TLD_PAGE = 1000;
+
+/**
+ * Every ending, paged.
+ *
+ * This used to take the first response and stop, which is a silent truncation:
+ * the registry answers 200 by default and says so in `total`, but a list of 200
+ * looks exactly like a complete list of 200. `.eggs` sat past that line, so
+ * `dns install` wrote a config that quietly did not route it and the name did
+ * not resolve — the failure looked like DNS, three layers from the cause.
+ *
+ * Paged to exhaustion against `total`, with the page count bounded so a
+ * registry that misreports it cannot spin here forever.
+ */
 export async function fetchTlds({ registryBase = DEFAULT_REGISTRY_BASE, fetchImpl = fetch } = {}) {
-  const res = await fetchImpl(`${registryBase.replace(/\/+$/, "")}/api/moshpit/tlds`);
-  if (!res.ok) throw new Error(`registry returned ${res.status}`);
-  const json = await res.json();
-  return (json?.tlds || [])
+  const base = `${registryBase.replace(/\/+$/, "")}/api/moshpit/tlds`;
+  const seen = [];
+  let offset = 0;
+  let total = null;
+
+  // A page that comes back empty ends it too, so a `total` that overstates the
+  // rows on hand cannot loop.
+  for (let page = 0; page < 64; page++) {
+    const res = await fetchImpl(`${base}?limit=${TLD_PAGE}&offset=${offset}`);
+    if (!res.ok) throw new Error(`registry returned ${res.status}`);
+    const json = await res.json();
+    const rows = json?.tlds || [];
+    if (!rows.length) break;
+
+    seen.push(...rows);
+    offset += rows.length;
+    if (total === null && Number.isFinite(Number(json?.total))) total = Number(json.total);
+    // No `total` at all means an older registry that cannot page — take what it
+    // gave rather than walking off the end of it.
+    if (total === null || offset >= total) break;
+  }
+
+  return seen
     .map((t) => (typeof t === "string" ? t : t?.tld))
     .filter((t) => typeof t === "string" && t)
     .map((t) => t.toLowerCase())
