@@ -46,9 +46,17 @@ export function skillInstallAction(key, spec) {
   }
 }
 
-/** Plan the fan-out: one entry per skills engine with its action or skip reason. */
+/**
+ * Plan the fan-out: one entry per engine with its action or skip reason.
+ * Every engine, not just SKILL_ENGINES — prd/0003 R8 requires the engines with
+ * no skills primitive to be *reported* as skipped, and an engine missing from
+ * the plan is missing from the summary. Derived from ENGINES the same way the
+ * /skill list matrix derives it, so an engine added later cannot quietly fall
+ * out of the fan-out while still showing up in the matrix.
+ */
 export function planSkillInstall(spec, { installedSet } = {}) {
-  return SKILL_ENGINES.map((key) => {
+  const rest = Object.keys(ENGINES).filter((key) => !SKILL_ENGINES.includes(key));
+  return [...SKILL_ENGINES, ...rest].map((key) => {
     const bin = ENGINES[key].bin;
     const installed = installedSet ? installedSet.has(key) : isInstalled(bin);
     return { key, bin, installed, ...skillInstallAction(key, spec) };
