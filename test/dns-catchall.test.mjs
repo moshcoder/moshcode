@@ -277,3 +277,34 @@ test("upstreams are read before routing is switched, and loopback is dropped", a
   // per-ending rather than pointing everything at a bridge that cannot forward.
   assert.deepEqual(await discoverUpstreams(async () => { throw new Error("nope"); }), []);
 });
+
+test("a stub /etc/resolv.conf does not read as 'no upstreams'", async () => {
+  const { discoverUpstreams, UPSTREAM_SOURCES } = await import("../src/dns.mjs");
+
+  // The shape of every systemd-resolved machine, which is the platform this
+  // was built for: /etc/resolv.conf points at the 127.0.0.53 stub, and the
+  // real servers live in systemd's own uplink file. Reading only
+  // /etc/resolv.conf found nothing, so catch-all routing silently fell back
+  // to the per-ending list on exactly the systems that needed it.
+  const files = {
+    "/etc/resolv.conf": "nameserver 127.0.0.53\noptions edns0\n",
+    "/run/systemd/resolve/resolv.conf": "nameserver 67.207.67.3\nnameserver 67.207.67.2\n",
+  };
+  assert.deepEqual(await discoverUpstreams(async (p) => files[p] ?? ""), ["67.207.67.3", "67.207.67.2"]);
+
+  // systemd's file is consulted first, so a machine with real servers in both
+  // does not depend on which one happens to be more current.
+  assert.equal(UPSTREAM_SOURCES[0], "/run/systemd/resolve/resolv.conf");
+
+  // No systemd: /etc/resolv.conf is the real thing and is used.
+  const plain = { "/etc/resolv.conf": "nameserver 1.1.1.1\n" };
+  assert.deepEqual(await discoverUpstreams(async (p) => plain[p] ?? ""), ["1.1.1.1"]);
+
+  // Loopback everywhere still means none — the fallback that keeps a machine's
+  // DNS intact rather than pointing it all at a bridge with nowhere to forward.
+  const stubOnly = {
+    "/etc/resolv.conf": "nameserver 127.0.0.53\n",
+    "/run/systemd/resolve/resolv.conf": "nameserver ::1\n",
+  };
+  assert.deepEqual(await discoverUpstreams(async (p) => stubOnly[p] ?? ""), []);
+});
