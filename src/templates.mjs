@@ -164,26 +164,29 @@ function run(cmd, args, { capture = false } = {}) {
  * deploy a service; the alternative is a tar parser in a CLI that does not
  * otherwise need one.
  */
-export async function fetchRemote(source, { tmpRoot = os.tmpdir() } = {}) {
+export async function fetchRemote(
+  source,
+  { tmpRoot = os.tmpdir(), fetchImpl = fetch, runImpl = run } = {},
+) {
   const dir = await fs.mkdtemp(path.join(tmpRoot, "moshcode-template-"));
 
   if (source.kind === "git") {
-    const cloned = await run("git", ["clone", "--depth", "1", "--quiet", source.url, dir]);
-    if (!cloned.ok) return { ok: false, error: `could not clone ${source.url}`, dir };
+    const cloned = await runImpl("git", ["clone", "--depth", "1", "--quiet", source.url, dir]);
+    if (!cloned.ok) return { ok: false, error: `could not clone ${source.url}`, dir, cleanupDir: dir };
     // The clone's own history is not part of the template.
     await fs.rm(path.join(dir, ".git"), { recursive: true, force: true });
-    return { ok: true, dir };
+    return { ok: true, dir, cleanupDir: dir };
   }
 
   if (source.kind === "tarball") {
     const archive = path.join(dir, "template.tar.gz");
     let body;
     try {
-      const res = await fetch(source.url);
-      if (!res.ok) return { ok: false, error: `${source.url} answered ${res.status}`, dir };
+      const res = await fetchImpl(source.url);
+      if (!res.ok) return { ok: false, error: `${source.url} answered ${res.status}`, dir, cleanupDir: dir };
       body = Buffer.from(await res.arrayBuffer());
     } catch {
-      return { ok: false, error: `could not fetch ${source.url}`, dir };
+      return { ok: false, error: `could not fetch ${source.url}`, dir, cleanupDir: dir };
     }
     await fs.writeFile(archive, body);
 
@@ -191,23 +194,23 @@ export async function fetchRemote(source, { tmpRoot = os.tmpdir() } = {}) {
     // extracted tree would be theatre: by then tar has already written
     // wherever the entry said, and /etc/systemd/system/anything.service is a
     // root shell on the next boot.
-    const listed = await run("tar", ["-tzf", archive], { capture: true });
-    if (!listed.ok) return { ok: false, error: "could not read the archive", dir };
+    const listed = await runImpl("tar", ["-tzf", archive], { capture: true });
+    if (!listed.ok) return { ok: false, error: "could not read the archive", dir, cleanupDir: dir };
     const unsafe = listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean).find((e) => !safeEntry(e));
-    if (unsafe) return { ok: false, error: `archive writes outside the target: ${unsafe}`, dir };
+    if (unsafe) return { ok: false, error: `archive writes outside the target: ${unsafe}`, dir, cleanupDir: dir };
 
     const out = path.join(dir, "unpacked");
     await fs.mkdir(out, { recursive: true });
-    const extracted = await run("tar", [
+    const extracted = await runImpl("tar", [
       "-xzf", archive, "-C", out,
       "--strip-components=1",
       "--no-same-owner", "--no-same-permissions",
     ]);
-    if (!extracted.ok) return { ok: false, error: "could not unpack the archive", dir };
-    return { ok: true, dir: out };
+    if (!extracted.ok) return { ok: false, error: "could not unpack the archive", dir, cleanupDir: dir };
+    return { ok: true, dir: out, cleanupDir: dir };
   }
 
-  return { ok: false, error: "not a template source", dir };
+  return { ok: false, error: "not a template source", dir, cleanupDir: dir };
 }
 
 /* ------------------------------------------------------------------- verb */
@@ -221,6 +224,7 @@ const USAGE = `moshcode template — starting stacks for Moshpit-hosted services
 
   --into <dir>   write somewhere other than the current directory
   --force        overwrite files that are already there
+  --dry-run      show every create/overwrite without writing anything
 
 Nothing in a template is executed on install — the files are copied and what to
 run is yours to decide. Read them before you do.`;
@@ -236,19 +240,39 @@ export function parseInstallArgs(args = []) {
   let spec = null;
   let into = null;
   let force = false;
+  let dryRun = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--force") { force = true; continue; }
-    if (arg === "--into") { into = args[++i] ?? null; continue; }
-    if (arg.startsWith("--into=")) { into = arg.slice("--into=".length) || null; continue; }
-    if (arg.startsWith("--")) continue;
+    if (arg === "--dry-run") { dryRun = true; continue; }
+    if (arg === "--into") {
+      const value = args[i + 1];
+      if (!value || value.startsWith("-")) {
+        return { spec, into, force, dryRun, error: "--into requires a directory" };
+      }
+      into = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--into=")) {
+      into = arg.slice("--into=".length) || null;
+      if (!into) return { spec, into, force, dryRun, error: "--into requires a directory" };
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return { spec, into, force, dryRun, error: `unknown option ${JSON.stringify(arg)}` };
+    }
     if (spec === null) spec = arg;
   }
-  return { spec, into, force };
+  return { spec, into, force, dryRun };
 }
 
-export async function templateCommand(args = [], out = console.log) {
+export async function templateCommand(
+  args = [],
+  out = console.log,
+  { fetchRemoteImpl = fetchRemote, cwd = process.cwd() } = {},
+) {
   const [sub, ...rest] = args;
 
   if (!sub || sub === "help" || sub === "--help" || sub === "-h") {
@@ -277,7 +301,12 @@ export async function templateCommand(args = [], out = console.log) {
     return 1;
   }
 
-  const { spec, into: intoArg, force } = parseInstallArgs(rest);
+  const parsed = parseInstallArgs(rest);
+  if (parsed.error) {
+    out(`moshcode template install: ${parsed.error}`);
+    return 1;
+  }
+  const { spec, into: intoArg, force, dryRun } = parsed;
   const source = classifySource(spec);
   if (source.kind === "none") {
     out("moshcode template install: name a template, a git URL, or a .tar.gz");
@@ -288,7 +317,7 @@ export async function templateCommand(args = [], out = console.log) {
     return 1;
   }
 
-  const into = path.resolve(intoArg || process.cwd());
+  const into = path.resolve(cwd, intoArg || ".");
 
   let from = null;
   let cleanup = null;
@@ -303,14 +332,14 @@ export async function templateCommand(args = [], out = console.log) {
     }
   } else {
     out(`fetching ${source.url} …`);
-    const fetched = await fetchRemote(source);
+    const fetched = await fetchRemoteImpl(source);
     if (!fetched.ok) {
-      await fs.rm(fetched.dir, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(fetched.cleanupDir || fetched.dir, { recursive: true, force: true }).catch(() => {});
       out(`moshcode template install: ${fetched.error}`);
       return 1;
     }
     from = fetched.dir;
-    cleanup = fetched.dir;
+    cleanup = fetched.cleanupDir || fetched.dir;
   }
 
   try {
@@ -318,6 +347,19 @@ export async function templateCommand(args = [], out = console.log) {
     if (!files.length) {
       out("moshcode template install: that template has no files in it");
       return 1;
+    }
+    if (dryRun) {
+      const conflictSet = new Set(conflicts);
+      for (const file of files) out(`  ${conflictSet.has(file) ? "overwrite" : "create"}  ${file}`);
+      out("");
+      if (conflicts.length && !force) {
+        out(`${conflicts.length} existing file${conflicts.length === 1 ? "" : "s"} would block this install.`);
+        out("Nothing was written. Re-run with --force --dry-run to preview overwrites.");
+        return 1;
+      }
+      out(`${files.length} file${files.length === 1 ? "" : "s"} would be written to ${into}`);
+      out("dry run; nothing was written");
+      return 0;
     }
     if (conflicts.length && !force) {
       out(`moshcode template install: ${conflicts.length} file${conflicts.length === 1 ? "" : "s"} already exist here:`);

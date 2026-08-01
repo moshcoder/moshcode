@@ -129,6 +129,9 @@ test("bash completion respects argument depth and preserves file fallbacks", () 
   assert.ok(bashCompletions(["moshcode", "skill", "list", "--"]).includes("--json"));
   assert.ok(bashCompletions(["moshcode", "skills", "list", "--"]).includes("--json"));
 
+  assert.ok(bashCompletions(["moshcode", "template", ""]).includes("install"));
+  assert.ok(bashCompletions(["moshcode", "template", "install", "--"]).includes("--dry-run"));
+
   assert.deepEqual(bashCompletions(["moshcode", "run", ""]), []);
   assert.ok(bashCompletions(["moshcode", "run", "--"]).includes("--dry-run"));
   assert.ok(bashCompletions(["moshcode", "upgrade", "claude", ""]).includes("codex"));

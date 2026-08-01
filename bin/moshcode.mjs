@@ -157,6 +157,7 @@ usage:
   moshcode template list               starting stacks for a Moshpit-hosted service
   moshcode template install <name>     copy one here (also takes a git URL,
      [--into dir] [--force]            owner/repo, or a .tar.gz); nothing is run
+     [--dry-run]                       preview creates and overwrites without writing
   moshcode install <engine|tool>       install a coding engine or workflow tool
   moshcode uninstall <engine|tool>     take one back off this machine
   moshcode upgrade [target…]           update moshcode + installed engines/tools

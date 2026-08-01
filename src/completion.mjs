@@ -150,6 +150,13 @@ _moshcode_completion() {
           choices="--port --ttyd --bind"
         fi
         ;;
+      template|templates)
+        if (( COMP_CWORD == 2 )); then
+          choices="list install"
+        elif [[ "$nested" == "install" && "$cur" == -* ]]; then
+          choices="--into --force --dry-run"
+        fi
+        ;;
     esac
   fi
 
@@ -254,6 +261,15 @@ _moshcode() {
         _files
       fi
       ;;
+    template|templates)
+      if (( CURRENT == 3 )); then
+        _values "template command" list install
+      elif [[ "\${words[3]}" == "install" && "$PREFIX" == -* ]]; then
+        _values "template install option" --into --force --dry-run
+      else
+        _files
+      fi
+      ;;
     *)
       _files
       ;;
@@ -314,6 +330,10 @@ complete -c moshcode -n '${atSecondToken("console")}' -a '--url' -d 'print a gat
 complete -c moshcode -n '__moshcode_nested_is console serve' -l port -r -d 'local HTTP port'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l ttyd -r -d 'ttyd host and port'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l bind -r -d 'bind address'
+complete -c moshcode -n '${atSecondToken("template templates")}' -a 'list install' -d 'template command'
+complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l into -r -d 'target directory'
+complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l force -d 'overwrite existing files'
+complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l dry-run -d 'preview without writing'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l name -r -d 'server name'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l transport -s t -r -d 'MCP transport'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l env -s e -r -d 'environment KEY=VALUE'
