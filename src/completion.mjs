@@ -7,7 +7,7 @@ import {
 import { ENGINES, ENGINE_ALIASES } from "./engines.mjs";
 import { TOOLS } from "./tools.mjs";
 
-export const COMPLETION_SHELLS = ["bash", "zsh", "fish"];
+export const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 
 function entry(name, description) {
   const value = String(name);
@@ -81,6 +81,125 @@ function fishEntries(condition, entries) {
   return entries.map(({ name, description }) => (
     `complete -c moshcode -n ${fishQuote(condition)} -a ${fishQuote(name)} -d ${fishQuote(description)}`
   )).join("\n");
+}
+
+function powershellQuote(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function powershellEntries(variable, entries) {
+  const rows = entries.map(({ name, description }) => (
+    `  [pscustomobject]@{ Name = ${powershellQuote(name)}; Description = ${powershellQuote(description)} }`
+  ));
+  return `$script:${variable} = @(\n${rows.join("\n")}\n)`;
+}
+
+function powershellCompletion(model) {
+  const optionEntries = (values, description = "option") => (
+    values.split(" ").filter(Boolean).map((name) => entry(name, description))
+  );
+
+  return `# PowerShell completion for moshcode
+${powershellEntries("MoshcodeCompletionTop", model.top)}
+${powershellEntries("MoshcodeCompletionEngines", model.engines)}
+${powershellEntries("MoshcodeCompletionInstall", model.install)}
+${powershellEntries("MoshcodeCompletionUninstall", model.uninstall)}
+${powershellEntries("MoshcodeCompletionUpgrade", model.upgrade)}
+${powershellEntries("MoshcodeCompletionMcp", model.mcp)}
+${powershellEntries("MoshcodeCompletionMcpServerSpecs", model.mcpServerSpecs)}
+${powershellEntries("MoshcodeCompletionSkills", model.skills)}
+${powershellEntries("MoshcodeCompletionSkillSources", model.skillSources)}
+${powershellEntries("MoshcodeCompletionShells", model.shells)}
+${powershellEntries("MoshcodeCompletionJson", optionEntries("--json", "print JSON"))}
+${powershellEntries("MoshcodeCompletionLogin", optionEntries("--browser -b --device -d", "authentication mode"))}
+${powershellEntries("MoshcodeCompletionRun", optionEntries("--dry-run --max -n", "run option"))}
+${powershellEntries("MoshcodeCompletionUninstallOptions", optionEntries("--yes -y --dry-run", "uninstall option"))}
+${powershellEntries("MoshcodeCompletionConsole", optionEntries("serve --url", "console command"))}
+${powershellEntries("MoshcodeCompletionConsoleServe", optionEntries("--port --ttyd --bind", "console serve option"))}
+${powershellEntries("MoshcodeCompletionMcpOptions", optionEntries("--name --transport -t --env -e --header -H", "MCP option"))}
+${powershellEntries("MoshcodeCompletionSkillOptions", optionEntries("--name", "skill option"))}
+
+Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
+  param($wordToComplete, $commandAst, $cursorPosition)
+
+  $tokens = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
+  $argumentIndex = if ([string]::IsNullOrEmpty($wordToComplete)) {
+    $tokens.Count
+  } else {
+    $tokens.Count - 1
+  }
+  $command = if ($tokens.Count -gt 1) { $tokens[1] } else { '' }
+  $nested = if ($tokens.Count -gt 2) { $tokens[2] } else { '' }
+  $choices = @()
+
+  if ($argumentIndex -eq 1) {
+    $choices = $script:MoshcodeCompletionTop
+  } else {
+    switch ($command) {
+      { $_ -in @('agents', 'start') } {
+        if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionEngines }
+      }
+      'install' {
+        if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionInstall }
+      }
+      { $_ -in @('uninstall', 'remove') } {
+        if ($argumentIndex -eq 2 -and -not $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionUninstall
+        } elseif ($wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionUninstallOptions
+        }
+      }
+      { $_ -in @('upgrade', 'update') } {
+        $choices = $script:MoshcodeCompletionUpgrade
+      }
+      'completion' {
+        if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionShells }
+      }
+      'mcp' {
+        if ($argumentIndex -eq 2) {
+          $choices = $script:MoshcodeCompletionMcp
+        } elseif ($nested -eq 'list' -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionJson
+        } elseif ($script:MoshcodeCompletionMcpServerSpecs.Name -contains $nested -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionMcpOptions
+        }
+      }
+      { $_ -in @('skill', 'skills') } {
+        if ($argumentIndex -eq 2) {
+          $choices = $script:MoshcodeCompletionSkills
+        } elseif ($nested -eq 'list' -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionJson
+        } elseif ($script:MoshcodeCompletionSkillSources.Name -contains $nested -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionSkillOptions
+        }
+      }
+      'login' { if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionLogin } }
+      { $_ -in @('engines', 'tools', 'commands') } {
+        if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionJson }
+      }
+      'run' { if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionRun } }
+      'console' {
+        if ($argumentIndex -eq 2) {
+          $choices = $script:MoshcodeCompletionConsole
+        } elseif ($nested -eq 'serve' -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionConsoleServe
+        }
+      }
+    }
+  }
+
+  foreach ($candidate in $choices) {
+    if ($candidate.Name.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {
+      [System.Management.Automation.CompletionResult]::new(
+        $candidate.Name,
+        $candidate.Name,
+        [System.Management.Automation.CompletionResultType]::ParameterValue,
+        $candidate.Description
+      )
+    }
+  }
+}
+`;
 }
 
 function bashCompletion(model) {
@@ -348,5 +467,6 @@ export function completionScript(shell) {
   if (normalized === "bash") return bashCompletion(model);
   if (normalized === "zsh") return zshCompletion(model);
   if (normalized === "fish") return fishCompletion(model);
+  if (normalized === "powershell" || normalized === "pwsh") return powershellCompletion(model);
   throw new Error(`unsupported shell ${JSON.stringify(shell)}; choose: ${COMPLETION_SHELLS.join(", ")}`);
 }
