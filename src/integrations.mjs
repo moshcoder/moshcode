@@ -183,8 +183,20 @@ function summarize(results) {
   }
 }
 
-/** Run `/mcp …`. `tokens` are the words after `mcp`. */
-export async function mcpCommand(tokens) {
+/**
+ * Did any engine we actually ran come back failed?
+ *
+ * Only "failed" counts. An engine that is skipped ("no MCP support") or absent
+ * ("not installed") was never attempted, and the summary already prints both in
+ * grey rather than red — treating them as failures would make `mcp add` exit
+ * non-zero on a perfectly good box that simply does not have all six engines.
+ * This is the rule `upgrade` already applies to its own fan-out, which counts
+ * `!r.ok` over the engines it ran and exits 1 if any of them failed.
+ */
+const anyFailed = (results) => results.some((r) => r.status === "failed");
+
+/** Run `/mcp …`. `tokens` are the words after `mcp`. `run`/`installedSet` are injectable for tests. */
+export async function mcpCommand(tokens, { run, installedSet } = {}) {
   const parsed = parseMcp(tokens);
   if (parsed.list) { printMcpTargets(parsed.json); return 0; }
   if (parsed.showCatalog) { printMcpCatalog(); return 0; }
@@ -192,7 +204,7 @@ export async function mcpCommand(tokens) {
 
   const { spec } = parsed;
   console.log(info(`registering ${bone(spec.name)} → ${ash(spec.target)} across MCP engines…`));
-  const results = await runMcpAdd(planMcpAdd(spec));
+  const results = await runMcpAdd(planMcpAdd(spec, { installedSet }), run ? { run } : {});
   summarize(results);
   // Credentials are named, never registered: an API key copied into five
   // engines' config files is five places to leak it from and five to rotate.
@@ -205,11 +217,11 @@ export async function mcpCommand(tokens) {
   if (spec.headers.length || /^https?:/i.test(spec.target)) {
     console.log(ash("  note: OAuth/HTTP servers may still need per-engine auth (e.g. `opencode mcp auth`, `codex mcp login`)."));
   }
-  return 0;
+  return anyFailed(results) ? 1 : 0;
 }
 
-/** Run `/skill …`. `tokens` are the words after `skill`. */
-export async function skillCommand(tokens) {
+/** Run `/skill …`. `tokens` are the words after `skill`. `run`/`installedSet` are injectable for tests. */
+export async function skillCommand(tokens, { run, installedSet } = {}) {
   const verb = tokens[0];
   if (!verb || verb === "list") { printSkillTargets(tokens.slice(1).includes("--json")); return 0; }
   if (verb !== "install") {
@@ -232,7 +244,7 @@ export async function skillCommand(tokens) {
 
   const spec = { source, name: skillName(source, name) };
   console.log(info(`installing skill ${bone(spec.name)} → ${ash(source)} across skills engines…`));
-  const results = await runSkillInstall(planSkillInstall(spec));
+  const results = await runSkillInstall(planSkillInstall(spec, { installedSet }), run ? { run } : {});
   summarize(results);
-  return 0;
+  return anyFailed(results) ? 1 : 0;
 }
