@@ -219,3 +219,16 @@ test("owner email is never put on a page built to be crawled", skip, async () =>
   // The registry API exposes it; that is not a reason to make it indexable.
   assert.doesNotMatch(body, /a@b\.c/);
 });
+
+test("the pointer count reads as English at one and at many", skip, async () => {
+  const { get } = await app();
+
+  // .rank has exactly one ending pointing at it, which read "1 ending point
+  // here" — the noun was pluralised and the verb was not.
+  assert.match((await get("/n/rank")).body, /1 ending points here/);
+
+  // A second pointer flips both halves.
+  const { run } = await import("../src/db.mjs");
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,alias_of,created_at) VALUES ('serp','u1','a@b.c','rank',1)`);
+  assert.match((await get("/n/rank")).body, /2 endings point here/);
+});

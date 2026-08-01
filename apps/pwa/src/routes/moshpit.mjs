@@ -538,7 +538,10 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], us
     `${live.length} pointed somewhere`,
     owner.price_usd != null ? `$${owner.price_usd} a name` : "not for sale",
     owner.alias_of ? `points at .${owner.alias_of}` : null,
-    pointedHereBy.length ? `${pointedHereBy.length} ending${pointedHereBy.length === 1 ? "" : "s"} point here` : null,
+    // The verb agrees too: "1 ending points here", "2 endings point here".
+    pointedHereBy.length
+      ? `${pointedHereBy.length} ending${pointedHereBy.length === 1 ? " points" : "s point"} here`
+      : null,
     claimedOn ? `claimed ${claimedOn}` : null,
   ].filter(Boolean);
 
