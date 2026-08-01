@@ -54,6 +54,7 @@ import {
   parseMoshpitName,
   PIN_KINDS,
   pinsForName,
+  popularLabels,
   quoteName,
   registerName,
   registerTld,
@@ -68,6 +69,7 @@ import {
   setNameTarget,
   setTldPrice,
   shortCount,
+  suggestedLabels,
   summarizeBulkClaim,
   tldRejection,
 } from "../moshpit.mjs";
@@ -396,15 +398,23 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     const ending = normalizeTld(String(req.params.name || "").replace(/^\.+/, ""));
     const owner = ending ? await getTldWithPrice(ending) : null;
     if (owner) {
-      const [names, aliasesTo, sameOwner] = await Promise.all([
+      const [names, aliasesTo, sameOwner, popular] = await Promise.all([
         listNames(ending),
         listAliasesTo(ending),
         listTldsForUser(owner.user_id, { limit: 50 }),
+        popularLabels(),
       ]);
+      // What could go under it next — the third question, after what is under
+      // it and what is near it.
+      const suggestions = suggestedLabels({
+        tld: ending,
+        taken: names.map((n) => n.label),
+        popular,
+      });
       return res.status(200).send(page({
         title: `.${ending}`,
         head: endingHead(ending, owner),
-        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, user: req.user, req }),
+        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, suggestions, user: req.user, req }),
       }));
     }
     // Still 400 for an ending nobody holds: otherwise every typo under /n/
@@ -509,7 +519,7 @@ function endingHead(tld, owner) {
  * ending's price and a box to pick a name under it — and the listing is the
  * whole ending rather than "what else lives near the name you asked for".
  */
-function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], user, req }) {
+function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], user, req }) {
   const live = names.filter((n) => n.target);
   const claimed = names.filter((n) => !n.target);
   const nameLink = (n) =>
@@ -545,6 +555,12 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], us
     claimedOn ? `claimed ${claimedOn}` : null,
   ].filter(Boolean);
 
+  // A suggestion goes to the claim box with the name already filled in, which
+  // is the same path the "See if it is free" form takes — so the offer and the
+  // shortcut cannot disagree about what happens next.
+  const suggestionLink = (label) =>
+    `<a class="mono" href="/pit?name=${encodeURIComponent(`${label}.${tld}`)}">${esc(label)}.${esc(tld)}</a>`;
+
   return `
 <section class="pit-panel">
   <h1 class="acid">.${esc(tld)}</h1>
@@ -578,6 +594,13 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], us
   <ul class="pit-dir">${claimed.map((n) => `<li>${nameLink(n)}</li>`).join("")}</ul>` : ""}
 
   ${names.length ? "" : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">Nothing lives under .${esc(tld)} yet.</p>`}
+
+  ${suggestions.length ? `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">${mine ? `Yours to mint` : `Still free under .${esc(tld)}`}</h2>
+  <p class="mono faint" style="font-size:.72rem">${mine
+    ? "You hold this ending, so these cost nothing."
+    : "Nobody has taken these yet."}</p>
+  <p class="pit-dir-row">${suggestions.map(suggestionLink).join(" &middot; ")}</p>` : ""}
 
   ${related.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>

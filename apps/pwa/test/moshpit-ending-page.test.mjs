@@ -50,6 +50,12 @@ async function boot() {
   // Somebody else's ending, so "related" cannot just mean "every ending".
   await run(`INSERT OR REPLACE INTO users (id,email,created_at) VALUES ('u2','x@y.z',1)`);
   await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('theirs','u2','x@y.z',1)`);
+  await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,created_at) VALUES ('elsewhere','u2','x@y.z',1)`);
+  // `www` twice and `docs` once, so "most-used first" has something to order.
+  // Deliberately not under .bare, which has to stay empty for the empty case.
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('theirs','www','u2',NULL,1)`);
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('elsewhere','www','u2',NULL,1)`);
+  await run(`INSERT INTO moshpit_names (tld,label,user_id,target,created_at) VALUES ('theirs','docs','u2',NULL,1)`);
 
   const app = deps.express();
   app.use((req, _res, next) => { req.csrfToken = () => "csrf"; next(); });
@@ -220,6 +226,51 @@ test("owner email is never put on a page built to be crawled", skip, async () =>
   assert.doesNotMatch(body, /a@b\.c/);
 });
 
+// ---- what could go here next ----
+//
+// "Nothing lives under .eggs yet" was the whole page for a young ending: true,
+// and nothing to do about it. What is under an ending and what is near it were
+// both answered; what could go under it next was not.
+
+test("an empty ending suggests names rather than stopping at 'nothing here'", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  assert.match(body, /Nothing lives under \.bare yet/);
+  // What the rest of the registry actually took, most-used first.
+  assert.match(body, /www\.bare/);
+  assert.match(body, /docs\.bare/);
+});
+
+test("a suggestion goes to the claim box with the name filled in", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  // The same path the "See if it is free" form posts to, so the shortcut and
+  // the form cannot disagree about what happens next.
+  assert.match(body, /href="\/pit\?name=www\.bare"/);
+});
+
+test("a name already taken is never suggested", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/torklink");
+
+  // `parked.torklink` exists; offering it would only ever answer "taken".
+  assert.doesNotMatch(body, /href="\/pit\?name=parked\.torklink"/);
+  assert.doesNotMatch(body, /href="\/pit\?name=pointed\.torklink"/);
+});
+
+test("the registry's own labels outrank the starter list", skip, async () => {
+  const { get } = await app();
+  const { body } = await get("/n/bare");
+
+  const row = body.slice(body.indexOf("Still free under"), body.indexOf("Related endings"));
+  // `www` is taken twice elsewhere and `docs` once, so www comes first — and
+  // both beat a starter label nobody has taken.
+  assert.ok(row.indexOf("www.bare") < row.indexOf("docs.bare"), row);
+  assert.ok(row.indexOf("docs.bare") < row.indexOf("status.bare"), row);
+});
+
 test("the pointer count reads as English at one and at many", skip, async () => {
   const { get } = await app();
 
@@ -230,5 +281,4 @@ test("the pointer count reads as English at one and at many", skip, async () => 
   // A second pointer flips both halves.
   const { run } = await import("../src/db.mjs");
   await run(`INSERT INTO moshpit_tlds (tld,user_id,owner_email,alias_of,created_at) VALUES ('serp','u1','a@b.c','rank',1)`);
-  assert.match((await get("/n/rank")).body, /2 endings point here/);
-});
+  assert.match((await get("/n/rank")).body, /2 endings point here/);});

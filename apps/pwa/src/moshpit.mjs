@@ -26,7 +26,7 @@ import {
 
 export {
   RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_CHUNK, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
-  parseTldList, tldRejection, normalizeMode, resolutionPreference,
+  parseTldList, tldRejection, normalizeMode, resolutionPreference, STARTER_LABELS, suggestedLabels,
 } from "./lib/moshpit-name.mjs";
 
 /**
@@ -277,6 +277,25 @@ export async function countNames(tld) {
  */
 export async function listAllNames(limit = 20_000) {
   return all(`SELECT tld, label FROM moshpit_names ORDER BY tld, label LIMIT ?`, [limit]);
+}
+
+/**
+ * The labels people actually take, most-used first.
+ *
+ * What to suggest under an empty ending is a question the registry can already
+ * answer better than a list written up front: `www` and `docs` earn their place
+ * by being taken under other endings, not by someone guessing they would be.
+ *
+ * Counted across every ending rather than near-by ones, because the signal is
+ * "this is what a name is for", which does not vary by ending — and an ending
+ * with neighbours worth copying is exactly the one that has names already.
+ */
+export async function popularLabels(limit = 40) {
+  const rows = await all(
+    `SELECT label, COUNT(*) AS uses FROM moshpit_names GROUP BY label ORDER BY uses DESC, label LIMIT ?`,
+    [limit],
+  );
+  return rows.map((r) => r.label);
 }
 
 export async function listNamesForUser(userId) {
