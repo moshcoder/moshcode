@@ -187,7 +187,7 @@ usage:
      [--port N] [--ttyd host:port]     behind moshcode login); --bind defaults to
      [--bind addr]                     127.0.0.1 — put it on a tailnet, not 0.0.0.0
   moshcode console --url <base>        print that gateway's URL with your login token
-  moshcode pwd                         show the current dir + git repo/branch/origin
+  moshcode pwd [--json]                show the current dir + git repo/branch/origin
   moshcode engines [--json]            list engines + install status
   moshcode tools [--json]              list workflow tools + install status
   moshcode commands [--json]           list built-in moshscript commands
@@ -422,7 +422,12 @@ async function main() {
   }
 
   if (cmd === "pwd" || cmd === "where") {
-    const { cwd, home, git } = locate();
+    const location = locate();
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify({ cwd: location.cwd, git: location.git }, null, 2));
+      return;
+    }
+    const { cwd, home, git } = location;
     console.log(tilde(cwd, home));
     if (git) {
       console.log(`repo:   ${git.name}${git.branch ? ` (${git.branch})` : ""}`);
