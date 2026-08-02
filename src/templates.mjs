@@ -27,6 +27,18 @@ export const BUNDLED_DIR = path.join(HERE, "..", "examples", "templates");
 /** The manifest is metadata about the copy, not part of it. */
 const MANIFEST = "template.json";
 
+/**
+ * Is this the template's own manifest?
+ *
+ * Only the one at the root describes the copy. A `template.json` deeper in the
+ * tree is one of the template's own files — a collection laid out the way the
+ * bundled ones are, `<name>/template.json`, is the ordinary case — and dropping
+ * it because the basename matched would quietly install a broken tree.
+ */
+function isOwnManifest(relative) {
+  return relative === MANIFEST;
+}
+
 /* ------------------------------------------------------------------ listing */
 
 /** The bundled templates, each with whatever its manifest says about it. */
@@ -134,7 +146,7 @@ async function walk(dir, base = dir) {
  */
 export async function installPlan(from, into) {
   const walked = await walk(from);
-  const files = walked.files.filter((f) => path.basename(f) !== MANIFEST);
+  const files = walked.files.filter((f) => !isOwnManifest(f));
   const conflicts = [];
   for (const file of files) {
     try {
