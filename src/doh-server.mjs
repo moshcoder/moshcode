@@ -13,7 +13,9 @@
 
 import http from "node:http";
 import { createDohHandler, DNS_MESSAGE } from "./doh.mjs";
-import { discoverUpstreams, fetchTlds, DEFAULT_REGISTRY_BASE, parkingAddress } from "./dns.mjs";
+import {
+  discoverUpstreams, fetchTlds, parseDnsPort, DEFAULT_REGISTRY_BASE, parkingAddress,
+} from "./dns.mjs";
 
 export const DEFAULT_DOH_PORT = 8053;
 export const DOH_PATH = "/dns-query";
@@ -61,6 +63,25 @@ export function parseGuardArgs(args = []) {
     ban: { ...DEFAULT_GUARDS.ban, baseMs: num("--ban-seconds", 60) * 1000 },
     maxResponseBytes: num("--max-response", DEFAULT_GUARDS.maxResponseBytes),
   };
+}
+
+/**
+ * Read the listen port off the command line.
+ *
+ * Same rule as the bridge's ports, by reusing the same parser: `dns install
+ * --port 1e3` is refused, so `doh --port 1e3` refusing it is one rule to learn
+ * rather than two. Bare `Number()` disagrees with that parser in both
+ * directions — it takes `1e3` and `0`, which it should not, and turns `abc`
+ * and a missing value into NaN, which reaches `listen()` as a crash.
+ *
+ * Returns the raw text back on failure so the caller can quote what was typed.
+ */
+export function parseDohPort(args = [], fallback = DEFAULT_DOH_PORT) {
+  const at = args.indexOf("--port");
+  if (at < 0) return { ok: true, port: fallback };
+  const raw = args[at + 1];
+  const port = parseDnsPort(raw);
+  return port === null ? { ok: false, raw } : { ok: true, port };
 }
 
 /** Read a request body, refusing anything implausible for a DNS message. */

@@ -27,7 +27,7 @@ import { consoleCommand } from "../src/console.mjs";
 import { dnsCommand } from "../src/dns.mjs";
 import { templateCommand } from "../src/templates.mjs";
 import { serveCommand } from "../src/serve.mjs";
-import { createDohServer, nginxDohSite, parseGuardArgs, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
+import { createDohServer, nginxDohSite, parseDohPort, parseGuardArgs, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
 import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
@@ -398,9 +398,14 @@ async function main() {
       console.log(nginxDohSite({ name: rest[nameAt + 1] || "dns.example", port: DEFAULT_DOH_PORT }));
       return;
     }
-    const portAt = rest.indexOf("--port");
+    const listenPort = parseDohPort(rest, DEFAULT_DOH_PORT);
+    if (!listenPort.ok) {
+      console.error(`--port needs a decimal integer from 1 to 65535, got ${JSON.stringify(listenPort.raw)}`);
+      process.exitCode = 1;
+      return;
+    }
     const server = await createDohServer({
-      port: portAt >= 0 ? Number(rest[portAt + 1]) : DEFAULT_DOH_PORT,
+      port: listenPort.port,
       ...parseGuardArgs(rest),
     });
     console.log(`DoH resolver on ${server.url}`);
