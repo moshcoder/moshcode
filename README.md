@@ -277,6 +277,7 @@ a **DIP-style** standard: a numbered, committed proposal collection in your repo
 ```sh
 moshcode prd "parked-domain service expansion"   # publish the next numbered PRD, then hand it to an engine
 moshcode prd                                      # list existing PRDs
+moshcode prd list --json                          # machine-readable listing; writes nothing
 ```
 
 `moshcode prd <idea>` bootstraps `prd/` on first use (a `README.md` index +

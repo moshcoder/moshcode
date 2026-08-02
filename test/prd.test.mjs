@@ -1,10 +1,56 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createPrd, listPrds, renderPrd } from "../src/prd.mjs";
+
+const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
+
+test("prd list --json is machine-readable and does not bootstrap an empty repo", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-list-"));
+  try {
+    const result = spawnSync(process.execPath, [BIN, "prd", "list", "--json"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout), []);
+    assert.equal(fs.existsSync(path.join(root, "prd")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prd list --json returns stable public fields without changing the PRD tree", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-list-"));
+  try {
+    createPrd("add a dark mode toggle", root);
+    const dir = path.join(root, "prd");
+    const before = fs.readdirSync(dir).sort();
+    const result = spawnSync(process.execPath, [BIN, "prd", "list", "--json"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout), [{
+      id: "0001",
+      title: "Add a dark mode toggle",
+      status: "Draft",
+      file: "0001-add-a-dark-mode-toggle.md",
+    }]);
+    assert.deepEqual(fs.readdirSync(dir).sort(), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("renderPrd quotes titles so YAML metacharacters stay valid", () => {
   const body = renderPrd({
