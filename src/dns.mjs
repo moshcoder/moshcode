@@ -1229,15 +1229,40 @@ export async function dnsCommand(args = [], out = console.log) {
     if (upstreams.length) out(`forwarding non-Moshpit lookups to ${upstreams.join(", ")}`);
     else out("! no upstreams found in /etc/resolv.conf — this bridge can only answer Moshpit names");
 
-    const server = await createServer({
-      port,
-      registryBase,
-      parkingAddress: park,
-      upstreams,
-      tldSet,
-      onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
-      onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
-    });
+    // The same two error codes the parking server above already explains, on
+    // the port this command exists to bind. Without this they arrived as an
+    // unhandled rejection — bin/moshcode calls main() with no top-level catch —
+    // so a busy port answered with a node:dgram stack trace. This one is fatal
+    // where the parking server's is not, so it ends the command rather than
+    // carrying on: the shape serve.mjs uses for a step it cannot complete.
+    let server;
+    try {
+      server = await createServer({
+        port,
+        registryBase,
+        parkingAddress: park,
+        upstreams,
+        tldSet,
+        onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
+        onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
+      });
+    } catch (err) {
+      const why = err?.code === "EACCES"
+        ? `needs privileges to bind port ${port}`
+        : err?.code === "EADDRINUSE"
+          ? `port ${port} is already in use`
+          : err?.message || String(err);
+      out(`! resolver could not start — ${why}`);
+      out(err?.code === "EACCES"
+        ? "  (run with sudo, or pass --port N and point your resolver there)"
+        : `  (stop what is on port ${port}, or pass --port N and point your resolver there)`);
+      // Opened before the bind was attempted, so it is listening right now. The
+      // crash used to close it by killing the process; returning cannot, and an
+      // orphaned listener holds the event loop open — the command would hang on
+      // a busy port instead of exiting.
+      await parking?.close();
+      return 1;
+    }
     if (parking) out(`parked names → http://${parking.address}:${parking.port} → ${registryBase}/n/<name>`);
     out(`moshpit resolver on ${server.address}:${server.port} (registry ${registryBase})`);
     out("point your resolver here with: moshcode dns install");
