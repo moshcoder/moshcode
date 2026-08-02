@@ -240,6 +240,17 @@ export async function skillCommand(tokens, { run, installedSet } = {}) {
     }
     else if (!source) source = rest[i];
   }
+  // A source still starting with `-` was never consumed as a flag, so it is a
+  // typo or an engine-native flag moshcode does not take (`-s user`). Left
+  // alone it becomes the skill SOURCE and is spliced straight into every
+  // engine's own argv — `gemini skills install -s --scope user`, and a
+  // `git clone --depth 1 -s <dest>` where `-s` (`--shared`) makes git read the
+  // destination as the repository — while the URL the user actually typed is
+  // dropped on the floor. Same guard `mcp` already applies to its own spec.
+  if (source?.startsWith("-")) {
+    console.log(err(`unknown skill flag "${source}" — skill install takes --name; a source that really starts with "-" must be written as ./${source}`));
+    return 1;
+  }
   if (!source) { console.log(err("usage: /skill install <git-url|path> [--name <name>]")); return 1; }
 
   const spec = { source, name: skillName(source, name) };
