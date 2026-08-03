@@ -23,6 +23,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifySource, listTemplates } from "./templates.mjs";
+import { tldOf, keyPaths, certificateCommand, pinFromCertificate, publishPin } from "./pins.mjs";
+import { loadCreds } from "./auth.mjs";
+
+/** The registry credential: explicit env first, then `moshcode login`. */
+const token = () => process.env.MOSHCODE_API_KEY || loadCreds()?.token || "";
 
 /**
  * What a freshly installed site contains before anyone has written anything.
@@ -131,22 +136,12 @@ const defaultListeners = async () => {
 };
 
 /** An nginx server block for one Moshpit name. */
-export function nginxSite({ name, root, proxy }) {
+export function nginxSite({ name, root, proxy, tls = null }) {
   const body = proxy
     ? [`\tlocation / {`, `\t\tproxy_pass http://127.0.0.1:${proxy};`, `\t\tproxy_set_header Host $host;`, `\t\tproxy_set_header X-Moshpit-Name $host;`, `\t}`]
     : [`\troot ${root};`, `\tindex index.html;`, ``, `\tlocation / {`, `\t\ttry_files $uri $uri/ =404;`, `\t}`];
 
-  return [
-    `# ${name} — written by \`moshcode serve\`.`,
-    "#",
-    "# No redirect to HTTPS, deliberately: no CA will issue for an ending outside",
-    "# the DNS root, so a redirect here points at a page that can never load. The",
-    "# gateway forwards the status without the Location header, which makes it a",
-    "# 301 to nowhere.",
-    "#",
-    "# Both listen lines matter. Resolver users arrive over IPv6 because that is",
-    "# what the name points at; everyone else arrives via pit.moshcode.sh, which",
-    "# fetches this server-side.",
+  const plain = [
     "server {",
     "\tlisten 80;",
     "\tlisten [::]:80;",
@@ -159,6 +154,70 @@ export function nginxSite({ name, root, proxy }) {
     "\t\tdeny all;",
     "\t}",
     "}",
+  ];
+
+  // The TLS half, when this ending has a key. Both halves serve the site;
+  // neither redirects to the other. That is the whole point — a client takes
+  // whichever it can verify, and there is no arrangement where one of them
+  // sends a client somewhere it cannot follow.
+  const secure = tls
+    ? [
+        "",
+        "# The same site over TLS, for clients that can verify it.",
+        "#",
+        "# Verified against the registry's published pin rather than a CA chain,",
+        "# because no CA will issue for an ending outside the DNS root. The pin is",
+        "# a stronger statement than a CA's: it names the exact key, where a CA",
+        "# only attests that somebody proved control to some issuer.",
+        "#",
+        `# pin: ${tls.pin}`,
+        "server {",
+        "\tlisten 443 ssl;",
+        "\tlisten [::]:443 ssl;",
+        "\thttp2 on;",
+        "",
+        `\tserver_name ${name};`,
+        "",
+        `\tssl_certificate     ${tls.cert};`,
+        `\tssl_certificate_key ${tls.key};`,
+        "\tssl_protocols TLSv1.3;",
+        "\tssl_prefer_server_ciphers off;",
+        // Hybrid post-quantum, matching what is already deployed. A DNS-adjacent
+        // request names every site someone is about to visit, which is worth as
+        // much to an attacker recording now to decrypt later as the pages are.
+        "\tssl_conf_command Groups X25519MLKEM768:X25519:P-256;",
+        "\tssl_session_tickets off;",
+        "",
+        ...body,
+        "",
+        "\tlocation ~ /\\. {",
+        "\t\tdeny all;",
+        "\t}",
+        "}",
+      ]
+    : [];
+
+  return [
+    `# ${name} — written by \`moshcode site\`.`,
+    "#",
+    "# Port 80 never redirects to 443, deliberately. No CA will issue for an",
+    "# ending outside the DNS root, so a stock browser or curl cannot verify the",
+    "# certificate here however good it is — and a redirect would send them to a",
+    "# page they can never load. The gateway forwards the status without the",
+    "# Location header, which turns it into a 301 to nowhere.",
+    "#",
+    tls
+      ? "# So both ports serve the site: plain HTTP for anything, pin-verified TLS"
+      : "# TLS is absent because this ending has no key yet — `--tls` creates one",
+    tls
+      ? "# for clients that check the registry's pin. The client picks."
+      : "# and publishes its pin, after which this file gains a 443 block.",
+    "#",
+    "# Both listen lines matter. Resolver users arrive over IPv6 because that is",
+    "# what the name points at; everyone else arrives via pit.moshcode.sh, which",
+    "# fetches this server-side.",
+    ...plain,
+    ...secure,
     "",
   ].join("\n");
 }
@@ -180,19 +239,67 @@ export function caddySite({ name, root, proxy }) {
 }
 
 /**
+ * The TLS story for a name: reuse the ending's key, or mint one.
+ *
+ * One key per *ending*, not per name, because that is what the registry pins —
+ * you claim `.eggs`, not `scrambled.eggs`. A key per name would mean a pin
+ * published per site and every name under the ending accepting all of them:
+ * strictly more keys able to impersonate each other, for no isolation gained.
+ *
+ * When the key already exists its pin is read back off disk rather than
+ * assumed, so a second name under the same ending publishes the pin that is
+ * actually being served rather than one we believe should be.
+ */
+export async function tlsFor(name, { dir = "/etc/ssl/moshpit", readFile = fs.readFile } = {}) {
+  const tld = tldOf(name);
+  if (!tld) return null;
+  const paths = keyPaths(tld, dir);
+  if (!paths) return null;
+
+  try {
+    const existing = await readFile(paths.cert, "utf8");
+    return { tld, dir, key: paths.key, cert: paths.cert, pin: pinFromCertificate(existing), create: null };
+  } catch {
+    // No key yet. The command is returned rather than run, so `--install`
+    // stays the only thing that touches the machine.
+    //
+    // The pin is null here and read back from the certificate after openssl
+    // has run: openssl mints the key itself, so predicting the pin would mean
+    // publishing a value we hoped for rather than the one being served.
+    return { tld, dir, key: paths.key, cert: paths.cert, pin: null, create: certificateCommand({ name, tld, paths }) };
+  }
+}
+
+/**
  * What serving this name would change.
  *
  * Returned rather than done, so `--write` is the only thing that touches the
  * machine and everything before it can be read first.
  */
-export function servePlan({ name, server, root, proxy, reload = false, seed = null }) {
+export function servePlan({ name, server, root, proxy, reload = false, seed = null, tls = null }) {
   const target = SERVERS[server];
   if (!target) return { ok: false, error: `no supported web server found — install nginx or caddy` };
 
   const file = path.join(target.dir, `${name}${target.ext}`);
-  const content = server === "nginx" ? nginxSite({ name, root, proxy }) : caddySite({ name, root, proxy });
+  // Caddy has no pinned-TLS story here: it wants to provision a certificate
+  // from a CA, which is exactly what cannot happen for these endings.
+  const useTls = server === "nginx" ? tls : null;
+  const content = server === "nginx" ? nginxSite({ name, root, proxy, tls: useTls }) : caddySite({ name, root, proxy });
 
-  const steps = [{ kind: "write", path: file, content, why: `answer to ${name} without redirecting it` }];
+  const steps = [];
+  if (useTls?.create) {
+    // Before the config that references them, so a failed key never leaves
+    // nginx pointing at a certificate that does not exist — which it refuses
+    // to start with, taking every other site on the box down with it.
+    steps.push({ kind: "mkdir", path: useTls.dir, why: "somewhere for the ending's key to live" });
+    steps.push({
+      kind: "run",
+      command: useTls.create.cmd,
+      args: useTls.create.args,
+      why: `a key for .${useTls.tld} — one per ending, which is what the registry pins`,
+    });
+  }
+  steps.push({ kind: "write", path: file, content, why: `answer to ${name} without redirecting it` });
   if (!proxy) {
     steps.push({ kind: "mkdir", path: root, why: "somewhere for the files to live" });
     // Only when the root is new. Seeding over someone's site would be the
@@ -208,7 +315,20 @@ export function servePlan({ name, server, root, proxy, reload = false, seed = nu
   // deleting a file, the second changes what a running server does to traffic.
   if (reload) steps.push({ kind: "run", command: target.reload[0], args: target.reload.slice(1), why: "make it live now" });
 
-  return { ok: true, server, file, root: proxy ? null : root, proxy: proxy ?? null, steps };
+  // Last, and only once the key exists on disk. Publishing a pin for a key
+  // that failed to generate would tell every client to expect a certificate
+  // this machine cannot present — worse than no pin, because a pin that does
+  // not match is a hard failure rather than a missing one.
+  if (useTls) {
+    steps.push({
+      kind: "publish-pin",
+      tld: useTls.tld,
+      pin: useTls.pin,
+      why: `so clients can verify .${useTls.tld} without a CA`,
+    });
+  }
+
+  return { ok: true, server, file, root: proxy ? null : root, proxy: proxy ?? null, tls: useTls, steps };
 }
 
 const USAGE = `moshcode site — install web-server config for a Moshpit name
@@ -222,6 +342,8 @@ const USAGE = `moshcode site — install web-server config for a Moshpit name
                                            \`moshcode template list\`)
   moshcode site <name> --empty             seed nothing; serve a 404 until you
                                            put something there
+  moshcode site <name> --tls               also serve TLS, and publish the key
+                                           pin so clients can verify it
 
 moshcode does not serve anything itself. This writes a config file for the web
 server already on this machine; nginx or Caddy does the serving.
@@ -271,13 +393,17 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
     out("  install nginx or caddy, or add the equivalent block by hand.");
     return 1;
   }
-  const plan = servePlan({ name, server, root, proxy: proxy ? Number(proxy) : null, reload: rest.includes("--reload"), seed });
+  // Opt-in, because it writes a private key and publishes to the registry —
+  // two things that should not happen because someone ran the default.
+  const tls = rest.includes("--tls") ? await tlsFor(name) : null;
+  const plan = servePlan({ name, server, root, proxy: proxy ? Number(proxy) : null, reload: rest.includes("--reload"), seed, tls });
   if (!plan.ok) {
     out(`moshcode site: ${plan.error}`);
     return 1;
   }
 
-  out(`${name} → ${plan.proxy ? `127.0.0.1:${plan.proxy}` : plan.root}  (${plan.server}, port 80, plain HTTP)`);
+  const ports = plan.tls ? "ports 80 + 443, pin-verified TLS" : "port 80, plain HTTP";
+  out(`${name} → ${plan.proxy ? `127.0.0.1:${plan.proxy}` : plan.root}  (${plan.server}, ${ports})`);
   out("");
   for (const step of plan.steps) {
     const what = step.kind === "run" ? `${step.command} ${step.args.join(" ")}` : step.path;
@@ -303,6 +429,24 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
         if (!result?.ok) {
           out(`! ${step.command} failed — stopping before anything else changes`);
           return 1;
+        }
+      } else if (step.kind === "publish-pin") {
+        // Read back off the certificate rather than using the value planned:
+        // openssl minted the key, so this is the only way to publish what is
+        // actually being served instead of what we expected to be.
+        const served = await fs.readFile(plan.tls.cert, "utf8").then(pinFromCertificate).catch(() => step.pin);
+        const result = await publishPin({ tld: step.tld, pin: served, token: token(), note: `moshcode site ${name}` });
+        if (result.ok) {
+          out(result.already ? `  pin already published for .${step.tld}` : `  pin published for .${step.tld}`);
+        } else {
+          // Not fatal. The site works; only its TLS is unverifiable, and
+          // failing the whole install here would leave a machine configured
+          // and a user told nothing worked.
+          out(`  ! pin not published: ${result.error}`);
+          out(result.needsAuth
+            ? `    the site is up, but TLS cannot be verified until it is. run \`moshcode login\`, then:`
+            : `    the site is up, but TLS cannot be verified until it is. retry with:`);
+          out(`    moshcode site ${name} --tls --install`);
         }
       }
     } catch (err) {
