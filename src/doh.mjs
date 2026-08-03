@@ -16,8 +16,9 @@
 // keeps no per-query record of who asked what.
 
 import {
-  answerRecords, buildRecordResponse, buildResponse, capResponse, clientKey, createBanList,
-  createRateLimiter, forwardQuery, isOurs, answerPolicy, mayHaveCname, parseQuery, refusalReason,
+  addressAnswer, answerRecords, buildChainResponse, buildRecordResponse, buildResponse,
+  capResponse, clientKey, createBanList, resolveChain,
+  createRateLimiter, forwardQuery, isOurs, answerPolicy, parseQuery, refusalReason,
   RECORD_TYPES, TYPE_A, TYPE_AAAA, DEFAULT_TTL, UDP_SAFE_BYTES,
 } from "./dns.mjs";
 
@@ -172,26 +173,46 @@ export function createDohHandler({
     }
 
     const wantsAddress = query.type === TYPE_A || query.type === TYPE_AAAA;
-    const policy = await answerPolicy(query.name, {
-      registryBase, fetchImpl, parkingAddress, wantsAddress,
-    }).catch(() => ({ exists: false, address: null }));
+    if (!wantsAddress) {
+      const policy = await answerPolicy(query.name, {
+        registryBase, fetchImpl, parkingAddress, wantsAddress: false,
+      }).catch(() => ({ exists: false, address: null }));
+      onQuery({ name: query.name, type: query.type, address: null });
+      return {
+        status: 200,
+        headers: { "content-type": DNS_MESSAGE, "cache-control": cacheControl(ttl) },
+        body: buildResponse(query, decoded.message, null, ttl, policy.exists),
+      };
+    }
 
-    // Same second look for a CNAME as the UDP path, on the same condition: only
-    // when the name is here and has nothing else to answer with.
-    const cname = wantsAddress && mayHaveCname(policy)
-      ? await answerRecords(query.name, { registryBase, fetchImpl, type: "CNAME" })
-        .catch(() => ({ records: [] }))
-      : null;
+    // The same plan the UDP path follows, for the same reason the split above
+    // has to stay a split: a published record or a hostname target must resolve
+    // identically here, or this endpoint reintroduces the gap it exists to close.
+    const plan = await addressAnswer(query.name, {
+      registryBase, fetchImpl, parkingAddress, wantsV6: query.type === TYPE_AAAA,
+    }).catch(() => ({ exists: false, kind: "nxdomain", records: [], address: null, cname: null }));
 
-    onQuery({ name: query.name, type: query.type, address: policy.address });
+    const answer = async () => {
+      if (plan.kind === "records") {
+        return buildRecordResponse(query, decoded.message, plan.records, {
+          ttl, exists: plan.exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
+        });
+      }
+      if (plan.kind === "chain") {
+        const addresses = await resolveChain(plan.cname, {
+          upstreams, wantsV6: query.type === TYPE_AAAA, timeoutMs: forwardTimeoutMs,
+        });
+        return buildChainResponse(query, decoded.message, { cname: plan.cname, addresses, ttl });
+      }
+      return buildResponse(query, decoded.message, plan.address, ttl, plan.exists);
+    };
+
+    const encoded = await answer();
+    onQuery({ name: query.name, type: query.type, address: plan.address || plan.cname || null });
     return {
       status: 200,
       headers: { "content-type": DNS_MESSAGE, "cache-control": cacheControl(ttl) },
-      body: cname?.records?.length
-        ? buildRecordResponse(query, decoded.message, cname.records, {
-          ttl, exists: policy.exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
-        })
-        : buildResponse(query, decoded.message, policy.address, ttl, policy.exists),
+      body: encoded,
     };
   };
 }

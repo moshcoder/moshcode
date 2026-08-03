@@ -17,6 +17,7 @@
 
 import dgram from "node:dgram";
 import { isIP } from "node:net";
+import { Resolver } from "node:dns/promises";
 
 export const DEFAULT_REGISTRY_BASE = "https://pit.moshcode.sh";
 export const DEFAULT_PARKING_HOST = "moshcoding.com";
@@ -282,6 +283,48 @@ export function buildRecordResponse(query, buf, records = [], { ttl = DEFAULT_TT
 }
 
 /**
+ * A CNAME answer, plus the leaf addresses when we could find them.
+ *
+ * Two owner names appear in one message: the question's name owns the CNAME,
+ * and the CNAME's target owns the addresses. Only the first can use the 0xc00c
+ * pointer — it is the only name already in the message — so the target is
+ * written out in full for each leaf. Uncompressed is legal, and a handful of
+ * spare bytes is a fair price for not hand-rolling a compression table.
+ */
+export function buildChainResponse(query, buf, { cname, addresses = [], ttl = DEFAULT_TTL } = {}) {
+  const question = buf.subarray(12, query.questionEnd);
+  const wantsV6 = query.type === TYPE_AAAA;
+  const target = encodeName(cname);
+
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(0xc00c, 0); // the question's name, by pointer
+  head.writeUInt16BE(TYPE_CNAME, 2);
+  head.writeUInt16BE(CLASS_IN, 4);
+  head.writeUInt32BE(ttl, 6);
+  head.writeUInt16BE(target.length, 10);
+
+  const parts = [head, target];
+  let answers = 1;
+  for (const address of addresses) {
+    const rdata = wantsV6 ? ipv6(address) : ipv4(address);
+    if (!rdata) continue;
+    const leaf = Buffer.alloc(10);
+    leaf.writeUInt16BE(wantsV6 ? TYPE_AAAA : TYPE_A, 0);
+    leaf.writeUInt16BE(CLASS_IN, 2);
+    leaf.writeUInt32BE(ttl, 4);
+    leaf.writeUInt16BE(rdata.length, 8);
+    parts.push(target, leaf, rdata);
+    answers += 1;
+  }
+
+  return Buffer.concat([
+    header(query.id, { rcode: RCODE_OK, answers, recursionDesired: query.recursionDesired }),
+    question,
+    ...parts,
+  ]);
+}
+
+/**
  * Build an address-record response for the family the query asked for.
  *
  * Three outcomes, and the difference between the last two is the whole reason
@@ -495,8 +538,8 @@ export async function answerFor(name, options = {}) {
  * carries an address and nothing else, so the port is dropped here — a name
  * whose target names a non-default port cannot be served by the resolver path
  * at all, because there is no way to say "port 8080" in an A or AAAA record and
- * the browser will go to 80 regardless. A hostname target is null for the same
- * reason: turning it into an address would mean this bridge doing clearnet DNS.
+ * the browser will go to 80 regardless. A hostname target is null here because
+ * an A record cannot hold one; `targetHostname` is the other half of the answer.
  */
 export function targetAddress(target) {
   const raw = String(target || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -515,6 +558,30 @@ export function targetAddress(target) {
 }
 
 /**
+ * The bare hostname inside a stored target, or null when there isn't one.
+ *
+ * The other half of `targetAddress`. Most names in the registry are pointed at
+ * a host, not an address — `seo.rank` targets `dev.profullstack.com` — and
+ * refusing to say so was the bug that made every such name look unregistered.
+ * A CNAME expresses exactly this and costs us no clearnet DNS: the client
+ * chases it, which is what a CNAME is for.
+ *
+ * A target naming a port is null on purpose. No CNAME can carry `:8080`, and
+ * sending the client to port 80 of the right host is a worse answer than
+ * admitting there is nothing here to say.
+ */
+export function targetHostname(target) {
+  const raw = String(target || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!raw || targetAddress(raw)) return null;
+  // A colon is a port or a malformed v6 literal; a slash is a path. Neither
+  // survives the trip into an owner name, so neither is guessed at.
+  if (raw.includes(":") || raw.includes("/")) return null;
+  const host = raw.toLowerCase().replace(/\.$/, "");
+  const label = "[a-z0-9]([a-z0-9-]*[a-z0-9])?";
+  return new RegExp(`^${label}(\\.${label})+$`).test(host) ? host : null;
+}
+
+/**
  * Is an address question on this name worth a second look for a CNAME?
  *
  * True when the name is here and has no address to give. A CNAME is the one
@@ -524,6 +591,89 @@ export function targetAddress(target) {
  */
 export function mayHaveCname({ exists, address }) {
   return Boolean(exists) && !address;
+}
+
+/**
+ * Everything an address question needs, from a single registry lookup.
+ *
+ * The old path asked two separate questions — `answerPolicy` for the target,
+ * then `answerRecords` for a CNAME — and between them dropped the two cases
+ * that cover most of the registry. A published A/AAAA record was never
+ * consulted at all (addresses came only from `target`), and a hostname target
+ * produced nothing. Both surfaced as an authoritative NOERROR with no answers,
+ * which a client is entitled to treat as final: the name looked dead while the
+ * registry held a perfectly good answer for it.
+ *
+ * The cheap question is asked first and usually ends it: a name pointed at a
+ * bare address needs no record set, and every page load on the machine comes
+ * through here. Only a name that has nothing to say yet is worth the second
+ * round trip — which is the same bargain the old path struck for CNAMEs, held
+ * to here so the common case did not get slower in exchange for being right.
+ */
+export async function addressAnswer(name, options = {}) {
+  const { parkingAddress, wantsV6 = false } = options;
+  const plan = (kind, extra) => ({ exists: true, kind, records: [], address: null, cname: null, ...extra });
+
+  const result = await resolveName(name, options);
+  const exists = result.status === "live" || result.status === "parked";
+  if (!exists) return { exists: false, kind: "nxdomain", records: [], address: null, cname: null };
+
+  // Parking is checked before anything the registry published: a parked name's
+  // whole job is to reach the page explaining that it is for sale.
+  if (result.status === "parked") {
+    return parkingAddress ? plan("address", { address: parkingAddress }) : plan("nodata");
+  }
+
+  const address = targetAddress(result.target);
+  if (address) return plan("address", { address });
+
+  const full = await resolveName(name, { ...options, records: true });
+  const of = (type) => (full.records || []).filter((r) => r?.type === type);
+
+  // An address the owner published beats a CNAME to somewhere that holds one:
+  // it is the more specific statement, and it saves the client a lookup.
+  const published = of(wantsV6 ? "AAAA" : "A");
+  if (published.length) return plan("records", { records: published });
+
+  const cnames = of("CNAME");
+  if (cnames.length) return plan("records", { records: cnames });
+
+  const host = targetHostname(result.target);
+  return host ? plan("chain", { cname: host }) : plan("nodata");
+}
+
+/**
+ * The addresses a clearnet hostname holds, for finishing a CNAME chain.
+ *
+ * A bare CNAME is a legal answer and a useless one here. This bridge sets RA=0
+ * — it offers no recursion — so a stub that receives a dangling CNAME has been
+ * told, in the same breath, that nobody will chase it. systemd-resolved reports
+ * that as a name with no address, which is indistinguishable from broken.
+ *
+ * Best-effort by design: the chain is a courtesy on top of a CNAME that is
+ * already correct, so an upstream that is slow or silent costs the extra
+ * records, never the answer.
+ */
+export async function resolveChain(hostname, { upstreams = [], wantsV6 = false, timeoutMs = 2000 } = {}) {
+  const servers = upstreams.map(resolverServer).filter(Boolean);
+  if (!hostname || !servers.length) return [];
+  try {
+    const resolver = new Resolver({ timeout: timeoutMs, tries: 1 });
+    resolver.setServers(servers);
+    const found = await (wantsV6 ? resolver.resolve6(hostname) : resolver.resolve4(hostname));
+    return Array.isArray(found) ? found : [];
+  } catch {
+    return [];
+  }
+}
+
+/** An upstream in `1.2.3.4#5353` form, as node's resolver wants to read it. */
+function resolverServer(upstream) {
+  const [address, portText] = String(upstream).split("#");
+  const family = isIP(address);
+  if (!family) return null;
+  const port = Number(portText) || 53;
+  return port === 53 ? address : `${family === 6 ? `[${address}]` : address}:${port}`;
 }
 
 /**
@@ -908,19 +1058,28 @@ export function createServer(options = {}) {
       });
     } else if (query.class === CLASS_IN) {
       const wantsAddress = query.type === TYPE_A || query.type === TYPE_AAAA;
-      const policy = await answerPolicy(query.name, { ...options, wantsAddress }).catch(() => null);
-      if (policy) ({ exists, address } = policy);
-      // A name that is here with no address to give may still have published a
-      // CNAME, which is the one record that can answer an address question.
-      // Handing it back lets the client chase the name through its own
-      // resolver — the only party here that may do clearnet DNS — instead of
-      // getting the NODATA that made a pointed name look broken.
-      if (wantsAddress && mayHaveCname(policy || {})) {
-        const found = await answerRecords(query.name, { ...options, type: "CNAME" }).catch(() => null);
-        if (found?.records?.length) {
-          reply = buildRecordResponse(query, msg, found.records, {
+      if (!wantsAddress) {
+        // HTTPS/SVCB and friends: the name's existence is the whole answer, and
+        // getting it wrong here denies the name for every other question too.
+        const policy = await answerPolicy(query.name, { ...options, wantsAddress: false }).catch(() => null);
+        if (policy) ({ exists } = policy);
+      } else {
+        const plan = await addressAnswer(query.name, {
+          ...options, wantsV6: query.type === TYPE_AAAA,
+        }).catch(() => null);
+        exists = Boolean(plan?.exists);
+        if (plan?.kind === "records") {
+          reply = buildRecordResponse(query, msg, plan.records, {
             ttl, exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
           });
+        } else if (plan?.kind === "chain") {
+          const addresses = await resolveChain(plan.cname, {
+            upstreams, wantsV6: query.type === TYPE_AAAA, timeoutMs: forwardTimeoutMs,
+          });
+          reply = buildChainResponse(query, msg, { cname: plan.cname, addresses, ttl });
+          address = addresses[0] || plan.cname;
+        } else {
+          address = plan?.address || null;
         }
       }
     }

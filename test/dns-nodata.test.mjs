@@ -110,13 +110,15 @@ test("the A question beside it still answers, so the pair does not contradict it
 
 /* ------------------------------------------------- a name with no address to serve */
 
-test("a live name pointed at a hostname is NODATA, not NXDOMAIN", async (t) => {
-  // targetAddress() refuses a hostname on purpose — the bridge does not do
-  // clearnet DNS. The name still exists, so denying it is the wrong answer.
+test("a live name pointed at a hostname answers with a CNAME, not an empty NOERROR", async (t) => {
+  // Most of the registry is pointed at a host rather than an address, so the
+  // old empty-NOERROR here was not an edge case: it was the common case, and
+  // it read to every client as a name with nothing behind it. An A record
+  // cannot hold a hostname; a CNAME can, and the client chases it.
   const server = await serve(t, live("example.com"));
   const reply = await ask(server, query("scrambled.eggs", { type: TYPE_A }));
   assert.equal(rcode(reply), RCODE_OK);
-  assert.equal(answers(reply), 0);
+  assert.equal(answers(reply), 1, "the name has somewhere to go and must say so");
 });
 
 test("a live name whose target names a port is NODATA, not NXDOMAIN", async (t) => {
