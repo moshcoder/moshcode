@@ -606,6 +606,91 @@ export async function trustName(name, out, deps = {}) {
 }
 
 /**
+ * Trust every name as it is resolved, instead of one command per name.
+ *
+ * `dns trust <name>` works and does not scale: a person browsing Moshpit hits a
+ * certificate error on every site they have not personally thought about, which
+ * is indistinguishable from the namespace being broken.
+ *
+ * The registry pin is what makes doing it automatically defensible. Nothing is
+ * trusted on sight — a name is trusted only when the key it serves is one the
+ * registry already published for it, which is a stronger claim than domain
+ * validation ever made. A name with no pin gets nothing, silently and forever.
+ *
+ * Three properties this has to have, and each one is a way it could go wrong:
+ *
+ *   - it must never block a DNS answer. Resolution is on the critical path of
+ *     every page load; certificate work is not.
+ *   - it must ask about a name once, not once per query. A browser sends A and
+ *     AAAA together and retries, so "on resolve" is a firehose.
+ *   - a failure must be quiet and final for that name until restart. Retrying a
+ *     name whose pin does not match, on every lookup, is a loop that writes a
+ *     log line per query and never succeeds.
+ */
+export function createAutoTrust({
+  trust = trustName,
+  out = () => {},
+  registryBase,
+  uid = typeof process.getuid === "function" ? process.getuid() : 0,
+  ...deps
+} = {}) {
+  // One entry per name for the life of the process: `true` while in flight or
+  // done, so neither a success nor a refusal is ever retried.
+  const seen = new Set();
+  const pending = [];
+  // The in-flight drain, not a boolean. A flag can say "someone else is
+  // draining", but it cannot be awaited — so `idle()` returned the moment it
+  // saw one, reporting a queue as settled while it was still being worked.
+  let running = null;
+
+  async function drain() {
+    if (running) return running;
+    running = (async () => {
+      try {
+      while (pending.length) {
+        const name = pending.shift();
+        // Output is deliberately only the interesting half. A resolver that
+        // narrated a success per name would bury its own query log.
+        const lines = [];
+        const code = await trust(name, (l) => lines.push(l), { registryBase, uid, ...deps })
+          .catch(() => 1);
+        if (code === 0) out(`  trusted ${name}`);
+        else if (lines.some((l) => l.startsWith("REFUSED"))) out(`  ! ${name} — ${lines[0]}`);
+        }
+      } finally {
+        running = null;
+      }
+    })();
+    return running;
+  }
+
+  return {
+    /** Consider a name for trust. Returns immediately; never throws. */
+    consider(name) {
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      pending.push(name);
+      // Detached on purpose: the caller is a UDP handler with a reply to send.
+      queueMicrotask(() => { drain().catch(() => {}); });
+      return true;
+    },
+    /**
+     * Settle whatever is queued, including work added while draining.
+     *
+     * Looped rather than awaited once: a name considered mid-drain joins the
+     * queue behind the current pass, so a single await can return with items
+     * still waiting.
+     */
+    async idle() {
+      while (running || pending.length) await drain();
+    },
+    get size() {
+      return seen.size;
+    },
+  };
+}
+
+/**
  * A one-line proof that the whole chain works, or the reason it does not.
  *
  * The check is deliberately a plain HTTPS fetch with nothing relaxed: no `-k`,
