@@ -20,6 +20,7 @@
 // anything unparseable is refused rather than assumed routable.
 
 import { promises as dns } from "node:dns";
+import http from "node:http";
 import { isIP } from "node:net";
 
 /** How long the origin has to answer before the gateway gives up on it. */
@@ -203,11 +204,57 @@ export async function checkTarget(target, { resolve = dns.lookup } = {}) {
   };
 }
 
+/**
+ * Fetch an origin, honouring the Host header.
+ *
+ * This deliberately does not use fetch(). `Host` is a forbidden header name in
+ * the fetch spec, so undici drops it without a word and sends the authority
+ * from the URL instead — the origin was being asked for the *target*, never for
+ * the Moshpit name. A box that virtual-hosts the name then fell through to
+ * whatever its default vhost is, and if that redirects to HTTPS the gateway
+ * forwarded a 301 (with the Location stripped, since only content-type is
+ * copied) — the "301 to nowhere" that made pointed names look broken.
+ *
+ * node:http lets Host be set, which is the entire reason it is here.
+ */
+export function fetchOrigin({ host, port, path, headers, timeoutMs, maxBytes }) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ host, port, path, method: "GET", headers }, (response) => {
+      const chunks = [];
+      let size = 0;
+      let truncated = false;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        // Stop reading rather than buffer an unbounded body from a target the
+        // person who claimed the name chose.
+        if (size > maxBytes) { truncated = true; response.destroy(); return; }
+        chunks.push(chunk);
+      });
+      const done = () => resolve({
+        status: response.statusCode,
+        headers: response.headers,
+        body: truncated ? Buffer.alloc(0) : Buffer.concat(chunks),
+        truncated,
+      });
+      response.on("end", done);
+      response.on("close", done); // fires instead of "end" on the destroy above
+      response.on("error", reject);
+    });
+    request.setTimeout(timeoutMs, () => {
+      // Named so the caller can tell a slow origin from an unreachable one.
+      request.destroy(Object.assign(new Error("origin timed out"), { name: "AbortError" }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
 /** Headers worth passing to the origin. Everything else is dropped. */
 export function forwardableHeaders(headers = {}, name) {
   const out = {
     // The origin is virtual-hosting on the Moshpit name, so it needs to be told
-    // which one this is — the TCP connection only knows an IP.
+    // which one this is — the TCP connection only knows an IP. Only reaches the
+    // origin because fetchOrigin() uses node:http; fetch() would discard it.
     host: name,
     "x-forwarded-host": name,
     "x-moshpit-name": name,
