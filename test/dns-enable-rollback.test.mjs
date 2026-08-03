@@ -314,6 +314,53 @@ test("a rollback that fails says where the previous config is", async () => {
   fsSync.rmSync(dir, { recursive: true, force: true });
 });
 
+/* -------------------------------------------------------- the restore point */
+
+test("enable records what the machine looked like before it changes it", async () => {
+  const file = path.join(fsSync.mkdtempSync(path.join(os.tmpdir(), "moshcode-manifest-")), "restore.json");
+  let existedAtApply = false;
+  const code = await dnsCommand(["enable"], () => {}, {
+    ...noSystem(),
+    manifestFile: file,
+    dropins: async () => [{ name: "00-moshpit.conf", content: "[Resolve]\nDNS=127.0.0.1:5354\n" }],
+    applyWith: async () => {
+      // Written *before* the routing moves, so a run killed halfway still
+      // leaves the one thing needed to undo it.
+      existedAtApply = fsSync.existsSync(file);
+      return { saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] };
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(existedAtApply, true);
+
+  const manifest = JSON.parse(fsSync.readFileSync(file, "utf8"));
+  assert.equal(manifest.version, 1, "versioned, so a build that does not understand it falls back to detection");
+  const paths = manifest.files.map((f) => f.path);
+  assert.ok(paths.includes("/etc/systemd/resolved.conf.d/00-moshpit.conf"), "the foreign file is the one disable cannot deduce");
+  assert.ok(paths.includes("/etc/systemd/resolved.conf.d/moshpit.conf"));
+  fsSync.rmSync(path.dirname(file), { recursive: true, force: true });
+});
+
+test("a rolled-back enable takes its restore point with it", async () => {
+  // A manifest that outlives the run it describes is a loaded gun: the next
+  // `disable` would replay it against a machine it no longer describes.
+  const file = path.join(fsSync.mkdtempSync(path.join(os.tmpdir(), "moshcode-manifest-")), "restore.json");
+  const code = await dnsCommand(["enable"], () => {}, {
+    ...noSystem(),
+    manifestFile: file,
+    applyWith: async () => ({
+      saved: { ok: true },
+      applied: { ok: true, results: [] },
+      verified: { ok: false, checks: [{ name: "pit.moshcode.sh", kind: "clearnet", ok: false, error: "ENOTFOUND" }] },
+      rolledBack: { ok: true, results: [] },
+      backups: [],
+    }),
+  });
+  assert.equal(code, 1);
+  assert.equal(fsSync.existsSync(file), false);
+  fsSync.rmSync(path.dirname(file), { recursive: true, force: true });
+});
+
 /* --------------------------------------------------------------- dry run ---*/
 
 test("--dry-run writes nothing, restarts nothing, verifies nothing, rolls back nothing", async () => {
@@ -374,6 +421,11 @@ function noSystem() {
     bridgeStatus: async () => ({ running: false, pid: null, stale: false }),
     startBridge: async () => ({ started: true, pid: 1, alreadyRunning: false }),
     stopBridge: async () => ({ stopped: true, reason: null }),
+    dropins: async () => [],
+    readManifest: async () => null,
+    // Pointed away from /var/lib so nothing here can write outside a temp dir;
+    // the tests that care about the manifest hand in their own path.
+    manifestFile: path.join(os.tmpdir(), "moshcode-test-manifest-unused.json"),
     uid: 0,
   };
 }

@@ -1548,6 +1548,11 @@ const defaultReadMaybe = async (path) => {
  * start — so the plan's own `run` steps are replayed afterwards. Windows writes
  * no files and undoes its NRPT rules with different commands entirely, which is
  * why the caller can hand in its own `rollbackSteps`.
+ *
+ * Deletions are snapshotted alongside overwrites, which is what lets `disable`
+ * use this too. Undoing a switch is a switch: it restarts the resolver, it can
+ * leave the machine unable to resolve, and a disable that cannot be undone is
+ * the same outage as an enable that cannot be undone.
  */
 export async function applyWithRollback(plan, {
   apply = applyPlan,
@@ -1557,7 +1562,7 @@ export async function applyWithRollback(plan, {
   rollbackSteps = plan.steps.filter((s) => s.kind === "run"),
 } = {}) {
   const opts = runner ? { runner } : {};
-  const targets = plan.steps.filter((s) => s.kind === "write").map((s) => s.path);
+  const targets = plan.steps.filter((s) => s.kind === "write" || s.kind === "remove").map((s) => s.path);
   const before = new Map();
   for (const path of targets) before.set(path, await read(path));
 
@@ -1594,6 +1599,167 @@ export async function applyWithRollback(plan, {
     await apply({ steps: backups.map((b) => ({ kind: "remove", path: b.path, why: "the original is back in place" })) }, opts);
   }
   return { saved, applied, verified, rolledBack, backups: rolledBack.ok ? [] : backups.map((b) => b.path) };
+}
+
+/* ------------------------------------------------------- the restore point */
+
+// `disable` used to remove one hardcoded filename and report success. On a
+// machine where anything else routes to the bridge — and there is at least one
+// installer in the wild that writes `00-moshpit.conf` for exactly that purpose
+// — it removed a file, restarted the resolver, printed "Moshpit TLDs are back
+// to your normal resolver", and changed nothing anyone could observe. A
+// silently successful no-op is worse than a failure: nobody re-reads the output
+// of a command that said it worked.
+//
+// So `enable` now records what the machine looked like before it touched it,
+// and `disable` restores that recording rather than deducing an undo.
+
+export const MANIFEST_VERSION = 1;
+
+/**
+ * Where the restore point lives.
+ *
+ * Not under resolved.conf.d, and not merely because of the `*.conf` glob that
+ * the backup suffix already works around: a manifest is state about the machine
+ * rather than configuration for the resolver, and the resolver's own config
+ * directory is the one place guaranteed to be inspected, copied, templated and
+ * wiped by other tooling. /var/lib is where a root command's state belongs.
+ *
+ * Overridable by environment because every test of this would otherwise have to
+ * write to /var/lib to prove anything.
+ */
+export function manifestPath(env = process.env) {
+  return env.MOSHCODE_DNS_MANIFEST || "/var/lib/moshcode/dns-restore.json";
+}
+
+/** The routing suffixes a drop-in sets, the other half of what steers a query. */
+export function dropinDomains(content) {
+  const out = [];
+  for (const line of String(content ?? "").split("\n")) {
+    const m = line.match(/^\s*Domains\s*=\s*(\S.*?)\s*$/i);
+    if (m) out.push(...m[1].split(/\s+/));
+  }
+  return out;
+}
+
+/**
+ * What this machine's DNS looked like before this run, in enough detail to put
+ * it back byte-for-byte.
+ *
+ * Every drop-in that steers anything is captured whole, not just the one file
+ * this repo overwrites. That is the difference between an undo and a guess: the
+ * file that keeps a machine routed after `disable` is by definition one this
+ * code did not write, so a snapshot limited to our own filename could never
+ * have caught it.
+ *
+ * `Domains=` counts as steering as much as `DNS=` does. A drop-in setting only
+ * `Domains=~.` sends every lookup to whatever the global scope resolves to, and
+ * leaving it out of the snapshot would restore half of a routing decision.
+ *
+ * Paths the plan is about to write are captured too, with `content: null` when
+ * nothing is there — that null is what tells `disable` to remove the file
+ * rather than leave an empty one behind.
+ */
+export async function captureRestorePoint({
+  plan,
+  platform,
+  backend = "systemd-resolved",
+  bridge,
+  dir = RESOLVED_DROPIN_DIR,
+  dropins = readDropins,
+  read = defaultReadMaybe,
+  now = () => new Date().toISOString(),
+} = {}) {
+  const files = new Map();
+  for (const file of await dropins({ dir }).catch(() => [])) {
+    if (!dropinNameservers(file.content).length && !dropinDomains(file.content).length) continue;
+    files.set(`${dir}/${file.name}`, file.content);
+  }
+  for (const step of plan?.steps || []) {
+    if (step.kind !== "write" && step.kind !== "remove") continue;
+    if (!files.has(step.path)) files.set(step.path, await read(step.path));
+  }
+
+  return {
+    version: MANIFEST_VERSION,
+    createdAt: now(),
+    platform,
+    backend,
+    bridge,
+    // Sorted so two runs on an unchanged machine produce the same manifest, and
+    // a diff between them means something.
+    files: [...files.keys()].sort().map((path) => ({ path, content: files.get(path) ?? null })),
+    // Carried rather than re-derived: the manifest has to be able to undo a run
+    // made by a build whose idea of the restart command has since changed.
+    restart: (plan?.steps || []).filter((s) => s.kind === "run").map((s) => ({ command: s.command, args: s.args })),
+  };
+}
+
+/**
+ * A manifest, or null when there is not a usable one.
+ *
+ * A version this build does not know is null rather than an error: the caller's
+ * fallback is detection, which is strictly better than refusing to disable
+ * because a newer moshcode enabled the machine.
+ */
+export function parseManifest(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text ?? ""));
+  } catch {
+    return null;
+  }
+  if (!parsed || parsed.version !== MANIFEST_VERSION || !Array.isArray(parsed.files)) return null;
+  return parsed;
+}
+
+/** Putting the machine back, as a plan — inspectable before it runs, like every other. */
+export function restorePlan(manifest) {
+  const steps = manifest.files.map(({ path, content }) => (content === null || content === undefined
+    ? { kind: "remove", path, why: "nothing was here before moshcode touched this machine" }
+    : { kind: "write", path, content, why: "restore the file as it was before moshcode touched this machine" }));
+  for (const r of manifest.restart || []) {
+    steps.push({ kind: "run", command: r.command, args: r.args, why: "the resolver read those files at start" });
+  }
+  return { platform: manifest.platform, elevated: true, steps, notes: [] };
+}
+
+/**
+ * Files this repo did not write, and the best available guess at who did.
+ *
+ * Named rather than removed. Deleting a config file another tool owns is not a
+ * thing to do quietly on someone's behalf — it may be the only reason their
+ * machine resolves at all — so the decision is handed back with enough
+ * information to make it.
+ */
+export const KNOWN_DROPIN_WRITERS = new Map([
+  // The one this was found on. It writes the same routing to a lower-sorting
+  // filename, so `moshcode dns disable` removed its own file and left this one
+  // resolving Moshpit names exactly as before.
+  ["00-moshpit.conf", "the moshpit-proxy installer"],
+]);
+
+/** Our own files say so in their first line — that is what the header is for. */
+export function writtenByMoshcode(content) {
+  return /^#\s*Written by `moshcode dns/m.test(String(content ?? ""));
+}
+
+export function bridgeDropins(files, { bridge, ours = "moshpit.conf" } = {}) {
+  const out = [];
+  for (const file of files || []) {
+    const name = String(file?.name ?? "");
+    if (!name.endsWith(".conf")) continue;
+    const servers = dropinNameservers(file.content);
+    if (bridge && !servers.includes(bridge)) continue;
+    if (!bridge && !servers.length) continue;
+    out.push({
+      name,
+      servers,
+      mine: name === ours || writtenByMoshcode(file.content),
+      likelySource: KNOWN_DROPIN_WRITERS.get(name) || null,
+    });
+  }
+  return out;
 }
 
 /* ----------------------------------------------------------------- the verb */
@@ -1642,15 +1808,20 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
   --dry-run    with enable/disable: print exactly what would be done
   --force      with enable: proceed past a preflight refusal (a second drop-in
                setting DNS=, or a stranger already on the bridge's port)
+  --remove-foreign
+               with disable: also remove drop-ins that route to the bridge but
+               were written by something other than moshcode. Named, never
+               removed, without this.
   --backend    linux only: systemd-resolved (default) or dnsmasq
   --port N     the bridge's port (Windows must use 53 — NRPT carries no port)
 
 The registry speaks HTTP, not DNS, so nothing outside a browser can reach a
 Moshpit name until this bridge is running and your resolver points at it.
 \`enable\` edits system DNS and needs root (Administrator on Windows). It refuses
-to start from a machine where the switch cannot work, keeps a copy of whatever
-it overwrites, checks that both a Moshpit name and a clearnet name still resolve
-afterwards, and puts everything back if either one does not.`;
+to start from a machine where the switch cannot work, records what that machine
+looked like first, checks that both a Moshpit name and a clearnet name still
+resolve afterwards, and puts everything back if either one does not. \`disable\`
+replays that recording rather than deleting a filename it hopes is the only one.`;
 
 function resolveArgument(args) {
   for (let i = 0; i < args.length; i++) {
@@ -1678,6 +1849,9 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     bridgeStatus = daemonStatus,
     startBridge = startDaemon,
     stopBridge = stopDaemon,
+    dropins = readDropins,
+    manifestFile = manifestPath(),
+    readManifest = async (path) => parseManifest(await defaultReadMaybe(path)),
     uid = typeof process.getuid === "function" ? process.getuid() : 0,
   } = deps;
   const [sub, ...rest] = args;
@@ -1897,9 +2071,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         out(`  note  ${DEFAULT_HOST}:${wanted} is held by pid ${cleared.holder.pid || "?"}, which this run did not start — it forwards, so it is being used as-is`);
       }
       for (const dup of cleared.duplicates || []) {
-        // Not a blocker, but `dns disable` removes moshpit.conf and nothing
-        // else, so this file is what makes a disabled machine still route.
-        out(`  note  ${RESOLVED_DROPIN_DIR}/${dup.name} already points at this bridge — \`dns disable\` will not remove it`);
+        // Not a blocker, but this file is what keeps a disabled machine routed.
+        // `disable` restores it rather than removing it, which is the correct
+        // undo of *this* run and still leaves Moshpit names resolving — so the
+        // fact is said here, before the switch, rather than discovered later.
+        out(`  note  ${RESOLVED_DROPIN_DIR}/${dup.name} already points at this bridge — \`dns disable\` restores it, it does not remove it`);
       }
       for (const blocker of cleared.blockers) {
         out("");
@@ -1938,14 +2114,70 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       return 1;
     }
 
+    // What `disable` should do is a question about this machine, not a template.
+    // The old answer — remove one hardcoded filename — is wrong on any box where
+    // something else routes to the bridge, and wrong silently.
+    const detectable = platform === "linux" && linuxBackend === "systemd-resolved";
+    const removeForeign = rest.includes("--remove-foreign");
+    let restore = null;
+    let routed = [];
+    let foreign = [];
+    if (sub === "disable") {
+      restore = await readManifest(manifestFile).catch(() => null);
+      if (detectable) {
+        routed = bridgeDropins(await dropins().catch(() => []), { bridge: `${DEFAULT_HOST}:${wanted}` });
+        foreign = routed.filter((d) => !d.mine);
+      }
+      out(restore
+        ? `restore point  ${manifestFile} (taken ${restore.createdAt})`
+        : `restore point  none — falling back to detection${detectable ? "" : " (no drop-ins to read on this backend)"}`);
+      for (const d of routed) {
+        const who = d.mine ? "written by moshcode" : `not written by moshcode${d.likelySource ? ` — likely ${d.likelySource}` : ""}`;
+        out(`  found  ${RESOLVED_DROPIN_DIR}/${d.name} → ${d.servers.join(" ")}  (${who})`);
+      }
+      out("");
+
+      // Nothing points here and there is no recording to replay. Restarting the
+      // resolver anyway is a real, if brief, DNS outage in exchange for nothing.
+      if (!restore && detectable && !routed.length) {
+        out("Moshpit names are not routed on this machine — nothing to undo.");
+        const idle = await stopBridge();
+        out(idle.stopped ? "  ok   bridge stopped" : `  --   bridge was not running${idle.reason ? ` (${idle.reason})` : ""}`);
+        return 0;
+      }
+    }
+
     let plan;
     try {
-      plan = sub === "enable"
-        ? enablePlan({ platform, tlds, port: wanted, linuxBackend, upstreams: safety.safe ? safety.upstreams : [] })
-        : disablePlan({ platform, tlds, linuxBackend });
+      if (sub === "enable") {
+        plan = enablePlan({ platform, tlds, port: wanted, linuxBackend, upstreams: safety.safe ? safety.upstreams : [] });
+      } else if (restore) {
+        plan = restorePlan(restore);
+      } else {
+        plan = disablePlan({ platform, tlds, linuxBackend });
+      }
     } catch (err) {
       out(err.message);
       return 1;
+    }
+
+    // Asked for explicitly, and only then. Deleting a config file another tool
+    // owns may be the only reason this machine resolves anything; that is not a
+    // call to make on someone's behalf while they are not looking. When it is
+    // asked for it overrides the restore point, which would otherwise put the
+    // file back exactly as it was.
+    if (sub === "disable" && removeForeign && foreign.length) {
+      const paths = new Set(foreign.map((f) => `${RESOLVED_DROPIN_DIR}/${f.name}`));
+      const files = plan.steps.filter((s) => s.kind !== "run" && !paths.has(s.path));
+      const runs = plan.steps.filter((s) => s.kind === "run");
+      plan = {
+        ...plan,
+        steps: [
+          ...files,
+          ...[...paths].map((path) => ({ kind: "remove", path, why: "--remove-foreign: it routes Moshpit names and moshcode did not write it" })),
+          ...runs,
+        ],
+      };
     }
 
     // The name whose resolution proves the bridge is answering, alongside the
@@ -1957,24 +2189,31 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
 
     if (dryRun) {
       out(`# ${sub} on ${platform} — nothing below has been run`);
+      if (sub === "enable") out(`record  ${manifestFile}    # what this machine looks like right now, so disable can put it back`);
       out(describePlan(plan));
-      if (sub === "enable") {
-        // The three phases that have no plan steps of their own. Printed
-        // because "what would this do to my machine" has to include the part
-        // that undoes it, and because a dry run is how someone decides whether
-        // to hand this command root.
+      // The phases that have no plan steps of their own. Printed because "what
+      // would this do to my machine" has to include the part that undoes it,
+      // and because a dry run is how someone decides whether to hand this
+      // command root.
+      out("");
+      out(sub === "enable"
+        ? "verify  (both must answer, through this machine's own resolver)"
+        : "verify  (this machine must still resolve after the undo)");
+      if (sub === "enable" && moshpitProbe) out(`          ${moshpitProbe}    # a Moshpit name — the bridge is reachable`);
+      out(`          ${CLEARNET_PROBE}    # clearnet — ${sub === "enable" ? "the bridge forwards rather than swallows" : "restoring a broken prior state is the same outage in reverse"}`);
+      out("");
+      out("rollback  (only if verify fails)");
+      for (const step of plan.steps.filter((s) => s.kind === "write" || s.kind === "remove")) {
+        out(`          restore ${step.path}, or remove it if it did not exist before this run`);
+      }
+      for (const step of undoSteps || plan.steps.filter((s) => s.kind === "run")) {
+        out(`          run     ${step.command} ${step.args.join(" ")}`);
+      }
+      if (sub === "disable" && foreign.length && !removeForeign) {
         out("");
-        out("verify  (both must answer, through this machine's own resolver)");
-        if (moshpitProbe) out(`          ${moshpitProbe}    # a Moshpit name — the bridge is reachable`);
-        out(`          ${CLEARNET_PROBE}    # clearnet — the bridge forwards rather than swallows`);
-        out("");
-        out("rollback  (only if verify fails)");
-        for (const step of plan.steps.filter((s) => s.kind === "write")) {
-          out(`          restore ${step.path}, or remove it if this run created it`);
-        }
-        for (const step of undoSteps || plan.steps.filter((s) => s.kind === "run")) {
-          out(`          run     ${step.command} ${step.args.join(" ")}`);
-        }
+        out("NOT removed — these route Moshpit names and moshcode did not write them:");
+        for (const f of foreign) out(`          ${RESOLVED_DROPIN_DIR}/${f.name}${f.likelySource ? `    # likely ${f.likelySource}` : ""}`);
+        out("          re-run with --remove-foreign to remove them too");
       }
       return 0;
     }
@@ -1998,15 +2237,75 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     };
 
     if (sub === "disable") {
-      const applied = await applyPlan(plan);
-      report(applied.results);
+      // Undone through the same machinery as the switch itself, because it is
+      // the same risk: it rewrites resolver config and restarts the resolver,
+      // and restoring a prior state that turns out not to resolve is the same
+      // outage in the other direction. No Moshpit name is asked for — after a
+      // disable those are *supposed* to stop resolving, so requiring one would
+      // roll back every successful undo.
+      const outcome = await applyWith(plan, { verify: () => verify({ moshpit: null }) });
+      report(outcome.applied.results);
       for (const note of plan.notes || []) out(`  note   ${note}`);
+      for (const check of outcome.verified.checks) {
+        out(`  ${check.ok ? "ok  " : "FAIL"} verify ${check.name} (${check.kind})${check.ok ? "" : ` — ${check.error}`}`);
+      }
+      if (outcome.verified.skipped) out(`  --   verify ${outcome.verified.skipped}`);
+
+      if (outcome.rolledBack) {
+        out("");
+        report(outcome.rolledBack.results);
+        out("");
+        out(outcome.applied.ok
+          ? "Undoing the routing left this machine unable to resolve, so the undo was undone."
+          : "Some steps failed, so the undo was never complete and has been reversed.");
+        out(outcome.rolledBack.ok
+          ? "Nothing has changed: the machine is as it was before this command ran."
+          : "! the reversal did not fully succeed — this machine's DNS needs attention now.");
+        for (const path of outcome.backups) out(`  the previous config is at ${path}`);
+        return 1;
+      }
+
       const stopped = await stopBridge();
       out(stopped.stopped ? "  ok   bridge stopped" : `  ok   bridge was not running${stopped.reason ? ` (${stopped.reason})` : ""}`);
+      // Consumed. Leaving it would let a later `disable` restore a machine to a
+      // state that is two changes old.
+      if (restore) {
+        const cleared2 = await applyPlan({ steps: [{ kind: "remove", path: manifestFile, why: "the restore point has been used" }] });
+        if (cleared2.ok) out(`  ok   remove ${manifestFile}`);
+      }
       out("");
+
+      // The line the old implementation printed unconditionally, now only when
+      // it is true. Whatever still points at the bridge is named instead.
+      const left = removeForeign ? [] : foreign;
+      if (left.length) {
+        out("! Moshpit names still resolve here — these route to the bridge and were left alone:");
+        for (const f of left) out(`    ${RESOLVED_DROPIN_DIR}/${f.name}${f.likelySource ? `    (likely ${f.likelySource})` : ""}`);
+        out("  moshcode did not write them, so removing them is your call:");
+        out(`    sudo moshcode dns disable --remove-foreign`);
+        return 1;
+      }
       out("Moshpit TLDs are back to your normal resolver.");
-      return applied.ok ? 0 : 1;
+      return 0;
     }
+
+    // Recorded before anything moves, and written before anything moves, so a
+    // run killed halfway leaves behind the one thing needed to undo it. The
+    // per-file backup covers the file this run overwrites; this covers the
+    // machine, which is a different question and the one `disable` has to ask.
+    const point = await captureRestorePoint({
+      plan,
+      platform,
+      backend: platform === "linux" ? linuxBackend : platform,
+      bridge: `${DEFAULT_HOST}:${wanted}`,
+      dropins,
+    });
+    const recorded2 = await applyPlan({
+      steps: [{ kind: "write", path: manifestFile, content: `${JSON.stringify(point, null, 2)}\n`, why: "so disable can put this machine back" }],
+    });
+    out(recorded2.ok
+      ? `  ok   record ${manifestFile} (${point.files.length} file${point.files.length === 1 ? "" : "s"})`
+      : `  warn could not record a restore point — \`dns disable\` will fall back to detection`);
 
     // The bridge comes up before the routing points at it. The old order wrote
     // the config, restarted the resolver, and started the daemon afterwards —
@@ -2052,6 +2351,13 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     if (started.started) {
       const stopped = await stopBridge();
       if (stopped.stopped) out("  ok   remove bridge started by this run");
+    }
+    // The machine is back where it started, so there is nothing to restore to.
+    // A manifest that outlives its rollback is a loaded gun: the next `disable`
+    // would replay it against a machine it no longer describes.
+    if (recorded2.ok) {
+      const dropped = await applyPlan({ steps: [{ kind: "remove", path: manifestFile, why: "the run it described was rolled back" }] });
+      if (dropped.ok) out(`  ok   remove ${manifestFile}`);
     }
     out("");
     const failed = outcome.verified.checks.filter((c) => !c.ok).map((c) => c.name);
