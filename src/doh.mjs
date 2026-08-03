@@ -16,9 +16,9 @@
 // keeps no per-query record of who asked what.
 
 import {
-  buildResponse, capResponse, clientKey, createBanList, createRateLimiter,
-  forwardQuery, isOurs, answerPolicy, parseQuery, refusalReason,
-  TYPE_A, TYPE_AAAA, DEFAULT_TTL,
+  answerRecords, buildRecordResponse, buildResponse, capResponse, clientKey, createBanList,
+  createRateLimiter, forwardQuery, isOurs, answerPolicy, mayHaveCname, parseQuery, refusalReason,
+  RECORD_TYPES, TYPE_A, TYPE_AAAA, DEFAULT_TTL, UDP_SAFE_BYTES,
 } from "./dns.mjs";
 
 /** What RFC 8484 says both directions are. */
@@ -153,16 +153,45 @@ export function createDohHandler({
       };
     }
 
+    // CNAME, MX and TXT come from the record set; addresses still come from
+    // `target`. Same split as the UDP path, and it has to stay the same split:
+    // a name that resolves over the bridge and not over DoH is the failure mode
+    // this endpoint exists to remove.
+    const wanted = RECORD_TYPES.get(query.type);
+    if (wanted) {
+      const found = await answerRecords(query.name, { registryBase, fetchImpl, type: wanted })
+        .catch(() => ({ exists: false, records: [] }));
+      onQuery({ name: query.name, type: query.type, records: found.records.length });
+      return {
+        status: 200,
+        headers: { "content-type": DNS_MESSAGE, "cache-control": cacheControl(ttl) },
+        body: buildRecordResponse(query, decoded.message, found.records, {
+          ttl, exists: found.exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
+        }),
+      };
+    }
+
     const wantsAddress = query.type === TYPE_A || query.type === TYPE_AAAA;
     const policy = await answerPolicy(query.name, {
       registryBase, fetchImpl, parkingAddress, wantsAddress,
     }).catch(() => ({ exists: false, address: null }));
 
+    // Same second look for a CNAME as the UDP path, on the same condition: only
+    // when the name is here and has nothing else to answer with.
+    const cname = wantsAddress && mayHaveCname(policy)
+      ? await answerRecords(query.name, { registryBase, fetchImpl, type: "CNAME" })
+        .catch(() => ({ records: [] }))
+      : null;
+
     onQuery({ name: query.name, type: query.type, address: policy.address });
     return {
       status: 200,
       headers: { "content-type": DNS_MESSAGE, "cache-control": cacheControl(ttl) },
-      body: buildResponse(query, decoded.message, policy.address, ttl, policy.exists),
+      body: cname?.records?.length
+        ? buildRecordResponse(query, decoded.message, cname.records, {
+          ttl, exists: policy.exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
+        })
+        : buildResponse(query, decoded.message, policy.address, ttl, policy.exists),
     };
   };
 }

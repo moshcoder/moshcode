@@ -1936,8 +1936,19 @@ moshpitRouter.get("/pit/records", async (req, res) => {
     Real records on the names you hold: <span class="mono acid">AAAA</span> for the box that serves it,
     <span class="mono acid">CNAME</span> to send it somewhere else, <span class="mono acid">MX</span> for
     mail, <span class="mono acid">TXT</span> for everything that has to be proved. Published the moment
-    you hit the button — the registry answers them, so a resolver on this network picks them up on its
-    next lookup rather than waiting on a zone transfer.
+    you hit the button — no zone transfer, no propagation wait.
+  </p>
+  <p class="dim" style="max-width:66ch;font-size:.9rem">
+    ${/* Which resolver answers what, said here rather than discovered from a dig
+         that comes back empty. All four types are served now; the caveat that is
+         left is a machine still running an older bridge, which answers addresses
+         and NODATA for the rest. */""}
+    <span class="acid mono">All four resolve.</span> <span class="mono">dig MX blue.eggs</span> through
+    a Moshpit resolver answers from what you publish here, as do
+    <span class="mono">TXT</span>, <span class="mono">CNAME</span> and <span class="mono">AAAA</span>.
+    A machine running a bridge from before records existed answers addresses and nothing else —
+    <span class="mono">moshcode update</span> is the fix, and
+    <span class="mono">moshcode dns resolve blue.eggs</span> says which one you are talking to.
   </p>
   ${/* Only the count this page actually knows. Yours and Theirs would each cost
        a query to state truthfully, and a confident `0` next to an account
@@ -2007,10 +2018,11 @@ curl ${esc(config.pitOrigin)}/api/moshpit/records?name=blue.eggs
 curl -X DELETE ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
   -H "authorization: Bearer $MOSH_KEY" -H 'content-type: application/json' \\
   -d '{"label":"blue","type":"MX","value":"mx.example.com"}'</div>
-  <p class="pit-copy" style="font-size:.84rem">A resolver on this network reads them through
-    <code>/api/moshpit/records</code>, and <code>/api/moshpit/resolve?name=…&amp;records=1</code> returns
-    the address and the record set in one call. <code>moshcode dns resolve blue.eggs</code> shows what a
-    machine actually gets.</p>
+  <p class="pit-copy" style="font-size:.84rem"><code>/api/moshpit/records</code> is what a resolver
+    reads, and <code>/api/moshpit/resolve?name=…&amp;records=1</code> returns the address and the record
+    set in one call — which is the one the bridge and the DoH server use when the question is a
+    <code>CNAME</code>, <code>MX</code> or <code>TXT</code>. <code>moshcode dns resolve blue.eggs</code>
+    shows what a machine actually gets.</p>
 </details>`;
 }
 
