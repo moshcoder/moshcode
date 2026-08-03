@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { locate, tilde } from "../src/pwd.mjs";
+
+const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
 test("tilde shortens the home directory itself", () => {
   const home = path.join("C:", "Users", "mosh");
@@ -69,6 +73,32 @@ test("locate follows an absolute commondir too", () => {
     const { git } = locate(worktree);
 
     assert.equal(git.origin, "https://github.com/moshcoder/moshcode.git");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pwd --json prints only the machine-readable location and git context", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-pwd-json-"));
+  try {
+    const worktree = fakeWorktree(root, { commondir: path.join("..", "..") });
+    const result = spawnSync(process.execPath, [BIN, "pwd", "--json"], {
+      cwd: worktree,
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout), {
+      cwd: worktree,
+      git: {
+        root: worktree,
+        name: "feature",
+        branch: "feature",
+        origin: "https://github.com/moshcoder/moshcode.git",
+      },
+    });
+    assert.doesNotMatch(result.stdout, /"home"/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
