@@ -49,15 +49,36 @@ export function pinFromCertificate(certPem) {
 }
 
 /**
- * Where a TLD's key lives.
+ * Where a name's key lives.
  *
- * One key per ending, not per name, because that is the granularity the
- * registry stores. Giving each name its own key would mean a new pin published
- * per site, and every name under the ending would then accept all of them —
- * strictly more keys able to impersonate each other, for no isolation gained.
+ * One key per name, not per ending. This used to key off the TLD, on the
+ * belief that "that is the granularity the registry stores" — which is the
+ * opposite of true. Migration 009 is explicit about it, and about why:
+ *
+ *   Per name rather than per TLD, and that is forced by 008: names under a TLD
+ *   are sold, so `blue.eggs` can belong to someone who does not own `.eggs`.
+ *   Hanging keys off the TLD would let its operator publish a key for a name
+ *   they already sold — impersonating a buyer inside the namespace they bought
+ *   into.
+ *
+ * A shared per-ending key is that hole in private-key form: the ending's
+ * operator holds the key for every name they have sold, and every buyer holds
+ * a key that signs for every other buyer. Per-name keys make a compromise stop
+ * at one site.
+ *
+ * The dot is kept — `chovy.hacker.crt`, not `chovyhacker.crt` — which also
+ * matches the certificates setup-origin.sh has been writing all along.
+ * Separators that could climb out of `dir` are dropped rather than escaped:
+ * `../../etc/passwd` collapses to `etcpasswd`, which is a harmless filename
+ * inside the directory rather than a path anywhere else.
  */
-export function keyPaths(tld, dir = "/etc/ssl/moshpit") {
-  const safe = String(tld ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+export function keyPaths(name, dir = "/etc/ssl/moshpit") {
+  const safe = String(name ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]/g, "")
+    // Any run of dots becomes one, so no `..` survives to mean "parent".
+    .replace(/\.{2,}/g, ".")
+    .replace(/^[.-]+|[.-]+$/g, "");
   if (!safe) return null;
   return { key: `${dir}/${safe}.key`, cert: `${dir}/${safe}.crt`, dir };
 }
@@ -80,9 +101,12 @@ export function certificateCommand({ name, tld, paths, days = 3650 }) {
       "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
       "-keyout", paths.key, "-out", paths.cert,
       "-days", String(days), "-subj", subject,
-      // Every name under the ending, since they share this key. Browsers and
+      // This name and nothing else. It used to carry `DNS:*.${tld}` as well,
+      // on the assumption that every name under the ending shared one key —
+      // which would have each buyer's certificate assert authority over every
+      // other name in a namespace they merely bought into. Browsers and
       // pin-checking clients both read SAN, not CN.
-      "-addext", `subjectAltName=DNS:${name},DNS:*.${tld}`,
+      "-addext", `subjectAltName=DNS:${name}`,
     ],
   };
 }

@@ -41,32 +41,48 @@ test("pins hang off the ending, not the name", () => {
   assert.equal(tldOf("SEO.RANK"), "rank", "case is not part of the identity");
 });
 
-test("one key per ending, because that is the granularity the registry stores", () => {
-  const paths = keyPaths("hacker");
-  assert.match(paths.key, /hacker\.key$/);
-  assert.match(paths.cert, /hacker\.crt$/);
-
-  // Per-name keys would mean a pin published per site, and every name under
-  // the ending would then accept all of them — more keys able to impersonate
-  // each other, for no isolation gained.
-  assert.deepEqual(keyPaths("hacker"), keyPaths("hacker"));
+test("one key per name, because a name can belong to someone who does not own the ending", () => {
+  const paths = keyPaths("chovy.hacker");
+  assert.match(paths.key, /\/chovy\.hacker\.key$/);
+  assert.match(paths.cert, /\/chovy\.hacker\.crt$/);
+  assert.deepEqual(keyPaths("chovy.hacker"), keyPaths("chovy.hacker"));
 });
 
-test("a path traversal in the ending cannot escape the key directory", () => {
-  // The ending reaches this from a registry response, so it is not trusted
+test("two names under one ending do not share a key", () => {
+  // This is the whole point. Names under a TLD are sold, so a shared key means
+  // the ending's operator holds the private key for every name they sold, and
+  // every buyer holds a key that signs for every other buyer. Migration 009
+  // exists to stop exactly that at the pin layer; keying certificates off the
+  // TLD reintroduced it one layer down.
+  assert.notEqual(keyPaths("chovy.hacker").key, keyPaths("auto.hacker").key);
+  assert.notEqual(keyPaths("chovy.hacker").cert, keyPaths("auto.hacker").cert);
+});
+
+test("a numeric ending keeps its digits", () => {
+  // `.2600` is a registered ending. Stripping to alphanumerics used to be
+  // harmless here; now that the label is included it must not eat the dot.
+  assert.match(keyPaths("alt.2600").cert, /\/alt\.2600\.crt$/);
+});
+
+test("a path traversal in the name cannot escape the key directory", () => {
+  // The name reaches this from a registry response, so it is not trusted
   // input. Writing a key through `../../` would be a very bad day.
   assert.match(keyPaths("../../etc/passwd").key, /\/etcpasswd\.key$/);
+  assert.match(keyPaths("a/../../b.hacker").key, /\/a\.b\.hacker\.key$/);
   assert.equal(keyPaths("..."), null, "nothing usable left after stripping");
   assert.equal(keyPaths(""), null);
 });
 
-test("the certificate covers every name under the ending, since they share the key", () => {
-  const paths = keyPaths("hacker");
+test("the certificate covers this name and nothing else", () => {
+  const paths = keyPaths("chovy.hacker");
   const { args } = certificateCommand({ name: "chovy.hacker", tld: "hacker", paths });
   const san = args[args.indexOf("-addext") + 1];
 
   assert.match(san, /DNS:chovy\.hacker/);
-  assert.match(san, /DNS:\*\.hacker/, "the other names under this ending present the same key");
+  // A wildcard here would have each buyer's certificate assert authority over
+  // every other name under an ending they merely bought into — the same hole
+  // migration 009 closed at the pin layer.
+  assert.doesNotMatch(san, /\*/, "no name may vouch for its neighbours");
   assert.match(args.join(" "), /prime256v1/, "P-256, matching what is already deployed");
 });
 
