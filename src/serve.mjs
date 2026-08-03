@@ -22,6 +22,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { classifySource, listTemplates } from "./templates.mjs";
+
 /**
  * What a freshly installed site contains before anyone has written anything.
  *
@@ -35,6 +37,42 @@ import { fileURLToPath } from "node:url";
  * running. Pick another with --template, or --empty to seed nothing.
  */
 export const DEFAULT_TEMPLATE = "caddy-static";
+
+/**
+ * Which starter to seed, and whether that answer is usable at all.
+ *
+ * `--template` is checked rather than trusted, because every way of getting it
+ * wrong lands in the same place: the directory does not exist, the seed step is
+ * quietly dropped, and the root is left empty — which serves the 404 the
+ * seeding exists to prevent, after reporting that everything worked. A typo has
+ * to be louder than that.
+ *
+ * The shape check is templates.mjs's existing rule rather than a new one: a
+ * bundled name is one label, so anything carrying a slash or a dot is not a
+ * name and must not be joined into a path underneath examples/templates.
+ */
+export async function chooseTemplate(rest = [], { list = listTemplates } = {}) {
+  if (rest.includes("--empty")) return { ok: true, template: null };
+
+  const at = rest.indexOf("--template");
+  if (at < 0) return { ok: true, template: DEFAULT_TEMPLATE };
+
+  const asked = rest[at + 1];
+  // `--template --install` reads the next flag as the starter, and the flag it
+  // ate still takes effect, so the site installs with nothing in its root.
+  if (asked === undefined || asked.startsWith("-")) {
+    return { ok: false, error: "--template takes the name of a starter" };
+  }
+  if (classifySource(asked).kind !== "bundled") {
+    return { ok: false, error: `${JSON.stringify(asked)} is not a starter name` };
+  }
+
+  const available = (await list()).map((t) => t.name);
+  if (!available.includes(asked)) {
+    return { ok: false, error: `there is no starter called ${JSON.stringify(asked)}`, available };
+  }
+  return { ok: true, template: asked };
+}
 
 /** Where each server keeps drop-in site config. */
 const SERVERS = {
@@ -211,7 +249,14 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
     return 1;
   }
   const root = flag("--root") || `/srv/${name}`;
-  const template = rest.includes("--empty") ? null : (flag("--template") || DEFAULT_TEMPLATE);
+  const choice = await chooseTemplate(rest);
+  if (!choice.ok) {
+    out(`moshcode site: ${choice.error}`);
+    if (choice.available) out(`  bundled: ${choice.available.join(", ")}`);
+    out("  `moshcode template list` shows them all, or use --empty to seed nothing.");
+    return 1;
+  }
+  const template = choice.template;
   const here = path.dirname(fileURLToPath(import.meta.url));
   const seedFrom = template ? path.join(here, "..", "examples", "templates", template, "site") : null;
   // An empty root serves 404, which reads as a broken install. Seed only when

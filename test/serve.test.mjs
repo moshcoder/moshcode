@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { caddySite, detectServer, nginxSite, servePlan, serveCommand } from "../src/serve.mjs";
+import { caddySite, chooseTemplate, detectServer, nginxSite, servePlan, serveCommand } from "../src/serve.mjs";
 
 test("no HTTPS redirect is ever emitted, for either server", () => {
   // The trap: a box's default vhost usually 301s to https, and for an ending
@@ -152,4 +152,80 @@ test("an existing site is never seeded over", async () => {
   });
   assert.equal(seeded, false, "/etc is not empty, so nothing is seeded");
   assert.doesNotMatch(lines.join("\n"), /seed /);
+});
+
+test("a starter that does not exist is refused, not silently skipped", async () => {
+  // The failure this prevents: a typo makes the seed directory missing, the
+  // seed step is dropped, and the root is left empty — which is the 404 the
+  // seeding exists to prevent, arrived at while reporting success.
+  const list = async () => [{ name: "caddy-static" }, { name: "bun-caddy-sqlite" }];
+
+  const typo = await chooseTemplate(["--template", "caddy-statik"], { list });
+  assert.equal(typo.ok, false);
+  assert.match(typo.error, /no starter called/);
+  // Naming the two that do exist is most of the fix: the typo is one letter.
+  assert.deepEqual(typo.available, ["caddy-static", "bun-caddy-sqlite"]);
+
+  assert.equal((await chooseTemplate(["--template", "caddy-static"], { list })).template, "caddy-static");
+  // No --template at all is still the default starter, and --empty still wins.
+  assert.equal((await chooseTemplate([], { list })).template, "caddy-static");
+  assert.equal((await chooseTemplate(["--empty"], { list })).template, null);
+  assert.equal((await chooseTemplate(["--empty", "--template", "caddy-statik"], { list })).ok, true);
+});
+
+test("--template with no value does not read the next flag as the starter", async () => {
+  // `site x.y --template --install` took "--install" as the name, found no
+  // such directory, seeded nothing — and installed anyway, because --install
+  // is matched separately.
+  const list = async () => [{ name: "caddy-static" }];
+  for (const args of [["--template"], ["--template", "--install"], ["--template", "--empty"]]) {
+    const choice = await chooseTemplate(args, { list });
+    assert.equal(choice.ok, args.includes("--empty"), JSON.stringify(args));
+    if (!choice.ok) assert.match(choice.error, /takes the name of a starter/);
+  }
+});
+
+test("a starter name cannot climb out of the bundled directory", async () => {
+  // templates.mjs already refuses to treat anything with a slash or a dot as a
+  // bundled name, for this reason. `site` joined the raw value into a path
+  // under examples/templates without that check, so a value with enough ../ in
+  // it named a copy source anywhere on the box — and the copy lands in a root a
+  // web server is about to publish.
+  const list = async () => [{ name: "caddy-static" }];
+  for (const bad of ["../../../../etc", "a/b", "./caddy-static", "caddy static"]) {
+    const choice = await chooseTemplate(["--template", bad], { list });
+    assert.equal(choice.ok, false, bad);
+    assert.match(choice.error, /not a starter name/);
+  }
+});
+
+test("a bad --template stops the install before anything is written", async () => {
+  for (const args of [
+    ["blue.eggs", "--install", "--template", "caddy-statik"],
+    ["blue.eggs", "--install", "--template", "../../../../tmp"],
+    ["blue.eggs", "--template", "--install"],
+  ]) {
+    const lines = [];
+    let touched = 0;
+    const code = await serveCommand(args, (l) => lines.push(l), {
+      detect: async () => "nginx",
+      write: async () => { touched += 1; },
+      mkdir: async () => { touched += 1; },
+      copy: async () => { touched += 1; },
+    });
+    assert.equal(code, 1, JSON.stringify(args));
+    assert.equal(touched, 0, "a starter we cannot find is not a reason to install a site with an empty root");
+  }
+
+  // The control: the starter that does exist still seeds.
+  const lines = [];
+  let seeded = null;
+  const code = await serveCommand(["blue.eggs", "--install", "--template", "caddy-static"], (l) => lines.push(l), {
+    detect: async () => "nginx",
+    write: async () => {},
+    mkdir: async () => {},
+    copy: async (from) => { seeded = from; },
+  });
+  assert.equal(code, 0);
+  assert.match(String(seeded), /examples\/templates\/caddy-static\/site$/);
 });
