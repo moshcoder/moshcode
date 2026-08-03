@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   applyTrust, caPath, describeCertificateCommand, operatorHome, parseNameConstraints,
-  requireNameConstraints, trustPlan, trustStores, verifyStockTls,
+  refusalRemedy, requireNameConstraints, trustPlan, trustStores, verifyStockTls,
 } from "../src/trust.mjs";
 
 /**
@@ -393,4 +393,41 @@ test("no root yet points at what makes one, and is not a failure of enable", asy
   });
   assert.equal(result.ok, false);
   assert.match(lines.join("\n"), /moshpit-proxy generates one/);
+});
+
+/* ------------------------------------------------- refusals say what to do */
+
+test("a stale root is told how to be regenerated, not just refused", (t) => {
+  // Permits a real Moshpit ending, just not the one claimed today. Nothing
+  // dangerous — the root predates the current ending list. A refusal that only
+  // says "no" is how a safety gate ends up disabled with --no-trust instead of
+  // satisfied, so this one has to carry the one command that fixes it.
+  const text = needRoot(t, "critical,permitted;DNS:.hacker");
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["rank"] });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.kind, "out-of-step");
+
+  const remedy = refusalRemedy(verdict.kind, "/home/x/.moshpit/ca/ca.crt").join("\n");
+  assert.match(remedy, /rm -rf \/home\/x\/\.moshpit\/ca/, "names the directory to clear");
+  assert.match(remedy, /moshpit-proxy/, "and what regenerates it");
+});
+
+test("a dangerous root is offered no way around the check", (t) => {
+  const text = needRoot(t, "critical,excluded;DNS:.hacker");
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.kind, "unconstrained");
+
+  const remedy = refusalRemedy(verdict.kind, "/home/x/.moshpit/ca/ca.crt").join("\n");
+  assert.match(remedy, /not overridable/);
+  assert.doesNotMatch(remedy, /--no-trust/, "never advertises the opt-out as the fix");
+});
+
+test("the refusal a session prints carries its remedy", async () => {
+  const h = harness({ caText: "Certificate:\n  no constraints here" });
+  await applyTrust(["hacker"], h.out, h.deps);
+  const text = h.lines.join("\n");
+  assert.match(text, /STOP/);
+  assert.match(text, /not overridable/, "the STOP line alone is not actionable");
 });

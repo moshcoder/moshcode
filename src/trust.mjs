@@ -118,19 +118,20 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
   // constraints in an unconstrained one — passing or failing everything.
   const body = String(text || "");
   if (!/Certificate:|Signature Algorithm:/i.test(body)) {
-    return { ok: false, why: "could not read the certificate — openssl printed nothing usable" };
+    return { ok: false, kind: "unreadable", why: "could not read the certificate — openssl printed nothing usable" };
   }
   const constraints = parseNameConstraints(body);
   if (!constraints) {
     return {
       ok: false,
+      kind: "unconstrained",
       why: "the root carries no name constraints — it could vouch for any name, not just Moshpit",
     };
   }
   // Non-critical constraints are advisory: a verifier is free to ignore an
   // extension it does not recognise, which turns the guarantee into a comment.
   if (!constraints.critical) {
-    return { ok: false, why: "the name constraints are not marked critical, so a verifier may ignore them" };
+    return { ok: false, kind: "unconstrained", why: "the name constraints are not marked critical, so a verifier may ignore them" };
   }
   // RFC 5280 §4.2.1.10: constraints bind only the name *types* they mention. A
   // root whose DNS entries are all exclusions — or whose permitted subtree
@@ -141,6 +142,7 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
   if (!constraints.permitted.length) {
     return {
       ok: false,
+      kind: "unconstrained",
       why: "the root permits no DNS subtree, so every name it does not exclude is allowed — it could vouch for any name",
     };
   }
@@ -150,7 +152,7 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
 
   const missing = tlds.filter((tld) => !permits(tld));
   if (missing.length) {
-    return { ok: false, why: `the root does not permit ${missing.join(", ")}` };
+    return { ok: false, kind: "out-of-step", why: `the root does not permit ${missing.join(", ")}` };
   }
   // And nothing beyond them. One `DNS:.com` in the permitted subtree is the
   // whole hole this gate exists to close, and it would otherwise sail through
@@ -160,6 +162,7 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
   if (foreign.length) {
     return {
       ok: false,
+      kind: "out-of-step",
       why: `the root also permits ${foreign.join(", ")}, which is not an ending we resolve — it reaches past Moshpit`,
     };
   }
@@ -255,7 +258,7 @@ export function trustPlan({
   const constrained = requireNameConstraints(caText, { tlds });
   if (!constrained.ok) {
     // Refused rather than warned. A warning here would be read past.
-    return { ok: false, refused: true, steps: [], why: constrained.why };
+    return { ok: false, refused: true, kind: constrained.kind, steps: [], why: constrained.why };
   }
 
   const steps = [];
@@ -273,6 +276,36 @@ export function trustPlan({
   }
 
   return { ok: true, steps, skipped, file, why: constrained.why };
+}
+
+/**
+ * What to do about a refusal, which depends entirely on which one it is.
+ *
+ * `out-of-step` is the common one and is not a security event: the root was
+ * generated when a different set of endings was claimed, so it is stale rather
+ * than dangerous. Regenerating costs one command, and without saying so the
+ * strict check reads as a dead end — which is how a safety gate ends up being
+ * disabled with --no-trust instead of satisfied.
+ *
+ * `unconstrained` is the dangerous one, and deliberately has no workaround
+ * offered: the answer is a fixed root, never a way around the check.
+ */
+export function refusalRemedy(kind, file) {
+  if (kind === "out-of-step") {
+    return [
+      "the root is older than the endings claimed now — regenerating it is enough:",
+      `  rm -rf ${path.dirname(file)} && moshpit-proxy   # writes a fresh root`,
+      "then re-run `moshcode dns enable`.",
+    ];
+  }
+  if (kind === "unreadable") {
+    return [`could not read ${file} — check it is a certificate and openssl is installed.`];
+  }
+  return [
+    "moshcode will not put a root that can vouch for names outside Moshpit",
+    "into your trust store. Names will resolve but not pass TLS until the",
+    "root is regenerated with name constraints. This is not overridable.",
+  ];
 }
 
 /** Run a command, never throwing — the caller reports, it does not crash. */
@@ -332,7 +365,12 @@ export async function applyTrust(tlds, out, deps = {}) {
   if (!plan.ok) {
     // A refusal is the feature working, so it says which it is.
     out(plan.refused ? `  STOP ${plan.why}` : `  --   ${plan.why}`);
-    if (plan.refused) out("       moshcode will not put an unconstrained root in your trust store.");
+    // ...and then how to get past it. A gate that only says "no" is a gate
+    // people work around, and the two refusals are nothing alike: one is a
+    // root that must never be installed, the other a root that is simply
+    // older than the endings claimed today. Telling them apart is the
+    // difference between "this is dangerous" and "regenerate it".
+    for (const line of refusalRemedy(plan.kind, file)) out(`       ${line}`);
     return { ok: false, why: plan.why };
   }
 
