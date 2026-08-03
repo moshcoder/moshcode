@@ -1930,6 +1930,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
+import { applyTrust } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2530,6 +2531,13 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     }
 
     if (!outcome.rolledBack) {
+      out("");
+      // Resolving was never the whole job. A name that resolves and then fails
+      // its TLS handshake reads as broken to the person who typed the URL, and
+      // no CA will ever sign for a Moshpit name — so the local root that
+      // moshpit-proxy generates is the only thing that closes it.
+      if (!rest.includes("--no-trust")) await applyTrust(tlds, out, deps);
+
       out("");
       out(`Moshpit names now resolve on this machine. Try: moshcode dns resolve ${moshpitProbe || "<name>"}`);
       out(`Routing covers the ${tlds.length} TLDs claimed right now. New ones do not route`);
