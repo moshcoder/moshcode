@@ -404,6 +404,207 @@ export async function applyTrust(tlds, out, deps = {}) {
   return { ok: true, installed: plan.steps.length, skipped: (plan.skipped || []).length };
 }
 
+/* ------------------------------------------------ trusting one name directly */
+
+/**
+ * SHA-256 over the SubjectPublicKeyInfo, base64 — RFC 7469's pin format.
+ *
+ * Over the key rather than the certificate, so re-issuing for the same key (a
+ * longer expiry, an added name) does not invalidate a pin anybody holds.
+ */
+export async function spkiPin(publicKeyPem) {
+  const crypto = await import("node:crypto");
+  const der = crypto.createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
+  return crypto.createHash("sha256").update(der).digest("base64");
+}
+
+/**
+ * The pin of the key inside a certificate.
+ *
+ * Read with node's own X509 parser rather than by shelling out to openssl a
+ * second time: the pin is the value the whole decision turns on, and piping a
+ * PEM back through a shell to extract it adds quoting and a second process to
+ * the one step that must not go wrong quietly.
+ */
+export async function pinFromCertificate(pem) {
+  const crypto = await import("node:crypto");
+  const cert = new crypto.X509Certificate(pem);
+  const der = cert.publicKey.export({ type: "spki", format: "der" });
+  return crypto.createHash("sha256").update(der).digest("base64");
+}
+
+/** The pins the registry publishes for a name. */
+export async function publishedPins(name, { registryBase = "https://pit.moshcode.sh", fetchImpl = fetch } = {}) {
+  const url = `${registryBase.replace(/\/+$/, "")}/api/moshpit/pins?name=${encodeURIComponent(name)}`;
+  const res = await fetchImpl(url);
+  if (!res.ok) throw new Error(`registry answered ${res.status}`);
+  const json = await res.json();
+  return Array.isArray(json?.pins) ? json.pins : [];
+}
+
+/**
+ * Is this certificate the one the registry vouches for?
+ *
+ * The entire security of installing a leaf rests on this comparison, so it is
+ * a gate rather than a report. Without it, `trust <name>` would install
+ * whatever answered the socket — which is the definition of trusting an
+ * attacker who can reach the port first.
+ *
+ * Any published pin matches, not just the first: the registry lists the old
+ * pin alongside the new one during a key rotation precisely so a key can change
+ * without a flag day.
+ */
+export function pinAccepted(pin, published) {
+  if (!pin || !Array.isArray(published) || !published.length) {
+    return { ok: false, why: "the registry publishes no pin for this name — nothing vouches for the certificate" };
+  }
+  return published.includes(pin)
+    ? { ok: true, why: "the served key matches a pin the registry publishes" }
+    : { ok: false, why: `the served key (${pin}) is not among the ${published.length} pin(s) the registry publishes` };
+}
+
+/**
+ * Where a trusted leaf is written, per name.
+ *
+ * One file per name rather than a bundle: removing trust for a single name has
+ * to be removing a single file, and a name is not something to hand-edit out of
+ * a concatenation.
+ */
+export function leafPath(name, { platform = process.platform } = {}) {
+  // The name reaches this from a registry response, so it is not trusted input.
+  // Runs of dots are collapsed rather than merely stripped of slashes: `..` is
+  // the traversal, and leaving `....` behind produces a filename nobody can
+  // match back to a name even though it escapes nothing.
+  const safe = String(name).toLowerCase().replace(/[^a-z0-9.-]/g, "").replace(/\.{2,}/g, ".").replace(/^[.-]+|[.-]+$/g, "");
+  if (!safe || !safe.includes(".")) return null;
+  return platform === "darwin"
+    ? `/Library/Keychains/moshpit-${safe}.crt`
+    : `/usr/local/share/ca-certificates/moshpit-${safe}.crt`;
+}
+
+/**
+ * What `trust <name>` should do, given what the socket served and what the
+ * registry says about it.
+ *
+ * Pure, so the refusal path is testable without a network or a trust store.
+ */
+export function leafTrustPlan({ name, pin, published, platform = process.platform } = {}) {
+  const accepted = pinAccepted(pin, published);
+  if (!accepted.ok) return { ok: false, refused: true, why: accepted.why };
+
+  const file = leafPath(name, { platform });
+  if (!file) return { ok: false, why: `${name} is not a name that can be written to a file` };
+
+  return {
+    ok: true,
+    why: accepted.why,
+    file,
+    // A self-signed leaf is its own trust anchor, and its SAN limits it to this
+    // one name — so trusting it vouches for `seo.rank` and nothing else. That
+    // is a far smaller grant than a CA, which is why this path needs no
+    // name constraints argument to be defensible.
+    refresh: platform === "darwin"
+      ? { command: "security", args: ["add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", file] }
+      : { command: "update-ca-certificates", args: [] },
+  };
+}
+
+/** The certificate a name is actually serving, as PEM. */
+export function fetchCertificateCommand(name, { port = 443 } = {}) {
+  return {
+    command: "sh",
+    args: ["-c", `openssl s_client -connect ${name}:${port} -servername ${name} </dev/null 2>/dev/null | openssl x509`],
+  };
+}
+
+/**
+ * `moshcode dns trust <name>` — trust one name, on the strength of its pin.
+ *
+ * The path that needs no proxy and no certificate authority. A Moshpit name
+ * serves a self-signed certificate whose SAN names only itself, so trusting it
+ * vouches for that one name and nothing else — a far smaller grant than a root,
+ * and the reason this needs no name-constraints argument to be defensible.
+ *
+ * The pin check is what makes it safe rather than reckless. Installing whatever
+ * answered the socket is the definition of trusting whoever reached the port
+ * first; installing it only when the registry already vouches for that exact
+ * key is registry-backed trust, which is a stronger claim than domain
+ * validation ever made.
+ */
+export async function trustName(name, out, deps = {}) {
+  const {
+    registryBase = "https://pit.moshcode.sh",
+    fetchImpl = fetch,
+    runner = run,
+    platform = process.platform,
+    uid = typeof process.getuid === "function" ? process.getuid() : 0,
+    writeFile = async (f, c) => (await import("node:fs/promises")).writeFile(f, c),
+  } = deps;
+
+  if (!name) {
+    out("which name? e.g. moshcode dns trust seo.rank");
+    return 1;
+  }
+
+  const fetchCert = fetchCertificateCommand(name);
+  const served = await runner(fetchCert.command, fetchCert.args);
+  if (!served.ok || !served.stdout.includes("BEGIN CERTIFICATE")) {
+    out(`could not read a certificate from ${name}:443`);
+    out("  the name must resolve and be serving HTTPS before its certificate can be trusted");
+    return 1;
+  }
+
+  const pin = await pinFromCertificate(served.stdout).catch(() => null);
+  if (!pin) {
+    out(`could not read the public key out of ${name}'s certificate`);
+    return 1;
+  }
+
+  let published = [];
+  try {
+    published = await publishedPins(name, { registryBase, fetchImpl });
+  } catch (err) {
+    // An outage is not a failed pin check, and must not be reported as one —
+    // the answer to "the registry is down" is to wait, not to distrust a name.
+    out(`could not reach the registry to check ${name}'s pin — ${err?.message || err}`);
+    out("  nothing has been trusted.");
+    return 1;
+  }
+
+  const plan = leafTrustPlan({ name, pin, published, platform });
+  if (!plan.ok) {
+    out(`REFUSED — ${plan.why}`);
+    if (plan.refused) {
+      out(`  served  ${pin}`);
+      out(published.length ? `  pinned  ${published.join("\n          ")}` : "  pinned  (none)");
+      out("  moshcode will not trust a certificate the registry does not vouch for.");
+    }
+    return 1;
+  }
+
+  out(`${name} — ${plan.why}`);
+  out(`  pin  ${pin}`);
+
+  if (uid !== 0) {
+    out(`  writing ${plan.file} needs root.`);
+    return 1;
+  }
+
+  try {
+    await writeFile(plan.file, served.stdout);
+  } catch (err) {
+    out(`  FAIL could not write ${plan.file} — ${err?.message || err}`);
+    return 1;
+  }
+  const refreshed = await runner(plan.refresh.command, plan.refresh.args);
+  if (!refreshed.ok) {
+    out(`  FAIL ${plan.refresh.command} — ${refreshed.stderr.split("\n")[0] || "failed"}`);
+    return 1;
+  }
+  out(`  ok   trusted — curl https://${name} now verifies without flags`);
+  return 0;
+}
+
 /**
  * A one-line proof that the whole chain works, or the reason it does not.
  *

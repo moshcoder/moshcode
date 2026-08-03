@@ -1930,7 +1930,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
-import { applyTrust, verifyStockTls } from "./trust.mjs";
+import { applyTrust, trustName, verifyStockTls } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2043,6 +2043,10 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const tlds = await fetchTlds({ registryBase });
     out(tlds.length ? tlds.map((t) => `.${t}`).join("\n") : "no TLDs claimed yet");
     return 0;
+  }
+
+  if (sub === "trust") {
+    return trustName(rest.find((a) => !a.startsWith("-")) || "", out, { registryBase, ...deps });
   }
 
   if (sub === "resolve") {
@@ -2228,12 +2232,17 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const wanted = requiredPort(platform, port);
 
     let tlds = [];
+    let tldError = null;
     try {
       tlds = await fetchTldsImpl({ registryBase });
-    } catch {
+    } catch (err) {
       // disable does not need the list on Linux, and on macOS a stale list is
       // better than refusing to clean up because the registry is unreachable.
+      // enable does need it, and the reason it is empty is the whole difference
+      // between "nobody has claimed an ending" and "we could not ask" — see the
+      // refusal below, which used to report the second as the first.
       tlds = [];
+      tldError = err?.message || String(err);
     }
 
     // Phase 1, and it runs before every other question is asked — including the
@@ -2296,7 +2305,18 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     }
 
     if (sub === "enable" && !tlds.length) {
-      out("no TLDs claimed yet — nothing to route");
+      // Two very different situations, and reporting the second as the first
+      // sends someone to claim an ending they already own. The registry holds
+      // thousands; a machine that sees none of them has almost certainly failed
+      // to ask rather than found an empty namespace.
+      if (tldError) {
+        out(`could not read the ending list from ${registryBase} — ${tldError}`);
+        out("  nothing has been changed. This is a failure to ask, not an empty registry:");
+        out(`  check with  curl -s '${registryBase}/api/moshpit/tlds?limit=5&offset=0'`);
+      } else {
+        out("the registry reports no claimed endings — nothing to route");
+        out(`  that is the registry's answer, not a local failure: ${registryBase}/api/moshpit/tlds`);
+      }
       return 1;
     }
 

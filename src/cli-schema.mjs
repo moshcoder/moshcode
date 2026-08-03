@@ -406,6 +406,7 @@ export const DNS_VERBS = [
   { name: "service", description: "install or remove the background service" },
   { name: "tlds", description: "list the endings claimed in the Pit" },
   { name: "resolve", description: "what a name resolves to, and why" },
+  { name: "trust", description: "trust one name's certificate, after checking it against the registry pin" },
 ];
 
 /** Sub-verb tables, by the name a command's `verbs` field refers to. */

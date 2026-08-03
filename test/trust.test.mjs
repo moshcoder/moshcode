@@ -431,3 +431,141 @@ test("the refusal a session prints carries its remedy", async () => {
   assert.match(text, /STOP/);
   assert.match(text, /not overridable/, "the STOP line alone is not actionable");
 });
+
+/* ---------------------------------------- trusting one name on the strength of its pin */
+
+import { fetchCertificateCommand, leafPath, leafTrustPlan, pinAccepted, pinFromCertificate, trustName } from "../src/trust.mjs";
+
+/** A real self-signed leaf, the shape a Moshpit origin serves. */
+function leaf(cn = "seo.rank") {
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leaf-"));
+    const key = path.join(dir, "k.pem");
+    const crt = path.join(dir, "c.pem");
+    execFileSync("openssl", [
+      "req", "-x509", "-nodes", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+      "-keyout", key, "-out", crt, "-days", "1", "-subj", `/CN=${cn}`, "-addext", `subjectAltName=DNS:${cn}`,
+    ], { stdio: "ignore" });
+    const pem = fs.readFileSync(crt, "utf8");
+    fs.rmSync(dir, { recursive: true, force: true });
+    return pem;
+  } catch {
+    return null;
+  }
+}
+
+test("a pin is SHA-256 over the SPKI, so re-issuing for the same key keeps it valid", async () => {
+  const pem = leaf();
+  if (!pem) return;
+  const pin = await pinFromCertificate(pem);
+  assert.equal(Buffer.from(pin, "base64").length, 32);
+  assert.equal(await pinFromCertificate(pem), pin, "the same certificate always gives the same pin");
+});
+
+test("any published pin matches, because rotation lists both", () => {
+  // The registry keeps the old pin beside the new one during a key change
+  // precisely so there is no flag day; accepting only the first would undo that.
+  assert.equal(pinAccepted("B", ["A", "B"]).ok, true);
+  assert.equal(pinAccepted("A", ["A", "B"]).ok, true);
+});
+
+test("a key the registry does not vouch for is refused", () => {
+  const verdict = pinAccepted("SERVED=", ["OTHER="]);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.why, /SERVED=/, "the served key is named, so the mismatch is checkable");
+});
+
+test("a name with no published pin is refused rather than trusted on sight", () => {
+  // Installing whatever answered the socket is the definition of trusting
+  // whoever reached the port first.
+  assert.equal(pinAccepted("SERVED=", []).ok, false);
+  assert.match(pinAccepted("SERVED=", []).why, /nothing vouches/);
+});
+
+test("the leaf is written per name, and a name cannot escape the directory", () => {
+  assert.equal(leafPath("seo.rank", { platform: "linux" }), "/usr/local/share/ca-certificates/moshpit-seo.rank.crt");
+  assert.equal(leafPath("../../etc/passwd", { platform: "linux" }), null, "traversal is refused, not sanitised into nonsense");
+  assert.equal(leafPath("localhost", { platform: "linux" }), null, "a single label is not a Moshpit name");
+  assert.equal(leafPath("", { platform: "linux" }), null);
+});
+
+test("the certificate is read from the name itself, with SNI set", () => {
+  const { args } = fetchCertificateCommand("seo.rank");
+  assert.match(args.join(" "), /-servername seo\.rank/, "without SNI a shared origin serves the wrong certificate");
+});
+
+test("a mismatched pin installs nothing at all", async () => {
+  const pem = leaf();
+  if (!pem) return;
+  const lines = [];
+  const ran = [];
+  const code = await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => {
+      ran.push(c);
+      return a.join(" ").includes("s_client") ? { ok: true, stdout: pem, stderr: "" } : { ok: true, stdout: "", stderr: "" };
+    },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ pins: ["NOTTHISONE="] }) }),
+    writeFile: async () => assert.fail("nothing may be written when the pin does not match"),
+    uid: 0, platform: "linux",
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /REFUSED/);
+  assert.ok(!ran.includes("update-ca-certificates"), "and the store is never refreshed");
+});
+
+test("a registry outage is not reported as a failed pin check", async () => {
+  // "the registry is down" is answered by waiting, not by distrusting a name.
+  const pem = leaf();
+  if (!pem) return;
+  const lines = [];
+  const code = await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => (a.join(" ").includes("s_client") ? { ok: true, stdout: pem, stderr: "" } : { ok: true, stdout: "", stderr: "" }),
+    fetchImpl: async () => { throw new Error("ECONNREFUSED"); },
+    writeFile: async () => assert.fail("nothing may be written"),
+    uid: 0, platform: "linux",
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /could not reach the registry/);
+  // Anchored, because ECONNREFUSED contains the word — which is itself the
+  // confusion being guarded against, one layer down.
+  assert.doesNotMatch(lines.join("\n"), /^REFUSED/m, "an outage must not read as a rejected certificate");
+});
+
+test("a matching pin is installed and reported as usable", async () => {
+  const pem = leaf();
+  if (!pem) return;
+  const pin = await pinFromCertificate(pem);
+  const lines = [];
+  let written = null;
+  const code = await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => (a.join(" ").includes("s_client") ? { ok: true, stdout: pem, stderr: "" } : { ok: true, stdout: "", stderr: "" }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ pins: [pin] }) }),
+    writeFile: async (f, c) => { written = { f, c }; },
+    uid: 0, platform: "linux",
+  });
+  assert.equal(code, 0);
+  assert.equal(written.f, "/usr/local/share/ca-certificates/moshpit-seo.rank.crt");
+  assert.ok(written.c.includes("BEGIN CERTIFICATE"));
+  assert.match(lines.join("\n"), /verifies without flags/);
+});
+
+test("without root it says so instead of failing obscurely on the write", async () => {
+  const pem = leaf();
+  if (!pem) return;
+  const pin = await pinFromCertificate(pem);
+  const lines = [];
+  const code = await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => (a.join(" ").includes("s_client") ? { ok: true, stdout: pem, stderr: "" } : { ok: true, stdout: "", stderr: "" }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ pins: [pin] }) }),
+    writeFile: async () => assert.fail("must not attempt the write"),
+    uid: 1000, platform: "linux",
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /needs root/);
+});
+
+test("no name asks for one rather than guessing", async () => {
+  const lines = [];
+  assert.equal(await trustName("", (l) => lines.push(l), {}), 1);
+  assert.match(lines.join("\n"), /which name/);
+});
