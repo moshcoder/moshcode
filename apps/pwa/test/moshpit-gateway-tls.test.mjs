@@ -132,6 +132,19 @@ test("an upgrade to HTTPS on the same name is followed", () => {
     "the target's own hostname counts as the same place");
 });
 
+test("an ending made of digits is a hostname, not an IPv4 address", () => {
+  // `new URL("https://alt.2600/")` throws: WHATWG sees a last label of all
+  // digits and tries to read the whole host as IPv4. Every ending like .2600
+  // or .1337 was therefore declined as unparseable and the origin's bare 301
+  // went to the browser — pit.moshcode.sh/n/alt.2600 showed nginx's "301 Moved
+  // Permanently" page and nothing else.
+  const numeric = { name: "alt.2600", host: "dev.profullstack.com" };
+  assert.deepEqual(tlsRedirect("https://alt.2600/", numeric), { port: 443, path: "/" });
+  assert.deepEqual(tlsRedirect("https://alt.2600:8443/a?b=1", numeric), { port: 8443, path: "/a?b=1" });
+  assert.equal(tlsRedirect("https://alt.2600.evil.example/", numeric), null,
+    "the numeric path still may not be redirected off the name");
+});
+
 test("a redirect anywhere else is not followed", () => {
   // The redirect is written by whoever claimed the name. Following it to a new
   // host would re-open the SSRF hole checkTarget() exists to close — after the
@@ -145,4 +158,14 @@ test("a redirect anywhere else is not followed", () => {
   assert.equal(tlsRedirect(undefined, FOR), null);
   assert.equal(tlsRedirect("https://chovy.hacker.evil.example/", FOR), null,
     "a suffix of the name is not the name");
+  assert.equal(tlsRedirect("https://chovy.hacker@evil.example/", FOR), null,
+    "the name in the userinfo is not the host it points at");
+  assert.equal(tlsRedirect("https://chovy.hacker:99999/", FOR), null, "not a port");
+  assert.equal(tlsRedirect("https:///", FOR), null, "no host at all");
+});
+
+test("the fragment is dropped and a bare authority still has a path", () => {
+  // A fragment is never sent to an origin, and http.request needs a path.
+  assert.deepEqual(tlsRedirect("https://chovy.hacker", FOR), { port: 443, path: "/" });
+  assert.deepEqual(tlsRedirect("https://chovy.hacker/a#frag", FOR), { port: 443, path: "/a" });
 });
