@@ -308,6 +308,29 @@ export function helpModel({ engines = [], tools = [], version = "" } = {}) {
  * to stderr and exit 1; `renderCommand` on stdout is the same text for the
  * person who asked politely.
  */
+/* ------------------------------------------------------- moshscript verbs */
+
+/**
+ * A moshscript verb, rendered from the registry (PRD 0006 R14).
+ *
+ * `moshcode help ask` is a fair question — `ask()` is as much part of the
+ * interface as `moshcode prd` — and it used to answer "no help for ask",
+ * because the vocabulary lives in a registry that help had never been
+ * introduced to.
+ *
+ * `usage` is optional on a command object, so a verb registered by a host that
+ * has not declared one still renders: the signature falls back to `name(…)` and
+ * the summary carries the meaning.
+ */
+export function renderScriptVerb(command) {
+  if (!command) return null;
+  const out = [`${command.usage || `${command.name}(…)`} — ${command.summary || "a moshscript verb"}`];
+  if (command.detail) out.push("", wrap(command.detail, 0));
+  out.push("", "a moshscript verb — call it from a .mosh file, not from the shell.");
+  out.push("", "see also: moshcode help run · moshcode help commands");
+  return out.join("\n");
+}
+
 /* ---------------------------------------------------------------- markdown */
 
 export const README_START = "<!-- COMMANDS:START -->";

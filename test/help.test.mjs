@@ -11,7 +11,7 @@
 // code, one shape, at every depth.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,10 +24,13 @@ import {
 } from "../src/cli-schema.mjs";
 import {
   WIDTH, findCommand, findPitCommand, helpModel, pitHelpModel, renderCommand, renderOverview,
-  renderPitCommand, README_START, README_END, suggest, wantsHelp, withCommandTable, wrap,
+  renderPitCommand, renderScriptVerb, README_START, README_END, suggest, wantsHelp,
+  withCommandTable, wrap,
 } from "../src/help.mjs";
 import { ENGINES } from "../src/engines.mjs";
 import { TOOLS } from "../src/tools.mjs";
+import { moshVocabulary } from "../src/commands.mjs";
+import { completionModel } from "../src/completion.mjs";
 
 const run = promisify(execFile);
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
@@ -394,4 +397,101 @@ test("help --markdown emits the same table the README carries", async () => {
   assert.equal(code, 0);
   const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
   assert.ok(readme.includes(stdout.trim()), "the generator and the README disagree");
+});
+
+/* ------------------------------------------------- R14: moshscript verbs */
+
+const ESC = "[";
+
+test("moshcode help <verb> answers for a moshscript verb", async () => {
+  // `ask()` is as much part of the interface as `moshcode prd`, and used to
+  // answer "no help for ask" because the vocabulary lives in a registry help
+  // had never been introduced to.
+  const { code, stdout, stderr } = await cli(["help", "ask"]);
+  assert.equal(code, 0);
+  assert.equal(stderr, "");
+  assert.match(stdout, /^ask\(\.\.\.prompt\) —/, "the call signature leads");
+  assert.match(stdout, /moshscript verb/);
+});
+
+test("the signature comes from the registry, including its options", async () => {
+  const { stdout } = await cli(["help", "ai"]);
+  assert.match(stdout, /ai\(prompt, \{ engine \}\)/, "R14's worked example");
+});
+
+test("every moshscript verb renders, with or without a declared usage", () => {
+  for (const command of moshVocabulary().all()) {
+    const text = renderScriptVerb(command);
+    assert.ok(text, `${command.name} rendered nothing`);
+    assert.match(text, /moshscript verb/, `${command.name} lost its footer`);
+  }
+  // A host may register a verb with no usage at all; it must still render.
+  assert.match(renderScriptVerb({ name: "custom", summary: "" }), /^custom\(…\)/);
+  assert.equal(renderScriptVerb(null), null);
+});
+
+test("a CLI verb's usage is derived, so adding one documents it", () => {
+  const gh = moshVocabulary().get("gh");
+  assert.equal(gh.usage, "gh(...args)");
+  assert.match(gh.detail, /moshcode gh/);
+});
+
+test("a command and a verb of the same name resolve to the command", async () => {
+  // `run` and `pwd` are both. The CLI command is what `moshcode help run`
+  // means — the verb is reachable through `moshcode commands`.
+  const { stdout } = await cli(["help", "run"]);
+  assert.match(stdout, /^moshcode run —/);
+});
+
+/* --------------------------------------------------------- R15: terminal */
+
+test("help is plain text when the terminal is not one", async () => {
+  // execFile gives the child a pipe, not a TTY — the non-TTY half of R15.
+  for (const args of [["--help"], ["help", "prd"], ["help", "ask"], ["help", "--all"]]) {
+    const { stdout } = await cli(args);
+    assert.ok(!stdout.includes(ESC), `${args.join(" ")} emitted ANSI to a pipe`);
+  }
+});
+
+test("NO_COLOR is honoured", async () => {
+  const env = { ...process.env, NO_COLOR: "1" };
+  delete env.FORCE_COLOR;
+  const { stdout } = await cli(["--help"], { env });
+  assert.ok(!stdout.includes(ESC), "NO_COLOR still produced escapes");
+});
+
+test("the pit's help is plain when piped", () => {
+  // spawnSync, not the execFile helper: the pit reads stdin, and execFile has
+  // no way to supply it — the child sits waiting for a prompt that never comes.
+  const { stdout } = spawnSync(process.execPath, [BIN], {
+    cwd: ROOT, input: "/help\n/quit\n", encoding: "utf8", timeout: 30_000,
+  });
+  assert.ok(!stdout.includes(ESC), "the pit coloured a pipe");
+  assert.match(stdout, /not in the pit/, "and still rendered");
+});
+
+/* ------------------------------------------------------ R16: completion */
+
+test("completion offers help topics in every shell", async () => {
+  for (const shell of ["bash", "zsh", "fish", "powershell"]) {
+    const { code, stdout } = await cli(["completion", shell]);
+    assert.equal(code, 0, `${shell} completion failed`);
+    // The topics are the surface help itself accepts: a command, an engine, a
+    // tool, and a moshscript verb.
+    for (const topic of ["install", "claude", "gh", "ask"]) {
+      assert.ok(stdout.includes(topic), `${shell} completion offers no "${topic}" help topic`);
+    }
+  }
+});
+
+test("every completion help topic is one help can actually answer", () => {
+  const model = completionModel();
+  assert.ok(model.helpTopics.length >= 30, "the topic list looks empty");
+  const engines = new Set(Object.keys(ENGINES));
+  const tools = new Set(Object.keys(TOOLS));
+  const verbs = new Set(moshVocabulary().names());
+  for (const { name } of model.helpTopics) {
+    const answerable = findCommand(name) || engines.has(name) || tools.has(name) || verbs.has(name);
+    assert.ok(answerable, `completion offers "${name}" but help cannot answer it`);
+  }
 });
