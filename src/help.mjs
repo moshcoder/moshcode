@@ -14,6 +14,8 @@
 import {
   CORE_CLI_COMMANDS,
   COMMAND_GROUPS,
+  NOT_IN_PIT,
+  PIT_COMMANDS,
   VERB_TABLES,
 } from "./cli-schema.mjs";
 
@@ -306,6 +308,68 @@ export function helpModel({ engines = [], tools = [], version = "" } = {}) {
  * to stderr and exit 1; `renderCommand` on stdout is the same text for the
  * person who asked politely.
  */
+/* ------------------------------------------------------------------ the pit */
+
+/** Resolve a pit command, following its aliases. */
+export function findPitCommand(name) {
+  const wanted = String(name ?? "").toLowerCase().replace(/^\//, "");
+  return PIT_COMMANDS.find((c) => c.name === wanted || (c.aliases || []).includes(wanted)) ?? null;
+}
+
+/**
+ * The model behind `/help` (R12).
+ *
+ * Structure rather than a string, because the pit colours its output and the
+ * CLI does not — returning pre-rendered text would mean either losing the
+ * colour or teaching this module about ANSI. The tool roster comes from the
+ * caller, which gets it from TOOLS: `/help` used to hardcode nine tool names
+ * directly beneath a printTools() whose own comment explains why that goes
+ * stale.
+ */
+export function pitHelpModel({ engines = [], tools = [] } = {}) {
+  return {
+    commands: PIT_COMMANDS.map((c) => ({
+      name: c.name,
+      aliases: c.aliases || [],
+      args: c.args || "",
+      description: c.description,
+      usage: `/${c.name}${c.args ? ` ${c.args}` : ""}`,
+    })),
+    engines,
+    tools,
+    // Honest about the gap rather than silent about it.
+    notInPit: NOT_IN_PIT.map((name) => ({
+      name,
+      description: findCommand(name)?.description || "",
+    })),
+  };
+}
+
+/**
+ * One pit command in detail, for `/help <command>` and `/<command> --help`.
+ *
+ * Delegates to the CLI block when the verb is the same verb, so flags and
+ * examples are written once. Pit-only commands (`/shell`, `/quit`) answer for
+ * themselves.
+ */
+export function renderPitCommand(name) {
+  const entry = findPitCommand(name);
+  if (!entry) return null;
+  if (entry.cli) {
+    const command = findCommand(entry.cli);
+    if (command) {
+      const body = renderCommand(command);
+      // The pit spells them with a slash; say so once rather than rewriting
+      // every synopsis line.
+      return `${body}\n\nin the pit: /${entry.name}${entry.args ? ` ${entry.args}` : ""}`;
+    }
+  }
+  const out = [`/${entry.name} — ${entry.description}`];
+  if (entry.args) out.push("", "usage:", row(`/${entry.name} ${entry.args}`, "", 44));
+  if (entry.aliases?.length) out.push("", `aliases: ${entry.aliases.map((a) => `/${a}`).join(", ")}`);
+  return out.join("\n");
+}
+
 export function usageBlock(name, verb = null) {
   const command = findCommand(name);
   if (!command) return "";

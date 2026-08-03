@@ -23,7 +23,8 @@ import {
   CORE_CLI_COMMANDS, MCP_VERBS, SKILL_VERBS, UPGRADE_TARGETS, DNS_VERBS,
 } from "../src/cli-schema.mjs";
 import {
-  WIDTH, findCommand, helpModel, renderCommand, renderOverview, suggest, wantsHelp, wrap,
+  WIDTH, findCommand, findPitCommand, helpModel, pitHelpModel, renderCommand, renderOverview,
+  renderPitCommand, suggest, wantsHelp, wrap,
 } from "../src/help.mjs";
 
 const run = promisify(execFile);
@@ -279,5 +280,65 @@ test("the overview names every group that has commands", () => {
   const text = renderOverview({ engines: ["claude"], tools: ["gh"] });
   for (const group of ["engines", "tools", "extend", "script", "account", "hosting", "system"]) {
     assert.match(text, new RegExp(`\\b${group}\\b`), `group ${group} missing from the overview`);
+  }
+});
+
+/* -------------------------------------------------------------- R12: the pit */
+
+test("the pit's help lists every command the pit dispatches", () => {
+  // Same drift guard as the CLI's, against the pit's own loop: a `/verb` added
+  // there without a schema entry fails here rather than going undocumented.
+  const source = fs.readFileSync(path.join(ROOT, "src/tui.mjs"), "utf8");
+  const dispatched = new Set([...source.matchAll(/cmd === "([^"]+)"/g)].map((m) => m[1]));
+  assert.ok(dispatched.size >= 10, "the pit dispatch scrape found nothing — did the shape change?");
+
+  for (const name of dispatched) {
+    assert.ok(findPitCommand(name), `the pit dispatches "/${name}" and has no help for it`);
+  }
+});
+
+test("/logout is in the pit's help, having been dispatched and undocumented", () => {
+  const model = pitHelpModel({});
+  assert.ok(model.commands.some((c) => c.name === "logout"), "the omission this PRD names");
+});
+
+test("the pit's help hardcodes no roster", () => {
+  const source = fs.readFileSync(path.join(ROOT, "src/tui.mjs"), "utf8");
+  const help = source.slice(source.indexOf("function printHelp"), source.indexOf("function printPwd"));
+  // The nine tool names that used to be typed out beneath a printTools() whose
+  // comment explains why doing that goes stale.
+  for (const tool of ["railway", "supabase", "doppler", "doctl", "turso", "tailscale"]) {
+    assert.ok(!help.includes(`/${tool}`), `printHelp still hardcodes /${tool}`);
+  }
+  // And the moshscript verbs, which had already drifted: ai() and shell() were
+  // in the vocabulary and missing from the hand-typed list.
+  assert.ok(!help.includes("notify() ask()"), "printHelp still hardcodes the vocabulary");
+});
+
+test("the pit says which CLI commands it does not have", () => {
+  const model = pitHelpModel({});
+  const absent = model.notInPit.map((c) => c.name);
+  for (const name of ["dns", "console", "completion", "uninstall"]) {
+    assert.ok(absent.includes(name), `${name} has no pit equivalent and should say so`);
+  }
+  // And nothing may be in both lists — that would be the confusion R12 exists
+  // to remove.
+  for (const name of absent) {
+    assert.equal(findPitCommand(name), null, `${name} is listed as absent but is dispatched`);
+  }
+});
+
+test("a pit command renders detail, delegating to the CLI block", () => {
+  const block = renderPitCommand("prd");
+  assert.match(block, /^moshcode prd —/);
+  assert.match(block, /in the pit: \/prd/);
+  // Pit-only verbs answer for themselves.
+  assert.match(renderPitCommand("quit"), /^\/quit —/);
+  assert.equal(renderPitCommand("nonsense"), null);
+});
+
+test("pit aliases resolve", () => {
+  for (const [alias, target] of [["agent", "agents"], ["engines", "agents"], ["where", "pwd"], ["q", "quit"], ["sh", "shell"]]) {
+    assert.equal(findPitCommand(alias)?.name, target, `/${alias} should resolve to /${target}`);
   }
 });
