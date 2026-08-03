@@ -5,7 +5,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { caddySite, chooseTemplate, detectServer, nginxSite, servePlan, serveCommand } from "../src/serve.mjs";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { caddySite, chooseTemplate, detectServer, nginxSite, servePlan, serveCommand, tlsFor } from "../src/serve.mjs";
+import { pinFromCertificate } from "../src/pins.mjs";
+
+/** A throwaway certificate, made here so the test carries no external fixture. */
+function certificateFixture() {
+  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "moshcode-cert-"));
+  const crt = path.join(dir, "c.pem");
+  execFileSync("openssl", [
+    "req", "-x509", "-nodes", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+    "-keyout", path.join(dir, "k.pem"), "-out", crt, "-days", "1", "-subj", "/CN=demo.hacker",
+  ], { stdio: "ignore" });
+  const pem = fsSync.readFileSync(crt, "utf8");
+  fsSync.rmSync(dir, { recursive: true, force: true });
+  return pem;
+}
 
 test("no HTTPS redirect is ever emitted, for either server", () => {
   // The trap: a box's default vhost usually 301s to https, and for an ending
@@ -228,4 +246,88 @@ test("a bad --template stops the install before anything is written", async () =
   });
   assert.equal(code, 0);
   assert.match(String(seeded), /examples\/templates\/caddy-static\/site$/);
+});
+
+// ---- TLS, and the pin that makes it verifiable ----------------------------
+
+test("without --tls the config is exactly what it was", () => {
+  const conf = nginxSite({ name: "demo.hacker", root: "/srv/demo.hacker" });
+  assert.doesNotMatch(conf, /listen 443/, "TLS is opt-in: it writes a key and publishes to the registry");
+  assert.match(conf, /^\tlisten 80;$/m);
+});
+
+test("with a key, both ports serve the site and neither redirects to the other", () => {
+  const conf = nginxSite({
+    name: "demo.hacker",
+    root: "/srv/demo.hacker",
+    tls: { tld: "hacker", key: "/etc/ssl/moshpit/hacker.key", cert: "/etc/ssl/moshpit/hacker.crt", pin: "P".repeat(43) + "=" },
+  });
+
+  assert.match(conf, /^\tlisten 80;$/m);
+  assert.match(conf, /^\tlisten 443 ssl;$/m);
+  assert.match(conf, /ssl_certificate\s+\/etc\/ssl\/moshpit\/hacker\.crt;/);
+  // The whole point. A redirect would send stock clients — which cannot verify
+  // a pin — to a certificate they must reject, and through the gateway it
+  // becomes a 301 with no Location at all.
+  assert.doesNotMatch(conf, /return 301/, "port 80 must never redirect to a certificate stock clients cannot verify");
+  // Both blocks serve the same root, or one of the two audiences gets nothing.
+  assert.equal((conf.match(/root \/srv\/demo\.hacker;/g) || []).length, 2);
+});
+
+test("the key is created before the config that references it", () => {
+  // nginx refuses to start when a referenced certificate is missing — not
+  // just that site, the whole server, taking every other name on the box with
+  // it. So ordering here is not tidiness.
+  const plan = servePlan({
+    name: "demo.hacker",
+    server: "nginx",
+    root: "/srv/demo.hacker",
+    tls: { tld: "hacker", dir: "/etc/ssl/moshpit", key: "/k", cert: "/c", pin: null, create: { cmd: "openssl", args: ["req"] } },
+  });
+
+  const kinds = plan.steps.map((s) => s.kind);
+  assert.ok(kinds.indexOf("run") < kinds.indexOf("write"), "openssl runs before the config is written");
+  assert.equal(kinds[0], "mkdir", "and the directory exists before openssl writes into it");
+});
+
+test("the pin is published last, after the key exists", () => {
+  // Publishing a pin for a key that failed to generate is worse than no pin:
+  // clients would be told to expect a certificate this machine cannot
+  // present, which is a hard failure rather than a missing one.
+  const plan = servePlan({
+    name: "demo.hacker",
+    server: "nginx",
+    root: "/srv/demo.hacker",
+    reload: true,
+    tls: { tld: "hacker", dir: "/etc/ssl/moshpit", key: "/k", cert: "/c", pin: "x", create: { cmd: "openssl", args: [] } },
+  });
+
+  assert.equal(plan.steps[plan.steps.length - 1].kind, "publish-pin");
+  assert.equal(plan.steps[plan.steps.length - 1].tld, "hacker");
+});
+
+test("Caddy does not get a TLS block it cannot honour", async () => {
+  // Caddy would try to provision from a CA, which is precisely what cannot
+  // happen for an ending outside the DNS root.
+  const plan = servePlan({
+    name: "demo.hacker",
+    server: "caddy",
+    root: "/srv/demo.hacker",
+    tls: { tld: "hacker", dir: "/etc/ssl/moshpit", key: "/k", cert: "/c", pin: "x", create: null },
+  });
+
+  assert.equal(plan.tls, null);
+  assert.ok(!plan.steps.some((s) => s.kind === "publish-pin"));
+});
+
+test("a second name under the same ending reuses the key and its pin", async () => {
+  // One key per ending is what the registry stores. The pin is read back off
+  // the certificate rather than assumed, so the value published is the one
+  // actually being served.
+  const cert = certificateFixture();
+  const tls = await tlsFor("second.hacker", { dir: "/etc/ssl/moshpit", readFile: async () => cert });
+
+  assert.equal(tls.tld, "hacker");
+  assert.equal(tls.create, null, "no new key when the ending already has one");
+  assert.equal(tls.pin, pinFromCertificate(cert));
 });
