@@ -22,6 +22,13 @@
 #   MOSHCODE_HOME=/path      install dir      (default: $HOME/.moshcode)
 #   MOSHCODE_BIN=/path/dir   wrapper bin dir  (default: $HOME/.local/bin)
 #   MOSHCODE_REF=vX.Y.Z      pin a tag/branch (default: latest release, else main)
+#   MOSHCODE_ALLOW_ROOT=1    install as root anyway (see below)
+#
+# Do not install this with sudo. moshcode is a user-level CLI, and every path
+# here is derived from $HOME — under sudo that is /root, so the payload and the
+# wrapper land in root's home where your own user cannot read them. Nothing
+# fails at install time; it surfaces later as "permission denied" on a binary
+# that looks installed. The installer refuses that case and tells you how.
 #
 # Re-running updates an existing install in place.
 
@@ -47,6 +54,34 @@ fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 
 # ---- prerequisites --------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not found."; }
+
+# Installing under sudo silently installs for the wrong user. Every path here
+# comes from $HOME, which sudo sets to /root, so the payload and wrappers land
+# in a directory mode 0700 root — invisible to the user who ran the command.
+# The install reports success and only breaks later, at first use.
+#
+# A bare root shell (containers, CI images, root-only boxes) has no SUDO_USER
+# and is a legitimate way to install, so only the sudo-from-a-real-user case is
+# refused, and MOSHCODE_ALLOW_ROOT overrides even that.
+check_not_sudo() {
+    [ "$(id -u)" = "0" ] || return 0
+    [ -n "${SUDO_USER:-}" ] || return 0
+    if [ -n "${MOSHCODE_ALLOW_ROOT:-}" ]; then
+        info "MOSHCODE_ALLOW_ROOT set — installing as root into $MOSHCODE_HOME"
+        return 0
+    fi
+    fail "don't install moshcode with sudo.
+
+  Every path is based on \$HOME, which sudo has set to $HOME, so this would
+  install for root and leave $SUDO_USER unable to run it.
+
+  Run it as yourself instead:
+      curl -fsSL $INSTALL_URL | sh
+
+  If you really do want it system-wide, choose the paths explicitly:
+      sudo MOSHCODE_ALLOW_ROOT=1 MOSHCODE_HOME=/opt/moshcode \\
+           MOSHCODE_BIN=/usr/local/bin sh -c 'curl -fsSL $INSTALL_URL | sh'"
+}
 
 check_node() {
     command -v node >/dev/null 2>&1 || fail \
@@ -123,6 +158,7 @@ ensure_path() {
 # ---- commands -------------------------------------------------------------
 run_install() {
     printf '\n%smoshcode installer%s %s— code hard, mosh harder 🤘%s\n\n' "$BOLD" "$RESET" "$ASH" "$RESET"
+    check_not_sudo
     need curl; need tar
     check_node
     _ref="$(resolve_ref)"
@@ -153,6 +189,6 @@ case "$CMD" in
     update|upgrade)     run_install ;;   # re-fetch latest, same path
     remove|uninstall)   run_remove ;;
     -h|--help|help)
-        sed -n '2,28p' "$0" 2>/dev/null || printf 'moshcode installer — install | update | remove\n' ;;
+        sed -n '2,33p' "$0" 2>/dev/null || printf 'moshcode installer — install | update | remove\n' ;;
     *) fail "unknown command: $CMD (try: install | update | remove)" ;;
 esac
