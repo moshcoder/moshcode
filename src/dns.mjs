@@ -16,13 +16,17 @@
 // testable without binding a port.
 
 import dgram from "node:dgram";
-import { isIP } from "node:net";
+import { isIP, connect as netConnect } from "node:net";
 import { Resolver } from "node:dns/promises";
 
 export const DEFAULT_REGISTRY_BASE = "https://pit.moshcode.sh";
 export const DEFAULT_PARKING_HOST = "moshcoding.com";
 export const DEFAULT_PORT = 5354;
 export const DEFAULT_HOST = "127.0.0.1";
+// Where the pinned-TLS proxy listens. Not configurable from DNS: an A record
+// cannot carry a port, so the proxy has to be on 443 for a browser to reach it
+// at all — its installer moves it there for exactly this reason.
+export const PROXY_PORT = 443;
 
 export function parseDnsPort(input) {
   const raw = String(input ?? "").trim();
@@ -610,8 +614,41 @@ export function mayHaveCname({ exists, address }) {
  * round trip — which is the same bargain the old path struck for CNAMEs, held
  * to here so the common case did not get slower in exchange for being right.
  */
+/**
+ * Is something actually listening where we are about to send every name?
+ *
+ * The guard that makes proxy mode safe to offer at all. Pointing every live
+ * Moshpit name at a loopback address is exactly as good as the thing behind it:
+ * with a proxy there, all of them work in a stock client; with nothing there,
+ * all of them break at once, and the resolver looks healthy while doing it —
+ * `dig` answers 127.0.0.1 and every connection is refused.
+ *
+ * So this is checked before the mode is allowed on, and rechecked rather than
+ * remembered: a proxy that dies after the resolver started is the same outage
+ * as one that was never running.
+ */
+export function proxyReachable(address, port = 443, { connect = null, timeoutMs = 1500 } = {}) {
+  return new Promise((resolve) => {
+    let socket;
+    const done = (ok) => {
+      try { socket?.destroy(); } catch { /* already gone */ }
+      resolve(ok);
+    };
+    try {
+      const net = connect || netConnect;
+      socket = net({ host: address, port });
+      const timer = setTimeout(() => done(false), timeoutMs);
+      timer.unref?.();
+      socket.once("connect", () => { clearTimeout(timer); done(true); });
+      socket.once("error", () => { clearTimeout(timer); done(false); });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 export async function addressAnswer(name, options = {}) {
-  const { parkingAddress, wantsV6 = false } = options;
+  const { parkingAddress, wantsV6 = false, proxyAddress = null } = options;
   const plan = (kind, extra) => ({ exists: true, kind, records: [], address: null, cname: null, ...extra });
 
   const result = await resolveName(name, options);
@@ -620,8 +657,29 @@ export async function addressAnswer(name, options = {}) {
 
   // Parking is checked before anything the registry published: a parked name's
   // whole job is to reach the page explaining that it is for sale.
+  //
+  // It is also checked before the proxy, deliberately. A parked name has no
+  // origin and no published pin, so handing it to a proxy whose entire job is
+  // to verify one would turn "this name is for sale" into a TLS error.
   if (result.status === "parked") {
     return parkingAddress ? plan("address", { address: parkingAddress }) : plan("nodata");
+  }
+
+  // Every live name answers the local proxy, whatever the registry says its
+  // target is — that is the point. The proxy reads the SNI, checks the origin's
+  // key against the registry pin, and re-signs with a root this machine
+  // generated, which is the only way a stock client can be told the result: no
+  // CA will ever sign for a Moshpit name.
+  //
+  // Answering the origin instead is what left the proxy running on loopback
+  // with nothing ever routed to it, so every name arrived at a stock client as
+  // a self-signed certificate no matter what was installed.
+  if (proxyAddress) {
+    const forFamily = wantsV6 ? proxyAddress.v6 : proxyAddress.v4;
+    // A proxy that only speaks one family is NODATA for the other, not a
+    // fabricated address: answering ::1 for a v4-only listener is a connection
+    // refused that looks like the site is down.
+    return forFamily ? plan("address", { address: forFamily, proxied: true }) : plan("nodata");
   }
 
   const address = targetAddress(result.target);
@@ -940,6 +998,7 @@ export function createServer(options = {}) {
     // names it is authoritative for.
     upstreams = [],
     tldSet = null,
+    proxyAddress = null,
     forwardTimeoutMs = 3000,
     // Off by default: a loopback bridge has one client and rate limiting it is
     // pure cost. These matter when the socket is reachable by strangers, which
@@ -1065,7 +1124,7 @@ export function createServer(options = {}) {
         if (policy) ({ exists } = policy);
       } else {
         const plan = await addressAnswer(query.name, {
-          ...options, wantsV6: query.type === TYPE_AAAA,
+          ...options, wantsV6: query.type === TYPE_AAAA, proxyAddress,
         }).catch(() => null);
         exists = Boolean(plan?.exists);
         if (plan?.kind === "records") {
@@ -2012,6 +2071,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     verify = verifyResolution,
     bridgeStatus = daemonStatus,
     startBridge = startDaemon,
+    proxyReachableImpl = proxyReachable,
     stopBridge = stopDaemon,
     dropins = readDropins,
     manifestFile = manifestPath(),
@@ -2150,6 +2210,35 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         : "  this bridge has nothing to answer for and nothing to forward to");
     }
 
+    // Proxy mode: answer every live name with the local pinned-TLS proxy rather
+    // than its origin, so a stock client gets a certificate it can verify.
+    const proxyIndex = rest.indexOf("--proxy");
+    let proxyAddress = null;
+    if (proxyIndex >= 0) {
+      const given = rest[proxyIndex + 1];
+      const host = given && !given.startsWith("-") ? given : null;
+      const candidates = host ? [host] : ["127.0.0.1", "::1"];
+      const reachable = [];
+      for (const candidate of candidates) {
+        if (await proxyReachableImpl(candidate, PROXY_PORT)) reachable.push(candidate);
+      }
+      if (!reachable.length) {
+        // Refused rather than warned. With the mode on and nothing behind it,
+        // every Moshpit name on the machine resolves and then refuses the
+        // connection — a total outage that reads as "the sites are down".
+        out(`! nothing is listening on ${candidates.map((c) => `${c}:${PROXY_PORT}`).join(" or ")}`);
+        out("  --proxy points every live Moshpit name there, so turning it on now would");
+        out("  break all of them at once rather than fix their certificates.");
+        out("  start moshpit-proxy first: https://github.com/profullstack/moshpit-proxy");
+        return 1;
+      }
+      proxyAddress = {
+        v4: reachable.find((a) => isIP(a) === 4) || null,
+        v6: reachable.find((a) => isIP(a) === 6) || null,
+      };
+      out(`proxying every live name to ${reachable.join(", ")}:${PROXY_PORT} — certificates are verified there`);
+    }
+
     // The same two error codes the parking server above already explains, on
     // the port this command exists to bind. Without this they arrived as an
     // unhandled rejection — bin/moshcode calls main() with no top-level catch —
@@ -2164,6 +2253,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         parkingAddress: park,
         upstreams,
         tldSet,
+        proxyAddress,
         onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
         onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
       });
