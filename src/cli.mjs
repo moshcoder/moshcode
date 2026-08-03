@@ -60,7 +60,17 @@ export function runMoshcode(cmd, args, ctx) {
 
 /** A vocabulary command mapping `name(...args)` → `moshcode name ...args`. */
 export function cliVerb(name, summary) {
-  return { name, summary, run: (ctx, ...args) => runMoshcode(name, args, ctx) };
+  // `usage` is the call signature `moshcode help <verb>` renders (PRD 0006
+  // R14). Every CLI verb has the same one — it forwards its arguments to
+  // `moshcode <name>` — so deriving it here means a verb added below is
+  // documented by the act of adding it.
+  return {
+    name,
+    summary,
+    usage: `${name}(...args)`,
+    detail: `runs \`moshcode ${name} ...args\` and returns { ok, code }`,
+    run: (ctx, ...args) => runMoshcode(name, args, ctx),
+  };
 }
 
 /**
@@ -102,5 +112,7 @@ export function runAi(ctx, prompt, opts = {}) {
 export const aiVerb = {
   name: "ai",
   summary: "run a coding engine on a prompt and return its output (shortcut)",
+  usage: "ai(prompt, { engine })",
+  detail: "blocking; returns the engine's stdout as a string. engine defaults to the first installed one. needs await",
   run: (ctx, prompt, opts) => runAi(ctx, prompt, opts),
 };

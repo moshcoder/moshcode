@@ -67,6 +67,8 @@ const COMMANDS = [
   {
     name: "code",
     summary: "compile features (no bugs)",
+    usage: "code()",
+    detail: "narrates a build step; takes no arguments",
     run(ctx, ...args) {
       expectNoArgs("code", args);
       ctx.out("  ⌨  code()    → compiling features (no bugs)…");
@@ -75,6 +77,8 @@ const COMMANDS = [
   {
     name: "mosh",
     summary: "open the pit + blast the moshcoding playlist",
+    usage: "mosh()",
+    detail: "opens the pit and starts the playlist",
     run(ctx, ...args) {
       expectNoArgs("mosh", args);
       ctx.out("  🤘 mosh()    → opening the pit");
@@ -91,6 +95,8 @@ const COMMANDS = [
   {
     name: "notify",
     summary: "ping the operator via app.moshcode.sh (email/SMS/Slack/Telegram/push)",
+    usage: "notify(...message)",
+    detail: "returns { id, url } — fire and forget, no reply awaited",
     // Fire-and-forget. Posts the approval to the app, which fans it out to the
     // operator's channels. Returns { id, url } so a script can hand the link off.
     async run(ctx, ...args) {
@@ -107,6 +113,8 @@ const COMMANDS = [
   {
     name: "ask",
     summary: "notify + BLOCK until the human approves/instructs at app.moshcode.sh",
+    usage: "ask(...prompt)",
+    detail: "BLOCKS until a human answers at app.moshcode.sh; returns their reply or null. needs await",
     // The human-in-the-loop gate. Posts the approval to the app, then waits for
     // the operator to open app.moshcode.sh/approve/:id, read the context, and
     // submit. Resolves with their instructions (or null). Requires `await`.
@@ -130,6 +138,8 @@ const COMMANDS = [
   {
     name: "repeat",
     summary: "back to the top of the loop",
+    usage: "repeat()",
+    detail: "jumps back to the top of the loop",
     run(ctx, ...args) {
       expectNoArgs("repeat", args);
       ctx.out("  ↻  repeat()  → back to the top");
@@ -138,6 +148,8 @@ const COMMANDS = [
   {
     name: "say",
     summary: "print a line",
+    usage: "say(...parts)",
+    detail: "prints one line",
     run(ctx, ...args) {
       ctx.out(`  💬 ${args.join(" ")}`);
     },
@@ -145,6 +157,8 @@ const COMMANDS = [
   {
     name: "sleep",
     summary: "pause for N milliseconds (blocking)",
+    usage: "sleep(ms)",
+    detail: "blocks for ms milliseconds",
     // Synchronous/blocking so it pauses inline in the simple no-`await` style:
     // `while (alive) { work(); sleep(1000); }` actually waits each iteration.
     run(ctx, ...args) {
@@ -163,6 +177,8 @@ const COMMANDS = [
   {
     name: "stop",
     summary: "end the loop (alive = false)",
+    usage: "stop()",
+    detail: "ends the loop (alive = false)",
     run(ctx, ...args) {
       expectNoArgs("stop", args);
       ctx.stop();
@@ -173,6 +189,8 @@ const COMMANDS = [
   {
     name: "shell",
     summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL -c elsewhere)",
+    usage: "shell(cmd)",
+    detail: "runs cmd in $SHELL; returns { ok, code, signal }",
     // The moshscript system verb for arbitrary shell commands. Blocking
     // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
     // and the child owns the terminal for interactive commands. Returns

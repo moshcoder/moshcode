@@ -32,7 +32,7 @@ import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
 import {
   findCommand, findVerb, helpModel, renderAll, renderCommand, renderOverview,
-  suggest, wantsHelp, withoutHelp,
+  renderMarkdown, renderScriptVerb, suggest, wantsHelp, withoutHelp,
 } from "../src/help.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
@@ -179,6 +179,13 @@ function handledHelp(cmd, rest) {
   const topLevel = ["help", "--help", "-h"].includes(cmd);
 
   if (topLevel) {
+    // `--markdown` is the generator behind README.md's command table (R13). A
+    // build-time convenience, deliberately not a docs pipeline: it emits one
+    // table, and the test that keeps README.md honest calls the same function.
+    if (rest.includes("--markdown")) {
+      console.log(renderMarkdown());
+      return true;
+    }
     const args = withoutHelp(rest).filter((a) => a !== "--json" && a !== "--all");
     // `moshcode help --help` asks about `help` itself, and R4 says every
     // command answers for itself. Only the spelled-out verb: `moshcode --help`
@@ -209,7 +216,16 @@ function handledHelp(cmd, rest) {
         console.log(`see also: moshcode help tools · moshcode help install`);
         return true;
       }
-      const near = suggest(args[0], [...Object.keys(ENGINES), ...Object.keys(TOOLS)]);
+      // A moshscript verb is a fair thing to ask about — `ask()` is as much
+      // part of the interface as `moshcode prd` (R14).
+      const verbHelp = renderScriptVerb(moshVocabulary().get(args[0]));
+      if (verbHelp) {
+        console.log(verbHelp);
+        return true;
+      }
+      const near = suggest(args[0], [
+        ...Object.keys(ENGINES), ...Object.keys(TOOLS), ...moshVocabulary().names(),
+      ]);
       console.error(`✗ no help for ${JSON.stringify(args[0])}${near ? ` — did you mean ${near}?` : ""}`);
       console.error("  moshcode help          list commands");
       process.exitCode = 1;

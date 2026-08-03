@@ -309,6 +309,7 @@ export const CORE_CLI_COMMANDS = [
     flags: [
       ["--all", "render every command instead of the overview", ""],
       ["--json", "emit the help model as JSON", ""],
+      ["--markdown", "emit the command table for README.md", ""],
     ],
     examples: [
       ["moshcode help mcp install", "a sub-verb"],
