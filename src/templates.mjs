@@ -185,6 +185,35 @@ function run(cmd, args, { capture = false } = {}) {
 }
 
 /**
+ * How many leading path components should the extraction drop?
+ *
+ * A release tarball wraps everything in one directory — `repo-1.2.3/` from a
+ * GitHub URL, `./` from `tar -czf t.tgz .` — and the template is what sits
+ * inside that wrapper, not the wrapper itself. So it is dropped.
+ *
+ * An archive built the other obvious way, `tar -czf t.tgz *`, has no wrapper.
+ * Dropping a component there does not unwrap anything: tar silently discards
+ * every top-level file and moves everything else up a level, so README.md and
+ * template.json disappear and src/app.js installs as app.js. That happens with
+ * no warning and a zero exit, which is the worst way for it to happen.
+ *
+ * So strip only when there is genuinely one root holding everything.
+ */
+function stripDepth(entries) {
+  const roots = new Set();
+  let nested = false;
+  for (const entry of entries) {
+    const parts = entry.split("/").filter(Boolean);
+    if (!parts.length) continue;
+    roots.add(parts[0]);
+    if (parts.length > 1) nested = true;
+    if (roots.size > 1) return 0;
+  }
+  // One root that nothing lives under is a lone file, not a wrapper.
+  return roots.size === 1 && nested ? 1 : 0;
+}
+
+/**
  * Put a remote template on disk and return the directory holding it.
  *
  * Both paths shell out rather than reimplementing git or tar. The cost is a
@@ -224,14 +253,15 @@ export async function fetchRemote(
     // root shell on the next boot.
     const listed = await runImpl("tar", ["-tzf", archive], { capture: true });
     if (!listed.ok) return { ok: false, error: "could not read the archive", dir, cleanupDir: dir };
-    const unsafe = listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean).find((e) => !safeEntry(e));
+    const members = listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    const unsafe = members.find((e) => !safeEntry(e));
     if (unsafe) return { ok: false, error: `archive writes outside the target: ${unsafe}`, dir, cleanupDir: dir };
 
     const out = path.join(dir, "unpacked");
     await fs.mkdir(out, { recursive: true });
     const extracted = await runImpl("tar", [
       "-xzf", archive, "-C", out,
-      "--strip-components=1",
+      `--strip-components=${stripDepth(members)}`,
       "--no-same-owner", "--no-same-permissions",
     ]);
     if (!extracted.ok) return { ok: false, error: "could not unpack the archive", dir, cleanupDir: dir };

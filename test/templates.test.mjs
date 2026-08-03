@@ -195,6 +195,79 @@ test("tarball fetches expose the whole temporary tree for cleanup", async () => 
   }
 });
 
+/**
+ * Unpack an archive with these members and report the --strip-components tar
+ * was actually given. Stripping a component off an archive that has no wrapper
+ * directory deletes its top-level files, so the number matters.
+ */
+async function stripComponentsFor(members) {
+  const tmpRoot = await tmp();
+  try {
+    let stripArg = null;
+    const fetched = await fetchRemote(
+      { kind: "tarball", url: "https://example.test/template.tar.gz" },
+      {
+        tmpRoot,
+        fetchImpl: async () => ({
+          ok: true,
+          arrayBuffer: async () => Buffer.from("placeholder archive"),
+        }),
+        runImpl: async (_command, args) => {
+          if (args[0] === "-tzf") return { ok: true, code: 0, stdout: `${members.join("\n")}\n` };
+          stripArg = args.find((arg) => arg.startsWith("--strip-components="));
+          return { ok: true, code: 0, stdout: "" };
+        },
+      },
+    );
+    assert.equal(fetched.ok, true);
+    return Number(String(stripArg).split("=")[1]);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+test("an archive with no wrapper directory keeps its top-level files", async () => {
+  // `tar -czf t.tgz README.md template.json src config`. Stripping a component
+  // here drops README.md and template.json outright and installs src/app.js as
+  // app.js, with no warning and a zero exit.
+  assert.equal(
+    await stripComponentsFor([
+      "README.md",
+      "template.json",
+      "src/",
+      "src/app.js",
+      "config/",
+      "config/settings.toml",
+    ]),
+    0,
+  );
+});
+
+test("a release tarball's wrapper directory is still stripped", async () => {
+  // What a GitHub tarball URL actually serves.
+  assert.equal(
+    await stripComponentsFor([
+      "demo-1.2.3/",
+      "demo-1.2.3/README.md",
+      "demo-1.2.3/template.json",
+      "demo-1.2.3/src/app.js",
+    ]),
+    1,
+  );
+});
+
+test("the ./ wrapper from `tar -czf t.tgz .` is still stripped", async () => {
+  assert.equal(
+    await stripComponentsFor(["./", "./README.md", "./src/app.js"]),
+    1,
+  );
+});
+
+test("a lone top-level file is not mistaken for a wrapper", async () => {
+  // One root, but nothing lives under it, so stripping would leave nothing.
+  assert.equal(await stripComponentsFor(["README.md"]), 0);
+});
+
 test("remote dry runs remove their fetch workspace and leave the target empty", async () => {
   const cleanupDir = await tmp();
   const from = path.join(cleanupDir, "unpacked");
