@@ -179,6 +179,7 @@ usage:
   moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
                                        prd/NNNN-slug.md and hand it to an engine to
                                        author; no arg lists existing PRDs
+  moshcode prd list [--json]           list PRDs without creating or changing files
   moshcode login [--device|--browser]  authenticate this machine with app.moshcode.sh
                                        (device code over SSH/headless; --browser forces loopback)
                                        (browser OAuth+PKCE; --device = headless/CI
@@ -527,8 +528,25 @@ async function main() {
   }
 
   if (cmd === "prd") {
-    if (!rest.length) {
+    const listMode = !rest.length || rest[0] === "list" || rest[0] === "--json";
+    if (listMode) {
+      const listArgs = rest[0] === "list" ? rest.slice(1) : rest;
+      const unknown = listArgs.filter((arg) => arg !== "--json");
+      if (unknown.length) {
+        console.error(`usage: moshcode prd list [--json]\nunknown option: ${unknown[0]}`);
+        process.exitCode = 1;
+        return;
+      }
       const prds = listPrds();
+      if (listArgs.includes("--json")) {
+        console.log(JSON.stringify(prds.map(({ id, title, status, file }) => ({
+          id,
+          title,
+          status,
+          file,
+        })), null, 2));
+        return;
+      }
       if (!prds.length) { console.log("no PRDs yet — `moshcode prd <idea>` to start one."); return; }
       for (const p of prds) console.log(`${p.id}  ${p.status.padEnd(9)} ${p.title}`);
       return;
