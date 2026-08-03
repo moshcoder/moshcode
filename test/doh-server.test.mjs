@@ -81,9 +81,35 @@ test("the nginx block forwards the client and does not compress", () => {
   // Both lines people miss, and both silently break something.
   assert.match(conf, /proxy_set_header X-Forwarded-For \$remote_addr;/);
   assert.match(conf, /gzip off;/);
+  assert.match(conf, new RegExp(`location ${DOH_PATH} \\{`));
+});
+
+test("the default block is one nginx will actually load", () => {
+  const conf = nginxDohSite({ name: "dns.moshcode.sh", port: 8053 });
+
+  // `listen 443 ssl` with no ssl_certificate is not a config with a missing
+  // line — nginx refuses to load it, so `nginx -t` fails and a reload takes
+  // every other site on the box down with it. And certbot cannot rescue it:
+  // `certbot --nginx` has to find a loadable vhost before it can issue the
+  // certificate that would make it loadable. Emitting port 80 is the only
+  // form with a way in.
+  assert.doesNotMatch(conf, /listen (\[::\]:)?443 ssl;/,
+    "must not emit a TLS listener it has no certificate for");
+  assert.match(conf, /^\tlisten 80;$/m);
+  assert.match(conf, /^\tlisten \[::\]:80;$/m);
+  assert.match(conf, /certbot --nginx -d dns\.moshcode\.sh/,
+    "and must say how the TLS half arrives");
+});
+
+test("--tls emits the certified form for a host provisioned elsewhere", () => {
+  const conf = nginxDohSite({ name: "dns.moshcode.sh", port: 8053, tls: true });
+
+  // The invariant is the pairing, not the port: a TLS listener may be emitted
+  // only alongside the certificate that makes it loadable.
   assert.match(conf, /^\tlisten 443 ssl;$/m);
   assert.match(conf, /^\tlisten \[::\]:443 ssl;$/m);
-  assert.match(conf, new RegExp(`location ${DOH_PATH} \\{`));
+  assert.match(conf, /ssl_certificate\s+\/etc\/letsencrypt\/live\/dns\.moshcode\.sh\/fullchain\.pem;/);
+  assert.match(conf, /ssl_certificate_key\s+\/etc\/letsencrypt\/live\/dns\.moshcode\.sh\/privkey\.pem;/);
 });
 
 test("guards are on by default, because an open resolver is found in hours", async () => {

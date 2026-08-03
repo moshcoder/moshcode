@@ -402,7 +402,11 @@ async function main() {
   if (cmd === "doh") {
     const nameAt = rest.indexOf("--nginx");
     if (nameAt >= 0) {
-      console.log(nginxDohSite({ name: rest[nameAt + 1] || "dns.example", port: DEFAULT_DOH_PORT }));
+      console.log(nginxDohSite({
+        name: rest[nameAt + 1] || "dns.example",
+        port: DEFAULT_DOH_PORT,
+        tls: rest.includes("--tls"),
+      }));
       return;
     }
     const listenPort = parseDohPort(rest, DEFAULT_DOH_PORT);
