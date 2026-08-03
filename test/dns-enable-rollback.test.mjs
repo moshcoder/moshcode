@@ -110,6 +110,7 @@ test("a holder that forwards is used, not refused — or --force becomes the nor
   // would train everyone to pass --force, which is how a safety check stops
   // being one. Behaviour is the test: it answers a clearnet name.
   const lines = [];
+  let startedOurs = false;
   const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
     ...noSystem(),
     preflight: (o) => preflightEnable({
@@ -118,10 +119,44 @@ test("a holder that forwards is used, not refused — or --force becomes the nor
       listeners: async () => [{ address: "0.0.0.0", port: 5354, pid: 2471795, process: "bun" }],
       forwards: async () => true,
     }),
+    startBridge: async () => { startedOurs = true; return { started: true, pid: 1, alreadyRunning: false }; },
     applyWith: async () => ({ saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] }),
   });
   assert.equal(code, 0);
-  assert.match(lines.join("\n"), /held by pid 2471795, which this run did not start — it forwards/);
+  const out = lines.join("\n");
+  assert.match(out, /held by pid 2471795, which this run did not start — it forwards/);
+  // "Used as-is" has to mean it. This assertion is the one this test was missing
+  // while it was named for it: the note printed, and then a second daemon was
+  // started anyway. `startDaemon` reads our pidfile to decide "already running",
+  // so it cannot see the holder; both bind, because the socket sets reuseAddr,
+  // and the kernel gives the query to the more specific bind. On the machine
+  // that found this, ours took 127.0.0.1 while the holder had 0.0.0.0 — so the
+  // bridge the note promised would serve was the one getting nothing.
+  assert.equal(startedOurs, false, "the holder is used as-is, so there is nothing to start");
+  assert.match(out, /using the bridge already on 127\.0\.0\.1:5354 \(pid 2471795\)/);
+  assert.doesNotMatch(out, /bridge started on/);
+});
+
+test("a holder that does not forward is still not reused — --force starts ours over it", async () => {
+  // The other half of the gate. A holder that fails the clearnet question is the
+  // stale-bridge case, and forcing past it means deliberately putting a working
+  // bridge in front of it — so the start still has to happen.
+  const lines = [];
+  let startedOurs = false;
+  const code = await dnsCommand(["enable", "--force"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    preflight: (o) => preflightEnable({
+      ...o,
+      dropins: async () => [],
+      listeners: async () => [{ address: "127.0.0.1", port: 5354, pid: 4242, process: "node" }],
+      forwards: async () => false,
+    }),
+    startBridge: async () => { startedOurs = true; return { started: true, pid: 7, alreadyRunning: false }; },
+    applyWith: async () => ({ saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] }),
+  });
+  assert.equal(code, 0);
+  assert.equal(startedOurs, true);
+  assert.match(lines.join("\n"), /bridge started on 127\.0\.0\.1:5354 \(pid 7\)/);
 });
 
 test("a wildcard bind is caught too — it is the same query, taken by the same stranger", () => {
