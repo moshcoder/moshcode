@@ -229,7 +229,16 @@ export function listPrds(root = process.cwd()) {
         const t = l.match(/^title:\s*(.+)$/); if (t) title = unquoteYaml(t[1]);
         const s = l.match(/^status:\s*(.+)$/); if (s) status = unquoteYaml(s[1]);
       }
-    } catch { continue; }
+    // A file this cannot read is still a PRD, and its number is still taken.
+    // Dropping it contradicts what the rest of this loop does: a PRD whose
+    // front matter will not parse is deliberately kept on the slug/"?"
+    // fallbacks above rather than discarded. Worse, `nextId` takes its max
+    // from this list, so dropping one hands its number straight back out and
+    // two PRDs end up numbered the same — in a scheme where the number is the
+    // identity. A committed symlink whose target is not checked out is enough
+    // to trigger it: `readFileSync` throws ENOENT. Keep the entry on the same
+    // fallbacks; the id stays reserved and the index row keeps its link.
+    } catch { /* unreadable: keep it with the file-name fallbacks */ }
     out.push({ id: m[1], slug: m[2], title, status, file: name, path: file });
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));

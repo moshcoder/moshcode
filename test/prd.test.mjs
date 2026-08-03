@@ -317,3 +317,92 @@ test("regenerateIndex leaves an ordinary slugified PRD link untouched", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// A PRD this cannot read is still a PRD, and its number is still taken. The
+// loop already keeps a PRD whose front matter will not parse, on the slug and
+// "?" fallbacks; a file that throws on read was the one case it discarded.
+// A committed symlink whose target is not checked out is enough to hit it —
+// git stores symlinks, so this arrives from a plain clone, not a corrupt disk.
+function dropDanglingPrd(root, name) {
+  fs.symlinkSync("./target-not-checked-out.md", path.join(root, "prd", name));
+}
+
+test("listPrds keeps a PRD it cannot read instead of dropping it", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropDanglingPrd(root, "0002-search-ranking-v2.md");
+
+    const ids = listPrds(root).map((p) => p.id);
+    assert.deepEqual(ids, ["0001", "0002"], "the unreadable PRD must still be listed");
+    const prd = listPrds(root).find((p) => p.id === "0002");
+    // Same fallbacks the no-front-matter case already uses.
+    assert.equal(prd.title, "search-ranking-v2");
+    assert.equal(prd.status, "?");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("createPrd does not reissue a number an unreadable PRD already holds", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropDanglingPrd(root, "0002-search-ranking-v2.md");
+
+    createPrd("add a dark mode toggle", root);
+
+    const numbered = fs.readdirSync(path.join(root, "prd"))
+      .filter((n) => /^\d{4}-/.test(n) && !n.startsWith("0000"))
+      .map((n) => n.slice(0, 4))
+      .sort();
+    assert.deepEqual(
+      numbered,
+      ["0001", "0002", "0003"],
+      `two PRDs must never share a number: ${numbered.join(", ")}`,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("regenerateIndex keeps a row for a PRD it cannot read", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropDanglingPrd(root, "0002-search-ranking-v2.md");
+    regenerateIndex(root);
+
+    assert.equal(
+      indexRow(root, "0002"),
+      "| [0002](0002-search-ranking-v2.md) | search-ranking-v2 | ? |",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Control: a tree where every PRD reads cleanly must come out byte-identical,
+// so the fix cannot be read as churning existing indexes or listings.
+test("listPrds is unchanged when every PRD is readable", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropPrd(root, "0002-import-notes.md", "Import notes");
+    regenerateIndex(root);
+
+    assert.deepEqual(
+      listPrds(root).map((p) => `${p.id}|${p.title}|${p.status}|${p.file}`),
+      [
+        "0001|Improve search ranking|Draft|0001-improve-search-ranking.md",
+        "0002|Import notes|Review|0002-import-notes.md",
+      ],
+    );
+    assert.equal(
+      indexRow(root, "Import notes"),
+      "| [0002](0002-import-notes.md) | Import notes | Review |",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
