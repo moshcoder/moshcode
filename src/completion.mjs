@@ -6,6 +6,7 @@ import {
 } from "./cli-schema.mjs";
 import { ENGINES, ENGINE_ALIASES } from "./engines.mjs";
 import { TOOLS } from "./tools.mjs";
+import { moshVocabulary } from "./commands.mjs";
 
 export const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 
@@ -54,6 +55,16 @@ export function completionModel() {
     skills: uniqueEntries(SKILL_VERBS),
     skillSources: uniqueEntries(SKILL_VERBS.filter(({ acceptsSource }) => acceptsSource)),
     shells: COMPLETION_SHELLS.map((name) => entry(name, `generate ${name} completion`)),
+    // `moshcode help <topic>` accepts anything help can answer for: a command,
+    // an engine, a tool, or a moshscript verb (PRD 0006 R16). Offering the same
+    // set here is what keeps tab-completion and help one discoverability
+    // surface rather than two that disagree.
+    helpTopics: uniqueEntries([
+      ...CORE_CLI_COMMANDS.filter(({ name }) => !name.startsWith("-")),
+      ...engines,
+      ...tools,
+      ...moshVocabulary().all().map((c) => entry(c.name, c.summary || "moshscript verb")),
+    ]),
   };
 }
 
@@ -110,6 +121,7 @@ ${powershellEntries("MoshcodeCompletionMcpServerSpecs", model.mcpServerSpecs)}
 ${powershellEntries("MoshcodeCompletionSkills", model.skills)}
 ${powershellEntries("MoshcodeCompletionSkillSources", model.skillSources)}
 ${powershellEntries("MoshcodeCompletionShells", model.shells)}
+${powershellEntries("MoshcodeCompletionHelpTopics", model.helpTopics)}
 ${powershellEntries("MoshcodeCompletionJson", optionEntries("--json", "print JSON"))}
 ${powershellEntries("MoshcodeCompletionLogin", optionEntries("--browser -b --device -d", "authentication mode"))}
 ${powershellEntries("MoshcodeCompletionRun", optionEntries("--dry-run --max -n", "run option"))}
@@ -153,6 +165,9 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
       }
       { $_ -in @('upgrade', 'update') } {
         $choices = $script:MoshcodeCompletionUpgrade
+      }
+      'help' {
+        if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionHelpTopics }
       }
       'completion' {
         if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionShells }
@@ -243,6 +258,9 @@ _moshcode_completion() {
         ;;
       completion)
         (( COMP_CWORD == 2 )) && choices="${names(model.shells)}"
+        ;;
+      help)
+        (( COMP_CWORD == 2 )) && choices="${names(model.helpTopics)}"
         ;;
       mcp)
         if (( COMP_CWORD == 2 )); then
@@ -348,6 +366,12 @@ _moshcode() {
       if (( CURRENT == 3 )); then
         choices=(${zshValues(model.shells)})
         _describe "shell" choices
+      fi
+      ;;
+    help)
+      if (( CURRENT == 3 )); then
+        choices=(${zshValues(model.helpTopics)})
+        _describe "help topic" choices
       fi
       ;;
     mcp)
@@ -458,6 +482,7 @@ ${fishEntries(atSecondToken("install"), model.install)}
 ${fishEntries(atSecondToken("uninstall remove"), model.uninstall)}
 ${fishEntries("__moshcode_command_is upgrade update", model.upgrade)}
 ${fishEntries(atSecondToken("completion"), model.shells)}
+${fishEntries(atSecondToken("help"), model.helpTopics)}
 ${fishEntries(atSecondToken("mcp"), model.mcp)}
 ${fishEntries(atSecondToken("skill skills"), model.skills)}
 complete -c moshcode -n '__moshcode_nested_is mcp list' -l json -d 'print JSON'
