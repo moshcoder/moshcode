@@ -1,7 +1,7 @@
 # Managed by sh1pt Actions Fleet
-# pack: vu1nz-scan@1.0.0
+# pack: vu1nz-scan@1.0.2
 # install: sh1pt-actions-store
-# hash: sha256:a5f27998f1a6ddd9e2ff263724a5d4eb5887a306210d9c00591d9a918a7136ad
+# hash: sha256:fbfb9b0acbf9bb8de63cbc0e1d775dbe7d0847f23b3d673837ee7575b4d2b272
 name: vu1nz security scan
 
 on:
@@ -24,8 +24,23 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `pip install` from a git URL is an unretried network call to
+      # github.com. Run 30799615944 died on an `RPC failed; HTTP 503` during
+      # clone, which failed the job and skipped every step after it — the
+      # review, the comment, and the exit-code gate. A transient 503 at a
+      # forge is not a security signal, and it should not read like one.
       - name: Install vu1nz
-        run: pip install --quiet git+https://github.com/profullstack/vu1nz-gh-actions.git
+        run: |
+          for attempt in 1 2 3; do
+            if pip install --quiet git+https://github.com/profullstack/vu1nz-gh-actions.git; then
+              exit 0
+            fi
+            delay=$((attempt * 10))
+            echo "::warning::vu1nz install attempt ${attempt}/3 failed; retrying in ${delay}s"
+            sleep "${delay}"
+          done
+          echo "::error::vu1nz install failed after 3 attempts"
+          exit 1
 
       - name: Load env file
         env:
@@ -38,13 +53,21 @@ jobs:
           if [ -n "$ANTHROPIC_API_KEY" ]; then
             echo "::add-mask::$ANTHROPIC_API_KEY"
             echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$GITHUB_ENV"
+            echo "VU1NZ_READY=true" >> "$GITHUB_ENV"
             echo "ANTHROPIC_API_KEY found and exported"
           else
-            echo "::warning::ANTHROPIC_API_KEY not found in ENV_FILE"
+            # Deliberately not a hard failure — a repo that has not configured
+            # the secret yet should not have its PRs blocked. But it must not
+            # report "0 findings" either: an unexamined diff is not a clean
+            # one, and "no issues found" is the most expensive lie a security
+            # tool can tell. VU1NZ_READY carries that distinction downstream.
+            echo "VU1NZ_READY=false" >> "$GITHUB_ENV"
+            echo "::warning::ANTHROPIC_API_KEY not found in ENV_FILE — review will report NOT RUN"
           fi
 
       - name: Review PR
         id: review
+        if: env.VU1NZ_READY == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NO_COLOR: "1"
@@ -77,6 +100,29 @@ jobs:
 
           review_file = os.environ.get("RUNNER_TEMP", "") + "/vu1nz-review.json"
           comment_file = os.environ.get("RUNNER_TEMP", "") + "/vu1nz-comment.md"
+
+          # The review step is skipped when ANTHROPIC_API_KEY is absent. Say so
+          # in the comment. Every other branch below reports a *result*; this
+          # one has to report the absence of one, because rendering "no issues
+          # found" for a scan that never ran is worse than rendering nothing.
+          if os.environ.get("VU1NZ_READY") != "true":
+              with open(comment_file, "w") as f:
+                  f.write(
+                      "## vu1nz Security Review\n\n"
+                      "**NOT RUN** — `ANTHROPIC_API_KEY` was not found in the `ENV_FILE` secret, "
+                      "so no review was performed. This is not a clean result; this diff was not "
+                      "examined.\n\n"
+                      "Add `ANTHROPIC_API_KEY=…` to the repository's `ENV_FILE` secret to enable "
+                      "the review.\n"
+                  )
+              out_path = os.environ.get("GITHUB_OUTPUT", "")
+              if out_path:
+                  with open(out_path, "a") as out:
+                      out.write("total=0\n")
+                      out.write("has_high_critical=false\n")
+                      out.write("status=not_run\n")
+              print("::warning::vu1nz review NOT RUN — ANTHROPIC_API_KEY missing")
+              sys.exit(0)
 
           try:
               with open(review_file) as f:
@@ -166,7 +212,12 @@ jobs:
           fi
 
       - name: Comment on PR
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        # Best-effort only. Skip for Dependabot (read-only token can't comment)
+        # and never fail the job if posting the comment errors — the scan's
+        # pass/fail is decided by the "Build PR comment" step, and findings are
+        # always written to the job summary.
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -206,9 +257,9 @@ jobs:
                 });
               }
             } catch (err) {
-              if (err.status === 403) {
-                core.warning(`Cannot post PR comment (read-only token): ${err.message}. Findings are in the job summary.`);
-              } else {
-                throw err;
-              }
+              // Posting the comment is best-effort. Read-only tokens return 403
+              // and transient GitHub outages return 503 (the "Unicorn" HTML
+              // page); neither should fail the scan. Findings are in the job
+              // summary regardless.
+              core.warning(`Could not post PR comment (status ${err.status ?? 'unknown'}): ${err.message}. Findings are in the job summary.`);
             }
