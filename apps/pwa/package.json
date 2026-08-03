@@ -24,6 +24,6 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@moshcoder/moshpit-name": "^0.2.0"
+    "@moshcoder/moshpit-name": "^0.4.0"
   }
 }
