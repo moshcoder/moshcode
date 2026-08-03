@@ -308,6 +308,49 @@ export function helpModel({ engines = [], tools = [], version = "" } = {}) {
  * to stderr and exit 1; `renderCommand` on stdout is the same text for the
  * person who asked politely.
  */
+/* ---------------------------------------------------------------- markdown */
+
+export const README_START = "<!-- COMMANDS:START -->";
+export const README_END = "<!-- COMMANDS:END -->";
+
+/**
+ * The command table as markdown, for README.md (PRD 0006 R13).
+ *
+ * Generated rather than checked against a hand-written list, and the difference
+ * matters: a checker tells you the README is wrong, a generator makes it right.
+ * Same shape as the PRD index this repo already keeps between markers, so the
+ * convention is one people here already know.
+ *
+ * Aliases ride along in their target's row instead of getting rows of their
+ * own — six extra lines saying "alias for X" is how a table stops being read.
+ */
+export function renderMarkdown() {
+  const rows = primaryCommands().map((command) => {
+    const aliases = aliasesFor(command.name);
+    const name = `\`moshcode ${command.name}\`${aliases.length ? ` <br>${aliases.map((a) => `\`${a}\``).join(" ")}` : ""}`;
+    return `| ${name} | ${command.group} | ${command.description} |`;
+  });
+  return [
+    "| command | group | what it does |",
+    "|---|---|---|",
+    ...rows,
+  ].join("\n");
+}
+
+/**
+ * Put the generated table between the markers in `markdown`.
+ *
+ * Returns the document unchanged when it carries no markers, so this can be
+ * pointed at a file that has not opted in without mangling it.
+ */
+export function withCommandTable(markdown) {
+  const text = String(markdown);
+  const from = text.indexOf(README_START);
+  const to = text.indexOf(README_END);
+  if (from < 0 || to < 0 || to < from) return text;
+  return `${text.slice(0, from + README_START.length)}\n${renderMarkdown()}\n${text.slice(to)}`;
+}
+
 /* ------------------------------------------------------------------ the pit */
 
 /** Resolve a pit command, following its aliases. */

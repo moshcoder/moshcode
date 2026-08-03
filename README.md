@@ -14,6 +14,44 @@ curl -fsSL https://moshcoding.com/install.sh | sh
 Zero-dependency ESM — all it needs is Node.js 18+. Later: `… | sh -s -- update`
 to upgrade, `… | sh -s -- remove` to uninstall.
 
+## Commands
+
+`moshcode help <command>` drills into any of these — flags, examples and all.
+`moshcode help --json` is the same thing for a machine.
+
+This table is generated from the command table the CLI itself dispatches from
+(`moshcode help --markdown`), so it cannot describe a verb that does not exist
+or miss one that does. A test fails the build when it drifts.
+
+<!-- COMMANDS:START -->
+| command | group | what it does |
+|---|---|---|
+| `moshcode agents` | engines | list engines or launch one autonomously |
+| `moshcode start` | engines | launch an engine with its native defaults |
+| `moshcode install` | engines | install an engine or workflow tool |
+| `moshcode uninstall` <br>`remove` | engines | take an engine or workflow tool off this machine |
+| `moshcode upgrade` <br>`update` | engines | update moshcode, engines, or tools |
+| `moshcode mcp` | extend | register and inspect MCP servers |
+| `moshcode skill` <br>`skills` | extend | install and inspect agent skills |
+| `moshcode prd` | script | publish or list product requirement documents |
+| `moshcode login` | account | authenticate with app.moshcode.sh |
+| `moshcode whoami` | account | show the logged-in account |
+| `moshcode logout` | account | clear the logged-in account |
+| `moshcode console` | account | serve or connect to the browser terminal |
+| `moshcode dns` | hosting | resolve Moshpit names on this machine |
+| `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
+| `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
+| `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |
+| `moshcode pwd` <br>`where` | system | show the current directory and git context |
+| `moshcode engines` | engines | list engines and installation status |
+| `moshcode tools` | tools | list workflow tools and installation status |
+| `moshcode commands` | script | list built-in moshscript commands |
+| `moshcode completion` | extend | print a shell completion script |
+| `moshcode run` | script | run a moshscript |
+| `moshcode help` <br>`--help` `-h` | system | show command help |
+| `moshcode version` <br>`--version` `-v` | system | show the installed version |
+<!-- COMMANDS:END -->
+
 ## Engines
 
 ```sh

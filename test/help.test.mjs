@@ -24,8 +24,10 @@ import {
 } from "../src/cli-schema.mjs";
 import {
   WIDTH, findCommand, findPitCommand, helpModel, pitHelpModel, renderCommand, renderOverview,
-  renderPitCommand, suggest, wantsHelp, wrap,
+  renderPitCommand, README_START, README_END, suggest, wantsHelp, withCommandTable, wrap,
 } from "../src/help.mjs";
+import { ENGINES } from "../src/engines.mjs";
+import { TOOLS } from "../src/tools.mjs";
 
 const run = promisify(execFile);
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
@@ -341,4 +343,55 @@ test("pit aliases resolve", () => {
   for (const [alias, target] of [["agent", "agents"], ["engines", "agents"], ["where", "pwd"], ["q", "quit"], ["sh", "shell"]]) {
     assert.equal(findPitCommand(alias)?.name, target, `/${alias} should resolve to /${target}`);
   }
+});
+
+/* ------------------------------------------------------------ R13: README */
+
+test("README's command table is generated, and current", () => {
+  // The point of R13: a verb cannot ship documented in one place and absent
+  // from the other. Regenerating and comparing is stricter than checking a
+  // hand-written list, and the fix is one command rather than an edit.
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+  assert.ok(readme.includes(README_START), "README lost its COMMANDS markers");
+  assert.equal(
+    withCommandTable(readme),
+    readme,
+    "README's command table is stale — regenerate it with `moshcode help --markdown`",
+  );
+});
+
+test("every command in the README's table is one the CLI dispatches", () => {
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+  const table = readme.slice(readme.indexOf(README_START), readme.indexOf(README_END));
+  const named = [...table.matchAll(/`moshcode ([a-z-]+)`/g)].map((m) => m[1]);
+  assert.ok(named.length >= 20, "the table looks empty");
+  for (const name of named) {
+    assert.ok(findCommand(name), `README documents "${name}", which is not a command`);
+  }
+});
+
+test("every command the README's prose shows is real", () => {
+  // The other direction, and the one that catches a rename: prose and fenced
+  // examples all over the file say `moshcode <verb>`. Scoped to the fenced
+  // blocks, because prose also contains sentences like "moshcode warns you".
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+  const fenced = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join("\n");
+  const invoked = new Set(
+    [...fenced.matchAll(/^\s*(?:sudo\s+|\$\s*)?moshcode\s+([a-z][a-z0-9-]*)/gm)].map((m) => m[1]),
+  );
+  assert.ok(invoked.size >= 10, "found no invocations to check");
+
+  const engines = new Set(Object.keys(ENGINES));
+  const tools = new Set(Object.keys(TOOLS));
+  for (const name of invoked) {
+    const known = findCommand(name) || engines.has(name) || tools.has(name);
+    assert.ok(known, `README runs \`moshcode ${name}\`, which is not a command, engine or tool`);
+  }
+});
+
+test("help --markdown emits the same table the README carries", async () => {
+  const { code, stdout } = await cli(["help", "--markdown"]);
+  assert.equal(code, 0);
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+  assert.ok(readme.includes(stdout.trim()), "the generator and the README disagree");
 });
