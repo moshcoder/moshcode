@@ -10,7 +10,12 @@
 //   POST   /api/moshpit/tlds/:tld/exempt      hold one back
 //   DELETE /api/moshpit/tlds/:tld/exempt      let it follow the alias again
 //   GET    /api/moshpit/resolve?name=&mode=   resolve + precedence for a client resolver
+//   GET    /api/moshpit/records?name=         the records a name publishes, no auth
+//   GET    /api/moshpit/tlds/:tld/records     the same, by tld + ?label=
+//   POST   /api/moshpit/tlds/:tld/records     publish a record on a name you hold
+//   DELETE /api/moshpit/tlds/:tld/records     withdraw one
 //   GET    /pit                               the human page
+//   GET    /pit/records                       the DNS records on the names you hold
 //   GET    /pit/dns                           how to reach these names from a machine
 import { Router } from "express";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
@@ -19,15 +24,17 @@ import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
-import { tldQuery } from "../lib/moshpit-search.mjs";
+import { nameQuery, tldQuery } from "../lib/moshpit-search.mjs";
 import {
   MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, forwardableHeaders,
 } from "../lib/moshpit-gateway.mjs";
 import {
   addPin,
+  addRecord,
   clearAlias,
   clearExempt,
   countNames,
+  countRecordNames,
   countTlds,
   countTldsForUser,
   countSearchTlds,
@@ -41,11 +48,16 @@ import {
   listExempt,
   listNames,
   listPins,
+  listRecordNames,
+  listRecords,
+  listRecordsForNames,
   listTlds,
   listTldsForUser,
   listTldsNotOwnedBy,
   MAX_BULK_TLDS,
   MAX_LISTING_PRICE_USD,
+  MAX_TTL,
+  MIN_TTL,
   normalizeLabel,
   normalizeMode,
   normalizePinKind,
@@ -56,11 +68,15 @@ import {
   pinsForName,
   popularLabels,
   quoteName,
+  RECORD_HELP,
+  RECORD_TYPES,
+  recordsForName,
   registerName,
   registerTld,
   registerTlds,
   releaseName,
   removePin,
+  removeRecord,
   resolutionPreference,
   resolveMoshpitName,
   searchTlds,
@@ -72,6 +88,7 @@ import {
   suggestedLabels,
   summarizeBulkClaim,
   tldRejection,
+  zoneLine,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
 
@@ -293,6 +310,79 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
   const result = await releaseName({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
   if (!result.ok) return bad(res, result.error || "could not release that name");
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), released: true });
+});
+
+/* ---- the DNS records a name publishes ---- */
+
+/**
+ * GET /api/moshpit/records?name=scrambled.eggs — public.
+ *
+ * Public because DNS is: a record is published so that strangers can act on it,
+ * and a zone nobody may read is a zone nobody may use. This is the endpoint a
+ * resolver calls, so it answers the resolved name (aliases followed) rather
+ * than the one that was typed.
+ *
+ * 404 with an empty list when the name publishes nothing, so a client can tell
+ * "no records" from "not a name this registry answers for" — the first is a
+ * name waiting to be pointed, the second is somebody else's namespace.
+ */
+moshpitRouter.get("/api/moshpit/records", async (req, res) => {
+  const found = await recordsForName(req.query.name);
+  if (!found) return res.status(404).json({ error: "not a Moshpit name", records: [] });
+
+  const body = {
+    name: found.name,
+    resolved: found.resolved,
+    name_registered: found.name_registered,
+    target: found.target,
+    records: found.records.map((r) => ({
+      type: r.type, value: r.value, ttl: r.ttl, ...(r.priority === null ? {} : { priority: r.priority }),
+    })),
+    // The zone-file form, because the point of these being real records is that
+    // they can be read, diffed and pasted by things that already speak DNS.
+    zone: found.records.map((r) => zoneLine(found.resolved, r)),
+  };
+  return found.records.length ? res.json(body) : res.status(404).json(body);
+});
+
+/** GET /api/moshpit/tlds/:tld/records?label=blue — public, unresolved and exact. */
+moshpitRouter.get("/api/moshpit/tlds/:tld/records", async (req, res) => {
+  const tld = normalizeTld(req.params.tld);
+  const label = normalizeLabel(req.query.label);
+  if (!tld) return bad(res, "not a valid TLD");
+  if (!label) return bad(res, "which name? pass ?label=");
+  res.json({ tld, label, records: await listRecords(tld, label) });
+});
+
+/**
+ * POST /api/moshpit/tlds/:tld/records { label, type, value, ttl?, priority? }
+ *
+ * 409 for a conflict with what the name already publishes, because that is what
+ * it is: the request was well-formed and the state refused it. A 400 would tell
+ * a script to fix its input, and there is nothing wrong with the input.
+ */
+moshpitRouter.post("/api/moshpit/tlds/:tld/records", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await addRecord({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id,
+    type: req.body?.type, value: req.body?.value, ttl: req.body?.ttl, priority: req.body?.priority,
+  });
+  if (!result.ok) {
+    const conflict = /CNAME/.test(result.error || "");
+    return bad(res, result.error || "could not publish that record", conflict ? 409 : 400);
+  }
+  res.status(201).json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), record: result.record });
+});
+
+/** DELETE /api/moshpit/tlds/:tld/records { label, type, value } */
+moshpitRouter.delete("/api/moshpit/tlds/:tld/records", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await removeRecord({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id,
+    type: req.body?.type, value: req.body?.value,
+  });
+  if (!result.ok) return bad(res, result.error || "could not withdraw that record", 404);
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), removed: true });
 });
 
 /* ---- serving a name over the clearnet ---- */
@@ -927,7 +1017,22 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
       name: String(req.query.name ?? ""), mode,
     });
   }
-  res.json({ ...resolution, mode, prefer: resolutionPreference({ registered: resolution.registered, mode }) });
+  // `?records=1` only. Every DNS query on the network lands here, and the
+  // records are a second query against a second table — a resolver that only
+  // wants an address (which is all the bridge and the DoH server ask for) must
+  // not pay for a lookup it will throw away. Callers that want the whole set
+  // ask for it, or use /api/moshpit/records.
+  const resolved = parseMoshpitName(resolution.resolved);
+  const records = req.query.records && resolution.name_registered && resolved
+    ? await listRecords(resolved.tld, resolved.label)
+    : null;
+
+  res.json({
+    ...resolution,
+    ...(records ? { records: records.map((r) => ({ type: r.type, value: r.value, ttl: r.ttl, ...(r.priority === null ? {} : { priority: r.priority }) })) } : {}),
+    mode,
+    prefer: resolutionPreference({ registered: resolution.registered, mode }),
+  });
 });
 
 /* ---------- the human page ---------- */
@@ -1150,7 +1255,44 @@ const PIT_CSS = `
 .pit-land{border:1px solid var(--line-2);border-left:3px solid var(--acid);border-radius:var(--r);
   background:linear-gradient(180deg,var(--surface),var(--bg-tint));padding:20px 22px;margin:0 0 26px}
 .pit-land h2{font-size:1.35rem;text-transform:none;margin:6px 0 10px}
-.pit-land .pit-form,.pit-land .pit-row{margin-bottom:0}`;
+.pit-land .pit-form,.pit-land .pit-row{margin-bottom:0}
+
+/* ---- DNS Records ---- */
+/* A zone is a table, and the reason to draw it as one is scanning: an owner
+   checking a name reads down the type column, not across four labelled fields
+   per row. It stays a table on a phone by scrolling in its own box rather than
+   collapsing to cards -- a wrapped record is a record you cannot compare. */
+.pit-zone{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.8rem;margin:8px 0 0}
+.pit-zone th{text-align:left;font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--faint);font-weight:400;padding:0 10px 6px 0;white-space:nowrap}
+.pit-zone td{padding:7px 10px 7px 0;border-top:1px solid var(--line);vertical-align:middle}
+.pit-zone tr:first-child td{border-top:1px solid var(--line-2)}
+.pit-zone .rtype{color:var(--acid);white-space:nowrap}
+/* The value is the long one and the only one worth selecting whole. */
+.pit-zone .rvalue{word-break:break-all;user-select:all;min-width:22ch}
+.pit-zone .rnum{color:var(--dim);text-align:right;white-space:nowrap;font-size:.74rem}
+.pit-zone .ract{text-align:right;width:1%;white-space:nowrap}
+.pit-zone form{display:inline}
+.pit-scroll{overflow-x:auto}
+.pit-rec{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:14px 16px;margin-bottom:10px}
+.pit-rec.empty{border-style:dashed}
+.pit-rec h3{font-family:var(--mono);font-size:1rem;text-transform:none;margin:0}
+.pit-rec-head{display:flex;gap:12px;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
+.pit-rec-add{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:10px;
+  border-top:1px dashed var(--line)}
+.pit-rec-add select,.pit-rec-add input{background:var(--bg-tint);border:1px solid var(--line-2);border-radius:8px;
+  color:var(--text);font-family:var(--mono);font-size:.82rem;padding:8px 10px}
+.pit-rec-add select:focus,.pit-rec-add input:focus{outline:none;border-color:var(--acid)}
+.pit-rec-add .value{flex:1 1 22ch;min-width:16ch}
+.pit-rec-add .ttl,.pit-rec-add .prio{width:9ch}
+/* Priority belongs to MX alone. Hidden by script for the other three; without
+   the script it stays visible and labelled, which is honest rather than broken. */
+.pit-rec-add [data-prio][hidden]{display:none}
+.pit-hint{font-family:var(--mono);font-size:.7rem;color:var(--faint);margin:6px 0 0;max-width:66ch}
+.pit-btn-x{background:transparent;border:1px solid var(--line-2);border-radius:6px;color:var(--dim);
+  font-family:var(--mono);font-size:.7rem;padding:5px 9px;cursor:pointer}
+.pit-btn-x:hover{border-color:var(--danger);color:var(--danger)}
+.pit-empty{font-family:var(--mono);font-size:.74rem;color:var(--faint);margin:10px 0 0}`;
 
 /**
  * The tab strip: the endings you hold, the ones you can buy from, and how to
@@ -1167,9 +1309,11 @@ const pitTabs = (active, counts = null, query = "") => {
   return `
 <nav class="pit-tabs">
   <a class="pit-tab${active === "yours" ? " on" : ""}" href="/pit?tab=yours${q}">Yours${
-    counts ? `<span class="count">${counts.yours}</span>` : ""}</a>
+    counts?.yours === undefined ? "" : `<span class="count">${counts.yours}</span>`}</a>
   <a class="pit-tab${active === "theirs" ? " on" : ""}" href="/pit?tab=theirs${q}">Theirs${
-    counts ? `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>` : ""}</a>
+    counts?.theirs === undefined ? "" : `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>`}</a>
+  <a class="pit-tab${active === "records" ? " on" : ""}" href="/pit/records${query ? `?q=${encodeURIComponent(query)}` : ""}">DNS Records${
+    counts?.records === undefined ? "" : `<span class="count">${counts.records}</span>`}</a>
   <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>
 </nav>`;
 };
@@ -1595,6 +1739,316 @@ moshpitRouter.get("/pit", async (req, res) => {
 </main>${footer}
 <script>${PIT_FILTER_JS}</script>`,
   }));
+});
+
+/* ---------- the DNS Records tab ---------- */
+
+/**
+ * How many names one page of records may draw.
+ *
+ * Smaller than TLDS_PER_PAGE because each row here is a table of records plus a
+ * form, not a line — and /pit already learned once what an unbounded list of
+ * forms does to a browser.
+ */
+const NAMES_PER_RECORDS_PAGE = 25;
+
+/**
+ * The filter and page carried through a form post.
+ *
+ * Without them, publishing a record from a filtered page nine drops you back on
+ * an unfiltered page one, hunting for the name you were just looking at. The
+ * redirect can only put you back where you were if the form says where that
+ * was.
+ */
+const whereYouWere = ({ q = "", page = 1 } = {}) =>
+  `${q ? `<input type="hidden" name="q" value="${esc(q)}">` : ""}${
+    page > 1 ? `<input type="hidden" name="page" value="${esc(String(page))}">` : ""}`;
+
+/** The type picker, with the current choice kept across a failed submit. */
+const typeSelect = (selected = "AAAA", attrs = "") => `
+<select name="type" aria-label="Record type" ${attrs}>
+  ${RECORD_TYPES.map((t) => `<option value="${t}"${t === selected ? " selected" : ""}>${t}</option>`).join("")}
+</select>`;
+
+/**
+ * The row that publishes a record, drawn under every name.
+ *
+ * Per name rather than one form at the top with a name picker: the question
+ * "which name is this record for" is already answered by where the form is, and
+ * a picker is one more thing to get wrong on a page whose whole job is getting
+ * four fields right.
+ */
+const addRecordRow = (req, name, ctx, { type = "AAAA", value = "", ttl = "", priority = "" } = {}) => `
+<form method="post" action="/pit/records" class="pit-rec-add" data-rec-add>
+  ${csrfInput(req)}
+  ${whereYouWere(ctx)}
+  <input type="hidden" name="name" value="${esc(name)}">
+  ${typeSelect(type, "data-rec-type")}
+  <input class="value" name="value" value="${esc(value)}" autocomplete="off" spellcheck="false"
+         placeholder="${esc(RECORD_HELP[type].hint)}" aria-label="Record value" data-rec-value required>
+  <input class="ttl" name="ttl" value="${esc(String(ttl))}" inputmode="numeric" autocomplete="off"
+         placeholder="ttl" aria-label="TTL in seconds" title="Seconds. ${MIN_TTL}–${MAX_TTL}, default 300.">
+  <span data-prio${type === "MX" ? "" : " hidden"}>
+    <input class="prio" name="priority" value="${esc(String(priority))}" inputmode="numeric" autocomplete="off"
+           placeholder="prio" aria-label="MX priority" title="Lowest priority wins. 10 if left blank.">
+  </span>
+  <button class="btn acid" type="submit">Publish</button>
+</form>`;
+
+/**
+ * One name and everything it publishes.
+ *
+ * A name with no records still gets its box and its form. The empty state is
+ * the one this tab exists for — an owner arrives here precisely because there
+ * is nothing published yet — so hiding it behind "names with records" would
+ * leave the page blank for exactly the person who came to fill it.
+ */
+const recordCard = (req, name, records, target, ctx) => {
+  const label = `${name.label}.${name.tld}`;
+  const rows = records.map((r) => `
+    <tr>
+      <td class="rtype">${r.type}</td>
+      <td class="rvalue">${esc(r.value)}</td>
+      <td class="rnum">${r.priority === null ? "—" : r.priority}</td>
+      <td class="rnum">${r.ttl}s</td>
+      <td class="ract">
+        <form method="post" action="/pit/records/delete">
+          ${csrfInput(req)}
+          ${whereYouWere(ctx)}
+          <input type="hidden" name="name" value="${esc(label)}">
+          <input type="hidden" name="type" value="${esc(r.type)}">
+          <input type="hidden" name="value" value="${esc(r.value)}">
+          <button class="pit-btn-x" type="submit" aria-label="Remove this ${r.type} record">Remove</button>
+        </form>
+      </td>
+    </tr>`).join("");
+
+  return `
+<div class="pit-rec${records.length ? "" : " empty"}">
+  <div class="pit-rec-head">
+    <h3 class="acid">${esc(label)}</h3>
+    <span class="mono faint" style="font-size:.7rem">${
+      records.length ? `${records.length} record${records.length === 1 ? "" : "s"}` : "nothing published"
+    }${target ? ` · resolves to <span class="acid">${esc(target)}</span>` : " · parked"}</span>
+  </div>
+  ${records.length ? `
+  <div class="pit-scroll">
+    <table class="pit-zone">
+      <thead><tr><th>type</th><th>value</th><th>prio</th><th>ttl</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <details class="pit-bulk" style="margin:10px 0 0">
+    <summary>as a zone file</summary>
+    <div class="pit-pre">${esc(records.map((r) => zoneLine(label, r)).join("\n"))}</div>
+  </details>` : `
+  <p class="pit-empty">No records yet — an AAAA pointing at the box that serves it is the usual first one.</p>`}
+  ${addRecordRow(req, label, ctx)}
+</div>`;
+};
+
+/**
+ * Swap the placeholder to match the chosen type, and hide the priority box for
+ * the three types that have no priority.
+ *
+ * Progressive enhancement, and small enough to stay inline: every field it
+ * touches works without it, so a browser that never runs this gets a form with
+ * a generic placeholder and one field it should leave alone — not a broken page.
+ *
+ * Plain ES5-ish, no template literals: it lives inside one.
+ */
+const RECORDS_JS = String.raw`
+(function () {
+  var HINTS = __HINTS__;
+  var forms = document.querySelectorAll('[data-rec-add]');
+  for (var i = 0; i < forms.length; i++) (function (form) {
+    var select = form.querySelector('[data-rec-type]');
+    var value = form.querySelector('[data-rec-value]');
+    var prio = form.querySelector('[data-prio]');
+    if (!select || !value) return;
+    function sync() {
+      var hint = HINTS[select.value];
+      if (hint) value.setAttribute('placeholder', hint);
+      if (prio) prio.hidden = select.value !== 'MX';
+    }
+    select.addEventListener('change', sync);
+    sync();
+  })(forms[i]);
+})();
+`;
+
+/**
+ * GET /pit/records — the records on every name you hold.
+ *
+ * The tab exists because "points at" was the only thing a name could say, and
+ * one address is not a zone: a name that cannot publish a second address, a
+ * mail exchanger or a proof-of-ownership string is a name you cannot actually
+ * run anything on.
+ *
+ * Filtered over whole names rather than endings, because the thing an owner is
+ * looking for here is a domain — `blue.eggs`, not `.eggs`. Paged for the reason
+ * /pit is paged: this draws a table and a form per name.
+ */
+moshpitRouter.get("/pit/records", async (req, res) => {
+  const bal = req.user ? await balance(req.user.id) : 0;
+  const filter = nameQuery(req.query.q);
+  const pageNo = pageParam(req.query.page);
+  const offset = (pageNo - 1) * NAMES_PER_RECORDS_PAGE;
+
+  const [names, total] = req.user
+    ? await Promise.all([
+      listRecordNames(req.user.id, {
+        like: filter?.like ?? null, exact: filter?.exact ?? "",
+        limit: NAMES_PER_RECORDS_PAGE, offset,
+      }),
+      countRecordNames(req.user.id, { like: filter?.like ?? null }),
+    ])
+    : [[], 0];
+
+  const records = await listRecordsForNames(names);
+  const published = names.reduce((n, name) => n + (name.record_count || 0), 0);
+  const ctx = { q: filter?.query ?? "", page: pageNo };
+
+  const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
+    : req.query.ok ? `<p class="pit-msg ok">${esc(req.query.ok)}</p>` : "";
+
+  const qs = filter ? `&q=${encodeURIComponent(filter.query)}` : "";
+
+  const body = !req.user
+    ? `<p class="dim">Sign in to publish records on the names you hold — the same login the CLI uses.</p>
+       <p><a class="btn acid" href="/">Sign in →</a></p>`
+    : names.length
+      ? names.map((n) => recordCard(req, n, records.get(`${n.label}.${n.tld}`) || [], n.target, ctx)).join("")
+      : filter
+        ? `<p class="dim">No name of yours matches <span class="mono acid">${esc(filter.query)}</span>.
+           <a class="acid" href="/pit/records">Show all of them →</a></p>`
+        : `<p class="dim">You don't hold a name yet. Names live under an ending —
+           <a class="acid" href="/pit">claim one in the pit</a>, then mint a name under it and it appears here.</p>`;
+
+  res.type("html").send(page({
+    title: "moshcode ▸ the pit ▸ dns records",
+    head: `<style>${PIT_CSS}</style>`,
+    body: `${appBar(req.user, bal, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px">
+  <p class="label">the moshpit namespace</p>
+  <h1 style="font-size:clamp(2rem,6vw,3.4rem)">DNS <span class="acid">records</span></h1>
+  <p class="dim" style="max-width:66ch">
+    Real records on the names you hold: <span class="mono acid">AAAA</span> for the box that serves it,
+    <span class="mono acid">CNAME</span> to send it somewhere else, <span class="mono acid">MX</span> for
+    mail, <span class="mono acid">TXT</span> for everything that has to be proved. Published the moment
+    you hit the button — the registry answers them, so a resolver on this network picks them up on its
+    next lookup rather than waiting on a zone transfer.
+  </p>
+  ${/* Only the count this page actually knows. Yours and Theirs would each cost
+       a query to state truthfully, and a confident `0` next to an account
+       holding forty endings is worse than no number at all. */""}
+  ${pitTabs("records", { records: published }, filter?.query ?? "")}
+  ${msg}
+
+  <form class="pit-filter" method="get" action="/pit/records" role="search">
+    <input name="q" value="${esc(filter?.query ?? "")}" autocomplete="off" spellcheck="false"
+           placeholder="filter domains — blue.eggs, eggs, blue.*" aria-label="Filter your names">
+    <button class="btn" type="submit">Filter</button>
+    ${filter ? `<a class="btn" href="/pit/records">Clear</a>` : ""}
+    <span class="mono faint" style="font-size:.7rem">
+      <code>eggs</code> anywhere in the name · <code>blue.*</code> starts with
+    </span>
+  </form>
+
+  <section class="pit-panel">
+    ${req.user ? `
+    <p class="dim" style="max-width:66ch;margin:0 0 14px">
+      ${total} name${total === 1 ? "" : "s"}${filter ? " matching" : ""} · ${published} record${published === 1 ? "" : "s"}
+      on this page. Records attach to the name itself: the namespace is one level deep, so there is no
+      <span class="mono">www.</span> to put in front of one.
+    </p>` : ""}
+    ${body}
+    ${pager({
+      page: pageNo, total, perPage: NAMES_PER_RECORDS_PAGE,
+      href: (n) => `/pit/records?page=${n}${qs}`,
+    })}
+  </section>
+
+  ${recordsApiHelp()}
+</main>${footer}
+<script>${RECORDS_JS.replace("__HINTS__", JSON.stringify(Object.fromEntries(RECORD_TYPES.map((t) => [t, RECORD_HELP[t].hint]))))}</script>`,
+  }));
+});
+
+/**
+ * The same thing from a script.
+ *
+ * On the page rather than in a docs file because the person who wants it is the
+ * person who just added the fourth record by hand and is wondering whether they
+ * have to do the next forty the same way. `moshcode` already holds an API key
+ * that this router accepts, so this is a real cut-and-paste, not an outline.
+ */
+function recordsApiHelp() {
+  return `<details class="pit-bulk" style="margin-top:28px">
+  <summary>publish records from a script</summary>
+  <p class="pit-copy" style="font-size:.84rem">Every button on this page is an API call. The key is the one
+    in <a class="acid" href="/settings">settings</a> — the same one <code>moshcode</code> uses.</p>
+  <div class="pit-pre">export MOSH_KEY=mk_...
+
+# publish an address
+curl -X POST ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
+  -H "authorization: Bearer $MOSH_KEY" -H 'content-type: application/json' \\
+  -d '{"label":"blue","type":"AAAA","value":"2606:4700:4700::1111","ttl":300}'
+
+# mail
+curl -X POST ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
+  -H "authorization: Bearer $MOSH_KEY" -H 'content-type: application/json' \\
+  -d '{"label":"blue","type":"MX","value":"mx.example.com","priority":10}'
+
+# read them back — no key needed, DNS is public
+curl ${esc(config.pitOrigin)}/api/moshpit/records?name=blue.eggs
+
+# withdraw one
+curl -X DELETE ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
+  -H "authorization: Bearer $MOSH_KEY" -H 'content-type: application/json' \\
+  -d '{"label":"blue","type":"MX","value":"mx.example.com"}'</div>
+  <p class="pit-copy" style="font-size:.84rem">A resolver on this network reads them through
+    <code>/api/moshpit/records</code>, and <code>/api/moshpit/resolve?name=…&amp;records=1</code> returns
+    the address and the record set in one call. <code>moshcode dns resolve blue.eggs</code> shows what a
+    machine actually gets.</p>
+</details>`;
+}
+
+/** Back to the records tab, keeping the filter and the page you were on. */
+const backToRecords = (req, res, params) =>
+  res.redirect(`/pit/records?${new URLSearchParams({
+    ...params,
+    ...(req.body?.q ? { q: req.body.q } : {}),
+    ...(req.body?.page && req.body.page !== "1" ? { page: req.body.page } : {}),
+  })}`);
+
+moshpitRouter.post("/pit/records", requireAuth, async (req, res) => {
+  const parsed = parseMoshpitName(req.body?.name);
+  if (!parsed) return backToRecords(req, res, { err: "which name? that is not one." });
+
+  const result = await addRecord({
+    tld: parsed.tld, label: parsed.label, userId: req.user.id,
+    type: req.body?.type, value: req.body?.value, ttl: req.body?.ttl, priority: req.body?.priority,
+  });
+  if (!result.ok) return backToRecords(req, res, { err: result.error || "could not publish that record" });
+
+  const record = result.record;
+  backToRecords(req, res, {
+    ok: `${parsed.label}.${parsed.tld} now publishes ${record.type} ${record.value}${
+      record.priority === null || record.priority === undefined ? "" : ` (priority ${record.priority})`}.`,
+  });
+});
+
+moshpitRouter.post("/pit/records/delete", requireAuth, async (req, res) => {
+  const parsed = parseMoshpitName(req.body?.name);
+  if (!parsed) return backToRecords(req, res, { err: "which name? that is not one." });
+
+  const result = await removeRecord({
+    tld: parsed.tld, label: parsed.label, userId: req.user.id,
+    type: req.body?.type, value: req.body?.value,
+  });
+  if (!result.ok) return backToRecords(req, res, { err: result.error || "could not withdraw that record" });
+  backToRecords(req, res, { ok: `${parsed.label}.${parsed.tld} no longer publishes that ${String(req.body?.type ?? "").toUpperCase()} record.` });
 });
 
 /**
