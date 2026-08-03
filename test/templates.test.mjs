@@ -24,6 +24,11 @@ import {
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), "moshcode-template-test-"));
 
+// Spelled out here rather than imported: the manifest name is part of the
+// installer's contract with template authors, so the test should break if it
+// ever quietly changes.
+const MANIFEST_NAME = "template.json";
+
 test("the bundled templates are listed with what they are for", async () => {
   const templates = await listTemplates();
   const names = templates.map((t) => t.name);
@@ -222,6 +227,33 @@ test("the manifest describes the copy without being part of it", async () => {
     assert.ok(files.includes("Caddyfile"));
   } finally {
     await fs.rm(into, { recursive: true, force: true });
+  }
+});
+
+test("a manifest deeper in the tree is one of the template's files, not metadata", async () => {
+  // A template holding several templates is laid out the way the bundled ones
+  // are, `<name>/template.json`. Those inner manifests are content: excluding
+  // them by basename installs a collection whose every entry has lost the file
+  // that says what it is, and reports success while doing it.
+  const root = await tmp();
+  const from = path.join(root, "from");
+  const into = path.join(root, "into");
+  try {
+    await fs.mkdir(path.join(from, "blog"), { recursive: true });
+    await fs.mkdir(into, { recursive: true });
+    await fs.writeFile(path.join(from, MANIFEST_NAME), '{"name":"collection"}\n');
+    await fs.writeFile(path.join(from, "README.md"), "# collection\n");
+    await fs.writeFile(path.join(from, "blog", MANIFEST_NAME), '{"name":"blog"}\n');
+    await fs.writeFile(path.join(from, "blog", "Caddyfile"), "blog.eggs\n");
+
+    const plan = await installPlan(from, into);
+    assert.deepEqual(plan.files, ["README.md", "blog/Caddyfile", `blog/${MANIFEST_NAME}`].sort());
+    assert.ok(!plan.files.includes(MANIFEST_NAME), "the template's own manifest is still metadata");
+
+    await applyInstall(from, into, plan.files);
+    assert.equal(await fs.readFile(path.join(into, "blog", MANIFEST_NAME), "utf8"), '{"name":"blog"}\n');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
