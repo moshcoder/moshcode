@@ -2312,10 +2312,24 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // which on catch-all routing is a window where every lookup on the machine
     // goes to a port with nothing behind it. It also left nothing to verify
     // against: there is no answer to ask for until the bridge exists.
-    const started = await startBridge({ port: wanted, registryBase, entry: cliEntry() });
-    out(started.alreadyRunning
-      ? `  ok   bridge already running (pid ${started.pid})`
-      : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
+    // Unless a bridge this run did not start already holds the port and
+    // forwards. Preflight has just said out loud that it is being used as-is,
+    // and starting ours anyway makes that line a lie: `startDaemon` decides
+    // "already running" from our pidfile alone, so a stranger on the port is
+    // invisible to it and it spawns a second daemon. Both then bind — the
+    // socket is created with reuseAddr — and the kernel delivers to whichever
+    // took the more specific address, so the holder the note promised would
+    // serve is silently shadowed by the bridge it said would not be started.
+    // Honoring the note is the whole of the fix.
+    const reusing = cleared.holder && cleared.holderForwards ? cleared.holder : null;
+    const started = reusing
+      ? { started: false, pid: reusing.pid, alreadyRunning: true, reused: true }
+      : await startBridge({ port: wanted, registryBase, entry: cliEntry() });
+    out(started.reused
+      ? `  ok   using the bridge already on ${DEFAULT_HOST}:${wanted} (pid ${reusing.pid || "?"}) — not starting a second one`
+      : started.alreadyRunning
+        ? `  ok   bridge already running (pid ${started.pid})`
+        : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
 
     const outcome = await applyWith(plan, {
       verify: () => verify({ moshpit: moshpitProbe }),
