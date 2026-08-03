@@ -1242,6 +1242,360 @@ export function dnsmasqConf(tlds, { host = DEFAULT_HOST, port = DEFAULT_PORT } =
   ].join("\n");
 }
 
+/* --------------------------------------- switching DNS without breaking DNS */
+
+// `dns enable` repoints every lookup on the machine. Four phases, in this
+// order, because each one exists for a way the previous arrangement failed on a
+// real box: refuse when the machine is already in a state where the switch
+// cannot work, keep what was there before touching it, prove the machine can
+// still resolve afterwards, and put it back when the proof fails. The last one
+// is the load-bearing one — without it `enable` can leave a desktop with no
+// resolver at all, and no working DNS with which to look up how to fix it.
+
+export const RESOLVED_DROPIN_DIR = "/etc/systemd/resolved.conf.d";
+export const MOSHPIT_DROPIN = `${RESOLVED_DROPIN_DIR}/moshpit.conf`;
+
+/**
+ * The suffix every backup written here gets, and why it is not `.conf`.
+ *
+ * systemd-resolved globs `*.conf` in the drop-in directory, so `moshpit.bak.conf`
+ * would be a *second* file setting `DNS=` — the exact state the preflight below
+ * refuses to run into. A suffix that sorts outside the glob is inert. macOS has
+ * the same shape of problem for a different reason: it reads /etc/resolver by
+ * filename, so a backup there routes a domain nobody will ever ask for.
+ */
+export const BACKUP_SUFFIX = ".moshcode-backup";
+
+export function backupPath(path) {
+  return `${path}${BACKUP_SUFFIX}`;
+}
+
+/**
+ * The nameservers a resolved drop-in sets, if any.
+ *
+ * `DNS=` with an empty value is systemd's reset — it clears what earlier
+ * drop-ins assigned rather than adding a server — so it is not a conflict and
+ * must not read as one. Commented-out lines are not matched at all: `^\s*DNS`
+ * cannot start with `#`.
+ */
+export function dropinNameservers(content) {
+  const out = [];
+  for (const line of String(content ?? "").split("\n")) {
+    const m = line.match(/^\s*DNS\s*=\s*(\S.*?)\s*$/i);
+    if (m) out.push(...m[1].split(/\s+/));
+  }
+  return out;
+}
+
+/**
+ * Any drop-in other than ours that names a nameserver.
+ *
+ * Two files each setting `DNS=` do not compete — systemd-resolved appends them
+ * into one global list and rotates between them, and having rotated away from a
+ * server that failed it never rotates back. So a single restart of the bridge
+ * moves every query on the machine to the other server, permanently. That
+ * server answers NXDOMAIN for every Moshpit name, which means DNS looks
+ * completely healthy while the entire namespace this command exists to serve is
+ * dead, with nothing anywhere reporting a failure.
+ *
+ * A DigitalOcean.conf left by the cloud image did this three times in one
+ * afternoon and was misdiagnosed as a bridge bug each time. Guessing which
+ * server should win is not this command's call to make, so it names the file
+ * and stops.
+ *
+ * `duplicate` is the exception, and it is common: a drop-in naming only the
+ * bridge we are about to point at is not a second server, because there is
+ * nothing for the resolver to rotate to. Blocking on it would refuse to run on
+ * every machine an earlier installer set up by hand. It is still a second file
+ * that `dns disable` will not remove, which is worth saying and not worth
+ * stopping for.
+ */
+export function conflictingDropins(files, { ours = "moshpit.conf", bridge = null } = {}) {
+  const out = [];
+  for (const file of files || []) {
+    const name = String(file?.name ?? "");
+    if (name === ours || !name.endsWith(".conf")) continue;
+    const servers = dropinNameservers(file.content);
+    if (!servers.length) continue;
+    out.push({ name, servers, duplicate: Boolean(bridge) && servers.every((s) => s === bridge) });
+  }
+  return out;
+}
+
+export async function readDropins({ dir = RESOLVED_DROPIN_DIR, readdir, read } = {}) {
+  const list = readdir || (async (d) => {
+    const { readdir: rd } = await import("node:fs/promises");
+    return rd(d);
+  });
+  const readOne = read || (async (p) => {
+    const { readFile: rf } = await import("node:fs/promises");
+    return rf(p, "utf8");
+  });
+  // A missing directory is a machine that does not use resolved drop-ins, not
+  // an error worth stopping an enable over.
+  const names = await list(dir).catch(() => []);
+  const files = [];
+  for (const name of names) {
+    if (!String(name).endsWith(".conf")) continue;
+    files.push({ name: String(name), content: await readOne(`${dir}/${name}`).catch(() => "") });
+  }
+  return files;
+}
+
+/**
+ * UDP sockets that are listening, as `ss -lnup` sees them.
+ *
+ * The process column only carries an owner when the caller can see it; `enable`
+ * runs as root, so on the run that matters the pid is there. Parsed rather than
+ * grepped because the pid is the only thing that distinguishes our own bridge
+ * from a stranger holding the same port.
+ */
+export function parseUdpListeners(text) {
+  const out = [];
+  for (const line of String(text ?? "").split("\n")) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 4) continue;
+    const m = fields[3].match(/^(.*):(\d+)$/);
+    if (!m) continue;
+    const owner = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
+    out.push({
+      address: m[1].replace(/^\[/, "").replace(/\]$/, ""),
+      port: Number(m[2]),
+      pid: owner ? Number(owner[2]) : null,
+      process: owner ? owner[1] : null,
+    });
+  }
+  return out;
+}
+
+const defaultUdpListeners = async () => {
+  const { execFile } = await import("node:child_process");
+  const text = await new Promise((resolve) => {
+    execFile("ss", ["-lnup"], { timeout: 5000 }, (err, stdout) => resolve(err ? "" : String(stdout)));
+  });
+  return parseUdpListeners(text);
+};
+
+/**
+ * Someone else on the bridge's port.
+ *
+ * A stale bridge from an older build is the case this is for, and it wins two
+ * different ways depending on how each side bound. Bound to the same address we
+ * want, it takes the port and ours cannot bind at all — and `startDaemon`
+ * spawns detached with stdio ignored, so that bind failure is invisible and
+ * `enable` still prints "bridge started". Bound to 127.0.0.1 while ours holds
+ * 0.0.0.0, the kernel delivers to the more specific socket, so ours is running,
+ * healthy and receiving nothing. Either way the routing we just wrote points
+ * every lookup on the machine at a process we did not start, which answers
+ * NOERROR with zero answers and eats the query.
+ *
+ * That took DNS down twice in one day. `catchAllSafety` cannot see it: it
+ * probes the port and gets an answer either way.
+ *
+ * A holder whose pid matches the bridge we already recorded is ours and fine.
+ * An unattributable holder — no pid visible — is only accepted when a bridge of
+ * ours is recorded as running, because then it is very likely that same one;
+ * with nothing of ours running there is no reading under which it is ours.
+ */
+export function portHolder(listeners, { host = DEFAULT_HOST, port = DEFAULT_PORT, ourPid = null } = {}) {
+  const wildcards = new Set(["0.0.0.0", "::", "*"]);
+  for (const l of listeners || []) {
+    if (l.port !== port) continue;
+    if (l.address !== host && !wildcards.has(l.address)) continue;
+    if (ourPid && l.pid === ourPid) continue;
+    if (!l.pid && ourPid) continue;
+    return l;
+  }
+  return null;
+}
+
+/**
+ * Everything that has to be true of the machine before the routing is written.
+ *
+ * Both checks refuse rather than guess. The states they find are ones where
+ * writing the config produces a machine that reports success and cannot
+ * resolve, which is strictly worse than not running at all — so the answer is a
+ * named file, a named pid, and a stop.
+ */
+export async function preflightEnable({
+  host = DEFAULT_HOST,
+  port = DEFAULT_PORT,
+  ourPid = null,
+  // Only meaningful for the systemd-resolved backend. A dnsmasq machine may
+  // carry a resolved.conf.d it does not use, and blocking on it would be a
+  // refusal over a file that has no effect on anything.
+  checkDropins = true,
+  dropins = readDropins,
+  listeners = defaultUdpListeners,
+  forwards = probeForwarding,
+} = {}) {
+  const blockers = [];
+
+  const dropinFiles = checkDropins ? conflictingDropins(await dropins(), { bridge: `${host}:${port}` }) : [];
+  const duplicates = dropinFiles.filter((f) => f.duplicate);
+  const conflicts = dropinFiles.filter((f) => !f.duplicate);
+  for (const c of conflicts) {
+    blockers.push({
+      kind: "conflicting-dropin",
+      lines: [
+        `${RESOLVED_DROPIN_DIR}/${c.name} also sets DNS= (${c.servers.join(" ")})`,
+        "  systemd-resolved appends both into one list and rotates between them, and never",
+        "  rotates back to a server that failed — so one bridge restart sends every lookup",
+        "  on this machine to that server for good. It answers NXDOMAIN for Moshpit names,",
+        "  so nothing looks broken and the whole namespace is gone.",
+        `  Move it aside, or re-run with --force to accept that.`,
+      ],
+    });
+  }
+
+  // Owning the port is not the offence — eating queries is. A bridge someone
+  // started by hand holds the port with no pidfile to prove it is ours, and it
+  // is perfectly good; refusing on identity alone would make --force the normal
+  // way to run this command, which is how a safety check stops being one. So
+  // the holder is asked the same clearnet question `catchAllSafety` asks, and
+  // only a holder that cannot answer it is a blocker.
+  const holder = portHolder(await listeners().catch(() => []), { host, port, ourPid });
+  const holderForwards = holder ? await forwards({ host, port, name: CLEARNET_PROBE }).catch(() => false) : false;
+  if (holder && !holderForwards) {
+    const who = holder.pid ? `pid ${holder.pid}${holder.process ? ` (${holder.process})` : ""}` : "owner not visible";
+    blockers.push({
+      kind: "port-holder",
+      lines: [
+        `something is already listening on ${holder.address}:${holder.port} and does not forward — ${who}`,
+        "  it is not the bridge this command started, and the routing below would hand it",
+        "  every lookup on the machine. A stale bridge answers NOERROR with no answers,",
+        "  which is indistinguishable from working DNS until nothing resolves.",
+        `  Stop it (kill ${holder.pid || "<pid>"}), or re-run with --force to accept that.`,
+      ],
+    });
+  }
+
+  return { ok: blockers.length === 0, blockers, conflicts, duplicates, holder, holderForwards };
+}
+
+const defaultSleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+
+/**
+ * Does this machine still resolve?
+ *
+ * Two names, and both must answer. The Moshpit one proves the bridge is
+ * reachable through the routing that was just written; the clearnet one proves
+ * it is *forwarding* rather than swallowing, and that is the check that matters
+ * — its failure is what "you broke my DNS" means to the person whose machine it
+ * is. A run that only checked Moshpit names would call a box that cannot reach
+ * the internet a success.
+ *
+ * Resolution goes through the system resolver rather than straight at the
+ * bridge, deliberately: the bridge answering on 5354 is not the claim being
+ * made. The claim is that a normal lookup on this machine works.
+ *
+ * Retried because systemd-resolved takes a moment to be ready after a restart,
+ * and a rollback triggered by that gap would undo a switch that was fine.
+ */
+export async function verifyResolution({
+  moshpit = null,
+  clearnet = CLEARNET_PROBE,
+  resolve = (name) => dnsPromises.resolve4(name),
+  attempts = 4,
+  delayMs = 400,
+  sleep = defaultSleep,
+} = {}) {
+  const wanted = [
+    ...(moshpit ? [{ name: moshpit, kind: "moshpit" }] : []),
+    { name: clearnet, kind: "clearnet" },
+  ];
+  const checks = [];
+  for (const { name, kind } of wanted) {
+    let ok = false;
+    let error = "no answer";
+    for (let attempt = 0; attempt < attempts && !ok; attempt++) {
+      if (attempt) await sleep(delayMs);
+      try {
+        const answers = await resolve(name);
+        // An empty answer counts as failure. NOERROR with no records is exactly
+        // what a resolver that has swallowed the query returns, and treating it
+        // as success is how the silent version of this outage stayed silent.
+        ok = Array.isArray(answers) ? answers.length > 0 : Boolean(answers);
+        if (!ok) error = "answered, with no records";
+      } catch (err) {
+        error = err?.code || err?.message || String(err);
+      }
+    }
+    checks.push({ name, kind, ok, error: ok ? null : error });
+  }
+  return { ok: checks.every((c) => c.ok), checks };
+}
+
+const defaultReadMaybe = async (path) => {
+  const { readFile: rf } = await import("node:fs/promises");
+  return rf(path, "utf8").catch(() => null);
+};
+
+/**
+ * Apply a routing plan, prove it worked, and put the machine back if it did not.
+ *
+ * The contents of every file the plan overwrites are read first and held, and
+ * also copied to disk next to the original — in memory is what the rollback
+ * uses, on disk is what is left for a person to find if this process is killed
+ * between the write and the restart. A failed backup copy is therefore reported
+ * and not fatal; the rollback does not depend on it.
+ *
+ * A failed *apply* rolls back for the same reason a failed verification does.
+ * Half-written routing is the state this whole function exists to make
+ * impossible, and "some steps failed, good luck" was the previous answer to it.
+ *
+ * Restoring the files is not enough on its own — the resolver read them at
+ * start — so the plan's own `run` steps are replayed afterwards. Windows writes
+ * no files and undoes its NRPT rules with different commands entirely, which is
+ * why the caller can hand in its own `rollbackSteps`.
+ */
+export async function applyWithRollback(plan, {
+  apply = applyPlan,
+  runner,
+  read = defaultReadMaybe,
+  verify = async () => ({ ok: true, checks: [] }),
+  rollbackSteps = plan.steps.filter((s) => s.kind === "run"),
+} = {}) {
+  const opts = runner ? { runner } : {};
+  const targets = plan.steps.filter((s) => s.kind === "write").map((s) => s.path);
+  const before = new Map();
+  for (const path of targets) before.set(path, await read(path));
+
+  const backups = targets
+    .filter((path) => before.get(path) !== null && before.get(path) !== undefined)
+    .map((path) => ({
+      kind: "write",
+      path: backupPath(path),
+      content: before.get(path),
+      why: `keep the previous ${path} until this run is known to have worked`,
+    }));
+  const saved = backups.length ? await apply({ steps: backups }, opts) : { ok: true, results: [] };
+
+  const applied = await apply(plan, opts);
+  const verified = applied.ok
+    ? await verify()
+    : { ok: false, checks: [], skipped: "not attempted — the routing was not fully applied" };
+
+  if (verified.ok) {
+    // Nothing left to protect, and a stray backup in a config directory is its
+    // own hazard on both of the platforms this writes to.
+    if (backups.length) await apply({ steps: backups.map((b) => ({ kind: "remove", path: b.path, why: "the run succeeded" })) }, opts);
+    return { saved, applied, verified, rolledBack: null, backups: [] };
+  }
+
+  const restores = targets.map((path) => (before.get(path) === null || before.get(path) === undefined
+    ? { kind: "remove", path, why: "there was no file here before this run" }
+    : { kind: "write", path, content: before.get(path), why: "put back what was here before this run" }));
+  const rolledBack = await apply({ steps: [...restores, ...rollbackSteps] }, opts);
+
+  // Kept when the rollback itself failed: then the backup is the only copy of
+  // the machine's previous configuration, and its path is worth printing.
+  if (rolledBack.ok && backups.length) {
+    await apply({ steps: backups.map((b) => ({ kind: "remove", path: b.path, why: "the original is back in place" })) }, opts);
+  }
+  return { saved, applied, verified, rolledBack, backups: rolledBack.ok ? [] : backups.map((b) => b.path) };
+}
+
 /* ----------------------------------------------------------------- the verb */
 
 import { promises as dnsPromises } from "node:dns";
@@ -1286,13 +1640,17 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
   moshcode dns install [--write] print the resolver config without applying it
 
   --dry-run    with enable/disable: print exactly what would be done
+  --force      with enable: proceed past a preflight refusal (a second drop-in
+               setting DNS=, or a stranger already on the bridge's port)
   --backend    linux only: systemd-resolved (default) or dnsmasq
   --port N     the bridge's port (Windows must use 53 — NRPT carries no port)
 
 The registry speaks HTTP, not DNS, so nothing outside a browser can reach a
 Moshpit name until this bridge is running and your resolver points at it.
-\`enable\` edits system DNS and needs root (Administrator on Windows); it routes
-only the Moshpit TLDs, so every other name keeps using your normal resolver.`;
+\`enable\` edits system DNS and needs root (Administrator on Windows). It refuses
+to start from a machine where the switch cannot work, keeps a copy of whatever
+it overwrites, checks that both a Moshpit name and a clearnet name still resolve
+afterwards, and puts everything back if either one does not.`;
 
 function resolveArgument(args) {
   for (let i = 0; i < args.length; i++) {
@@ -1307,7 +1665,21 @@ function resolveArgument(args) {
   return null;
 }
 
-export async function dnsCommand(args = [], out = console.log) {
+export async function dnsCommand(args = [], out = console.log, deps = {}) {
+  const {
+    // Injected so the decision logic in `enable` — refuse, apply, verify, roll
+    // back — is testable without a resolver, a root shell or a machine whose
+    // DNS is a real thing to break.
+    tlds: fetchTldsImpl = fetchTlds,
+    safety: catchAllSafetyImpl = catchAllSafety,
+    preflight = preflightEnable,
+    applyWith = applyWithRollback,
+    verify = verifyResolution,
+    bridgeStatus = daemonStatus,
+    startBridge = startDaemon,
+    stopBridge = stopDaemon,
+    uid = typeof process.getuid === "function" ? process.getuid() : 0,
+  } = deps;
   const [sub, ...rest] = args;
   const flag = (name, fallback) => {
     const i = rest.indexOf(`--${name}`);
@@ -1465,7 +1837,7 @@ export async function dnsCommand(args = [], out = console.log) {
       return 1;
     }
     const conf = resolvedConf(tlds, { port });
-    const target = "/etc/systemd/resolved.conf.d/moshpit.conf";
+    const target = MOSHPIT_DROPIN;
     if (rest.includes("--write")) {
       try {
         await writeFile(target, conf);
@@ -1491,23 +1863,64 @@ export async function dnsCommand(args = [], out = console.log) {
       return 1;
     }
     const dryRun = rest.includes("--dry-run");
+    const force = rest.includes("--force");
     const linuxBackend = flag("backend", "systemd-resolved");
     const wanted = requiredPort(platform, port);
 
     let tlds = [];
     try {
-      tlds = await fetchTlds({ registryBase });
+      tlds = await fetchTldsImpl({ registryBase });
     } catch {
       // disable does not need the list on Linux, and on macOS a stale list is
       // better than refusing to clean up because the registry is unreachable.
       tlds = [];
     }
 
+    // Phase 1, and it runs before every other question is asked — including the
+    // forwarding probe, whose answer means nothing while a stranger holds the
+    // port it is probing.
+    let cleared = { ok: true, blockers: [] };
+    if (sub === "enable") {
+      const recorded = await bridgeStatus().catch(() => ({ pid: null, running: false }));
+      cleared = await preflight({
+        port: wanted,
+        ourPid: recorded.running ? recorded.pid : null,
+        checkDropins: platform === "linux" && linuxBackend === "systemd-resolved",
+      });
+      out(cleared.ok
+        ? `preflight  clear — no competing DNS= drop-in, nothing eating queries on ${DEFAULT_HOST}:${wanted}`
+        : "preflight  BLOCKED");
+      // Said out loud rather than passed over: a bridge nothing here started is
+      // about to be handed every lookup on the machine, and the one line saying
+      // so is what makes that a decision instead of a surprise.
+      if (cleared.holder && cleared.holderForwards) {
+        out(`  note  ${DEFAULT_HOST}:${wanted} is held by pid ${cleared.holder.pid || "?"}, which this run did not start — it forwards, so it is being used as-is`);
+      }
+      for (const dup of cleared.duplicates || []) {
+        // Not a blocker, but `dns disable` removes moshpit.conf and nothing
+        // else, so this file is what makes a disabled machine still route.
+        out(`  note  ${RESOLVED_DROPIN_DIR}/${dup.name} already points at this bridge — \`dns disable\` will not remove it`);
+      }
+      for (const blocker of cleared.blockers) {
+        out("");
+        for (const line of blocker.lines) out(`  ${line}`);
+      }
+      out("");
+      // A dry run still says what it found and still describes the rest, which
+      // is the point of asking for one while a machine is in this state.
+      if (!cleared.ok && !force && !dryRun) {
+        out("Refusing to switch this machine's DNS into a state it cannot resolve out of.");
+        out("Nothing has been changed.");
+        return 1;
+      }
+      if (!cleared.ok && force) out("--force: proceeding anyway.");
+    }
+
     // Decided before anything is written, because the routing config is written
     // first and the bridge is started after — so by the time a bad bridge is
     // visible, every lookup on the machine is already pointed at it.
     const safety = sub === "enable"
-      ? await catchAllSafety({ port: wanted })
+      ? await catchAllSafetyImpl({ port: wanted })
       : { safe: false, upstreams: [] };
     if (sub === "enable") {
       out(safety.safe
@@ -1535,15 +1948,40 @@ export async function dnsCommand(args = [], out = console.log) {
       return 1;
     }
 
+    // The name whose resolution proves the bridge is answering, alongside the
+    // clearnet one that proves it is forwarding.
+    const moshpitProbe = tlds[0] ? `a.${tlds[0]}` : null;
+    // Restoring files is not a rollback on Windows: NRPT rules are not files,
+    // so the undo is the disable plan's commands rather than the enable plan's.
+    const undoSteps = platform === "windows" ? disablePlan({ platform, tlds, linuxBackend }).steps : undefined;
+
     if (dryRun) {
       out(`# ${sub} on ${platform} — nothing below has been run`);
       out(describePlan(plan));
+      if (sub === "enable") {
+        // The three phases that have no plan steps of their own. Printed
+        // because "what would this do to my machine" has to include the part
+        // that undoes it, and because a dry run is how someone decides whether
+        // to hand this command root.
+        out("");
+        out("verify  (both must answer, through this machine's own resolver)");
+        if (moshpitProbe) out(`          ${moshpitProbe}    # a Moshpit name — the bridge is reachable`);
+        out(`          ${CLEARNET_PROBE}    # clearnet — the bridge forwards rather than swallows`);
+        out("");
+        out("rollback  (only if verify fails)");
+        for (const step of plan.steps.filter((s) => s.kind === "write")) {
+          out(`          restore ${step.path}, or remove it if this run created it`);
+        }
+        for (const step of undoSteps || plan.steps.filter((s) => s.kind === "run")) {
+          out(`          run     ${step.command} ${step.args.join(" ")}`);
+        }
+      }
       return 0;
     }
 
     // Checked before doing half of it: every step here needs root, and a
     // partial apply is worse than a clean refusal with the command to retry.
-    if (plan.elevated && typeof process.getuid === "function" && process.getuid() !== 0) {
+    if (plan.elevated && uid !== 0) {
       out(`dns ${sub} edits system DNS and needs root.`);
       out(`  sudo moshcode dns ${sub}${rest.length ? " " + rest.join(" ") : ""}`);
       out("");
@@ -1552,32 +1990,82 @@ export async function dnsCommand(args = [], out = console.log) {
       return 1;
     }
 
-    const applied = await applyPlan(plan);
-    for (const r of applied.results) {
-      const what = r.step.kind === "run" ? `${r.step.command} ${r.step.args.join(" ")}` : r.step.path;
-      out(`  ${r.ok ? "ok  " : "FAIL"} ${r.step.kind.padEnd(6)} ${what}${r.ok ? "" : ` — ${r.error}`}`);
-    }
-    for (const note of plan.notes || []) out(`  note   ${note}`);
+    const report = (results) => {
+      for (const r of results) {
+        const what = r.step.kind === "run" ? `${r.step.command} ${r.step.args.join(" ")}` : r.step.path;
+        out(`  ${r.ok ? "ok  " : "FAIL"} ${r.step.kind.padEnd(6)} ${what}${r.ok ? "" : ` — ${r.error}`}`);
+      }
+    };
 
-    if (sub === "enable") {
-      const started = await startDaemon({ port: wanted, registryBase, entry: cliEntry() });
-      out(started.alreadyRunning
-        ? `  ok   bridge already running (pid ${started.pid})`
-        : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
-      out("");
-      out(applied.ok
-        ? `Moshpit names now resolve on this machine. Try: moshcode dns resolve ${tlds[0] ? `a.${tlds[0]}` : "<name>"}`
-        : "Some steps failed — routing is incomplete. Re-run, or use --dry-run to see what was meant to happen.");
-      out(`Routing covers the ${tlds.length} TLDs claimed right now. New ones do not route`);
-      out("until you re-run this — there is no common suffix to match, so every TLD is listed.");
-      out("Note: the bridge does not yet survive a reboot. Re-run `moshcode dns enable` after one.");
-    } else {
-      const stopped = await stopDaemon();
+    if (sub === "disable") {
+      const applied = await applyPlan(plan);
+      report(applied.results);
+      for (const note of plan.notes || []) out(`  note   ${note}`);
+      const stopped = await stopBridge();
       out(stopped.stopped ? "  ok   bridge stopped" : `  ok   bridge was not running${stopped.reason ? ` (${stopped.reason})` : ""}`);
       out("");
       out("Moshpit TLDs are back to your normal resolver.");
+      return applied.ok ? 0 : 1;
     }
-    return applied.ok ? 0 : 1;
+
+    // The bridge comes up before the routing points at it. The old order wrote
+    // the config, restarted the resolver, and started the daemon afterwards —
+    // which on catch-all routing is a window where every lookup on the machine
+    // goes to a port with nothing behind it. It also left nothing to verify
+    // against: there is no answer to ask for until the bridge exists.
+    const started = await startBridge({ port: wanted, registryBase, entry: cliEntry() });
+    out(started.alreadyRunning
+      ? `  ok   bridge already running (pid ${started.pid})`
+      : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
+
+    const outcome = await applyWith(plan, {
+      verify: () => verify({ moshpit: moshpitProbe }),
+      rollbackSteps: undoSteps,
+    });
+    report(outcome.applied.results);
+    for (const note of plan.notes || []) out(`  note   ${note}`);
+
+    for (const check of outcome.verified.checks) {
+      out(`  ${check.ok ? "ok  " : "FAIL"} verify ${check.name} (${check.kind})${check.ok ? "" : ` — ${check.error}`}`);
+    }
+    if (outcome.verified.skipped) out(`  --   verify ${outcome.verified.skipped}`);
+    if (outcome.saved && !outcome.saved.ok) {
+      // Not fatal: the rollback restores from what was read into memory before
+      // anything was written. The on-disk copy only matters if this process is
+      // killed mid-run, which is worth one line and not worth refusing over.
+      out("  warn backup copy could not be written — an interrupted run would need manual repair");
+    }
+
+    if (!outcome.rolledBack) {
+      out("");
+      out(`Moshpit names now resolve on this machine. Try: moshcode dns resolve ${moshpitProbe || "<name>"}`);
+      out(`Routing covers the ${tlds.length} TLDs claimed right now. New ones do not route`);
+      out("until you re-run this — there is no common suffix to match, so every TLD is listed.");
+      out("Note: the bridge does not yet survive a reboot. Re-run `moshcode dns enable` after one.");
+      return 0;
+    }
+
+    out("");
+    report(outcome.rolledBack.results);
+    // Started by this run and no longer routed to, so leaving it would be a
+    // process holding 5354 that the next enable's preflight refuses to run past.
+    if (started.started) {
+      const stopped = await stopBridge();
+      if (stopped.stopped) out("  ok   remove bridge started by this run");
+    }
+    out("");
+    const failed = outcome.verified.checks.filter((c) => !c.ok).map((c) => c.name);
+    out(outcome.applied.ok
+      ? `Verification failed — ${failed.join(" and ")} did not resolve after the switch.`
+      : "Some routing steps failed, so the switch was never complete.");
+    if (outcome.rolledBack.ok) {
+      out("Rolled back: this machine's DNS is exactly as it was before this command ran.");
+    } else {
+      out("! the rollback did not fully succeed — this machine's DNS needs attention now.");
+      for (const path of outcome.backups) out(`  the previous config is at ${path}`);
+      out("  restore it, then: systemctl restart systemd-resolved");
+    }
+    return 1;
   }
 
   if (sub === "status") {
@@ -1588,7 +2076,7 @@ export async function dnsCommand(args = [], out = console.log) {
 
     // Routing is read off the filesystem rather than remembered, so a config
     // someone edited or removed by hand is reported as it actually is.
-    const marker = platform === "macos" ? "/etc/resolver" : "/etc/systemd/resolved.conf.d/moshpit.conf";
+    const marker = platform === "macos" ? "/etc/resolver" : MOSHPIT_DROPIN;
     const routed = platform === "linux" ? existsSync(marker) : platform === "macos" ? existsSync(marker) : null;
     out(`routing    ${routed === null ? "(check NRPT: Get-DnsClientNrptRule)" : routed ? `configured (${marker})` : "not configured"}`);
 
