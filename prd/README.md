@@ -19,5 +19,8 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0001](0001-wrap-ugig-and-coinpay-clis.md) | Wrap the UGig and CoinPay CLIs | Accepted |
 | [0002](0002-separate-agent-and-raw-engine-launches.md) | Separate autonomous agent and raw engine launches | Accepted |
 | [0003](0003-cross-engine-mcp-and-skill-installation.md) | Install MCP servers and skills across every engine at once | Accepted |
-| [0004](0004-moshscript-run-programmable-moshcode.md) | moshscript — a scriptable /run for driving all of moshcode programmatically | Draft |
+| [0004](0004-moshscript-run-programmable-moshcode.md) | moshscript — a scriptable /run for driving all of moshcode programmatically | Accepted |
+| [0005](0005-hosted-moshpit-resolver.md) | A hosted Moshpit resolver, for the devices that cannot run the bridge | Draft |
+| [0006](0006-help.md) | --help | Draft |
+| [0007](0007-profullstack-site-init.md) | Generate batteries-included Profullstack sites for Moshpit names | Draft |
 <!-- PRD-INDEX:END -->
