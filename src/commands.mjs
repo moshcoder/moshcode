@@ -32,7 +32,14 @@ function hasDesktop() {
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
-/** Fire-and-forget open of a URL in the OS default browser. Never throws. */
+/**
+ * Fire-and-forget open of a URL in the OS default browser. Never throws.
+ *
+ * Returns whether the open was *attempted*, not whether it worked: a missing
+ * opener surfaces as an async 'error' event on the child, long after this has
+ * returned, so the catch below only ever sees a synchronous spawn failure.
+ * Callers must not phrase the result as a browser that definitely opened.
+ */
 function openBrowser(url) {
   const [cmd, args] =
     process.platform === "darwin" ? ["open", [url]]
@@ -73,8 +80,11 @@ const COMMANDS = [
       ctx.out("  🤘 mosh()    → opening the pit");
       ctx.out(`     🎧 ${MOSH_PLAYLIST}`);
       if (ctx.dryRun) return;
+      // Only ever an attempt — see openBrowser. dns.mjs ("opening <url>") and
+      // auth.mjs ("opening your browser…") word their own opens the same way,
+      // and the playlist URL is already on the line above to fall back to.
       if (hasDesktop() && openBrowser(MOSH_PLAYLIST)) {
-        ctx.out("     ↗  launched in your browser — crank it 🔊");
+        ctx.out("     ↗  opening it in your browser — crank it 🔊");
       }
     },
   },
