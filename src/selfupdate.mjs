@@ -18,6 +18,24 @@ import { moshcodeVersion } from "./ui.mjs";
 export const DEFAULT_INTERVAL = "15min";
 const RELEASE_API = "https://api.github.com/repos/moshcoder/moshcode/releases/latest";
 
+/** The time units systemd.time(7) accepts, longest spelling first so `sec` wins over `s`. */
+const TIME_UNITS = "usec|us|msec|ms|seconds|second|sec|s|minutes|minute|min|m"
+  + "|hours|hour|hr|h|days|day|d|weeks|week|w|months|month|M|years|year|y";
+const TIME_SPAN = new RegExp(`^(\\d+(\\.\\d+)?\\s*(${TIME_UNITS})?\\s*)+$`);
+
+/**
+ * Would systemd accept this as a timer interval?
+ *
+ * Checked here because the value is written into a unit file, and systemd's
+ * reaction to one it cannot parse is to ignore the setting and refuse the whole
+ * timer — leaving it enabled but dead. Case matters: `M` is months and `m` is
+ * minutes.
+ */
+export function validInterval(value) {
+  const text = String(value ?? "").trim();
+  return text === "infinity" || TIME_SPAN.test(text);
+}
+
 /** Strip the `v` and anything after the patch, so `v1.2.3` and `1.2.3` compare. */
 export function normalizeVersion(input) {
   const match = String(input ?? "").trim().match(/(\d+)\.(\d+)\.(\d+)/);
@@ -136,7 +154,25 @@ export async function selfUpdateCommand(args = [], out = console.log, deps = {})
 
   if (args.includes("--timer")) {
     const at = args.indexOf("--interval");
-    const units = timerUnits({ interval: at >= 0 ? args[at + 1] : DEFAULT_INTERVAL });
+    let interval = DEFAULT_INTERVAL;
+    if (at >= 0) {
+      const value = args[at + 1];
+      // `--interval` took whatever followed it, including the next flag. With
+      // `--timer --interval --install` that is the word `--install`, which does
+      // not stop the install — `args.includes("--install")` is still true — so
+      // the units get written with `OnBootSec=--install`, systemd refuses the
+      // timer, and the command still says it is checking on a schedule.
+      if (value === undefined || value.startsWith("-")) {
+        out(`moshcode update: --interval needs a time span, not ${value === undefined ? "nothing" : JSON.stringify(value)} — try --interval 1h`);
+        return 1;
+      }
+      if (!validInterval(value)) {
+        out(`moshcode update: --interval ${JSON.stringify(value)} is not a systemd time span — try 15min, 1h, 2d or 1h30min`);
+        return 1;
+      }
+      interval = value;
+    }
+    const units = timerUnits({ interval });
     if (!args.includes("--install")) {
       for (const [name, body] of Object.entries(units)) {
         out(`--- /etc/systemd/system/${name} ---`);

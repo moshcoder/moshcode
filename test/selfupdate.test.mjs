@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isNewer, latestRelease, normalizeVersion, selfUpdateCommand, timerUnits, updatePlan } from "../src/selfupdate.mjs";
+import { isNewer, latestRelease, normalizeVersion, selfUpdateCommand, timerUnits, updatePlan, validInterval } from "../src/selfupdate.mjs";
 
 const release = (tag) => async () => ({ ok: true, json: async () => ({ tag_name: tag }) });
 
@@ -89,4 +89,76 @@ test("--timer prints the units and writes nothing without --install", async () =
   await selfUpdateCommand(["--timer"], (l) => lines.push(l), { write: async () => { wrote += 1; } });
   assert.equal(wrote, 0);
   assert.match(lines.join("\n"), /nothing written/);
+});
+
+// A bad --interval is not a cosmetic complaint: the value goes into a unit
+// file, and systemd's answer to one it cannot parse is to ignore the setting
+// and refuse the timer — "Timer unit lacks value setting. Refusing." The timer
+// is then enabled and permanently inactive, while the command has already said
+// it is checking on a schedule.
+test("--interval refuses to swallow the flag that follows it", async () => {
+  const written = new Map();
+  const lines = [];
+  const code = await selfUpdateCommand(
+    ["--timer", "--interval", "--install"],
+    (l) => lines.push(l),
+    { write: async (p, b) => written.set(p, b), runner: async () => ({ ok: true }) },
+  );
+
+  assert.equal(code, 1);
+  // The install must not proceed: --install was eaten as the interval, but
+  // args.includes("--install") is still true, so nothing else stops it.
+  assert.equal(written.size, 0, "wrote a unit systemd would refuse");
+  assert.doesNotMatch(lines.join("\n"), /checking on a schedule/);
+  assert.match(lines.join("\n"), /--interval needs a time span/);
+});
+
+test("--interval rejects a value systemd cannot parse", async () => {
+  const written = new Map();
+  const lines = [];
+  const code = await selfUpdateCommand(
+    ["--timer", "--interval", "banana", "--install"],
+    (l) => lines.push(l),
+    { write: async (p, b) => written.set(p, b), runner: async () => ({ ok: true }) },
+  );
+
+  assert.equal(code, 1);
+  assert.equal(written.size, 0);
+  assert.match(lines.join("\n"), /not a systemd time span/);
+});
+
+test("--interval with nothing after it is an error, not a silent default", async () => {
+  const lines = [];
+  assert.equal(await selfUpdateCommand(["--timer", "--interval"], (l) => lines.push(l), {}), 1);
+  assert.match(lines.join("\n"), /--interval needs a time span/);
+});
+
+test("control: a valid --interval still writes the units it always did", async () => {
+  const written = new Map();
+  const lines = [];
+  const code = await selfUpdateCommand(
+    ["--timer", "--interval", "1h30min", "--install"],
+    (l) => lines.push(l),
+    { write: async (p, b) => written.set(p, b), runner: async () => ({ ok: true }) },
+  );
+
+  assert.equal(code, 0);
+  assert.equal(written.size, 2);
+  assert.match(written.get("/etc/systemd/system/moshcode-update.timer"), /^OnUnitActiveSec=1h30min$/m);
+  assert.match(lines.join("\n"), /checking on a schedule/);
+});
+
+test("control: --timer with no --interval is still the default", async () => {
+  const lines = [];
+  assert.equal(await selfUpdateCommand(["--timer"], (l) => lines.push(l), {}), 0);
+  assert.match(lines.join("\n"), /^OnUnitActiveSec=15min$/m);
+});
+
+test("an interval is checked against what systemd.time(7) actually accepts", () => {
+  for (const ok of ["15min", "1h", "30s", "2d", "1h30min", "500ms", "1w", "3M", "60", "1.5h", "infinity"]) {
+    assert.equal(validInterval(ok), true, `${ok} is a systemd time span`);
+  }
+  for (const bad of ["--install", "banana", "", "1x", "-1", "now", "1,5h"]) {
+    assert.equal(validInterval(bad), false, `${bad} is not a systemd time span`);
+  }
 });
