@@ -19,8 +19,10 @@
 // the entire public internet. The ranges below are the ones IANA reserves, and
 // anything unparseable is refused rather than assumed routable.
 
+import { createHash } from "node:crypto";
 import { promises as dns } from "node:dns";
 import http from "node:http";
+import https from "node:https";
 import { isIP } from "node:net";
 
 /** How long the origin has to answer before the gateway gives up on it. */
@@ -247,6 +249,127 @@ export function fetchOrigin({ host, port, path, headers, timeoutMs, maxBytes }) 
     request.on("error", reject);
     request.end();
   });
+}
+
+/**
+ * The pin for a certificate: SHA-256 over its SubjectPublicKeyInfo, base64.
+ *
+ * The public key rather than the whole certificate, so an origin can renew or
+ * re-issue without the registry entry going stale — the only question a pin
+ * asks is "is this the same key I was promised".
+ *
+ * This is the RFC 7469 format, byte-identical to what setup-origin.sh publishes
+ * and to what an operator gets from
+ *   openssl x509 -pubkey -noout | openssl pkey -pubin -outform der |
+ *     openssl dgst -sha256 -binary | base64
+ * so nobody has to take our word for a mismatch.
+ */
+export function pinFromCertificate(certificate) {
+  return createHash("sha256")
+    .update(certificate.publicKey.export({ type: "spki", format: "der" }))
+    .digest("base64");
+}
+
+/**
+ * Fetch an origin over TLS, trusting a published pin instead of a CA.
+ *
+ * No CA will issue for a Moshpit ending — they are outside the DNS root, and
+ * the CA/Browser Forum stopped issuing for non-IANA TLDs in 2015. So the
+ * origin's certificate is self-signed, `rejectUnauthorized` is off, and the
+ * pin is doing the entire job a chain would normally do. That is a stronger
+ * check than a chain in one respect and a weaker one in another: it names one
+ * exact key rather than delegating to whichever of ~150 CAs will sign, but it
+ * only works for a name whose owner has actually published a pin.
+ *
+ * The identity check is therefore the pin and nothing else — hostname
+ * verification is explicitly disabled, because the certificate is for
+ * `chovy.hacker` while the socket is connected to an address the registry
+ * resolved. Checking the name here would fail on a certificate that is
+ * correct, and passing it would prove nothing the pin has not already proven.
+ */
+export function fetchOriginTls({ host, port, servername, path, headers, pins, timeoutMs, maxBytes }) {
+  return new Promise((resolve, reject) => {
+    if (!pins?.length) {
+      reject(Object.assign(new Error("no pin published"), { name: "NoPinError" }));
+      return;
+    }
+
+    const request = https.request({
+      host, port, path, method: "GET", headers, servername,
+      rejectUnauthorized: false,
+      // The pin is the identity. See above.
+      checkServerIdentity: () => undefined,
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      let truncated = false;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > maxBytes) { truncated = true; response.destroy(); return; }
+        chunks.push(chunk);
+      });
+      const done = () => resolve({
+        status: response.statusCode,
+        headers: response.headers,
+        body: truncated ? Buffer.alloc(0) : Buffer.concat(chunks),
+        truncated,
+      });
+      response.on("end", done);
+      response.on("close", done);
+      response.on("error", reject);
+    });
+
+    // Checked the moment the handshake finishes and before a single request
+    // byte is written, so a wrong key never sees the request either.
+    request.on("socket", (socket) => {
+      socket.on("secureConnect", () => {
+        const certificate = socket.getPeerX509Certificate?.();
+        if (!certificate) {
+          request.destroy(Object.assign(new Error("origin sent no certificate"), { name: "PinError" }));
+          return;
+        }
+        const served = pinFromCertificate(certificate);
+        if (!pins.includes(served)) {
+          request.destroy(Object.assign(
+            new Error(`origin key does not match the published pin (serving ${served})`),
+            { name: "PinError", served },
+          ));
+        }
+      });
+    });
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(Object.assign(new Error("origin timed out"), { name: "AbortError" }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+/**
+ * Where an origin's redirect points, when it points somewhere we may follow.
+ *
+ * An origin that upgrades to HTTPS is the common case for a Moshpit name — the
+ * name's own nginx block does it — and forwarding that redirect to a browser is
+ * useless, since the browser cannot resolve the name or validate the
+ * certificate. So the gateway follows it instead.
+ *
+ * Only to the same name, and only to HTTPS. Following it anywhere else would
+ * re-open the SSRF hole checkTarget() exists to close: the redirect is written
+ * by whoever claimed the name, so treating it as a new address to fetch would
+ * let them point at 169.254.169.254 after passing the check. Staying on the
+ * already-validated address means there is no second target to validate.
+ */
+export function tlsRedirect(location, { name, host }) {
+  if (!location) return null;
+  let url;
+  try { url = new URL(location); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+
+  const to = url.hostname.toLowerCase();
+  if (to !== String(name).toLowerCase() && to !== String(host).toLowerCase()) return null;
+
+  return { port: url.port ? Number(url.port) : 443, path: `${url.pathname}${url.search}` || "/" };
 }
 
 /** Headers worth passing to the origin. Everything else is dropped. */
