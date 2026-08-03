@@ -26,7 +26,7 @@ import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import { nameQuery, tldQuery } from "../lib/moshpit-search.mjs";
 import {
-  MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, forwardableHeaders,
+  MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, fetchOriginTls, forwardableHeaders, tlsRedirect,
 } from "../lib/moshpit-gateway.mjs";
 import {
   addPin,
@@ -557,15 +557,57 @@ moshpitRouter.get("/n/:name", async (req, res) => {
 
 /** Fetch the origin and hand the result back, bounded in time and size. */
 async function proxyToOrigin(req, res, resolution, check) {
+  const name = resolution.resolved;
+  const headers = forwardableHeaders(req.headers, name);
+  const path = req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/";
+
   try {
-    const upstream = await fetchOrigin({
+    let upstream = await fetchOrigin({
       host: check.host,
       port: check.port,
-      path: req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/",
-      headers: forwardableHeaders(req.headers, resolution.resolved),
+      path,
+      headers,
       timeoutMs: ORIGIN_TIMEOUT_MS,
       maxBytes: MAX_BODY_BYTES,
     });
+
+    // An origin that upgrades to HTTPS is the normal shape for a Moshpit name.
+    // Handing that redirect to the browser is useless — it cannot resolve the
+    // name, and no CA will have issued for the ending — so follow it here,
+    // authenticating the origin against the pin its owner published.
+    const upgrade = upstream.status >= 300 && upstream.status < 400
+      ? tlsRedirect(upstream.headers.location, { name, host: check.host })
+      : null;
+
+    if (upgrade) {
+      const parsed = parseMoshpitName(name);
+      const pins = parsed
+        ? (await listPins(parsed.tld, parsed.label, "tls")).map((row) => row.pin)
+        : [];
+      try {
+        upstream = await fetchOriginTls({
+          host: check.host,
+          port: upgrade.port,
+          servername: name,
+          path: upgrade.path,
+          headers,
+          pins,
+          timeoutMs: ORIGIN_TIMEOUT_MS,
+          maxBytes: MAX_BODY_BYTES,
+        });
+      } catch (error) {
+        // Distinguished from a generic failure because each has exactly one
+        // fix and it belongs to a different person: the owner publishes a pin,
+        // or somebody works out why the key changed.
+        const why = error.name === "NoPinError"
+          ? "this name redirects to HTTPS, but its owner has not published a key pin — "
+            + "without one there is no way to tell the real origin from an impostor"
+          : error.name === "PinError"
+            ? `the origin's key does not match the pin published for this name — ${error.message}`
+            : "the origin could not be reached over HTTPS";
+        return res.status(502).send(page({ title: resolution.name, body: unreachable(resolution, why) }));
+      }
+    }
 
     // Only what a page needs. Passing the origin's Set-Cookie through would let
     // a name's owner set cookies on app.moshcode.sh, which is where accounts
