@@ -126,7 +126,12 @@ async function launchEngine(key, engine, args, { agentMode = false } = {}) {
   return backToPit(key, result.code, result.signal);
 }
 
-function help() {
+// `write` decides the stream. Help asked for is output; help printed because a
+// verb was wrong is a diagnostic, and a diagnostic on stdout ends up inside
+// whatever the caller was redirecting to — `moshcode doh --nginx x > site.conf`
+// on a build without `doh` writes this banner into an nginx config, and nginx
+// then fails to start for reasons four layers from the typo.
+function help(write = console.log) {
   const vocab = moshVocabulary().all();
   // Every workflow tool is exposed as a CLI verb, so derive them from TOOLS
   // rather than repeating the roster here — a tool missing from this list gets
@@ -134,7 +139,7 @@ function help() {
   const cliVerbs = [...CORE_CLI_COMMAND_NAMES, ...Object.keys(TOOLS)];
   const local = vocab.filter((c) => !cliVerbs.includes(c.name));
   const cli = vocab.filter((c) => !local.includes(c));
-  console.log(`moshcode — metal scripting toolkit 🤘
+  write(`moshcode — metal scripting toolkit 🤘
 
 usage:
   moshcode                             open the TUI shell (then /agents <engine>)
@@ -594,8 +599,10 @@ async function main() {
     return;
   }
 
-  help();
-  if (cmd && !["help", "--help", "-h"].includes(cmd)) process.exit(1);
+  const asked = !cmd || ["help", "--help", "-h"].includes(cmd);
+  if (!asked) console.error(`moshcode: unknown command ${JSON.stringify(cmd)}\n`);
+  help(asked ? console.log : console.error);
+  if (!asked) process.exit(1);
 }
 
 main();
