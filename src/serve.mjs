@@ -253,7 +253,7 @@ export function caddySite({ name, root, proxy }) {
 export async function tlsFor(name, { dir = "/etc/ssl/moshpit", readFile = fs.readFile } = {}) {
   const tld = tldOf(name);
   if (!tld) return null;
-  const paths = keyPaths(tld, dir);
+  const paths = keyPaths(name, dir);
   if (!paths) return null;
 
   try {
