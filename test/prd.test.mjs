@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createPrd, listPrds, renderPrd } from "../src/prd.mjs";
+import { createPrd, listPrds, regenerateIndex, renderPrd } from "../src/prd.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -209,6 +209,110 @@ test("listPrds does not take a title or status from a PRD with no front matter",
     const [prd] = listPrds(root);
     assert.equal(prd.title, "import-notes");
     assert.equal(prd.status, "?");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// `listPrds` picks up any `NNNN-<anything>.md` sitting in prd/, not only the
+// names `createPrd` slugified, so the index has to cope with a hand-dropped
+// file whose name was never sanitised.
+function dropPrd(root, name, title) {
+  fs.writeFileSync(
+    path.join(root, "prd", name),
+    ["---", `title: "${title}"`, "status: Review", "---", "", "## Problem", "", "Dropped in by hand.", ""].join("\n"),
+  );
+}
+
+function indexRow(root, needle) {
+  const readme = fs.readFileSync(path.join(root, "prd", "README.md"), "utf8");
+  const row = readme.split(/\r?\n/).find((l) => l.includes(needle));
+  assert.ok(row, `the PRD row for ${needle} must be in the index`);
+  return row;
+}
+
+// Unescaped pipes are the cell separator, mirroring the title-escaping test.
+function cellsOf(row) {
+  return row.split(/(?<!\\)\|/).slice(1, -1);
+}
+
+// A markdown link destination ends at the first space, so `0002-Search Ranking.md`
+// stops being a link at all and the index entry renders as literal `[0002](...)`.
+test("regenerateIndex links a PRD whose file name has spaces", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropPrd(root, "0002-Search Ranking v2.md", "Rank results by recency");
+    regenerateIndex(root);
+
+    const row = indexRow(root, "recency");
+    const link = row.match(/\[0002\]\(([^)]*)\)/);
+    assert.ok(link, `the 0002 entry must still be a closed markdown link: ${row}`);
+    assert.doesNotMatch(link[1], /\s/, `link destination must not contain whitespace: ${link[1]}`);
+    // Encoding is only worth anything if the link still points at the real file.
+    assert.equal(decodeURIComponent(link[1]), "0002-Search Ranking v2.md");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A `|` in the *link* cell shifts every column after it: Title shows the file
+// name and Status falls off the row entirely.
+test("regenerateIndex keeps the columns when a PRD file name has a pipe", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropPrd(root, "0003-costs|benefits.md", "Weigh costs against benefits");
+    regenerateIndex(root);
+
+    const row = indexRow(root, "Weigh costs");
+    const cells = cellsOf(row);
+    assert.equal(cells.length, 3, `row should have 3 cells, got ${cells.length}: ${row}`);
+    assert.equal(cells[1].trim(), "Weigh costs against benefits");
+    assert.equal(cells[2].trim(), "Review", "the Status column must survive the row");
+    const link = row.match(/\[0003\]\(([^)]*)\)/);
+    assert.ok(link, `the 0003 entry must still be a closed markdown link: ${row}`);
+    assert.equal(decodeURIComponent(link[1]), "0003-costs|benefits.md");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// `)` closes a link destination, so `0004-fix (v2).md` ends the link mid-name
+// and leaves `v2).md)` as visible text.
+test("regenerateIndex keeps a parenthesised PRD file name inside its link", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    dropPrd(root, "0004-fix (v2).md", "Fix the ranking regression");
+    regenerateIndex(root);
+
+    const row = indexRow(root, "ranking regression");
+    const link = row.match(/\[0004\]\(([^)]*)\)/);
+    assert.ok(link, `the 0004 entry must still be a closed markdown link: ${row}`);
+    assert.equal(decodeURIComponent(link[1]), "0004-fix (v2).md");
+    assert.equal(cellsOf(row).length, 3, `row should have 3 cells: ${row}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// CONTROL: every name `createPrd` produces is already URL-safe, so the rows the
+// tool writes for itself must come out byte-for-byte as they did before.
+test("regenerateIndex leaves an ordinary slugified PRD link untouched", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-prd-"));
+  try {
+    createPrd("improve search ranking", root);
+    createPrd("add a dark mode toggle", root);
+
+    assert.equal(
+      indexRow(root, "search ranking"),
+      "| [0001](0001-improve-search-ranking.md) | Improve search ranking | Draft |",
+    );
+    assert.equal(
+      indexRow(root, "dark mode"),
+      "| [0002](0002-add-a-dark-mode-toggle.md) | Add a dark mode toggle | Draft |",
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

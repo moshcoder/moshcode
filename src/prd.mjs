@@ -257,9 +257,23 @@ export function regenerateIndex(root = process.cwd()) {
     .replace(/\\/g, "\\\\")
     .replace(/\|/g, "\\|")
     .replace(/\r\n?|\n/g, " ");
+  // The same reasoning applies to the link cell, which `cell` cannot help with:
+  // a file name is a link *destination*, so it has to end up a valid URL, not
+  // just an escaped table cell. `listPrds` accepts any `NNNN-<anything>.md` on
+  // disk — the test suite treats "a doc dropped into prd/" as supported, and a
+  // doc exported from a writing tool arrives as `0002-Search Ranking.md` — so
+  // the name is not always the slug `createPrd` would have produced. A space
+  // ends the destination early and the link dies; a `|` closes the cell and
+  // shifts every column after it, dropping Status off the row entirely.
+  // Percent-encode it: `p.file` is a bare readdir entry, never a path, so
+  // encodeURIComponent is safe here, and `(`/`)` are added by hand because it
+  // leaves those alone and an unescaped `)` would close the link early.
+  const linkTarget = (file) => encodeURIComponent(file)
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29");
   const rows = prds.length
     ? ["| # | Title | Status |", "|---|---|---|",
-       ...prds.map((p) => `| [${p.id}](${p.file}) | ${cell(p.title)} | ${cell(p.status)} |`)].join("\n")
+       ...prds.map((p) => `| [${p.id}](${linkTarget(p.file)}) | ${cell(p.title)} | ${cell(p.status)} |`)].join("\n")
     : "_No PRDs yet._";
   // Use a function replacement so `$`-sequences in a PRD title (e.g. `$&`, `$1`,
   // `$\`` ) are inserted verbatim instead of being read as String.replace special
