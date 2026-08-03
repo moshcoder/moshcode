@@ -27,7 +27,12 @@ test("an unknown verb writes nothing to stdout and exits non-zero", async () => 
   assert.notEqual(failed.code, 0, "an unknown verb must not exit 0");
   assert.equal(failed.stdout, "", "stdout must stay clean so redirection is safe");
   assert.match(failed.stderr, /unknown command/, "the reason belongs on stderr");
-  assert.match(failed.stderr, /usage:/, "the banner still gets shown, just not on stdout");
+  // Was: the full banner on stderr. PRD 0006 R11 replaced the 127-line dump
+  // with one line and a way forward — the pointer is what has to survive, not
+  // the wall. `moshcode help` is now where the banner lives.
+  assert.match(failed.stderr, /moshcode help/, "the way forward still gets shown");
+  assert.ok(failed.stderr.split("\n").filter(Boolean).length <= 3,
+    "a typo should not print a screenful");
 });
 
 test("help asked for goes to stdout", async () => {

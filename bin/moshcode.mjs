@@ -30,6 +30,10 @@ import { serveCommand } from "../src/serve.mjs";
 import { createDohServer, nginxDohSite, parseDohPort, parseGuardArgs, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
 import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
+import {
+  findCommand, findVerb, helpModel, renderAll, renderCommand, renderOverview,
+  suggest, wantsHelp, withoutHelp,
+} from "../src/help.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -126,113 +130,121 @@ async function launchEngine(key, engine, args, { agentMode = false } = {}) {
   return backToPit(key, result.code, result.signal);
 }
 
-// `write` decides the stream. Help asked for is output; help printed because a
-// verb was wrong is a diagnostic, and a diagnostic on stdout ends up inside
-// whatever the caller was redirecting to — `moshcode doh --nginx x > site.conf`
-// on a build without `doh` writes this banner into an nginx config, and nginx
-// then fails to start for reasons four layers from the typo.
-function help(write = console.log) {
-  const vocab = moshVocabulary().all();
-  // Every workflow tool is exposed as a CLI verb, so derive them from TOOLS
-  // rather than repeating the roster here — a tool missing from this list gets
-  // misfiled as a moshscript-only local verb.
-  const cliVerbs = [...CORE_CLI_COMMAND_NAMES, ...Object.keys(TOOLS)];
-  const local = vocab.filter((c) => !cliVerbs.includes(c.name));
-  const cli = vocab.filter((c) => !local.includes(c));
-  write(`moshcode — metal scripting toolkit 🤘
+/**
+ * Help, on the right stream, from the schema (PRD 0006 R3, R5).
+ *
+ * \`write\` decides the stream and it is not cosmetic: help asked for is output,
+ * help printed because a verb was wrong is a diagnostic, and a diagnostic on
+ * stdout ends up inside whatever the caller was redirecting to — \`moshcode doh
+ * --nginx x > site.conf\` on a build without \`doh\` used to write this banner
+ * into an nginx config, and nginx then failed to start for reasons four layers
+ * from the typo.
+ *
+ * The 87-line template literal that used to live here is gone. It had already
+ * drifted — \`dns\` and \`version\` were dispatchable and missing from it — and
+ * every fix to it was a second place to remember.
+ */
+function helpContext() {
+  return {
+    engines: Object.keys(ENGINES),
+    tools: Object.keys(TOOLS),
+    version: moshcodeVersion() || "",
+  };
+}
 
-usage:
-  moshcode                             open the TUI shell (then /agents <engine>)
-  moshcode agents [engine] [args…]     list engines, or launch one autonomously
-                                       (bypasses/auto-approves native permissions)
-  moshcode start <engine> [args…]      raw engine launch; inject no arguments
-  moshcode <engine> [args…]            raw launch shorthand (backward compatible)
-  moshcode <tool> [args…]              transparently invoke any workflow tool listed below
-                                       (ugig, coinpay, gh, railway, supabase, doppler, doctl, …)
-  moshcode secrets [args…]             manage/view team secrets (wraps the logicsrc CLI:
-                                       login, teams, credentials — e.g. \`secrets teams pull acme prod\`)
-  moshcode run [file.mosh] [--max N]   run a moshscript (stdin with '-', or the
-     [--dry-run] [args…]               built-in loop if no file); --max bounds
-                                       the while loop (default 3); --dry-run
-                                       narrates without executing; extra args
-                                       reach the script as argv
-  moshcode mcp list [--json]           show MCP support + install status
-  moshcode mcp install <url>           register an MCP server across every engine
-  moshcode mcp add <name> <url|cmd>    that supports it (claude/gemini/codex/opencode)
-  moshcode skill list [--json]         show skills support + install status
-  moshcode skill install <git-url>     install a skill across every engine that
-                                       supports it (claude/gemini)
-  moshcode doh [--port N]              run the DNS-over-HTTPS resolver (loopback;
-     [--rate N] [--burst N]            put TLS in front of it). Rate limits and
-     [--ban-seconds N] [--no-guards]   bans are ON by default.
-  moshcode doh --nginx <name>          print the reverse-proxy block for it
-  moshcode site <name> [--install]     install web-server config for a Moshpit
-     [--reload] [--proxy PORT]         name (nginx/Caddy does the serving, not
-     [--root DIR]                      moshcode); shows the plan by default
-  moshcode template list               starting stacks for a Moshpit-hosted service
-  moshcode template install <name>     copy one here (also takes a git URL,
-     [--into dir] [--force]            owner/repo, or a .tar.gz); nothing is run
-     [--dry-run]                       preview creates and overwrites without writing
-  moshcode install <engine|tool>       install a coding engine or workflow tool
-  moshcode uninstall <engine|tool>     take one back off this machine
-  moshcode update --check              say whether a newer release exists
-  moshcode update --if-newer           install only when there is one
-  moshcode update --timer [--install]  check on a schedule (default 15min)
-  moshcode upgrade [target…]           update moshcode + installed engines/tools
-                                       (no args = everything; name targets to
-                                       narrow, e.g. \`upgrade ugig\`)
-  moshcode prd [idea]                  publish the next numbered PRD (OpenPRD) to
-                                       prd/NNNN-slug.md and hand it to an engine to
-                                       author; no arg lists existing PRDs
-  moshcode prd list [--json]           list PRDs without creating or changing files
-  moshcode login [--device|--browser]  authenticate this machine with app.moshcode.sh
-                                       (device code over SSH/headless; --browser forces loopback)
-                                       (browser OAuth+PKCE; --device = headless/CI
-                                       code flow) so notify()/ask() reach you
-  moshcode whoami | logout             show / clear the logged-in account
-  moshcode console serve               serve a browser terminal on this box (ttyd
-     [--port N] [--ttyd host:port]     behind moshcode login); --bind defaults to
-     [--bind addr]                     127.0.0.1 — put it on a tailnet, not 0.0.0.0
-  moshcode console --url <base>        print that gateway's URL with your login token
-  moshcode pwd [--json]                show the current dir + git repo/branch/origin
-  moshcode engines [--json]            list engines + install status
-  moshcode tools [--json]              list workflow tools + install status
-  moshcode commands [--json]           list built-in moshscript commands
-  moshcode completion <bash|zsh|fish|powershell>
-                                       print a shell completion script
-  moshcode help                        this
+function help(write = console.log, { all = false } = {}) {
+  write(all ? renderAll(helpContext()) : renderOverview(helpContext()));
+}
 
-engines (moshcode is a wrapper — it installs/drives these):
-${engineList()}
+/**
+ * Answer every form of "how does this work" before anything is parsed.
+ *
+ * Ahead of dispatch on purpose (PRD 0006 R1, R2). Asking for help used to be
+ * handled by each command's own argument parser, by accident and differently
+ * every time: `prd --help` read `--help` as the PRD's idea and *published a
+ * document*, `run --help` was an unknown-option error, `console --help` printed
+ * usage to stderr and exited 1. Recognising it here means no parser sees it and
+ * none of them can act on it.
+ *
+ * Returns true when it handled the invocation.
+ *
+ * Two boundaries it deliberately does not cross:
+ *  - an engine or tool name. `moshcode gh --help` is gh's question and passes
+ *    through byte-for-byte; `moshcode help gh` asks how moshcode wraps it.
+ *  - the moshscript filename. `moshcode run --help` is the runner's; after the
+ *    file, `--help` is the script's argv (PRD 0004 R13).
+ */
+function handledHelp(cmd, rest) {
+  const asJson = rest.includes("--json");
+  const topLevel = ["help", "--help", "-h"].includes(cmd);
 
-warning: agent mode intentionally weakens native safety checks. use it only in
-isolated or trusted workspaces. use \`moshcode start <engine>\` for native defaults.
+  if (topLevel) {
+    const args = withoutHelp(rest).filter((a) => a !== "--json" && a !== "--all");
+    // `moshcode help --help` asks about `help` itself, and R4 says every
+    // command answers for itself. Only the spelled-out verb: `moshcode --help`
+    // is the overview, which is what a bare flag has always meant.
+    if (cmd === "help" && !args.length && wantsHelp(rest)) args.push("help");
+    if (asJson && !args.length) {
+      console.log(JSON.stringify(helpModel(helpContext()), null, 2));
+      return true;
+    }
+    if (!args.length) {
+      help(console.log, { all: rest.includes("--all") });
+      return true;
+    }
+    // `moshcode help <topic> [verb]`
+    const command = findCommand(args[0]);
+    if (!command) {
+      // An engine or a tool is a legitimate topic: this is the only way to ask
+      // how moshcode wraps something whose own --help passes through.
+      if (resolveEngine(args[0])) {
+        console.log(`moshcode ${args[0]} [args…] — open ${args[0]} directly (passthrough).`);
+        console.log(`its own flags belong to it: \`moshcode ${args[0]} --help\` asks ${args[0]}, not moshcode.`);
+        console.log(`see also: moshcode help agents · moshcode help start`);
+        return true;
+      }
+      if (resolveTool(args[0])) {
+        console.log(`moshcode ${args[0]} [args…] — run ${args[0]}, with moshcode's auth and env (passthrough).`);
+        console.log(`its own flags belong to it: \`moshcode ${args[0]} --help\` asks ${args[0]}, not moshcode.`);
+        console.log(`see also: moshcode help tools · moshcode help install`);
+        return true;
+      }
+      const near = suggest(args[0], [...Object.keys(ENGINES), ...Object.keys(TOOLS)]);
+      console.error(`✗ no help for ${JSON.stringify(args[0])}${near ? ` — did you mean ${near}?` : ""}`);
+      console.error("  moshcode help          list commands");
+      process.exitCode = 1;
+      return true;
+    }
+    const verb = args[1] ? findVerb(command, args[1]) : null;
+    if (args[1] && !verb) {
+      console.error(`✗ ${command.name} has no verb ${JSON.stringify(args[1])}`);
+      console.error(renderCommand(command));
+      process.exitCode = 1;
+      return true;
+    }
+    if (asJson) {
+      const model = helpModel(helpContext()).commands.find((c) => c.name === command.name);
+      console.log(JSON.stringify(verb ? model.verbs.find((v) => v.name === verb.name) : model, null, 2));
+      return true;
+    }
+    console.log(renderCommand(command, { verb }));
+    return true;
+  }
 
-tools (native CLI passthrough; each tool owns its auth and output):
-${toolList()}
-the primary development toolchain is available through \`moshcode\` as a
-dev.profullstack.com user — https://dev.profullstack.com/
+  // `moshcode <command> [verb] --help`, at any depth.
+  const command = findCommand(cmd);
+  if (!command) return false;
+  // `run` claims --help only before the script filename.
+  if (!wantsHelp(rest, { stopAt: command.name === "run" })) return false;
 
-moshscript — secretly all JS is legal:
-${DEFAULT_SCRIPT}
-a .mosh file is real JavaScript with the command vocabulary injected as globals.
-const, for, if, await, template strings — all just work. shebang lines
-(#!/usr/bin/env moshscript) are stripped automatically, so chmod +x works.
-
-local commands (moshscript-only):
-${local.map((c) => `  ${(`${c.name}()`).padEnd(14)} ${c.summary}`).join("\n")}
-
-CLI commands (each shells out to \`moshcode <name> ...args\`):
-${cli.map((c) => `  ${(`${c.name}()`).padEnd(14)} ${c.summary}`).join("\n")}
-
-human-in-the-loop + AI (via app.moshcode.sh):
-  notify(msg)          ping the operator across their channels + return the link
-  ask(prompt)          blocking gate — waits for the human's reply at app.moshcode.sh
-  ai(prompt, {engine}) run a coding engine headlessly and return its output
-
-env: MOSHCODE_API (default https://app.moshcode.sh), MOSHCODE_API_KEY (from the
-     app's Settings → API keys), MOSHCODE_WEBHOOK_SECRET, MOSHCODE_PLAYLIST
-`);
+  const verb = findVerb(command, withoutHelp(rest)[0]);
+  if (asJson) {
+    const model = helpModel(helpContext()).commands.find((c) => c.name === command.name);
+    console.log(JSON.stringify(verb ? model.verbs.find((v) => v.name === verb.name) : model, null, 2));
+    return true;
+  }
+  console.log(renderCommand(command, { verb }));
+  return true;
 }
 
 async function main() {
@@ -240,6 +252,9 @@ async function main() {
 
   // No args → open the interactive TUI shell (/agents <engine>, etc.).
   if (cmd === undefined) return tui();
+
+  // Before every parser, so none of them can act on --help. See handledHelp().
+  if (handledHelp(cmd, rest)) return;
 
   if (cmd === "--version" || cmd === "-v" || cmd === "version") {
     console.log(moshcodeVersion() || "unknown");
@@ -603,10 +618,13 @@ async function main() {
     return;
   }
 
-  const asked = !cmd || ["help", "--help", "-h"].includes(cmd);
-  if (!asked) console.error(`moshcode: unknown command ${JSON.stringify(cmd)}\n`);
-  help(asked ? console.log : console.error);
-  if (!asked) process.exit(1);
+  // Unknown. One line and a way forward, on stderr (PRD 0006 R3, R11) — this
+  // used to dump 127 lines to *stdout* and exit 1, which polluted every pipe
+  // that had a typo in it and buried the one fact the caller needed.
+  const near = suggest(cmd, [...Object.keys(ENGINES), ...Object.keys(TOOLS)]);
+  console.error(`✗ unknown command ${JSON.stringify(cmd)}${near ? ` — did you mean ${near}?` : ""}`);
+  console.error("  moshcode help          list commands");
+  process.exit(1);
 }
 
 main();
