@@ -24,11 +24,22 @@ import {
   parseTldList,
   tldRejection,
 } from "./lib/moshpit-name.mjs";
+import {
+  effectiveTarget,
+  normalizeRecord,
+  normalizeRecordType,
+  recordConflict,
+} from "./lib/moshpit-records.mjs";
 
 export {
   RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_CHUNK, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
   parseTldList, tldRejection, normalizeMode, resolutionPreference, STARTER_LABELS, suggestedLabels,
 } from "./lib/moshpit-name.mjs";
+
+export {
+  DEFAULT_TTL, MAX_PRIORITY, MAX_TTL, MAX_TXT_BYTES, MIN_TTL, RECORD_HELP, RECORD_TYPES,
+  effectiveTarget, isMoshpitTarget, normalizeRecord, normalizeRecordType, zoneLine,
+} from "./lib/moshpit-records.mjs";
 
 /**
  * The largest number this column will accept.
@@ -367,6 +378,9 @@ export async function releaseName({ tld: tldInput, label: labelInput, userId }) 
   // and whoever registered the name next would inherit the previous holder's
   // published keys.
   await run(`DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  // Records go with the name for the same reason, and it matters more: an
+  // inherited MX would route the next holder's mail to the last one's server.
+  await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await run(`DELETE FROM moshpit_names WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await logAction(owned.tld, userId, `unname:${owned.label}`);
   return { ok: true };
@@ -746,6 +760,208 @@ export async function removePin({ tld: tldInput, label: labelInput, pin, userId 
 
   await logAction(owned.tld, userId, `pin:remove:${owned.label}`);
   return { ok: true };
+}
+
+/* ---- the DNS records a name publishes ---- */
+
+const RECORD_COLS = `tld, label, type, value, ttl, priority, user_id, created_at`;
+
+/**
+ * Records ordered the way a zone file reads: addresses, then the alias, then
+ * mail by preference, then text. Not by created_at — the order a set of records
+ * was typed in says nothing about how it should be read back, and an owner
+ * comparing the tab against their notes is reading a zone, not a history.
+ */
+const RECORD_ORDER = `CASE type WHEN 'AAAA' THEN 0 WHEN 'CNAME' THEN 1 WHEN 'MX' THEN 2 ELSE 3 END,
+                      COALESCE(priority, 0), value`;
+
+export async function listRecords(tldInput, labelInput) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return [];
+  return all(`SELECT ${RECORD_COLS} FROM moshpit_records WHERE tld = ? AND label = ?
+              ORDER BY ${RECORD_ORDER}`, [tld, label]);
+}
+
+/**
+ * The records a resolver should answer with for `scrambled.eggs`.
+ *
+ * Aliases are followed first, for the reason pinsForName follows them: when
+ * `.agentic` points at `.agent`, a client asking about `foo.agentic` is served
+ * by whatever serves `foo.agent`, so the records that matter are the ones
+ * published there. Answering with the typed name's own records would send mail
+ * to a host the operator repointed away from months ago.
+ *
+ * Null when the pit has no authority over the name at all.
+ */
+export async function recordsForName(input) {
+  const resolution = await resolveMoshpitName(input);
+  if (!resolution || !resolution.registered) return null;
+
+  const parsed = parseMoshpitName(resolution.resolved);
+  if (!parsed) return null;
+
+  return {
+    name: resolution.name,
+    resolved: resolution.resolved,
+    tld: parsed.tld,
+    label: parsed.label,
+    name_registered: resolution.name_registered,
+    target: resolution.target,
+    records: await listRecords(parsed.tld, parsed.label),
+  };
+}
+
+/**
+ * Publish a record on a name you hold.
+ *
+ * Validation is in lib/moshpit-records.mjs and the conflict rules with it, so
+ * this is ownership, the write, and the one thing neither could know: whether
+ * the name already carries something the new record cannot sit beside.
+ *
+ * Re-adding a record that is already there succeeds and changes nothing but its
+ * TTL. A form that answers "already published" to a person who just asked for
+ * exactly what is already true has made them read an error to learn they got
+ * what they wanted.
+ */
+export async function addRecord({ tld: tldInput, label: labelInput, type, value, ttl, priority, userId }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const name = `${owned.label}.${owned.tld}`;
+  const checked = normalizeRecord({ type, value, ttl, priority, name });
+  if (!checked.ok) return checked;
+  const record = checked.record;
+
+  const existing = await listRecords(owned.tld, owned.label);
+  const conflict = recordConflict(record, existing);
+  if (conflict) return { ok: false, error: conflict };
+
+  const already = existing.find((r) => r.type === record.type && r.value === record.value);
+  if (already) {
+    // The primary key is (tld, label, type, value), so the same record with a
+    // new TTL or priority is an edit rather than a second row — which is what
+    // the owner means by typing it again with a different number.
+    if (already.ttl === record.ttl && (already.priority ?? null) === record.priority) return { ok: true, record: already };
+    await run(`UPDATE moshpit_records SET ttl = ?, priority = ? WHERE tld = ? AND label = ? AND type = ? AND value = ?`,
+      [record.ttl, record.priority, owned.tld, owned.label, record.type, record.value]);
+    await logAction(owned.tld, userId, `record:edit:${owned.label}:${record.type}`);
+    return { ok: true, record: { ...already, ttl: record.ttl, priority: record.priority } };
+  }
+
+  await run(`INSERT INTO moshpit_records (${RECORD_COLS}) VALUES (?,?,?,?,?,?,?,?)`,
+    [owned.tld, owned.label, record.type, record.value, record.ttl, record.priority, userId, Date.now()]);
+  await logAction(owned.tld, userId, `record:add:${owned.label}:${record.type}`);
+
+  // Keep "points at" in step with the records, in the one direction that cannot
+  // surprise anyone: a name with no target that just published its first
+  // address now has one. Everything downstream — the bridge, the DoH server,
+  // the /n/ gateway — reads that column and nothing else, so without this a
+  // name with a perfectly good AAAA record would still resolve to the parking
+  // page. Never the other way: an owner who typed a target is not overruled by
+  // a record they added afterwards.
+  if (!(await getName(owned.tld, owned.label))?.target) {
+    const target = effectiveTarget(null, await listRecords(owned.tld, owned.label));
+    if (target) await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`, [target, owned.tld, owned.label]);
+  }
+
+  return { ok: true, record };
+}
+
+/**
+ * Withdraw a record.
+ *
+ * Identified by (type, value) rather than by a row id: that is the pair a
+ * person can read off the row they are looking at, and it is what the API's
+ * callers have — a synthetic id would have to be looked up first by a client
+ * that already knows exactly which record it means.
+ */
+export async function removeRecord({ tld: tldInput, label: labelInput, type, value, userId }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const wanted = normalizeRecordType(type);
+  if (!wanted) return { ok: false, error: "not a record type this registry publishes" };
+
+  const before = await listRecords(owned.tld, owned.label);
+  const match = before.find((r) => r.type === wanted && r.value === String(value ?? "").trim().toLowerCase())
+    // TXT is the one type whose value is not lowercased on the way in, so it is
+    // the one that has to be matched as written.
+    || before.find((r) => r.type === wanted && r.value === String(value ?? "").trim());
+  if (!match) return { ok: false, error: "that record is not published on this name" };
+
+  await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ? AND type = ? AND value = ?`,
+    [owned.tld, owned.label, match.type, match.value]);
+  await logAction(owned.tld, userId, `record:remove:${owned.label}:${match.type}`);
+
+  // The mirror of addRecord: a target this registry set from a record follows
+  // that record out. A target the owner typed stays, because they typed it.
+  const entry = await getName(owned.tld, owned.label);
+  if (entry?.target && entry.target === match.value) {
+    const target = effectiveTarget(null, await listRecords(owned.tld, owned.label));
+    await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`, [target, owned.tld, owned.label]);
+  }
+
+  return { ok: true };
+}
+
+/**
+ * The names on the DNS Records tab: yours, optionally filtered, one page worth.
+ *
+ * Every name you hold, not only the ones that already have records — the tab
+ * exists to add the first record to a name, and a list that only showed names
+ * with records would be empty for exactly the people who need it.
+ *
+ * The record count comes back with the row so the list can say which names have
+ * something published without a query per name; the records themselves are
+ * fetched for the window only, by listRecordsForNames.
+ */
+export async function listRecordNames(userId, { like = null, exact = "", limit = 25, offset = 0 } = {}) {
+  const where = like
+    ? `n.user_id = ? AND (n.label || '.' || n.tld) LIKE ?`
+    : `n.user_id = ?`;
+  const params = like ? [userId, like] : [userId];
+  return all(
+    `SELECT n.tld, n.label, n.target,
+            (SELECT COUNT(*) FROM moshpit_records r WHERE r.tld = n.tld AND r.label = n.label) AS record_count
+     FROM moshpit_names n
+     WHERE ${where}
+     ORDER BY CASE WHEN (n.label || '.' || n.tld) = ? THEN 0 ELSE 1 END, n.tld, n.label
+     LIMIT ? OFFSET ?`,
+    [...params, exact || "", limit, offset],
+  );
+}
+
+export async function countRecordNames(userId, { like = null } = {}) {
+  const row = like
+    ? await get(`SELECT COUNT(*) AS n FROM moshpit_names WHERE user_id = ? AND (label || '.' || tld) LIKE ?`, [userId, like])
+    : await get(`SELECT COUNT(*) AS n FROM moshpit_names WHERE user_id = ?`, [userId]);
+  return row?.n ?? 0;
+}
+
+/**
+ * Records for a page of names, in one query.
+ *
+ * Returns a Map keyed `label.tld`. The alternative is a query per name, which
+ * is what the pit's earlier pages did with names-per-ending and is why /pit
+ * needed a page budget in the first place.
+ */
+export async function listRecordsForNames(names = []) {
+  const found = new Map();
+  if (!names.length) return found;
+  const keys = names.map((n) => `${n.label}.${n.tld}`);
+  const placeholders = keys.map(() => "?").join(",");
+  const rows = await all(
+    `SELECT ${RECORD_COLS} FROM moshpit_records WHERE (label || '.' || tld) IN (${placeholders})
+     ORDER BY ${RECORD_ORDER}`,
+    keys,
+  );
+  for (const row of rows) {
+    const key = `${row.label}.${row.tld}`;
+    if (!found.has(key)) found.set(key, []);
+    found.get(key).push(row);
+  }
+  return found;
 }
 
 /* ---- claiming a list of endings at once ---- */

@@ -46,3 +46,36 @@ export function tldQuery(raw) {
     exact: glob ? "" : cleaned,
   };
 }
+
+/**
+ * The same filter, over whole names rather than endings.
+ *
+ * `blue.eggs` is one string to the person typing it and two columns in the
+ * database, so the dot has to survive being cleaned — tldQuery strips it, which
+ * would turn `blue.eggs` into the substring `blueeggs` and match nothing. The
+ * DNS Records tab filters over domains, and a filter that cannot take the
+ * domain as written is a filter people type into twice and then stop using.
+ *
+ * Matched against `label || '.' || tld`, so `eggs` finds every name under
+ * `.eggs` and every name with eggs in it, and `blue.*` finds blue under all of
+ * them.
+ */
+export function nameQuery(raw) {
+  const cleaned = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9.*-]/g, "")
+    .replace(/^\.+/, "")
+    // A name is two labels and a dot: 63 + 1 + 63.
+    .slice(0, MAX_QUERY * 2 + 1);
+
+  if (!cleaned || /^[.*]+$/.test(cleaned)) return null;
+
+  const glob = cleaned.includes("*");
+  return {
+    query: cleaned,
+    like: glob ? cleaned.replace(/\*+/g, "%") : `%${cleaned}%`,
+    glob,
+    exact: glob ? "" : cleaned,
+  };
+}
