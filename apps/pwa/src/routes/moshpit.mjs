@@ -1939,17 +1939,16 @@ moshpitRouter.get("/pit/records", async (req, res) => {
     you hit the button — no zone transfer, no propagation wait.
   </p>
   <p class="dim" style="max-width:66ch;font-size:.9rem">
-    ${/* What the resolvers answer today, said here rather than discovered from a
-         dig that comes back empty. The registry stores every type; the bridge and
-         the DoH server answer address questions and return an honest empty
-         NOERROR for the rest, so MX and TXT are published and readable over the
-         API before anything serves them over port 53. */""}
-    <span class="acid mono">Reachable now:</span> <span class="mono">AAAA</span> and
-    <span class="mono">CNAME</span> — the resolvers answer address lookups from them, so a name with an
-    address is live as soon as you add it. <span class="mono">MX</span> and <span class="mono">TXT</span>
-    are stored and served over the API, and the resolvers do not answer those question types yet: a
-    <span class="mono">dig MX</span> comes back empty for now. Publish them anyway — nothing has to
-    change here when the resolvers catch up.
+    ${/* Which resolver answers what, said here rather than discovered from a dig
+         that comes back empty. All four types are served now; the caveat that is
+         left is a machine still running an older bridge, which answers addresses
+         and NODATA for the rest. */""}
+    <span class="acid mono">All four resolve.</span> <span class="mono">dig MX blue.eggs</span> through
+    a Moshpit resolver answers from what you publish here, as do
+    <span class="mono">TXT</span>, <span class="mono">CNAME</span> and <span class="mono">AAAA</span>.
+    A machine running a bridge from before records existed answers addresses and nothing else —
+    <span class="mono">moshcode update</span> is the fix, and
+    <span class="mono">moshcode dns resolve blue.eggs</span> says which one you are talking to.
   </p>
   ${/* Only the count this page actually knows. Yours and Theirs would each cost
        a query to state truthfully, and a confident `0` next to an account
@@ -2021,8 +2020,9 @@ curl -X DELETE ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
   -d '{"label":"blue","type":"MX","value":"mx.example.com"}'</div>
   <p class="pit-copy" style="font-size:.84rem"><code>/api/moshpit/records</code> is what a resolver
     reads, and <code>/api/moshpit/resolve?name=…&amp;records=1</code> returns the address and the record
-    set in one call. <code>moshcode dns resolve blue.eggs</code> shows what a machine actually gets
-    today — which for now is the address, not the whole set.</p>
+    set in one call — which is the one the bridge and the DoH server use when the question is a
+    <code>CNAME</code>, <code>MX</code> or <code>TXT</code>. <code>moshcode dns resolve blue.eggs</code>
+    shows what a machine actually gets.</p>
 </details>`;
 }
 

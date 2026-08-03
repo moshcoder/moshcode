@@ -36,7 +36,35 @@ export const DEFAULT_TTL = 30;
 
 export const TYPE_A = 1;
 export const TYPE_AAAA = 28;
+export const TYPE_CNAME = 5;
+export const TYPE_MX = 15;
+export const TYPE_TXT = 16;
 const CLASS_IN = 1;
+
+/**
+ * The question types answered out of the registry's record set, mapped to the
+ * name the registry calls them.
+ *
+ * Address questions are not in here. They are answered from `target`, which the
+ * registry keeps in step with the address records and which every build of this
+ * bridge has read since before records existed — routing them through here
+ * would change how a name already resolving today gets its answer, to arrive at
+ * the same address.
+ */
+export const RECORD_TYPES = new Map([
+  [TYPE_CNAME, "CNAME"],
+  [TYPE_MX, "MX"],
+  [TYPE_TXT, "TXT"],
+]);
+
+/**
+ * What fits in a UDP answer without EDNS.
+ *
+ * 512 bytes is the floor every resolver accepts. Beyond it a datagram may be
+ * dropped by a middlebox rather than delivered short, so the reply is trimmed
+ * to what fits and marked truncated instead of being sent oversized and lost.
+ */
+export const UDP_SAFE_BYTES = 512;
 const RCODE_OK = 0;
 const RCODE_SERVFAIL = 2;
 const RCODE_REFUSED = 5;
@@ -148,6 +176,109 @@ function ipv6(address) {
   const buf = Buffer.alloc(16);
   groups.forEach((group, i) => buf.writeUInt16BE(parseInt(group, 16), i * 2));
   return buf;
+}
+
+/**
+ * TXT rdata: one or more length-prefixed strings.
+ *
+ * Split at 255 bytes because that is the largest a single DNS character-string
+ * can be, and long TXT values are normal rather than exceptional — a DKIM key
+ * does not fit in one and is always carried as several. A client joins them
+ * back together, so the split is invisible above the wire.
+ *
+ * Split on bytes, not characters: a multi-byte character straddling the
+ * boundary would be cut in half and neither piece would decode.
+ */
+export function rdataTxt(value) {
+  const bytes = Buffer.from(String(value), "utf8");
+  if (!bytes.length) return Buffer.from([0]);
+  const chunks = [];
+  for (let i = 0; i < bytes.length; i += 255) {
+    const chunk = bytes.subarray(i, i + 255);
+    chunks.push(Buffer.concat([Buffer.from([chunk.length]), chunk]));
+  }
+  return Buffer.concat(chunks);
+}
+
+/** MX rdata: a 16-bit preference, then the exchange as labels. */
+export function rdataMx(priority, value) {
+  const preference = Buffer.alloc(2);
+  preference.writeUInt16BE(Math.min(65_535, Math.max(0, Number(priority) || 0)), 0);
+  return Buffer.concat([preference, encodeName(value)]);
+}
+
+/**
+ * The rdata for one record from the registry, or null when it cannot be
+ * encoded.
+ *
+ * Null rather than a throw: one malformed record must not take down the answer
+ * for the ones beside it that are fine. The registry validates on the way in,
+ * so this is the second line — it is reading data over HTTP from a service that
+ * may be a different version than this bridge.
+ */
+export function encodeRdata(record) {
+  try {
+    if (record?.type === "TXT") return rdataTxt(record.value);
+    if (record?.type === "MX") return rdataMx(record.priority, record.value);
+    if (record?.type === "CNAME") return encodeName(record.value);
+    if (record?.type === "AAAA") return ipv6(record.value);
+    if (record?.type === "A") return ipv4(record.value);
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+const TYPE_NUMBERS = new Map([["A", TYPE_A], ["CNAME", TYPE_CNAME], ["MX", TYPE_MX],
+  ["TXT", TYPE_TXT], ["AAAA", TYPE_AAAA]]);
+
+/**
+ * A response carrying whole records rather than a bare address.
+ *
+ * Answers are fitted to `limit` and TC is set only if something was left out.
+ * Dropping every answer the way capResponse does is right for a relayed reply
+ * that cannot be re-cut, but here the answers are ours: a name with nine MX
+ * records should hand back the seven that fit and say it was truncated, not
+ * nothing at all — this bridge speaks UDP only, so a client that retries over
+ * TCP finds no one listening.
+ *
+ * `exists` carries the same NODATA/NXDOMAIN distinction buildResponse draws: a
+ * name with no TXT record still exists, and answering NXDOMAIN would deny it
+ * for every other type at once.
+ */
+export function buildRecordResponse(query, buf, records = [], { ttl = DEFAULT_TTL, exists = true, limit = UDP_SAFE_BYTES } = {}) {
+  const question = buf.subarray(12, query.questionEnd);
+  const encoded = [];
+  let dropped = false;
+  let size = 12 + question.length;
+
+  for (const record of records) {
+    const rdata = encodeRdata(record);
+    const type = TYPE_NUMBERS.get(record?.type);
+    if (!rdata || !type) continue;
+    const answer = Buffer.alloc(12);
+    answer.writeUInt16BE(0xc00c, 0); // the question's name, by pointer
+    answer.writeUInt16BE(type, 2);
+    answer.writeUInt16BE(CLASS_IN, 4);
+    // The record's own TTL when it has one. An owner who set 60 on an address
+    // that moves meant it, and overriding it with the bridge's default would
+    // quietly hold the old answer for longer than they asked.
+    answer.writeUInt32BE(Number.isFinite(record.ttl) ? Math.max(0, Math.floor(record.ttl)) : ttl, 6);
+    answer.writeUInt16BE(rdata.length, 10);
+
+    if (size + answer.length + rdata.length > limit) { dropped = true; continue; }
+    size += answer.length + rdata.length;
+    encoded.push(answer, rdata);
+  }
+
+  const answers = encoded.length / 2;
+  const head = header(query.id, {
+    rcode: answers || exists ? RCODE_OK : RCODE_NXDOMAIN,
+    answers,
+    recursionDesired: query.recursionDesired,
+  });
+  if (dropped) head.writeUInt16BE(head.readUInt16BE(2) | 0x0200, 2); // TC
+  return Buffer.concat([head, question, ...encoded]);
 }
 
 /**
@@ -275,31 +406,54 @@ export async function fetchTlds({ registryBase = DEFAULT_REGISTRY_BASE, fetchImp
  */
 export async function resolveName(
   name,
-  { registryBase = DEFAULT_REGISTRY_BASE, fetchImpl = fetch, timeoutMs = 4000 } = {},
+  { registryBase = DEFAULT_REGISTRY_BASE, fetchImpl = fetch, timeoutMs = 4000, records = false } = {},
 ) {
   const parsed = parseRegistryName(name);
-  if (!parsed) return { status: "not-a-name", target: null };
+  if (!parsed) return { status: "not-a-name", target: null, records: [] };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    // `&records=1` only when the question needs the whole set. Every address
+    // lookup on the machine comes through here, and the registry does a second
+    // query to answer it — a browser opening a page must not pay for records it
+    // will never read.
     const url = `${registryBase.replace(/\/+$/, "")}/api/moshpit/resolve?name=${encodeURIComponent(
       `${parsed.label}.${parsed.tld}`,
-    )}`;
+    )}${records ? "&records=1" : ""}`;
     const res = await fetchImpl(url, { signal: controller.signal });
     if (!res.ok) return { status: "unreachable", target: null };
     const json = await res.json();
     const claimed =
       typeof json?.name_registered === "boolean" ? json.name_registered : json?.registered;
     if (typeof claimed !== "boolean") return { status: "unreachable", target: null };
+    // The `records` key appears only when it was asked for. Every caller that
+    // wants an address deep-compares this shape, and an empty array they never
+    // requested is a difference they would have to be taught to ignore.
+    const found = records ? { records: Array.isArray(json.records) ? json.records : [] } : {};
     const target = typeof json.target === "string" && json.target ? json.target : null;
-    if (target) return { status: "live", target };
-    return { status: "parked", target: null, registered: claimed };
+    if (target) return { status: "live", target, ...found };
+    return { status: "parked", target: null, registered: claimed, ...found };
   } catch {
     return { status: "unreachable", target: null };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The records of one type a name publishes, and whether the name is here.
+ *
+ * Both halves matter and they are not the same question: a name with no MX
+ * record still exists, so the answer is NODATA, while a name nobody holds is
+ * NXDOMAIN. Collapsing them would let a missing MX deny the name's address too.
+ */
+export async function answerRecords(name, options = {}) {
+  const { type } = options;
+  const result = await resolveName(name, { ...options, records: true });
+  const exists = result.status === "live" || result.status === "parked";
+  if (!exists || !type) return { exists, records: [] };
+  return { exists, records: (result.records || []).filter((r) => r?.type === type) };
 }
 
 /* -------------------------------------------------------------------- server */
@@ -358,6 +512,18 @@ export function targetAddress(target) {
     if (isIP(bare) === 4) return bare;
   }
   return null;
+}
+
+/**
+ * Is an address question on this name worth a second look for a CNAME?
+ *
+ * True when the name is here and has no address to give. A CNAME is the one
+ * thing that can still answer such a question, and finding out costs another
+ * round trip to the registry — so it is asked only on the path that would
+ * otherwise return nothing at all, never on a name that already has an address.
+ */
+export function mayHaveCname({ exists, address }) {
+  return Boolean(exists) && !address;
 }
 
 /**
@@ -726,18 +892,41 @@ export function createServer(options = {}) {
 
     let address = null;
     let exists = false;
-    // Only address questions can be answered with an address; everything else
-    // (MX, TXT, HTTPS) gets an honest empty NOERROR rather than a lie. It still
-    // has to be looked up: a browser asks HTTPS/SVCB beside every A and AAAA,
-    // and NXDOMAIN to that one denies the name for the whole page load.
-    if (query.class === CLASS_IN) {
+    let reply = null;
+
+    // Three shapes of question now. CNAME, MX and TXT are answered from the
+    // record set; addresses are answered from `target` as they always have
+    // been; everything else (HTTPS/SVCB and the rest) still gets an honest
+    // empty NOERROR rather than a lie — a browser asks HTTPS beside every A and
+    // AAAA, and NXDOMAIN to that one denies the name for the whole page load.
+    const wanted = query.class === CLASS_IN ? RECORD_TYPES.get(query.type) : null;
+    if (wanted) {
+      const found = await answerRecords(query.name, { ...options, type: wanted }).catch(() => null);
+      exists = Boolean(found?.exists);
+      reply = buildRecordResponse(query, msg, found?.records || [], {
+        ttl, exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
+      });
+    } else if (query.class === CLASS_IN) {
       const wantsAddress = query.type === TYPE_A || query.type === TYPE_AAAA;
       const policy = await answerPolicy(query.name, { ...options, wantsAddress }).catch(() => null);
       if (policy) ({ exists, address } = policy);
+      // A name that is here with no address to give may still have published a
+      // CNAME, which is the one record that can answer an address question.
+      // Handing it back lets the client chase the name through its own
+      // resolver — the only party here that may do clearnet DNS — instead of
+      // getting the NODATA that made a pointed name look broken.
+      if (wantsAddress && mayHaveCname(policy || {})) {
+        const found = await answerRecords(query.name, { ...options, type: "CNAME" }).catch(() => null);
+        if (found?.records?.length) {
+          reply = buildRecordResponse(query, msg, found.records, {
+            ttl, exists, limit: maxResponseBytes || UDP_SAFE_BYTES,
+          });
+        }
+      }
     }
     onQuery({ name: query.name, type: query.type, address });
     try {
-      socket.send(buildResponse(query, msg, address, ttl, exists), rinfo.port, rinfo.address);
+      socket.send(reply || buildResponse(query, msg, address, ttl, exists), rinfo.port, rinfo.address);
     } catch {
       /* client vanished — nothing useful to do */
     }
