@@ -385,9 +385,16 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
 
   const flag = (f) => { const at = rest.indexOf(f); return at >= 0 ? rest[at + 1] : undefined; };
   const proxy = flag("--proxy");
-  if (proxy !== undefined && !/^\d+$/.test(proxy)) {
-    out("moshcode site: --proxy takes a port");
-    return 1;
+  if (proxy !== undefined) {
+    // `^\d+$` alone let 0 and out-of-range numbers through: --proxy 0 is
+    // falsy downstream, so the site silently drops to a static root, and
+    // --proxy 99999 writes a proxy_pass to a port that cannot exist. Both
+    // were reported as live. Ports are 1-65535 everywhere else here.
+    const port = /^\d+$/.test(proxy) ? Number(proxy) : NaN;
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+      out(`moshcode site: --proxy needs a decimal integer from 1 to 65535, got ${JSON.stringify(proxy)}`);
+      return 1;
+    }
   }
   const root = flag("--root") || `/srv/${name}`;
   const choice = await chooseTemplate(rest);
