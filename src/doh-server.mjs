@@ -201,8 +201,31 @@ export async function createDohServer({
  * that matter: a DNS message is binary, so no charset and no gzip, and the
  * client's address has to be forwarded or every client shares a rate-limit
  * bucket.
+ *
+ * Port 80, not 443. `listen 443 ssl` without an `ssl_certificate` is a config
+ * nginx refuses to load at all — "no ssl_certificate is defined for the listen
+ * ... ssl directive" — so emitting the TLS form first is unusable by
+ * construction: nginx will not start with it, and `certbot --nginx` needs a
+ * loadable vhost to find before it can issue the certificate that would make it
+ * loadable. That is a cycle with no entry point.
+ *
+ * So this emits the half that stands on its own. certbot rewrites it in place,
+ * adding the 443 listeners, the certificate paths, and the redirect — which is
+ * also what leaves renewal owned by certbot rather than by whoever pasted this.
+ *
+ * Pass `tls: true` for the already-certified form, for a host provisioned some
+ * other way.
  */
-export function nginxDohSite({ name, port = DEFAULT_DOH_PORT, path = DOH_PATH }) {
+export function nginxDohSite({ name, port = DEFAULT_DOH_PORT, path = DOH_PATH, tls = false }) {
+  const listeners = tls
+    ? ["\tlisten 443 ssl;", "\tlisten [::]:443 ssl;"]
+    : ["\tlisten 80;", "\tlisten [::]:80;"];
+  const certificate = tls
+    ? [`\tssl_certificate     /etc/letsencrypt/live/${name}/fullchain.pem;`,
+       `\tssl_certificate_key /etc/letsencrypt/live/${name}/privkey.pem;`]
+    : [`\t# TLS is not here yet. Install this, then: certbot --nginx -d ${name}`,
+       "\t# certbot adds the 443 listeners, the certificate, and the redirect,",
+       "\t# and owns the renewal afterwards."];
   return [
     `# ${name} — DoH endpoint, written by \`moshcode doh --nginx\`.`,
     "#",
@@ -210,11 +233,10 @@ export function nginxDohSite({ name, port = DEFAULT_DOH_PORT, path = DOH_PATH })
     "# certificate goes down when that certificate expires, and every machine",
     "# pointed at it loses DNS at once.",
     "server {",
-    "\tlisten 443 ssl;",
-    "\tlisten [::]:443 ssl;",
+    ...listeners,
     `\tserver_name ${name};`,
     "",
-    `\t# certificates: certbot --nginx -d ${name}`,
+    ...certificate,
     "",
     `\tlocation ${path} {`,
     `\t\tproxy_pass http://127.0.0.1:${port};`,
