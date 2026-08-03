@@ -21,7 +21,7 @@ import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import { tldQuery } from "../lib/moshpit-search.mjs";
 import {
-  MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, forwardableHeaders,
+  MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, forwardableHeaders,
 } from "../lib/moshpit-gateway.mjs";
 import {
   addPin,
@@ -467,33 +467,31 @@ moshpitRouter.get("/n/:name", async (req, res) => {
 
 /** Fetch the origin and hand the result back, bounded in time and size. */
 async function proxyToOrigin(req, res, resolution, check) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ORIGIN_TIMEOUT_MS);
   try {
-    const upstream = await fetch(`${check.origin}${req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/"}`, {
+    const upstream = await fetchOrigin({
+      host: check.host,
+      port: check.port,
+      path: req.originalUrl.replace(/^\/n\/[^/?]+/, "") || "/",
       headers: forwardableHeaders(req.headers, resolution.resolved),
-      redirect: "manual",
-      signal: controller.signal,
+      timeoutMs: ORIGIN_TIMEOUT_MS,
+      maxBytes: MAX_BODY_BYTES,
     });
 
     // Only what a page needs. Passing the origin's Set-Cookie through would let
     // a name's owner set cookies on app.moshcode.sh, which is where accounts
     // live — that is a session-fixation hole, not a feature.
-    const type = upstream.headers.get("content-type");
+    const type = upstream.headers["content-type"];
     if (type) res.set("content-type", type);
     res.set("x-moshpit-name", resolution.resolved);
     res.set("content-security-policy", "sandbox allow-scripts allow-forms allow-popups");
 
-    const buffer = Buffer.from(await upstream.arrayBuffer());
-    if (buffer.length > MAX_BODY_BYTES) {
+    if (upstream.truncated) {
       return res.status(502).send(page({ title: resolution.name, body: unreachable(resolution, "response too large") }));
     }
-    return res.status(upstream.status).send(buffer);
+    return res.status(upstream.status).send(upstream.body);
   } catch (error) {
     const why = error.name === "AbortError" ? "the origin did not answer in time" : "the origin could not be reached";
     return res.status(504).send(page({ title: resolution.name, body: unreachable(resolution, why) }));
-  } finally {
-    clearTimeout(timer);
   }
 }
 
