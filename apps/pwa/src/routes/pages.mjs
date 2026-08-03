@@ -136,26 +136,53 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
     ${err ? `<div class="notice err">${esc(err.replace(/-/g, " "))}</div>` : ""}
     ${newKey ? `<div class="notice ok">
       Your new API key. Copy it now — once this box goes, the key cannot be shown again.
-      <div style="display:flex;gap:10px;align-items:center;margin-top:9px">
-        <b class="mono" id="newkey" style="word-break:break-all;flex:1">${esc(newKey)}</b>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:9px">
+        <b class="mono" id="newkey" style="word-break:break-all;flex:1;min-width:200px">${esc(newKey)}</b>
+        <button class="btn" type="button" id="revealkey" style="padding:5px 12px;font-size:.72rem;white-space:nowrap" aria-controls="newkey" aria-pressed="false" hidden>Reveal</button>
         <button class="btn" type="button" id="copykey" style="padding:5px 12px;font-size:.72rem;white-space:nowrap">Copy</button>
-        <form method="post" action="/settings/apikeys/hide" style="margin:0">${csrfInput(req)}<button class="btn" style="padding:5px 12px;font-size:.72rem;white-space:nowrap">Hide</button></form>
+        <form method="post" action="/settings/apikeys/hide" style="margin:0">${csrfInput(req)}<button class="btn" style="padding:5px 12px;font-size:.72rem;white-space:nowrap">Dismiss</button></form>
       </div>
       <script>
-        document.getElementById("copykey").addEventListener("click", function () {
-          var b = this, v = document.getElementById("newkey").textContent;
-          // Clipboard API needs a secure context; a hidden textarea + execCommand
-          // still works on plain http, which is how this is reached in dev.
-          var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy" }, 1600) };
-          if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(v).then(done, fallback) } else { fallback() }
-          function fallback() {
-            var t = document.createElement("textarea");
-            t.value = v; t.style.position = "fixed"; t.style.opacity = "0";
-            document.body.appendChild(t); t.select();
-            try { document.execCommand("copy"); done() } catch (e) { b.textContent = "Select it manually" }
-            document.body.removeChild(t);
+        (function () {
+          var el = document.getElementById("newkey");
+          // Read the key once, up front. Everything below uses this and never
+          // el.textContent, which from here on may be the masked rendering.
+          var secret = el.textContent;
+          var reveal = document.getElementById("revealkey");
+          var shown = false;
+
+          // Masked until asked for. This box is open on screen exactly while
+          // someone is pairing a machine — the moment a window is most likely to
+          // be shared, projected or photographed. The 12-character prefix stays
+          // legible so the key can still be matched against the list below.
+          //
+          // The server renders the key in full and this hides it, rather than
+          // the reverse, so a visitor without JS still gets the one thing this
+          // box exists to hand over. The button is revealed with the behaviour.
+          function render() {
+            el.textContent = shown ? secret : secret.slice(0, 12) + Array(Math.max(0, secret.length - 12) + 1).join("•");
+            reveal.textContent = shown ? "Hide" : "Reveal";
+            reveal.setAttribute("aria-pressed", shown ? "true" : "false");
           }
-        });
+          reveal.hidden = false;
+          render();
+          reveal.addEventListener("click", function () { shown = !shown; render() });
+
+          document.getElementById("copykey").addEventListener("click", function () {
+            var b = this, v = secret;
+            // Clipboard API needs a secure context; a hidden textarea + execCommand
+            // still works on plain http, which is how this is reached in dev.
+            var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy" }, 1600) };
+            if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(v).then(done, fallback) } else { fallback() }
+            function fallback() {
+              var t = document.createElement("textarea");
+              t.value = v; t.style.position = "fixed"; t.style.opacity = "0";
+              document.body.appendChild(t); t.select();
+              try { document.execCommand("copy"); done() } catch (e) { b.textContent = "Select it manually" }
+              document.body.removeChild(t);
+            }
+          });
+        })();
       </script>
     </div>` : ""}
 
