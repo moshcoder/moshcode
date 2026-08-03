@@ -26,7 +26,8 @@ import net from "node:net";
 import { createServer, dnsCommand } from "../src/dns.mjs";
 
 // Nothing here may touch the network. A registry that cannot connect is enough:
-// `dns start` already wraps its TLD fetch in .catch(() => []).
+// `dns start` reports the unreadable ending list and carries on to the bind,
+// which is the failure these tests are about.
 const DEAD_REGISTRY = "http://127.0.0.1:1";
 
 /** Hold a UDP port so the resolver's bind is guaranteed to fail. */

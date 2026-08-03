@@ -1960,9 +1960,30 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // Without these the bridge answers only for endings it is authoritative
     // for, which is correct for per-ending routing and fatal for catch-all.
     const upstreams = await discoverUpstreams();
-    const tldSet = new Set(await fetchTlds({ registryBase }).catch(() => []));
+    // Swallowing this was the quietest way to turn the namespace off. An empty
+    // ending set makes isOurs() say no to every name, so with upstreams present
+    // the bridge forwards the whole of Moshpit to the clearnet, which denies it
+    // — every name NXDOMAIN, `dig` answering promptly, google.com fine, nothing
+    // in any log. The line below has always warned about missing upstreams; the
+    // list of what we answer for is worth at least as much.
+    // `enable` already takes this injected; `start` reached past it to the
+    // module, which is why the branch below had never been exercised.
+    const tlds = await fetchTldsImpl({ registryBase }).then(
+      (found) => ({ found }),
+      (err) => ({ error: err?.message || String(err) }),
+    );
+    const tldSet = new Set(tlds.found || []);
     if (upstreams.length) out(`forwarding non-Moshpit lookups to ${upstreams.join(", ")}`);
     else out("! no upstreams found in /etc/resolv.conf — this bridge can only answer Moshpit names");
+    if (tldSet.size) out(`answering for ${tldSet.size} endings`);
+    else {
+      out(`! could not read the ending list from ${registryBase}${tlds.error ? ` — ${tlds.error}` : ""}`);
+      // Named as the outcome rather than the cause: "no endings loaded" reads
+      // as a detail, and this is the whole namespace being off.
+      out(upstreams.length
+        ? "  every Moshpit name will be forwarded to the clearnet and answer NXDOMAIN until this is fixed"
+        : "  this bridge has nothing to answer for and nothing to forward to");
+    }
 
     // The same two error codes the parking server above already explains, on
     // the port this command exists to bind. Without this they arrived as an
