@@ -19,6 +19,8 @@ import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, skillCommand } from "./integrations.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
+import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
+import { findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
 
@@ -143,38 +145,106 @@ function printTools() {
   console.log(ash("   → ") + acid("https://dev.profullstack.com/"));
 }
 
-function printHelp() {
+/**
+ * The moshscript vocabulary, split the way the CLI's help splits it.
+ *
+ * A verb that is also a CLI command shells out; everything else is local to the
+ * script. Deriving the split from TOOLS + the command table means a tool added
+ * to the roster cannot be misfiled here as a local verb.
+ */
+/**
+ * Group `items` into lines whose joined length stays under `width`.
+ *
+ * Works on the bare strings, before any colour is applied — measuring a string
+ * that already contains ANSI escapes counts the escapes as width and wraps far
+ * too early.
+ */
+function wrapPlain(items, width) {
+  const lines = [[]];
+  let length = 0;
+  for (const item of items) {
+    const cost = item.length + 3; // " · "
+    if (length + cost > width && lines[lines.length - 1].length) {
+      lines.push([]);
+      length = 0;
+    }
+    lines[lines.length - 1].push(item);
+    length += cost;
+  }
+  return lines.filter((l) => l.length);
+}
+
+function vocabulary() {
+  const cliVerbs = new Set([...CORE_CLI_COMMAND_NAMES, ...Object.keys(TOOLS)]);
+  const all = moshVocabulary().all().map((c) => c.name);
+  return {
+    local: all.filter((n) => !cliVerbs.has(n)),
+    cli: all.filter((n) => cliVerbs.has(n)),
+  };
+}
+
+/**
+ * `/help`, rendered from the schema (PRD 0006 R12).
+ *
+ * Every tool name used to be typed out here — `/railway /gh /supabase …` —
+ * immediately below a printTools() whose own comment explains why hardcoding
+ * the roster goes stale. It had already: `/logout` has been dispatched forever
+ * and appeared nowhere, and nothing said that `/dns` and `/console` do not
+ * exist in the pit at all, so their absence read as an oversight rather than a
+ * fact.
+ *
+ * `topic` renders one command instead of the list.
+ */
+function printHelp(topic = null) {
+  if (topic) {
+    const block = renderPitCommand(topic);
+    if (!block) {
+      const near = suggest(String(topic).replace(/^\//, ""),
+        [...Object.keys(ENGINES), ...Object.keys(TOOLS)]);
+      console.log(err(`no help for "${topic}"${near ? ` — did you mean /${near}?` : ""}`));
+      console.log(ash("   /help for the list"));
+      return;
+    }
+    console.log(block.split("\n").map((l) => `  ${l}`).join("\n"));
+    return;
+  }
+
+  const model = pitHelpModel({ engines: Object.keys(ENGINES), tools: Object.keys(TOOLS) });
+  const USAGE_COL = 30;
+  const rows = model.commands.map((c) => {
+    const alias = c.aliases.length ? ash(`  (${c.aliases.map((a) => `/${a}`).join(" ")})`) : "";
+    // A usage longer than the column gets its description on the next line
+    // rather than shunting it off the right edge.
+    return c.usage.length > USAGE_COL
+      ? `   ${acid(c.usage)}\n   ${" ".repeat(USAGE_COL)} ${ash(c.description)}${alias}`
+      : `   ${acid(c.usage.padEnd(USAGE_COL))} ${ash(c.description)}${alias}`;
+  });
+
+  /** A roster, wrapped so a growing list never runs off an 80-column terminal. */
+  const roster = (items, colour = acid) =>
+    wrapPlain(items, 62).map((line) => line.map((i) => colour(i)).join(ash(" · ")));
+
   console.log([
-    bone("  commands"),
-    `   ${acid("/agents")}            list coding engines`,
-    `   ${acid("/agents <name>")}     autonomous launch; bypass/auto-approve native permissions`,
-    `   ${acid("/start <name>")}      raw launch; inject no engine arguments`,
-    `   ${acid("/tools")}             list workflow tools + install status`,
-    `   ${acid("/ugig [args…]")}      hand off to the native UGig CLI`,
-    `   ${acid("/coinpay [args…]")}   hand off to the native CoinPay CLI`,
-    `   ${acid("/c0mpute [args…]")}   hand off to the native c0mpute CLI`,
-    `   ${acid("/secrets [args…]")}   share/view team secrets via logicsrc (login · teams · credentials)`,
-    `   ${acid("/railway")} ${acid("/gh")} ${acid("/supabase")} ${acid("/doppler")} ${acid("/doctl")} ${acid("/turso")} ${acid("/tailscale")}`,
-    ash("                        hand off to the native cloud CLIs (deploys · repos · db · secrets · infra · vpn)"),
-    `   ${acid("/mcp install <url>")} register an MCP server across every engine that supports it`,
-    `   ${acid("/skill install <url>")} install a skill across every engine that supports it`,
-    `   ${acid("/install <name>")}    install an engine or workflow tool`,
-    `   ${acid("/upgrade [name…]")}   update moshcode + installed engines/tools (or named targets)`,
-    `   ${acid("/pwd")}                show the current dir + git repo/branch/origin`,
-    `   ${acid("/shell [cmd]")}        drop into $SHELL (exit → back to the pit); also ${acid("!cmd")}`,
-    `   ${acid("/prd [idea]")}        publish a numbered PRD (OpenPRD), or list them with no arg`,
-    `   ${acid("/run <file.mosh>")}   run a moshscript [--max N] [--dry-run]`,
-    `   ${acid("/login [--device]")}  connect this machine to app.moshcode.sh (device code over SSH)`,
-    `   ${acid("/whoami")}            who this machine is logged in as`,
-    `   ${acid("/help")}              this`,
-    `   ${acid("/quit")}              leave the pit  (or Ctrl-D)`,
+    bone("  commands") + ash("  — one in detail with ") + acid("/help <command>"),
+    ...rows,
+    "",
+    ...roster(model.engines.map((e) => `/${e}`)).map((l, i) =>
+      (i ? "            " : bone("  engines") + "   ") + l),
+    ...roster(model.tools.map((t) => `/${t}`)).map((l, i) =>
+      (i ? "            " : bone("  tools") + "     ") + l),
+    ash("             a bare engine or tool name runs it — flags after it are its own"),
+    "",
+    bone("  not in the pit") + ash(" — CLI-only:"),
+    ...roster(model.notInPit.map((c) => `moshcode ${c.name}`), ash).map((l) => `   ${l}`),
     "",
     bone("  moshscript") + ash("  — secretly all JS is legal"),
     ash("   .mosh files are real JavaScript with the command vocabulary injected."),
-    ash("   local verbs: ") + acid("code() mosh() notify() ask() say() sleep() stop() repeat()"),
-    ash("   CLI verbs:   ") + acid("agents() start() install() upgrade() mcp() skill() prd()"),
-    ash("               ") + acid("ugig() coinpay() c0mpute() secrets() pwd() run() shell()"),
-    ash("               ") + acid("railway() gh() supabase() doppler() doctl() turso() tailscale()"),
+    // Derived, for the same reason the tool roster is: these were three
+    // hand-typed lines that the vocabulary had already outgrown.
+    ...wrapPlain(vocabulary().local.map((n) => `${n}()`), 62)
+      .map((line, i) => (i ? ash("                ") : ash("   local verbs: ")) + acid(line.join(" "))),
+    ...wrapPlain(vocabulary().cli.map((n) => `${n}()`), 62)
+      .map((line, i) => (i ? ash("                ") : ash("   CLI verbs:   ")) + acid(line.join(" "))),
     ash("   shebang:     ") + acid("#!/usr/bin/env moshscript") + ash("  (chmod +x to self-run)"),
     "",
     ash("  raw shortcuts: type an engine or tool name by itself, e.g. ") + acid("claude") + ash(" or ") + acid("ugig"),
@@ -416,7 +486,17 @@ export async function tui() {
     const cmd = raw.toLowerCase().replace(/^\//, "");
 
     if (cmd === "quit" || cmd === "exit" || cmd === "q") break;
-    if (cmd === "help" || cmd === "?" || cmd === "h") { printHelp(); continue; }
+    if (cmd === "help" || cmd === "?" || cmd === "h") { printHelp(rest[0] || null); continue; }
+
+    // `/<command> --help` answers here, before the command runs (PRD 0006 R1,
+    // R12) — the same rule the CLI follows, so `/prd --help` cannot publish a
+    // PRD any more than `moshcode prd --help` can. Only for the pit's own
+    // verbs: after an engine or tool name the flag is theirs, so `/gh --help`
+    // still reaches gh.
+    if (findPitCommand(cmd) && wantsHelp(rest, { stopAt: cmd === "run" })) {
+      printHelp(cmd);
+      continue;
+    }
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "login") {
       const device = rest.includes("--device") || rest.includes("device") || rest.includes("-d");

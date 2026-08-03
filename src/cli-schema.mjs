@@ -413,3 +413,58 @@ export const VERB_TABLES = {
   UPGRADE_TARGETS,
   DNS_VERBS,
 };
+
+/**
+ * The pit's own command surface (PRD 0006 R12).
+ *
+ * Separate from CORE_CLI_COMMANDS because it genuinely is: the pit dispatches
+ * `/shell` and `/quit`, which have no CLI equivalent, and does not dispatch
+ * `dns`, `console`, `doh`, `site`, `template`, `completion` or `uninstall`,
+ * which do. `/help` used to imply otherwise by omission — it listed neither the
+ * commands it lacked nor `/logout`, which it has.
+ *
+ * `cli` points at the CORE_CLI_COMMANDS entry that documents the same verb, so
+ * `/help <command>` renders the flags and examples already written there rather
+ * than a second, thinner copy that drifts.
+ */
+export const PIT_COMMANDS = [
+  { name: "agents", aliases: ["agent", "engines"], args: "[name]", cli: "agents",
+    description: "list engines, or launch one autonomously" },
+  { name: "start", args: "<engine> [args…]", cli: "start",
+    description: "raw launch; inject no engine arguments" },
+  { name: "tools", args: "[name] [args…]", cli: "tools",
+    description: "list workflow tools, or run one" },
+  { name: "install", args: "<engine|tool>", cli: "install",
+    description: "install an engine or workflow tool" },
+  { name: "upgrade", aliases: ["update"], args: "[name…]", cli: "upgrade",
+    description: "update moshcode + installed engines/tools" },
+  { name: "mcp", args: "<verb> [args…]", cli: "mcp",
+    description: "register and inspect MCP servers" },
+  { name: "skill", aliases: ["skills"], args: "<verb> [args…]", cli: "skill",
+    description: "install and inspect agent skills" },
+  { name: "prd", args: "[idea…]", cli: "prd",
+    description: "publish a numbered PRD, or list them with no argument" },
+  { name: "run", args: "<file.mosh> [--max N] [--dry-run]", cli: "run",
+    description: "run a moshscript" },
+  { name: "login", args: "[--device] [--browser]", cli: "login",
+    description: "connect this machine to app.moshcode.sh" },
+  { name: "whoami", cli: "whoami", description: "who this machine is logged in as" },
+  // Dispatched since forever and missing from /help until now.
+  { name: "logout", cli: "logout", description: "clear the logged-in account" },
+  { name: "pwd", aliases: ["where"], cli: "pwd",
+    description: "show the current dir + git repo/branch/origin" },
+  { name: "shell", aliases: ["sh"], args: "[cmd]", pitOnly: true,
+    description: "drop into $SHELL (exit → back to the pit); also !cmd" },
+  { name: "help", aliases: ["?", "h"], args: "[command]", pitOnly: true,
+    description: "this, or one command in detail" },
+  { name: "quit", aliases: ["exit", "q"], pitOnly: true,
+    description: "leave the pit  (or Ctrl-D)" },
+];
+
+/**
+ * CLI verbs the pit does not have.
+ *
+ * Named rather than silently absent: "it isn't here" is a different answer from
+ * "you typed it wrong", and only one of them tells you to use the CLI instead.
+ */
+export const NOT_IN_PIT = ["uninstall", "dns", "doh", "site", "template", "console", "completion", "commands", "version"];
