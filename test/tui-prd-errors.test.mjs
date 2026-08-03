@@ -15,9 +15,27 @@ const strip = (s) => s.split(new RegExp(ESC + "\\[[0-9;]*m", "g")).join("");
 /** Everything the REPL printed after the banner, i.e. in response to commands. */
 const replied = (out) => strip(out).split("to leave")[1] || "";
 
+// An empty directory to hand the child as its whole PATH.
+//
+// /prd hands the published PRD to an installed engine to author, and
+// engineStatus() decides "installed" purely by walking PATH. So on a developer's
+// machine — where `claude` is on PATH — the healthy-cwd control below really did
+// launch Claude and block until it finished authoring: one test, seven minutes,
+// real tokens, a different result on every run. On CI, where no engine is
+// installed, the same test took under a second. A test whose behaviour flips on
+// whether the person running it happens to have Claude installed is not a test.
+//
+// node itself is spawned via process.execPath (absolute), so an empty PATH costs
+// the child nothing else.
+const NO_ENGINES = mkdtempSync(join(tmpdir(), "moshcode-no-engines-"));
+
 function runTui(input, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN], { stdio: ["pipe", "pipe", "pipe"], cwd });
+    const child = spawn(process.execPath, [BIN], {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd,
+      env: { ...process.env, PATH: NO_ENGINES },
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -80,6 +98,12 @@ test("TUI /prd still publishes a PRD in a healthy cwd", async () => {
     readdirSync(join(dir, "prd")).sort(),
     ["0000-template.md", "0001-ship-a-better-cli.md", "README.md"],
   );
+  // Publishing is what this control covers, and publishing is done by here. With
+  // no engine on PATH the session says so and returns to the prompt instead of
+  // handing off — the assertion that keeps this test from quietly going back to
+  // spawning a real engine for seven minutes.
+  assert.match(out, /open an engine to fill it in/);
+  assert.doesNotMatch(out, /handing .* to .* to author/);
 });
 
 test("TUI /prd with no argument lists PRDs and survives a blocked prd path", async () => {
