@@ -214,6 +214,7 @@ moshcode template list                        # what there is
 moshcode template install bun-caddy-sqlite    # into the current directory
 moshcode template install caddy-static --into /srv/site
 moshcode template install owner/repo          # or a git URL, or a .tar.gz
+moshcode template install caddy-static --dry-run # preview every file first
 ```
 
 | template | what you get |
@@ -224,6 +225,8 @@ moshcode template install owner/repo          # or a git URL, or a .tar.gz
 Each writes a Caddyfile, systemd units, and a README. **Nothing in a template is
 executed on install** — including the bundled ones. `install <url>` takes a
 stranger's URL, so the files are copied and what to run is yours to decide.
+`--dry-run` labels every file as `create` or `overwrite` and leaves the target
+directory unchanged; combine it with `--force` to preview an overwrite plan.
 
 The one fact that catches everyone: **the machine serving the name never
 resolves it, and every machine visiting it must.** Serving is a `Host` header

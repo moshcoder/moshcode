@@ -116,6 +116,8 @@ ${powershellEntries("MoshcodeCompletionRun", optionEntries("--dry-run --max -n",
 ${powershellEntries("MoshcodeCompletionUninstallOptions", optionEntries("--yes -y --dry-run", "uninstall option"))}
 ${powershellEntries("MoshcodeCompletionConsole", optionEntries("serve --url", "console command"))}
 ${powershellEntries("MoshcodeCompletionConsoleServe", optionEntries("--port --ttyd --bind", "console serve option"))}
+${powershellEntries("MoshcodeCompletionTemplate", optionEntries("list install", "template command"))}
+${powershellEntries("MoshcodeCompletionTemplateInstall", optionEntries("--into --force --dry-run", "template install option"))}
 ${powershellEntries("MoshcodeCompletionMcpOptions", optionEntries("--name --transport -t --env -e --header -H", "MCP option"))}
 ${powershellEntries("MoshcodeCompletionSkillOptions", optionEntries("--name", "skill option"))}
 
@@ -183,6 +185,13 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
           $choices = $script:MoshcodeCompletionConsole
         } elseif ($nested -eq 'serve' -and $wordToComplete.StartsWith('-')) {
           $choices = $script:MoshcodeCompletionConsoleServe
+        }
+      }
+      { $_ -in @('template', 'templates') } {
+        if ($argumentIndex -eq 2) {
+          $choices = $script:MoshcodeCompletionTemplate
+        } elseif ($nested -eq 'install' -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionTemplateInstall
         }
       }
     }
@@ -274,6 +283,13 @@ _moshcode_completion() {
           choices="enable disable status tlds resolve start install"
         elif [[ "$nested" == "resolve" && "$cur" == -* ]]; then
           choices="--json --open --registry"
+        fi
+        ;;
+      template|templates)
+        if (( COMP_CWORD == 2 )); then
+          choices="list install"
+        elif [[ "$nested" == "install" && "$cur" == -* ]]; then
+          choices="--into --force --dry-run"
         fi
         ;;
     esac
@@ -389,6 +405,15 @@ _moshcode() {
         _files
       fi
       ;;
+    template|templates)
+      if (( CURRENT == 3 )); then
+        _values "template command" list install
+      elif [[ "\${words[3]}" == "install" && "$PREFIX" == -* ]]; then
+        _values "template install option" --into --force --dry-run
+      else
+        _files
+      fi
+      ;;
     *)
       _files
       ;;
@@ -453,6 +478,10 @@ complete -c moshcode -n '${atSecondToken("dns")}' -a 'enable disable status tlds
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l open -d 'open a parked name in the Pit'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l registry -r -d 'registry base URL'
+complete -c moshcode -n '${atSecondToken("template templates")}' -a 'list install' -d 'template command'
+complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l into -r -d 'target directory'
+complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l force -d 'overwrite existing files'
+complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l dry-run -d 'preview without writing'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l name -r -d 'server name'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l transport -s t -r -d 'MCP transport'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l env -s e -r -d 'environment KEY=VALUE'

@@ -14,6 +14,7 @@ import {
   BUNDLED_DIR,
   applyInstall,
   classifySource,
+  fetchRemote,
   installPlan,
   listTemplates,
   parseInstallArgs,
@@ -67,12 +68,149 @@ test("sources are told apart, and a name can never be a path", () => {
 
 test("--into consumes its argument rather than donating it as the name", () => {
   assert.deepEqual(parseInstallArgs(["--into", "/srv/site", "caddy-static"]),
-    { spec: "caddy-static", into: "/srv/site", force: false });
+    { spec: "caddy-static", into: "/srv/site", force: false, dryRun: false });
   assert.deepEqual(parseInstallArgs(["caddy-static", "--into", "/srv/site"]),
-    { spec: "caddy-static", into: "/srv/site", force: false });
-  assert.deepEqual(parseInstallArgs(["caddy-static", "--into=/srv/site", "--force"]),
-    { spec: "caddy-static", into: "/srv/site", force: true });
-  assert.deepEqual(parseInstallArgs([]), { spec: null, into: null, force: false });
+    { spec: "caddy-static", into: "/srv/site", force: false, dryRun: false });
+  assert.deepEqual(parseInstallArgs(["--dry-run", "caddy-static", "--into=/srv/site", "--force"]),
+    { spec: "caddy-static", into: "/srv/site", force: true, dryRun: true });
+  assert.deepEqual(parseInstallArgs(["caddy-static", "--dry-run"]),
+    { spec: "caddy-static", into: null, force: false, dryRun: true });
+  assert.deepEqual(parseInstallArgs([]), { spec: null, into: null, force: false, dryRun: false });
+  assert.match(parseInstallArgs(["caddy-static", "--dryrun"]).error, /unknown option/);
+  assert.match(parseInstallArgs(["caddy-static", "--into", "--dry-run"]).error, /requires a directory/);
+  assert.match(parseInstallArgs(["caddy-static", "--into="]).error, /requires a directory/);
+});
+
+test("invalid safety flags fail before an install can touch the working directory", async () => {
+  for (const args of [
+    ["install", "caddy-static", "--dryrun"],
+    ["install", "caddy-static", "--into", "--dry-run"],
+    ["install", "caddy-static", "--into="],
+  ]) {
+    const cwd = await tmp();
+    const lines = [];
+    try {
+      const code = await templateCommand(args, (line) => lines.push(line), { cwd });
+      assert.equal(code, 1, args.join(" "));
+      assert.deepEqual(await fs.readdir(cwd), [], args.join(" "));
+      assert.match(lines.join("\n"), /unknown option|requires a directory/);
+    } finally {
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  }
+});
+
+test("--dry-run previews an install without creating the target", async () => {
+  const parent = await tmp();
+  const into = path.join(parent, "site");
+  const lines = [];
+  try {
+    const code = await templateCommand(
+      ["install", "caddy-static", "--dry-run", "--into", into],
+      (line) => lines.push(line),
+    );
+    assert.equal(code, 0);
+    await assert.rejects(fs.access(into));
+    assert.ok(lines.some((line) => line.includes("create  Caddyfile")));
+    assert.match(lines.join("\n"), /dry run; nothing was written/);
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("--dry-run reports blocking conflicts without writing any file", async () => {
+  const into = await tmp();
+  const lines = [];
+  try {
+    await fs.writeFile(path.join(into, "Caddyfile"), "mine\n");
+    const code = await templateCommand(
+      ["install", "caddy-static", "--into", into, "--dry-run"],
+      (line) => lines.push(line),
+    );
+    assert.equal(code, 1);
+    assert.ok(lines.includes("  overwrite  Caddyfile"));
+    assert.match(lines.join("\n"), /would block this install/);
+    assert.equal(await fs.readFile(path.join(into, "Caddyfile"), "utf8"), "mine\n");
+    assert.deepEqual(await fs.readdir(into), ["Caddyfile"]);
+  } finally {
+    await fs.rm(into, { recursive: true, force: true });
+  }
+});
+
+test("--force --dry-run previews overwrites without applying them", async () => {
+  const into = await tmp();
+  const lines = [];
+  try {
+    await fs.writeFile(path.join(into, "Caddyfile"), "mine\n");
+    const code = await templateCommand(
+      ["install", "--dry-run", "caddy-static", "--into", into, "--force"],
+      (line) => lines.push(line),
+    );
+    assert.equal(code, 0);
+    assert.ok(lines.includes("  overwrite  Caddyfile"));
+    assert.match(lines.join("\n"), /would be written/);
+    assert.equal(await fs.readFile(path.join(into, "Caddyfile"), "utf8"), "mine\n");
+    assert.deepEqual(await fs.readdir(into), ["Caddyfile"]);
+  } finally {
+    await fs.rm(into, { recursive: true, force: true });
+  }
+});
+
+test("tarball fetches expose the whole temporary tree for cleanup", async () => {
+  const tmpRoot = await tmp();
+  try {
+    const fetched = await fetchRemote(
+      { kind: "tarball", url: "https://example.test/template.tar.gz" },
+      {
+        tmpRoot,
+        fetchImpl: async () => ({
+          ok: true,
+          arrayBuffer: async () => Buffer.from("placeholder archive"),
+        }),
+        runImpl: async (_command, args) => {
+          if (args[0] === "-tzf") {
+            return { ok: true, code: 0, stdout: "template/README.md\n" };
+          }
+          const outputIndex = args.indexOf("-C") + 1;
+          const output = args[outputIndex];
+          await fs.writeFile(path.join(output, "README.md"), "# fetched\n");
+          return { ok: true, code: 0, stdout: "" };
+        },
+      },
+    );
+    assert.equal(fetched.ok, true);
+    assert.equal(fetched.dir, path.join(fetched.cleanupDir, "unpacked"));
+    assert.equal(path.dirname(fetched.cleanupDir), tmpRoot);
+    await fs.access(path.join(fetched.cleanupDir, "template.tar.gz"));
+    await fs.access(path.join(fetched.dir, "README.md"));
+    await fs.rm(fetched.cleanupDir, { recursive: true, force: true });
+    await assert.rejects(fs.access(fetched.cleanupDir));
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("remote dry runs remove their fetch workspace and leave the target empty", async () => {
+  const cleanupDir = await tmp();
+  const from = path.join(cleanupDir, "unpacked");
+  const into = await tmp();
+  const lines = [];
+  await fs.mkdir(from);
+  await fs.writeFile(path.join(from, "README.md"), "# remote template\n");
+  try {
+    const code = await templateCommand(
+      ["install", "https://example.test/template.tar.gz", "--dry-run", "--into", into],
+      (line) => lines.push(line),
+      { fetchRemoteImpl: async () => ({ ok: true, dir: from, cleanupDir }) },
+    );
+    assert.equal(code, 0);
+    assert.deepEqual(await fs.readdir(into), []);
+    await assert.rejects(fs.access(cleanupDir));
+    assert.match(lines.join("\n"), /dry run; nothing was written/);
+  } finally {
+    await fs.rm(cleanupDir, { recursive: true, force: true });
+    await fs.rm(into, { recursive: true, force: true });
+  }
 });
 
 test("the manifest describes the copy without being part of it", async () => {
