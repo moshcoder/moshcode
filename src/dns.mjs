@@ -1930,6 +1930,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
+import { applyTrust, verifyStockTls } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1974,6 +1975,9 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
                removed, without this.
   --backend    linux only: systemd-resolved (default) or dnsmasq
   --port N     the bridge's port (Windows must use 53 — NRPT carries no port)
+  --no-trust   with enable: route names but skip the local CA. They will
+               resolve and then fail TLS, which is the state this flag exists
+               to leave you in deliberately.
 
 The registry speaks HTTP, not DNS, so nothing outside a browser can reach a
 Moshpit name until this bridge is running and your resolver points at it.
@@ -2548,6 +2552,26 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     }
 
     if (!outcome.rolledBack) {
+      out("");
+      // Resolving was never the whole job. A name that resolves and then fails
+      // its TLS handshake reads as broken to the person who typed the URL, and
+      // no CA will ever sign for a Moshpit name — so the local root that
+      // moshpit-proxy generates is the only thing that closes it.
+      if (!rest.includes("--no-trust")) {
+        const trusted = await applyTrust(tlds, out, deps);
+        // The claim this whole feature makes is that an ordinary client now
+        // works, so check it as an ordinary client would — a plain HTTPS GET
+        // with nothing relaxed. Only worth asking when a root actually went in
+        // and there is a real name to ask about, and never fatal: a name that
+        // resolves but serves no HTTPS is not a failure of the trust store.
+        if (trusted?.ok && trusted.installed && moshpitProbe) {
+          const proof = await verifyStockTls(moshpitProbe);
+          out(proof.ok
+            ? `  ok   https://${moshpitProbe}/ verified by a stock client (${proof.status})`
+            : `  --   https://${moshpitProbe}/ not verified yet — ${proof.why}`);
+        }
+      }
+
       out("");
       out(`Moshpit names now resolve on this machine. Try: moshcode dns resolve ${moshpitProbe || "<name>"}`);
       out(`Routing covers the ${tlds.length} TLDs claimed right now. New ones do not route`);
