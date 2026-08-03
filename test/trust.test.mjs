@@ -21,12 +21,19 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 import {
-  applyTrust, caPath, describeCertificateCommand, requireNameConstraints,
-  trustPlan, trustStores, verifyStockTls,
+  applyTrust, caPath, describeCertificateCommand, operatorHome, parseNameConstraints,
+  requireNameConstraints, trustPlan, trustStores, verifyStockTls,
 } from "../src/trust.mjs";
 
-/** A real root, constrained or not, or null when openssl is unavailable. */
-function makeRoot({ constrained }) {
+/**
+ * A real root with whatever nameConstraints line you hand it, or null when
+ * openssl is unavailable.
+ *
+ * `constraints` is the raw openssl extension value, so a test can build the
+ * shapes that matter — permitted, excluded, both, neither — rather than only
+ * the one the happy path uses.
+ */
+function makeRoot({ constraints }) {
   try {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshca-"));
     const key = path.join(dir, "ca.key");
@@ -36,7 +43,7 @@ function makeRoot({ constrained }) {
       "[req]", "distinguished_name=dn", "x509_extensions=v3", "prompt=no",
       "[dn]", "CN=Moshpit Local CA",
       "[v3]", "basicConstraints=critical,CA:true", "keyUsage=critical,keyCertSign",
-      ...(constrained ? ["nameConstraints=critical,permitted;DNS:.hacker,permitted;DNS:.rank"] : []),
+      ...(constraints ? [`nameConstraints=${constraints}`] : []),
     ].join("\n"));
     execFileSync("openssl", [
       "req", "-x509", "-nodes", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
@@ -50,24 +57,96 @@ function makeRoot({ constrained }) {
   }
 }
 
+const MOSHPIT_ONLY = "critical,permitted;DNS:.hacker,permitted;DNS:.rank";
+
+/**
+ * Skip loudly, never silently.
+ *
+ * These tests are the only thing standing between a regression upstream and an
+ * unconstrained root installed by `dns enable`. A fixture that fails to build
+ * used to `return` — passing without asserting anything — so a box without
+ * openssl reported a green guard it had not tested at all.
+ */
+function needRoot(t, constraints) {
+  const text = makeRoot({ constraints });
+  if (!text) t.skip("openssl is not available to generate a test root");
+  return text;
+}
+
 /* ------------------------------------------------------------- the gate */
 
-test("a root constrained to Moshpit endings is accepted", () => {
-  const text = makeRoot({ constrained: true });
+test("a root constrained to Moshpit endings is accepted", (t) => {
+  const text = needRoot(t, MOSHPIT_ONLY);
   if (!text) return;
   const verdict = requireNameConstraints(text, { tlds: ["hacker", "rank"] });
   assert.equal(verdict.ok, true, verdict.why);
 });
 
-test("a root with no name constraints is refused, not warned about", () => {
+test("a root with no name constraints is refused, not warned about", (t) => {
   // This is the whole safety argument. An unconstrained root in the system
   // store can vouch for a bank; there is no wording of a warning that makes
   // that acceptable, so it must not be installable at all.
-  const text = makeRoot({ constrained: false });
+  const text = needRoot(t, null);
   if (!text) return;
   const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
   assert.equal(verdict.ok, false);
   assert.match(verdict.why, /no name constraints|any name/);
+});
+
+test("an excluded-only root is refused — exclusions constrain nothing", (t) => {
+  // RFC 5280 §4.2.1.10: constraints bind only the name types they mention, so
+  // a root that merely *excludes* .hacker permits every other DNS name on the
+  // internet. It carries a critical Name Constraints extension naming the very
+  // ending we asked about, which is exactly why a substring check passed it and
+  // installed a root that could vouch for a bank.
+  const text = needRoot(t, "critical,excluded;DNS:.hacker");
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.ok, false, "an excluded-only root must never be installable");
+  assert.match(verdict.why, /permits no DNS subtree|any name/);
+});
+
+test("permitting someone else's namespace while excluding ours is refused", (t) => {
+  // The same confusion in its other shape: the ending we care about appears in
+  // the extension, but under Excluded, while Permitted names a namespace we do
+  // not control.
+  const text = needRoot(t, "critical,permitted;DNS:.evil,excluded;DNS:.hacker");
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.ok, false);
+});
+
+test("a root that also permits the clearnet is refused", (t) => {
+  // One extra permitted entry is the whole hole. `.hacker` is present and
+  // correct; `.com` sitting beside it means the root reaches past Moshpit.
+  const text = needRoot(t, "critical,permitted;DNS:.hacker,permitted;DNS:.com");
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.why, /\.com/);
+});
+
+test("Permitted and Excluded are read as the opposite things they are", (t) => {
+  const text = needRoot(t, "critical,permitted;DNS:.hacker,excluded;DNS:.evil");
+  if (!text) return;
+  const parsed = parseNameConstraints(text);
+  assert.equal(parsed.critical, true);
+  assert.deepEqual(parsed.permitted, [".hacker"]);
+  assert.deepEqual(parsed.excluded, [".evil"]);
+});
+
+test("parsing stops at the end of the extension, not the end of the file", () => {
+  // The next extension's own DNS-looking content must not be read as a
+  // permitted subtree.
+  const text = [
+    "Certificate:",
+    "            X509v3 Name Constraints: critical",
+    "                Permitted:",
+    "                  DNS:.hacker",
+    "            X509v3 Subject Alternative Name:",
+    "                DNS:.com",
+  ].join("\n");
+  assert.deepEqual(parseNameConstraints(text).permitted, [".hacker"]);
 });
 
 test("constraints that are not critical do not count", () => {
@@ -82,8 +161,8 @@ test("constraints that are not critical do not count", () => {
   assert.match(verdict.why, /critical/);
 });
 
-test("a root that does not permit the endings we resolve is refused", () => {
-  const text = makeRoot({ constrained: true });
+test("a root that does not permit the endings we resolve is refused", (t) => {
+  const text = needRoot(t, MOSHPIT_ONLY);
   if (!text) return;
   const verdict = requireNameConstraints(text, { tlds: ["hacker", "eggs"] });
   assert.equal(verdict.ok, false);
@@ -101,10 +180,14 @@ test("nothing usable from openssl is a refusal, not a pass", () => {
 
 /* ------------------------------------------------------------ the plan */
 
+// Permits exactly the endings the tests below ask about, which is the shape
+// production hands in: `dns enable` passes the full claimed list, so a root
+// permitting an ending outside it is the "reaches past Moshpit" case, not the
+// normal one.
 const CONSTRAINED = [
   "Certificate:",
   "        X509v3 Name Constraints: critical",
-  "            Permitted:", "              DNS:.hacker", "              DNS:.rank",
+  "            Permitted:", "              DNS:.hacker",
 ].join("\n");
 
 test("without root, the store that needs it is skipped and said so", () => {
@@ -155,6 +238,53 @@ test("no root yet points at what generates it, rather than reporting a missing f
 test("the root is looked for where moshpit-proxy writes it", () => {
   assert.equal(caPath({ home: "/home/x" }), "/home/x/.moshpit/ca/ca.crt");
   assert.match(describeCertificateCommand("/tmp/ca.crt").args.join(" "), /-noout -text/);
+});
+
+/* ------------------------------------------------------- whose home it is */
+
+test("under sudo, the operator's home is used and not root's", () => {
+  // `dns enable` needs root and escalates itself, so os.homedir() here is
+  // /root — while moshpit-proxy wrote the root, and the NSS database the
+  // browser reads, under the operator's home. Getting this wrong reports
+  // "no local root" on a machine that has one, or installs into a browser
+  // profile nobody uses. It is the same $HOME-under-sudo trap as #272/#274.
+  const home = operatorHome({
+    env: { SUDO_USER: "anthony", HOME: "/root" },
+    expand: (user) => (user === "anthony" ? "/home/anthony" : null),
+  });
+  assert.equal(home, "/home/anthony");
+  assert.equal(caPath({ home }), "/home/anthony/.moshpit/ca/ca.crt");
+});
+
+test("without sudo it is just this user's home", () => {
+  assert.equal(
+    operatorHome({ env: { HOME: "/home/x" }, homedir: () => "/home/x" }),
+    "/home/x",
+  );
+  // A bare root shell — a container, a CI image — is genuinely root's own.
+  assert.equal(
+    operatorHome({ env: { SUDO_USER: "root", HOME: "/root" }, homedir: () => "/root" }),
+    "/root",
+  );
+});
+
+test("an unresolvable SUDO_USER falls back rather than inventing a path", () => {
+  assert.equal(
+    operatorHome({ env: { SUDO_USER: "ghost", HOME: "/root" }, expand: () => null }),
+    "/root",
+  );
+});
+
+test("the NSS store is handed back to the operator after a root writes it", async () => {
+  // Left owned by root, the browser silently loses the ability to update its
+  // own store — a failure that surfaces much later looking unrelated.
+  const h = harness({ uid: 0 });
+  h.deps.env = { SUDO_USER: "anthony" };
+  await applyTrust(["hacker"], h.out, h.deps);
+  assert.ok(
+    h.ran.some((c) => /^chown -R anthony: .*\.pki\/nssdb$/.test(c)),
+    `nssdb was not handed back — ran: ${JSON.stringify(h.ran)}`,
+  );
 });
 
 test("macOS has one store and it needs root", () => {
