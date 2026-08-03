@@ -1938,6 +1938,7 @@ import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
   requiredPort, startDaemon, stopDaemon,
 } from "./dns-system.mjs";
+import { escalateSelf } from "./escalate.mjs";
 
 /** The parking host's address — an A record has to carry an IP, not a name. */
 export async function parkingAddress(host = DEFAULT_PARKING_HOST, lookup = dnsPromises.resolve4) {
@@ -2013,6 +2014,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     manifestFile = manifestPath(),
     readManifest = async (path) => parseManifest(await defaultReadMaybe(path)),
     uid = typeof process.getuid === "function" ? process.getuid() : 0,
+    escalate = escalateSelf,
   } = deps;
   const [sub, ...rest] = args;
   const flag = (name, fallback) => {
@@ -2401,7 +2403,23 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
 
     // Checked before doing half of it: every step here needs root, and a
     // partial apply is worse than a clean refusal with the command to retry.
+    //
+    // Escalate this one command rather than telling the operator to re-run the
+    // whole CLI. `sudo moshcode …` is a habit with a sharp edge — `moshcode
+    // update` re-runs the installer, whose paths all come from $HOME, so an
+    // escalated update installs into /root. The DNS state this writes lives in
+    // /etc and /var/lib, never the operator's home, so raising just this
+    // command loses nothing.
     if (plan.elevated && uid !== 0) {
+      const escalated = escalate({
+        args: ["dns", sub, ...rest],
+        what: `dns ${sub}`,
+        out,
+      });
+      if (escalated.ran) return escalated.code;
+
+      // No tty, no sudo, or already escalated and still not root: fall back to
+      // the advice, and say why it could not just do it.
       out(`dns ${sub} edits system DNS and needs root.`);
       out(`  sudo moshcode dns ${sub}${rest.length ? " " + rest.join(" ") : ""}`);
       out("");

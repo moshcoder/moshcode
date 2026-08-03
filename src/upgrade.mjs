@@ -129,6 +129,33 @@ export function planUpgrade(targets = []) {
 export async function runUpgrade(targets = [], io = {}) {
   const log = io.log || ((s) => console.log(s));
   const rule = io.rule || (() => console.log("─".repeat(48)));
+
+  // `sudo moshcode update` is the one escalation this CLI must never accept.
+  // selfSpec re-runs the installer, and every path the installer uses comes
+  // from $HOME — which sudo has set to /root. The update "succeeds", moshcode
+  // is reinstalled into root's home, and the operator is left with a binary on
+  // PATH they cannot execute. Engine and tool installers have the same shape:
+  // they write into $HOME too.
+  //
+  // A bare root shell has no SUDO_USER and is a legitimate place to run this,
+  // so only the escalated-from-a-real-user case is refused.
+  const uid = io.uid ?? (typeof process.getuid === "function" ? process.getuid() : 0);
+  const env = io.env || process.env;
+  if (uid === 0 && env.SUDO_USER && !env.MOSHCODE_ALLOW_ROOT) {
+    log(`✗ don't run moshcode update with sudo.`);
+    log("");
+    log(`  It reinstalls moshcode, and the installer puts everything under $HOME —`);
+    log(`  which sudo has set to ${env.HOME || "/root"}. That would install moshcode for`);
+    log(`  root and leave ${env.SUDO_USER} with a moshcode on PATH it cannot execute.`);
+    log("");
+    log("  Run it as yourself instead:");
+    log("      moshcode update");
+    log("");
+    log("  Commands that genuinely need root, like `dns enable`, now ask for it");
+    log("  themselves — you do not need to escalate the whole CLI for those.");
+    return [{ name: "moshcode", ok: false, code: 1, signal: null }];
+  }
+
   const { self, items, unknown } = planUpgrade(targets);
 
   for (const u of unknown) log(`? skipping unknown upgrade target "${u}"`);
