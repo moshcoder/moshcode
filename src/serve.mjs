@@ -351,8 +351,27 @@ server already on this machine; nginx or Caddy does the serving.
 The name still has to point at this machine — set that in the Pit, and check
 it with \`moshcode dns resolve <name>\`. This only makes the box answer to it.`;
 
+/**
+ * Run one of the plan's commands.
+ *
+ * A real default, because the alternative was worse than it looked: with no
+ * runner the execution loop skipped every `run` step in silence and then
+ * printed "is live on this machine". `nginx -t` never validated, `systemctl
+ * reload` never reloaded, and the config that had just been written was not
+ * the config being served — a lie that is invisible until someone reloads
+ * nginx for an unrelated reason, hours or reboots later.
+ */
+async function defaultRunner(command, args) {
+  const { execFile } = await import("node:child_process");
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: 60_000 }, (error, _stdout, stderr) => {
+      resolve({ ok: !error, code: error?.code ?? 0, stderr: String(stderr || "").trim() });
+    });
+  });
+}
+
 export async function serveCommand(args = [], out = console.log, deps = {}) {
-  const { detect = detectServer, write = fs.writeFile, mkdir = fs.mkdir, copy = fs.cp, runner = null } = deps;
+  const { detect = detectServer, write = fs.writeFile, mkdir = fs.mkdir, copy = fs.cp, runner = defaultRunner } = deps;
   const [name, ...rest] = args;
 
   if (!name || name === "help" || name === "--help" || name === "-h") {
@@ -406,7 +425,11 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
   out(`${name} → ${plan.proxy ? `127.0.0.1:${plan.proxy}` : plan.root}  (${plan.server}, ${ports})`);
   out("");
   for (const step of plan.steps) {
-    const what = step.kind === "run" ? `${step.command} ${step.args.join(" ")}` : step.path;
+    const what = step.kind === "run"
+      ? `${step.command} ${step.args.join(" ")}`
+      : step.kind === "publish-pin"
+        ? `.${step.tld}`
+        : step.path;
     out(`  ${step.kind.padEnd(6)} ${what}`);
     out(`         ${step.why}`);
   }
@@ -424,10 +447,17 @@ export async function serveCommand(args = [], out = console.log, deps = {}) {
       if (step.kind === "write") await write(step.path, step.content);
       else if (step.kind === "mkdir") await mkdir(step.path, { recursive: true });
       else if (step.kind === "seed") await copy(step.from, step.path, { recursive: true, force: false });
-      else if (step.kind === "run" && runner) {
+      else if (step.kind === "run") {
+        if (!runner) {
+          // Silence here is how a config gets written referencing a key that
+          // was never generated, after reporting success.
+          out(`! cannot run ${step.command} — nothing would validate or take effect`);
+          return 1;
+        }
         const result = await runner(step.command, step.args);
         if (!result?.ok) {
           out(`! ${step.command} failed — stopping before anything else changes`);
+          if (result?.stderr) out(`  ${result.stderr.split("\n")[0]}`);
           return 1;
         }
       } else if (step.kind === "publish-pin") {

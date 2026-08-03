@@ -243,6 +243,8 @@ test("a bad --template stops the install before anything is written", async () =
     write: async () => {},
     mkdir: async () => {},
     copy: async (from) => { seeded = from; },
+    // `nginx -t` really runs now, and there is no nginx to run it against here.
+    runner: async () => ({ ok: true }),
   });
   assert.equal(code, 0);
   assert.match(String(seeded), /examples\/templates\/caddy-static\/site$/);
@@ -330,4 +332,51 @@ test("a second name under the same ending reuses the key and its pin", async () 
   assert.equal(tls.tld, "hacker");
   assert.equal(tls.create, null, "no new key when the ending already has one");
   assert.equal(tls.pin, pinFromCertificate(cert));
+});
+
+test("a run step that cannot execute fails loudly instead of being skipped", async () => {
+  // This was silent, and it is how a config gets written referencing a key
+  // that was never generated — then reported as live. `nginx -t` never
+  // validated and `systemctl reload` never reloaded, so the file on disk was
+  // not the config being served, which stays invisible until somebody
+  // reloads nginx for an unrelated reason hours later.
+  const lines = [];
+  const code = await serveCommand(["blue.eggs", "--install"], (l) => lines.push(l), {
+    detect: async () => "nginx",
+    write: async () => {},
+    mkdir: async () => {},
+    copy: async () => {},
+    runner: null,
+  });
+
+  assert.equal(code, 1, "no runner means nothing would take effect — that is a failure, not a success");
+  assert.match(lines.join("\n"), /cannot run/);
+});
+
+test("a failing command stops the install and says which one", async () => {
+  const lines = [];
+  const code = await serveCommand(["blue.eggs", "--install"], (l) => lines.push(l), {
+    detect: async () => "nginx",
+    write: async () => {},
+    mkdir: async () => {},
+    copy: async () => {},
+    runner: async () => ({ ok: false, code: 1, stderr: "nginx: [emerg] cannot load certificate" }),
+  });
+
+  assert.equal(code, 1);
+  // The reason nginx gave, not just that something failed — that line is the
+  // whole diagnosis and hiding it costs an hour.
+  assert.match(lines.join("\n"), /cannot load certificate/);
+});
+
+test("the pin step prints the ending rather than undefined", async () => {
+  const plan = servePlan({
+    name: "demo.hacker",
+    server: "nginx",
+    root: "/srv/demo.hacker",
+    tls: { tld: "hacker", dir: "/etc/ssl/moshpit", key: "/k", cert: "/c", pin: "x", create: null },
+  });
+  const step = plan.steps.find((s) => s.kind === "publish-pin");
+  assert.equal(step.path, undefined, "it has no path, which is what printed `undefined`");
+  assert.equal(step.tld, "hacker", "so the display has to use this instead");
 });
