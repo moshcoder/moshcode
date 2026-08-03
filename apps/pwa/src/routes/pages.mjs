@@ -3,7 +3,7 @@ import { Router } from "express";
 import { get, all, run } from "../db.mjs";
 import { id } from "../lib/crypto.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
-import { requireAuth, csrfInput } from "../lib/session.mjs";
+import { requireAuth, csrfInput, setCeremony, getCeremony, clearCeremony } from "../lib/session.mjs";
 import { balance, ledger, CHANNEL_COST } from "../lib/credits.mjs";
 import { createApiKey, listApiKeys, revokeApiKey } from "../lib/apikey.mjs";
 import { PACKS } from "./credits.mjs";
@@ -111,7 +111,7 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
     listApiKeys(uid),
   ]);
   const byKind = Object.fromEntries(chans.map((c) => [c.kind, c]));
-  const newKey = req.query.key ? String(req.query.key) : "";
+  const newKey = getCeremony(req, "newkey") || "";
   const err = req.query.err ? String(req.query.err) : "";
 
   const chanRows = CHANNEL_KINDS.map((kind) => {
@@ -134,7 +134,30 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
   <main class="wrap" style="max-width:720px;padding-top:30px">
     <h1 style="font-size:1.5rem;margin-bottom:20px">Settings</h1>
     ${err ? `<div class="notice err">${esc(err.replace(/-/g, " "))}</div>` : ""}
-    ${newKey ? `<div class="notice ok">New API key (copy it now — shown once):<br><b class="mono" style="word-break:break-all">${esc(newKey)}</b></div>` : ""}
+    ${newKey ? `<div class="notice ok">
+      Your new API key. Copy it now — once this box goes, the key cannot be shown again.
+      <div style="display:flex;gap:10px;align-items:center;margin-top:9px">
+        <b class="mono" id="newkey" style="word-break:break-all;flex:1">${esc(newKey)}</b>
+        <button class="btn" type="button" id="copykey" style="padding:5px 12px;font-size:.72rem;white-space:nowrap">Copy</button>
+        <form method="post" action="/settings/apikeys/hide" style="margin:0">${csrfInput(req)}<button class="btn" style="padding:5px 12px;font-size:.72rem;white-space:nowrap">Hide</button></form>
+      </div>
+      <script>
+        document.getElementById("copykey").addEventListener("click", function () {
+          var b = this, v = document.getElementById("newkey").textContent;
+          // Clipboard API needs a secure context; a hidden textarea + execCommand
+          // still works on plain http, which is how this is reached in dev.
+          var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy" }, 1600) };
+          if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(v).then(done, fallback) } else { fallback() }
+          function fallback() {
+            var t = document.createElement("textarea");
+            t.value = v; t.style.position = "fixed"; t.style.opacity = "0";
+            document.body.appendChild(t); t.select();
+            try { document.execCommand("copy"); done() } catch (e) { b.textContent = "Select it manually" }
+            document.body.removeChild(t);
+          }
+        });
+      </script>
+    </div>` : ""}
 
     <div class="card" style="margin-bottom:22px"><div class="card-head"><span class="h">Channels · where pings land</span></div>
       <div class="card-body"><form method="post" action="/settings/channels">${csrfInput(req)}
@@ -146,6 +169,7 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
     <div class="card" style="margin-bottom:22px"><div class="card-head"><span class="h">API keys · for the moshcode CLI</span></div>
       <div class="card-body">
         <p class="dim mono" style="font-size:.78rem;margin-top:0">Point the CLI at this app: <span class="acid">MOSHCODE_API=${esc(config.origin)}</span> and send <span class="acid">Authorization: Bearer &lt;key&gt;</span>.</p>
+        <p class="faint mono" style="font-size:.74rem">Only a hash of each key is stored, so the keys below can never be displayed again — that is what keeps them safe if this database ever leaks. Lost one? Revoke it and create another; it costs nothing.</p>
         ${keysHtml}
         <form method="post" action="/settings/apikeys" style="margin-top:14px;display:flex;gap:10px">${csrfInput(req)}
           <input name="name" placeholder="key name (e.g. laptop)" style="flex:1">
@@ -173,9 +197,22 @@ pagesRouter.post("/settings/channels", requireAuth, async (req, res) => {
   res.redirect("/settings");
 });
 
+// The new key goes back in a signed, httpOnly cookie rather than the redirect
+// URL. `/settings?key=mck_…` put a live credential in browser history, in the
+// Referer of anything the page loads, and in any access log in front of us —
+// and it only survived one render, so a stray reload lost the one copy the user
+// was ever going to get. The cookie survives a reload and expires on its own.
+const NEW_KEY_TTL = 1000 * 60 * 10;
+
 pagesRouter.post("/settings/apikeys", requireAuth, async (req, res) => {
   const { plaintext } = await createApiKey(req.user.id, String(req.body.name || "cli").slice(0, 40));
-  res.redirect("/settings?key=" + encodeURIComponent(plaintext));
+  setCeremony(res, "newkey", plaintext, NEW_KEY_TTL);
+  res.redirect("/settings");
+});
+
+pagesRouter.post("/settings/apikeys/hide", requireAuth, (req, res) => {
+  clearCeremony(res, "newkey");
+  res.redirect("/settings");
 });
 
 pagesRouter.post("/settings/apikeys/:id/delete", requireAuth, async (req, res) => {
