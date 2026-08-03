@@ -189,8 +189,16 @@ export async function selfUpdateCommand(args = [], out = console.log, deps = {})
       await write(`/etc/systemd/system/${name}`, body);
       out(`  wrote /etc/systemd/system/${name}`);
     }
-    await runner("systemctl", ["daemon-reload"]);
-    await runner("systemctl", ["enable", "--now", "moshcode-update.timer"]);
+    const reload = await runner("systemctl", ["daemon-reload"]);
+    const enable = await runner("systemctl", ["enable", "--now", "moshcode-update.timer"]);
+    // The units are on disk, but they only run if systemd actually took them.
+    // On a host without systemd (a container, WSL, macOS) or without root, the
+    // enable fails — and saying "checking on a schedule now" then would promise
+    // an auto-update that will never fire. Report the failure instead.
+    if (reload?.ok === false || enable?.ok === false) {
+      out("moshcode update: wrote the units but systemctl could not start the timer — it is not checking on a schedule yet. run `systemctl enable --now moshcode-update.timer` as root.");
+      return 1;
+    }
     out("checking on a schedule now. `systemctl list-timers moshcode-update` to see when.");
     return 0;
   }
