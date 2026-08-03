@@ -362,14 +362,44 @@ export function fetchOriginTls({ host, port, servername, path, headers, pins, ti
  */
 export function tlsRedirect(location, { name, host }) {
   if (!location) return null;
-  let url;
-  try { url = new URL(location); } catch { return null; }
-  if (url.protocol !== "https:") return null;
+  const url = parseHttpsLocation(location);
+  if (!url) return null;
 
-  const to = url.hostname.toLowerCase();
+  const to = url.host.toLowerCase();
   if (to !== String(name).toLowerCase() && to !== String(host).toLowerCase()) return null;
 
-  return { port: url.port ? Number(url.port) : 443, path: `${url.pathname}${url.search}` || "/" };
+  return { port: url.port, path: url.path };
+}
+
+/**
+ * Split an absolute `https://` Location into host, port and path.
+ *
+ * Hand-parsed rather than handed to `new URL()`, which rejects the exact hosts
+ * this gateway exists to serve. WHATWG reads a host whose last label is all
+ * digits as an IPv4 address, so `https://alt.2600/` is a parse *failure* and
+ * not a hostname — every numeric ending (.2600, .1337) landed in the catch,
+ * had its upgrade silently declined, and shipped the origin's bare 301 to a
+ * browser that could do nothing with it. `.hacker` parses, which is why the
+ * tests did not notice.
+ */
+function parseHttpsLocation(location) {
+  // Group 1 stops at the first "/", "?" or "#" — the authority. Group 2 is the
+  // rest bar the fragment, which is the browser's business and never sent on.
+  const match = /^https:\/\/([^/?#]*)([^#]*)/i.exec(String(location).trim());
+  if (!match) return null;
+
+  // Userinfo is everything through the last "@", so the host of
+  // `https://alt.2600@evil.example/` is evil.example — which is where it goes.
+  const authority = match[1].slice(match[1].lastIndexOf("@") + 1);
+  const split = authority.match(/^\[([0-9a-f:]+)\](?::(\d+))?$/i)  // an IPv6 literal
+    || authority.match(/^([^:]+)(?::(\d+))?$/);
+  if (!split) return null;
+
+  const port = split[2] ? Number(split[2]) : 443;
+  if (port < 1 || port > 65535) return null;
+
+  const path = match[2] || "/";
+  return { host: split[1], port, path: path.startsWith("/") ? path : `/${path}` };
 }
 
 /** Headers worth passing to the origin. Everything else is dropped. */
