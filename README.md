@@ -62,6 +62,8 @@ moshcode install privacycode # curl -fsSL https://getprivacycode.com/install | s
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 moshcode install kimi       # curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+moshcode install qwen       # npm i -g @qwen-code/qwen-code
+moshcode install deepseek   # npm i -g @serjm/deepseek-code
 ```
 
 ### Autonomous agents versus raw starts
@@ -78,6 +80,8 @@ moshcode agents privacycode # privacycode agent list                       (agen
 moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
 moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
 moshcode agents kimi        # kimi --yolo                                       (autonomous)
+moshcode agents qwen        # qwen --approval-mode=yolo                         (autonomous)
+moshcode agents deepseek    # deepseek-code --turbo                             (autonomous)
 moshcode agents aider       # aider --yes-always                                (autonomous)
 ```
 

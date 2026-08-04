@@ -95,6 +95,34 @@ export const ENGINES = {
     // lands in the rc the same way; only the default needs bridging here.)
     binDirs: [path.join(homedir(), ".kimi-code", "bin")],
   },
+  qwen: {
+    desc: "Qwen Code — Alibaba's agentic coding CLI",
+    bin: "qwen",
+    // A Gemini CLI fork, so it takes gemini's approval-mode flag. `--yolo`/`-y`
+    // selects the same mode by another name, and passing both is a hard error
+    // ("Cannot use --yolo (-y) and --approval-mode together"), so this stays on
+    // the one form — the gemini-shaped one, matching the entry above.
+    agentArgs: ["--approval-mode=yolo"],
+    install: { cmd: "npm", args: ["install", "-g", "@qwen-code/qwen-code"] },
+  },
+  deepseek: {
+    desc: "DeepSeek Code — terminal coding agent on DeepSeek models",
+    // Community-built (SerjMihashin), not a DeepSeek-published CLI — DeepSeek
+    // ships no first-party agentic CLI. The two other names that get suggested
+    // are dead ends: `deepseek-tui` is now a stub whose own description says it
+    // was renamed to `codewhale`, and `deepseek-cli` has not been touched since
+    // January 2025.
+    //
+    // The package installs two identical bins, `dsc` and `deepseek-code`. Take
+    // the long one: `dsc` is also Microsoft's Desired State Configuration
+    // binary, so on a machine that has both, the short name would silently
+    // launch the wrong program.
+    bin: "deepseek-code",
+    // `--turbo` is its "auto-approve all actions" mode (equivalently
+    // `--approval-mode turbo`, alongside plan/default/auto-edit).
+    agentArgs: ["--turbo"],
+    install: { cmd: "npm", args: ["install", "-g", "@serjm/deepseek-code"] },
+  },
   aider: {
     desc: "Aider — pair-programming in your terminal",
     bin: "aider",
@@ -118,6 +146,10 @@ export const ENGINE_ALIASES = {
   cc: "claude", "claude-code": "claude", openai: "codex", gpt: "codex", google: "gemini",
   pc: "privacycode", getprivacycode: "privacycode", privacy: "privacycode",
   "kimi-cli": "kimi", "kimi-code": "kimi", moonshot: "kimi",
+  "qwen-code": "qwen", qwencode: "qwen", alibaba: "qwen",
+  // `dsc` and `deepseek-code` are the binary names the package installs; accept
+  // both as engine names so whichever one someone has seen resolves.
+  ds: "deepseek", dsc: "deepseek", "deepseek-code": "deepseek",
 };
 
 /** Resolve a name/alias to `[key, engine]`, or null. */
@@ -199,6 +231,8 @@ const AI_EXEC = {
   privacycode: (p) => ["run", p],                            // privacycode one-shot (opencode-derived)
   aider: (p) => ["--message", p, "--yes", "--no-auto-commits"], // aider single message
   kimi: (p) => ["-p", p],                                    // kimi prompt mode (prints the response, text by default)
+  qwen: (p) => ["-p", p],                                    // qwen prompt mode (gemini-derived)
+  deepseek: (p) => ["--headless", "-p", p],                  // deepseek: -p runs one prompt and exits; --headless drops the TUI so stdout is pipe-clean
 };
 
 /** argv that runs `prompt` headlessly on `engine` (throws if it has no headless mode). */
@@ -220,7 +254,7 @@ export function aiExecArgs(engine, prompt) {
  */
 export function pickAiEngine(preferred) {
   const wanted = preferred ? resolveEngine(preferred)?.[0] : null;
-  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "aider"];
+  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "aider"];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin, ENGINES[key].binDirs)) return key;
   }
