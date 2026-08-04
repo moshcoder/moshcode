@@ -147,6 +147,13 @@ test("TUI /install rejects an Object.prototype name instead of crashing the pit"
   assert.doesNotMatch(result.stderr, /TypeError/);
 });
 
+test("TUI /new requires a real terminal", async () => {
+  const result = await runTui("/new\n/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\/new needs an interactive terminal/);
+});
+
 // The pit persists every line typed at the prompt to ~/.moshcode_history, and
 // the documented flows put secrets on those lines (`/mcp install <url> -H
 // "Authorization: Bearer …"`, `/secrets`, `/coinpay`, `!export TOKEN=…`). The
