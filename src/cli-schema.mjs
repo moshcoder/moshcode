@@ -268,6 +268,21 @@ export const CORE_CLI_COMMANDS = [
     seeAlso: ["install"],
   },
   {
+    name: "trade",
+    group: "tools",
+    description: "look up markets and trade through Alpaca",
+    synopsis: [["moshcode trade <verb> [args…]", "paper trading is Alpaca's default"]],
+    verbs: "TRADE_VERBS",
+    examples: [
+      ["moshcode trade ticker AAPL", "asset lookup"],
+      ["moshcode trade analysis AAPL", "quote/trade/bar snapshot"],
+      ["moshcode trade buy AAPL 1", "preview a market order"],
+      ["moshcode trade buy AAPL 1 --submit", "place it"],
+    ],
+    seeAlso: ["tools", "install"],
+    note: "buy/sell inject --dry-run unless --submit is present. Alpaca defaults to paper trading; live trading requires its separate --live opt-in.",
+  },
+  {
     name: "commands",
     group: "script",
     description: "list built-in moshscript commands",
@@ -395,6 +410,35 @@ export const UPGRADE_TARGETS = [
   { name: "tools", description: "update all installed workflow tools" },
 ];
 
+export const TRADE_VERBS = [
+  { name: "ticker", description: "look up an asset by ticker", synopsis: [["moshcode trade ticker <symbol> [flags…]", ""]] },
+  { name: "quote", description: "get the latest quote", synopsis: [["moshcode trade quote <symbol> [flags…]", ""]] },
+  { name: "analysis", description: "get an analysis-ready market snapshot", synopsis: [["moshcode trade analysis <symbol> [flags…]", ""]] },
+  {
+    name: "buy", description: "preview or submit a buy order",
+    synopsis: [
+      ["moshcode trade buy <symbol> <qty> [alpaca flags…] [--submit]", "share quantity"],
+      ["moshcode trade buy <symbol> --notional <usd> [--submit]", "dollar amount"],
+    ],
+    flags: [["--submit", "place the order instead of injecting --dry-run", "preview"]],
+  },
+  {
+    name: "sell", description: "preview or submit a sell order",
+    synopsis: [
+      ["moshcode trade sell <symbol> <qty> [alpaca flags…] [--submit]", "share quantity"],
+      ["moshcode trade sell <symbol> --notional <usd> [--submit]", "dollar amount"],
+    ],
+    flags: [["--submit", "place the order instead of injecting --dry-run", "preview"]],
+  },
+  { name: "watch", description: "manage watchlists", synopsis: [["moshcode trade watch [list|create|get|add|remove|delete] [args…]", ""]] },
+  { name: "positions", description: "list, inspect, or close positions", synopsis: [["moshcode trade positions [verb] [args…]", "default: list"]] },
+  { name: "orders", description: "list, inspect, replace, or cancel orders", synopsis: [["moshcode trade orders [verb] [args…]", "default: list"]] },
+  { name: "account", description: "show account details", synopsis: [["moshcode trade account [args…]", ""]] },
+  { name: "login", description: "authenticate an Alpaca profile", synopsis: [["moshcode trade login [alpaca profile flags…]", "paper by default"]] },
+  { name: "clock", description: "show market status and next open/close", synopsis: [["moshcode trade clock [args…]", ""]] },
+  { name: "raw", description: "invoke the native Alpaca command tree", synopsis: [["moshcode trade raw <alpaca args…>", ""]] },
+];
+
 /**
  * `dns` sub-verbs.
  *
@@ -421,6 +465,7 @@ export const VERB_TABLES = {
   SKILL_VERBS,
   UPGRADE_TARGETS,
   DNS_VERBS,
+  TRADE_VERBS,
 };
 
 /**
@@ -443,6 +488,8 @@ export const PIT_COMMANDS = [
     description: "raw launch; inject no engine arguments" },
   { name: "tools", args: "[name] [args…]", cli: "tools",
     description: "list workflow tools, or run one" },
+  { name: "trade", args: "<verb> [args…]", cli: "trade",
+    description: "look up markets and preview/place Alpaca orders" },
   { name: "install", args: "<engine|tool>", cli: "install",
     description: "install an engine or workflow tool" },
   { name: "upgrade", aliases: ["update"], args: "[name…]", cli: "upgrade",

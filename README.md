@@ -45,6 +45,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
+| `moshcode trade` | tools | look up markets and trade through Alpaca |
 | `moshcode commands` | script | list built-in moshscript commands |
 | `moshcode completion` | extend | print a shell completion script |
 | `moshcode run` | script | run a moshscript |
@@ -159,6 +160,41 @@ native setup and authentication commands. CoinPay currently requires Node.js
 
 In the TUI, use `/tools`, `/ugig [args…]`, or `/coinpay [args…]`. The native CLI
 owns the terminal until it exits, then MoshCode returns to the pit.
+
+### Alpaca trading
+
+Alpaca is a workflow tool, not a coding engine. Install its official Go CLI,
+use `alpaca` for exact native passthrough, or use `trade` for the shorter market
+and order vocabulary:
+
+```sh
+moshcode install alpaca            # go install github.com/alpacahq/cli/cmd/alpaca@latest
+moshcode trade login               # Alpaca profile login; paper trading is the default
+moshcode trade ticker AAPL         # asset get --symbol-or-asset-id AAPL
+moshcode trade quote AAPL          # latest quote
+moshcode trade analysis AAPL       # quote/trade/bar snapshot for analysis
+moshcode trade watch               # list watchlists
+moshcode trade positions           # list open positions
+moshcode trade orders              # list open orders
+```
+
+`buy` and `sell` are safe previews unless `--submit` is explicit. Other Alpaca
+order flags pass through, including limit prices and its separate live-trading
+opt-in:
+
+```sh
+moshcode trade buy AAPL 1                          # adds --type market --dry-run
+moshcode trade buy AAPL 1 --type limit --limit-price 185
+moshcode trade buy AAPL --notional 100              # preview a $100 market buy
+moshcode trade buy AAPL 1 --submit                 # places the paper order
+moshcode trade raw data news --symbol AAPL         # any native Alpaca command
+moshcode alpaca order submit --help                # exact native passthrough
+```
+
+The same facade is `/trade …` in the pit and `trade(…)` in moshscript.
+Alpaca's CLI has no confirmation prompts; `--submit` intentionally removes
+MoshCode's preview guard. Live trading additionally requires Alpaca's `--live`
+opt-in or corresponding environment setting.
 
 ## Browser terminal (`moshcode console`)
 

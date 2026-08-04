@@ -37,6 +37,7 @@ export function safePrefixes(home = homedir()) {
     `${home}/bin`,
     `${home}/.npm-global/bin`,
     `${home}/.volta/bin`,
+    `${home}/go/bin`,
     "/usr/local/bin",
     "/opt/homebrew/bin",
   ];

@@ -37,9 +37,22 @@ function withPath(names, fn) {
     chmodSync(file, 0o755);
   }
   const before = process.env.PATH;
+  const entries = [...Object.values(ENGINES), ...Object.values(TOOLS)];
+  const beforeBinDirs = entries.map((entry) => [entry, entry.binDirs]);
   process.env.PATH = dir;
+  // PATH is only half the lookup contract: tools installed into a known
+  // user-local directory (Turso, Alpaca) deliberately remain discoverable in
+  // an already-running shell. Blank those explicit directories too so a real
+  // local install cannot leak into this fake-machine test.
+  for (const entry of entries) entry.binDirs = [];
   try { return fn(); }
-  finally { process.env.PATH = before; }
+  finally {
+    process.env.PATH = before;
+    for (const [entry, binDirs] of beforeBinDirs) {
+      if (binDirs === undefined) delete entry.binDirs;
+      else entry.binDirs = binDirs;
+    }
+  }
 }
 
 const specOf = (target) => withPath([], () => planUpgrade([target]).items[0]);

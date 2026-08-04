@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
+import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
@@ -370,7 +371,12 @@ function installTarget(key) {
     console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
     console.log(hr());
     const child = spawn(target.install.cmd, target.install.args, { stdio: "inherit" });
-    child.on("error", (e) => { console.log(hr()); console.log(err(`install failed: ${e.message}`)); resolve(); });
+    child.on("error", (e) => {
+      console.log(hr());
+      console.log(err(`install failed: ${e.message}`));
+      if (e.code === "ENOENT" && target.installHelp) console.log(info(target.installHelp));
+      resolve();
+    });
     child.on("exit", (code) => { console.log(hr()); console.log(code === 0 ? ok(`${key} installed. 🤘`) : err(`install exited ${code}`)); resolve(); });
   });
 }
@@ -600,6 +606,19 @@ export async function tui() {
       const [key, tool] = resolved;
       rl.close();
       await openWorkflowTool(key, { ...tool, installed: toolStatus().find((entry) => entry.key === key)?.installed }, rest.slice(1));
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "trade") {
+      const translated = tradeArgs(rest);
+      if (translated.usage) { console.log(tradeUsage()); continue; }
+      if (translated.error) { console.log(err(translated.error)); continue; }
+      rl.close();
+      const tool = TOOLS.alpaca;
+      await openWorkflowTool("alpaca", {
+        ...tool,
+        installed: toolStatus().find((entry) => entry.key === "alpaca")?.installed,
+      }, translated.args);
       rl = mkrl();
       continue;
     }

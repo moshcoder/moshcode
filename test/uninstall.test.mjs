@@ -59,6 +59,13 @@ test("the places a per-user installer legitimately writes are allowed", () => {
   }
 });
 
+test("a Go-installed Alpaca binary can be removed from the default GOPATH", () => {
+  const entry = { bin: "alpaca", install: { cmd: "go", args: ["install", "github.com/alpacahq/cli/cmd/alpaca@latest"] } };
+  const plan = uninstallPlan(entry, { binPath: `${HOME}/go/bin/alpaca`, home: HOME });
+  assert.equal(plan.kind, "binary");
+  assert.deepEqual(plan.steps, [{ kind: "remove", path: `${HOME}/go/bin/alpaca` }]);
+});
+
 test("a tool that is not there says so rather than failing", () => {
   const plan = uninstallPlan(scriptEntry, { binPath: null, home: HOME });
   assert.equal(plan.kind, "absent");

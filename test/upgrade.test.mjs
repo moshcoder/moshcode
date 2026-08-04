@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { ENGINES, upgradeSpec } from "../src/engines.mjs";
 import { planUpgrade, runUpgrade, selfSpec } from "../src/upgrade.mjs";
+import { TOOLS } from "../src/tools.mjs";
 
 // Same trick as withFakeTools, for the cases that turn on a target being
 // installed: only an installed target is asked to update itself, so the
@@ -31,13 +32,21 @@ function withFakeTools(fn) {
     chmodSync(file, 0o755);
   }
   const before = process.env.PATH;
+  const beforeBinDirs = Object.values(TOOLS).map((tool) => [tool, tool.binDirs]);
   // REPLACE the PATH rather than prepending to it: "which tools are installed"
   // is the thing under test, so any real CLI on the developer's machine (gh,
   // doctl, tailscale…) would otherwise leak into the plan and make the
   // assertions depend on the host.
   process.env.PATH = dir;
+  for (const tool of Object.values(TOOLS)) tool.binDirs = [];
   try { return fn(); }
-  finally { process.env.PATH = before; }
+  finally {
+    process.env.PATH = before;
+    for (const [tool, binDirs] of beforeBinDirs) {
+      if (binDirs === undefined) delete tool.binDirs;
+      else tool.binDirs = binDirs;
+    }
+  }
 }
 
 test("upgrade tools selects installed workflow tools without self or engines", () => {
