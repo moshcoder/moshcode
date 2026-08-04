@@ -211,6 +211,24 @@ Alpaca's CLI has no confirmation prompts; `--submit` intentionally removes
 MoshCode's preview guard. Live trading additionally requires Alpaca's `--live`
 opt-in or corresponding environment setting.
 
+### Social posting from the pit
+
+The pit can hand a prepared post to Bluesky or Nostr without storing either
+account's credentials in MoshCode:
+
+```text
+/socials
+/post bsky "shipped it 🤘"
+/post nostr "shipped it 🤘"
+```
+
+Bluesky opens its official compose intent. Nostr opens the MoshCode composer,
+connects to a NIP-07 browser signer (or a NIP-46 bunker through
+[`window.nostr.js`](https://github.com/fiatjaf/window.nostr.js)), signs a kind-1
+event, and publishes it to the displayed relays. Both flows leave the final
+confirmation in the browser. If the pit is remote or headless, `/post` prints
+the composer URL instead.
+
 ## Browser terminal (`moshcode console`)
 
 A real terminal in the browser — arrow keys, history, full-screen TUIs — because
