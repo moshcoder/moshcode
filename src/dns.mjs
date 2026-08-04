@@ -2047,7 +2047,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
   }
 
   if (sub === "trust") {
-    return trustName(rest.find((a) => !a.startsWith("-")) || "", out, { registryBase, ...deps });
+    // resolveArgument, not a bare `find(!startsWith("-"))`: the latter grabs the
+    // value after `--registry`/`--port` (a URL does not start with "-"), so
+    // `dns trust --registry <url> <name>` would trust the registry host instead
+    // of <name>. The sibling `resolve` verb below already parses it this way.
+    return trustName(resolveArgument(rest) || "", out, { registryBase, ...deps });
   }
 
   if (sub === "resolve") {
