@@ -131,7 +131,7 @@ function integrationTargetStatus(supportedKeys, { installedSet } = {}) {
   return keys.map((key) => ({
     name: key,
     binary: ENGINES[key].bin,
-    installed: installedSet ? installedSet.has(key) : isInstalled(ENGINES[key].bin),
+    installed: installedSet ? installedSet.has(key) : isInstalled(ENGINES[key].bin, ENGINES[key].binDirs),
     supported: supported.has(key),
   }));
 }
@@ -159,7 +159,11 @@ export function printMcpTargets(json = false) {
   console.log(bone("  mcp") + ash("  — register a server everywhere with ") + acid("/mcp install <url>"));
   for (const target of targets) {
     const dot = target.supported && target.installed ? DOT.installed : DOT.missing;
-    console.log(`   ${dot} ${bone(target.name.padEnd(9))} ${ash(target.supported ? "mcp add supported" : "no MCP support")}`);
+    // "no MCP support" would be a claim about the engine; what this column
+    // actually knows is whether moshcode can register a server there. Kimi runs
+    // MCP servers perfectly well and simply has no command to add one from a
+    // script — the fan-out states each engine's own reason when you run it.
+    console.log(`   ${dot} ${bone(target.name.padEnd(9))} ${ash(target.supported ? "mcp add supported" : "no mcp add command")}`);
   }
 }
 

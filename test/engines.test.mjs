@@ -24,6 +24,7 @@ const EXPECTED_AGENT_ARGS = {
   claude: ["--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
+  kimi: ["--yolo"],
   aider: ["--yes-always"],
 };
 
@@ -35,6 +36,7 @@ const EXPECTED_LAUNCH_ARGS = {
   claude: ["agents", "--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
+  kimi: ["--yolo"], // no agents view — kimi has no agent list to land on
   aider: ["--yes-always"],
 };
 

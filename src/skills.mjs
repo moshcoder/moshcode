@@ -6,11 +6,20 @@ import path from "node:path";
 import { ENGINES, isInstalled, ranOk, runCmd } from "./engines.mjs";
 
 // Coding engines with a skills primitive. Codex/OpenCode/Aider have none.
-export const SKILL_ENGINES = ["claude", "gemini"];
+export const SKILL_ENGINES = ["claude", "gemini", "kimi"];
 
 /** Claude's global personal skills directory (~/.claude/skills). */
 export function claudeSkillsDir() {
   return path.join(os.homedir(), ".claude", "skills");
+}
+
+/**
+ * Kimi Code's global skills directory ($KIMI_CODE_HOME/skills, default
+ * ~/.kimi-code/skills). Kimi's own user-level skill dir moves with that
+ * variable, so read it rather than hardcoding the default away.
+ */
+export function kimiSkillsDir(env = process.env) {
+  return path.join(env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code"), "skills");
 }
 
 /** Derive a skill name from a git URL or path (basename minus `.git`), or use the override. */
@@ -41,6 +50,10 @@ export function skillInstallAction(key, spec) {
     case "claude":
       // Claude has no `skill install`; clone the source into its skills dir.
       return { cmd: "git", args: ["clone", "--depth", "1", source, path.join(claudeSkillsDir(), name)] };
+    case "kimi":
+      // Kimi Code discovers skills by scanning directories, with no install
+      // command of its own — so clone into the one it scans, as Claude does.
+      return { cmd: "git", args: ["clone", "--depth", "1", source, path.join(kimiSkillsDir(), name)] };
     default:
       return { skip: "no skills primitive" };
   }
@@ -58,7 +71,7 @@ export function planSkillInstall(spec, { installedSet } = {}) {
   const rest = Object.keys(ENGINES).filter((key) => !SKILL_ENGINES.includes(key));
   return [...SKILL_ENGINES, ...rest].map((key) => {
     const bin = ENGINES[key].bin;
-    const installed = installedSet ? installedSet.has(key) : isInstalled(bin);
+    const installed = installedSet ? installedSet.has(key) : isInstalled(bin, ENGINES[key].binDirs);
     return { key, bin, installed, ...skillInstallAction(key, spec) };
   });
 }
