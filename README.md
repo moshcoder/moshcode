@@ -99,6 +99,20 @@ is shorthand for `moshcode start claude`. In the TUI, use `/agents <engine>` for
 autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
 `/agents` without an engine still lists engines and their install status.
 
+### Parallel pit tabs
+
+At the mosh prompt, `/new` opens and switches to another independent moshcode
+tab. Run `/agents <engine>` in each tab and switch between them with tmux's
+`Ctrl-b n`, `Ctrl-b p`, or `Ctrl-b <number>` keys. If moshcode is already inside
+tmux, `/new` adds a window to that session. Otherwise the first `/new` opens a
+private two-tab workspace with its tab bar at the bottom.
+
+Each tab is a separate moshcode process and provider CLIs still receive an
+ordinary inherited terminal. Moshcode does not intercept or reinterpret their
+input, output, full-screen UI, or provider-specific shortcuts. The feature
+requires `tmux`; without it `/new` reports that requirement and leaves the
+current pit untouched.
+
 The modes are not identical across providers. In particular, OpenCode `--auto`
 auto-approves permission requests but continues to enforce explicit deny rules.
 

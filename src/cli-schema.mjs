@@ -482,6 +482,8 @@ export const VERB_TABLES = {
  * than a second, thinner copy that drifts.
  */
 export const PIT_COMMANDS = [
+  { name: "new", pitOnly: true,
+    description: "open and switch to another moshcode tab" },
   { name: "agents", aliases: ["agent", "engines"], args: "[name]", cli: "agents",
     description: "list engines, or launch one autonomously" },
   { name: "start", args: "<engine> [args…]", cli: "start",
