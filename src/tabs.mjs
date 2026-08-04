@@ -51,9 +51,17 @@ export function tabPlan({
     session,
     socket,
     required: [
-      [...server, "new-session", "-d", "-s", session, "-c", cwd, "-n", "mosh 1", command],
-      // Do not use -d: selecting the new window avoids assuming whether the
-      // user's tmux config starts window indexes at 0 or 1.
+      // This server is only for moshcode. Start it without the user's tmux
+      // config so the advertised Ctrl-b n/p/number bindings stay true even
+      // when their normal tmux remaps or unbinds those keys. Existing tmux
+      // sessions take the branch above and keep the user's configuration.
+      [...server, "-f", "/dev/null", "new-session", "-d", "-s", session, "-c", cwd, "-n", "mosh 1", command],
+      // Match the visible names to Ctrl-b 1/2. The clean tmux default starts
+      // at zero, so change the base and renumber the first window before
+      // adding its sibling.
+      [...server, "set-option", "-t", session, "base-index", "1"],
+      [...server, "move-window", "-r", "-t", session],
+      // Do not use -d: the new tab should be selected when we attach.
       [...server, "new-window", "-t", session, "-c", cwd, "-n", "mosh 2", command],
     ],
     // Presentation is best-effort: an older tmux should still open the tabs.
@@ -124,6 +132,12 @@ export async function openNewTab({
   if (!plan.attach) return { ok: true, dedicated: false };
   const attached = await runAttached(plan.attach, { spawner, env });
   if (!attached.ok) {
+    // Attaching is the last required step, but the private server and its two
+    // pit processes already exist by then. Do not strand them in the
+    // background when the terminal cannot attach (for example TERM=dumb or a
+    // client-side tmux error). As above, only a server created by this call is
+    // ever eligible for cleanup.
+    runner("tmux", ["-L", plan.socket, "kill-server"], { stdio: "ignore", env });
     return { ok: false, error: attached.error || new Error(`tmux attach exited ${attached.code ?? attached.signal ?? "unknown"}`) };
   }
   return { ok: true, dedicated: true, session: plan.session, socket: plan.socket };

@@ -512,7 +512,7 @@ export async function tui() {
       }
       rl.close();
       console.log(info(process.env.TMUX
-        ? "opening a new mosh tab — switch with Ctrl-b n/p or Ctrl-b <number>…"
+        ? "opening a new mosh tab — switch with your tmux window keys…"
         : "opening a two-tab mosh workspace — switch with Ctrl-b n/p or Ctrl-b <number>…"));
       const result = await openNewTab();
       if (!result.ok) {
