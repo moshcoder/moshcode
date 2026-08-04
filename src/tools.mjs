@@ -114,6 +114,19 @@ export const TOOLS = {
     // silently re-adding package repos.
     upgrade: { cmd: "tailscale", args: ["update"] },
   },
+  alpaca: {
+    desc: "Alpaca — paper/live trading, market data, positions, and watchlists",
+    bin: "alpaca",
+    // Official Go install documented by Alpaca. Go writes to $GOBIN when set,
+    // otherwise $GOPATH/bin (normally ~/go/bin); binDirs covers that default in
+    // an already-running shell whose PATH has not picked it up yet.
+    binDirs: [path.join(homedir(), "go", "bin")],
+    install: {
+      cmd: "go",
+      args: ["install", "github.com/alpacahq/cli/cmd/alpaca@latest"],
+    },
+    installHelp: "Go is required to install Alpaca; install Go, then retry `moshcode install alpaca`.",
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */

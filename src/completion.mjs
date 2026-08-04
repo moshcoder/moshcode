@@ -2,6 +2,7 @@ import {
   CORE_CLI_COMMANDS,
   MCP_VERBS,
   SKILL_VERBS,
+  TRADE_VERBS,
   UPGRADE_TARGETS,
 } from "./cli-schema.mjs";
 import { ENGINES, ENGINE_ALIASES } from "./engines.mjs";
@@ -53,6 +54,16 @@ export function completionModel() {
     mcp: uniqueEntries(MCP_VERBS),
     mcpServerSpecs: uniqueEntries(MCP_VERBS.filter(({ acceptsServerSpec }) => acceptsServerSpec)),
     skills: uniqueEntries(SKILL_VERBS),
+    trade: uniqueEntries(TRADE_VERBS),
+    tradeOrderOptions: uniqueEntries([
+      entry("--submit", "place the order instead of previewing"),
+      entry("--qty", "share quantity"),
+      entry("--notional", "dollar amount"),
+      entry("--type", "market, limit, stop, stop_limit, or trailing_stop"),
+      entry("--limit-price", "limit price"),
+      entry("--stop-price", "stop price"),
+      entry("--time-in-force", "order time in force"),
+    ]),
     skillSources: uniqueEntries(SKILL_VERBS.filter(({ acceptsSource }) => acceptsSource)),
     shells: COMPLETION_SHELLS.map((name) => entry(name, `generate ${name} completion`)),
     // `moshcode help <topic>` accepts anything help can answer for: a command,
@@ -119,6 +130,8 @@ ${powershellEntries("MoshcodeCompletionUpgrade", model.upgrade)}
 ${powershellEntries("MoshcodeCompletionMcp", model.mcp)}
 ${powershellEntries("MoshcodeCompletionMcpServerSpecs", model.mcpServerSpecs)}
 ${powershellEntries("MoshcodeCompletionSkills", model.skills)}
+${powershellEntries("MoshcodeCompletionTrade", model.trade)}
+${powershellEntries("MoshcodeCompletionTradeOrderOptions", model.tradeOrderOptions)}
 ${powershellEntries("MoshcodeCompletionSkillSources", model.skillSources)}
 ${powershellEntries("MoshcodeCompletionShells", model.shells)}
 ${powershellEntries("MoshcodeCompletionHelpTopics", model.helpTopics)}
@@ -188,6 +201,13 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
           $choices = $script:MoshcodeCompletionJson
         } elseif ($script:MoshcodeCompletionSkillSources.Name -contains $nested -and $wordToComplete.StartsWith('-')) {
           $choices = $script:MoshcodeCompletionSkillOptions
+        }
+      }
+      'trade' {
+        if ($argumentIndex -eq 2) {
+          $choices = $script:MoshcodeCompletionTrade
+        } elseif ($nested -in @('buy', 'sell') -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionTradeOrderOptions
         }
       }
       'login' { if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionLogin } }
@@ -280,6 +300,13 @@ _moshcode_completion() {
           choices="--json"
         elif ${shellMatches("nested", model.skillSources)} && [[ "$cur" == -* ]]; then
           choices="--name"
+        fi
+        ;;
+      trade)
+        if (( COMP_CWORD == 2 )); then
+          choices="${names(model.trade)}"
+        elif [[ "$nested" == "buy" || "$nested" == "sell" ]] && [[ "$cur" == -* ]]; then
+          choices="${names(model.tradeOrderOptions)}"
         fi
         ;;
       login)
@@ -402,6 +429,17 @@ _moshcode() {
         if [[ "$PREFIX" == -* ]]; then _values "skill option" --name; else _files; fi
       fi
       ;;
+    trade)
+      if (( CURRENT == 3 )); then
+        choices=(${zshValues(model.trade)})
+        _describe "trade command" choices
+      elif [[ "\${words[3]}" == "buy" || "\${words[3]}" == "sell" ]] && [[ "$PREFIX" == -* ]]; then
+        choices=(${zshValues(model.tradeOrderOptions)})
+        _describe "trade order option" choices
+      else
+        _files
+      fi
+      ;;
     login)
       _values "login option" --browser -b --device -d
       ;;
@@ -491,6 +529,8 @@ ${fishEntries(atSecondToken("completion"), model.shells)}
 ${fishEntries(atSecondToken("help"), model.helpTopics)}
 ${fishEntries(atSecondToken("mcp"), model.mcp)}
 ${fishEntries(atSecondToken("skill skills"), model.skills)}
+${fishEntries(atSecondToken("trade"), model.trade)}
+${fishEntries("__moshcode_nested_is trade buy; or __moshcode_nested_is trade sell", model.tradeOrderOptions)}
 complete -c moshcode -n '__moshcode_nested_is mcp list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is skill list; or __moshcode_nested_is skills list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is login' -l browser -s b -d 'use browser authentication'

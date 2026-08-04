@@ -9,7 +9,7 @@ import {
   completionModel,
   completionScript,
 } from "../src/completion.mjs";
-import { MCP_VERBS, UPGRADE_TARGETS } from "../src/cli-schema.mjs";
+import { MCP_VERBS, TRADE_VERBS, UPGRADE_TARGETS } from "../src/cli-schema.mjs";
 import { ENGINE_ALIASES, ENGINES } from "../src/engines.mjs";
 import { TOOLS } from "../src/tools.mjs";
 
@@ -66,6 +66,7 @@ test("completion model derives engines, aliases, and tools from their registries
     new Set(names(model.mcpServerSpecs)),
     new Set(MCP_VERBS.filter(({ acceptsServerSpec }) => acceptsServerSpec).map(({ name }) => name)),
   );
+  assert.deepEqual(names(model.trade), [...TRADE_VERBS].map(({ name }) => name).sort());
 });
 
 test("completion schema covers every explicitly dispatched CLI command", () => {
@@ -125,6 +126,15 @@ test("bash completion respects argument depth and preserves file fallbacks", () 
   assert.ok(mcp.includes("catalog"));
   assert.ok(bashCompletions(["moshcode", "mcp", "list", "--"]).includes("--json"));
   assert.deepEqual(bashCompletions(["moshcode", "mcp", "install", ""]), []);
+
+  const trade = bashCompletions(["moshcode", "trade", ""]);
+  assert.ok(trade.includes("ticker"));
+  assert.ok(trade.includes("buy"));
+  assert.ok(trade.includes("watch"));
+  const tradeOrder = bashCompletions(["moshcode", "trade", "buy", "AAPL", "1", "--"]);
+  assert.ok(tradeOrder.includes("--submit"));
+  assert.ok(tradeOrder.includes("--notional"));
+  assert.ok(tradeOrder.includes("--limit-price"));
 
   assert.ok(bashCompletions(["moshcode", "skill", "list", "--"]).includes("--json"));
   assert.ok(bashCompletions(["moshcode", "skills", "list", "--"]).includes("--json"));

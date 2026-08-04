@@ -248,6 +248,8 @@ const COMMANDS = [
   cliVerb("doctl", "drive the DigitalOcean CLI (droplets, apps, databases)"),
   cliVerb("turso", "drive the Turso CLI (auth, databases, replicas)"),
   cliVerb("tailscale", "drive the Tailscale CLI (mesh VPN: up, status, ssh, serve)"),
+  cliVerb("alpaca", "drive the native Alpaca trading CLI"),
+  cliVerb("trade", "look up tickers, inspect markets, and preview/place Alpaca orders"),
   cliVerb("pwd", "print the current repo/location"),
 ];
 

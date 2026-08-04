@@ -20,7 +20,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import {
-  CORE_CLI_COMMANDS, MCP_VERBS, SKILL_VERBS, UPGRADE_TARGETS, DNS_VERBS,
+  CORE_CLI_COMMANDS, MCP_VERBS, SKILL_VERBS, TRADE_VERBS, UPGRADE_TARGETS, DNS_VERBS,
 } from "../src/cli-schema.mjs";
 import {
   WIDTH, findCommand, findPitCommand, helpModel, pitHelpModel, renderCommand, renderOverview,
@@ -219,7 +219,7 @@ test("every dispatched command has a schema entry with a description", async () 
 });
 
 test("every sub-verb has a description", () => {
-  for (const [label, table] of [["mcp", MCP_VERBS], ["skill", SKILL_VERBS], ["upgrade", UPGRADE_TARGETS], ["dns", DNS_VERBS]]) {
+  for (const [label, table] of [["mcp", MCP_VERBS], ["skill", SKILL_VERBS], ["trade", TRADE_VERBS], ["upgrade", UPGRADE_TARGETS], ["dns", DNS_VERBS]]) {
     for (const verb of table) {
       assert.ok(verb.description?.length, `${label} ${verb.name} has no description`);
     }
