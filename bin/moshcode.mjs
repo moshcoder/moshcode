@@ -417,7 +417,7 @@ async function main() {
           return results.filter((r) => !r.ok).length ? 1 : 0;
         },
         write: (path, body) => fsp.writeFile(path, body),
-        runner: (cmd2, args2) => new Promise((res) => execFile(cmd2, args2, () => res({ ok: true }))),
+        runner: (cmd2, args2) => new Promise((res) => execFile(cmd2, args2, (err) => res({ ok: !err }))),
       })) || 0;
       return;
     }
