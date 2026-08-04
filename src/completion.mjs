@@ -300,7 +300,7 @@ _moshcode_completion() {
         ;;
       dns)
         if (( COMP_CWORD == 2 )); then
-          choices="enable disable status tlds resolve start install"
+          choices="enable disable status tlds resolve start install trust"
         elif [[ "$nested" == "resolve" && "$cur" == -* ]]; then
           choices="--json --open --registry"
         fi
@@ -426,7 +426,7 @@ _moshcode() {
       ;;
     dns)
       if (( CURRENT == 3 )); then
-        _values "dns command" enable disable status tlds resolve start install
+        _values "dns command" enable disable status tlds resolve start install trust
       elif [[ "\${words[3]}" == "resolve" && "$PREFIX" == -* ]]; then
         _values "dns resolve option" --json --open --registry
       else
@@ -505,7 +505,7 @@ complete -c moshcode -n '${atSecondToken("console")}' -a '--url' -d 'print a gat
 complete -c moshcode -n '__moshcode_nested_is console serve' -l port -r -d 'local HTTP port'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l ttyd -r -d 'ttyd host and port'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l bind -r -d 'bind address'
-complete -c moshcode -n '${atSecondToken("dns")}' -a 'enable disable status tlds resolve start install' -d 'dns command'
+complete -c moshcode -n '${atSecondToken("dns")}' -a 'enable disable status tlds resolve start install trust' -d 'dns command'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l open -d 'open a parked name in the Pit'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l registry -r -d 'registry base URL'
