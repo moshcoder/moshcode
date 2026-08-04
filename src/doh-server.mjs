@@ -141,7 +141,7 @@ export async function createDohServer({
     tldSet: new Set(await fetchTlds({ registryBase }).catch(() => [])),
     parkingAddress: await parkingAddress().catch(() => null),
     onQuery,
-    ...guards,
+    ...applied,
   });
 
   const server = http.createServer(async (req, res) => {
