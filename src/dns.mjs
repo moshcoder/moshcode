@@ -1930,7 +1930,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
-import { applyTrust, trustName, verifyStockTls } from "./trust.mjs";
+import { applyTrust, createAutoTrust, trustName, verifyStockTls } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2012,6 +2012,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     verify = verifyResolution,
     bridgeStatus = daemonStatus,
     startBridge = startDaemon,
+    autoTrustImpl = createAutoTrust,
     stopBridge = stopDaemon,
     dropins = readDropins,
     manifestFile = manifestPath(),
@@ -2160,6 +2161,18 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // so a busy port answered with a node:dgram stack trace. This one is fatal
     // where the parking server's is not, so it ends the command rather than
     // carrying on: the shape serve.mjs uses for a step it cannot complete.
+    // Trust every name as it resolves, rather than one command per name. Only
+    // useful as root — the trust store is not writable otherwise — so it says
+    // so once here instead of failing per name, forever, in the query log.
+    const wantsTrustAll = rest.includes("--trust-all");
+    if (wantsTrustAll && uid !== 0) {
+      out("! --trust-all needs root to write to the trust store — certificates will not be installed");
+    }
+    const autoTrust = wantsTrustAll && uid === 0
+      ? autoTrustImpl({ registryBase, out, uid })
+      : null;
+    if (autoTrust) out("trusting names as they resolve — only where the registry publishes a matching pin");
+
     let server;
     try {
       server = await createServer({
@@ -2168,7 +2181,13 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         parkingAddress: park,
         upstreams,
         tldSet,
-        onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
+        onQuery: ({ name, address, forwarded }) => {
+          out(`  ${name} → ${address || "NXDOMAIN"}`);
+          // Only a name that actually resolved to something of ours. A forwarded
+          // clearnet name is not ours to trust, and NXDOMAIN has no origin to
+          // fetch a certificate from.
+          if (autoTrust && address && !forwarded) autoTrust.consider(name);
+        },
         onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
       });
     } catch (err) {
