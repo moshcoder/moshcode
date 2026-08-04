@@ -46,7 +46,7 @@ test("template list --json prints the stable template metadata", async () => {
 
   assert.equal(code, 0);
   assert.ok(Array.isArray(templates));
-  assert.deepEqual(templates.map((template) => template.name), ["bun-caddy-sqlite", "caddy-static"]);
+  assert.deepEqual(templates.map((template) => template.name), ["bun-caddy-sqlite", "caddy-proxy", "caddy-static"]);
   for (const template of templates) {
     assert.deepEqual(Object.keys(template), ["name", "description"]);
     assert.equal(typeof template.description, "string");
@@ -499,7 +499,7 @@ test("every bundled systemd unit is installable", async () => {
 test("the Caddyfiles keep the scheme that stops Caddy chasing a certificate", async () => {
   // Dropping `http://` makes Caddy try to provision a cert for an ending no CA
   // will issue for, and the site never comes up. Easy to "tidy away" later.
-  for (const template of ["bun-caddy-sqlite", "caddy-static"]) {
+  for (const template of ["bun-caddy-sqlite", "caddy-proxy", "caddy-static"]) {
     const caddyfile = await fs.readFile(path.join(BUNDLED_DIR, template, "Caddyfile"), "utf8");
     assert.match(caddyfile, /^http:\/\/\{\$MOSHPIT_NAME/m, template);
   }

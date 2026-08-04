@@ -61,9 +61,11 @@ import {
   normalizeLabel,
   normalizeMode,
   normalizePinKind,
+  normalizeRecordLabel,
   normalizeTld,
   openNamePurchase,
   parseMoshpitName,
+  parseMoshpitQueryName,
   PIN_KINDS,
   pinsForName,
   popularLabels,
@@ -71,6 +73,7 @@ import {
   RECORD_HELP,
   RECORD_TYPES,
   recordsForName,
+  recordsWithWildcard,
   registerName,
   registerTld,
   registerTlds,
@@ -348,7 +351,9 @@ moshpitRouter.get("/api/moshpit/records", async (req, res) => {
 /** GET /api/moshpit/tlds/:tld/records?label=blue — public, unresolved and exact. */
 moshpitRouter.get("/api/moshpit/tlds/:tld/records", async (req, res) => {
   const tld = normalizeTld(req.params.tld);
-  const label = normalizeLabel(req.query.label);
+  // normalizeRecordLabel, not normalizeLabel: `*.chovy` is a name this table
+  // can hold, and the owner reads it back through the same route they wrote it.
+  const label = normalizeRecordLabel(req.query.label);
   if (!tld) return bad(res, "not a valid TLD");
   if (!label) return bad(res, "which name? pass ?label=");
   res.json({ tld, label, records: await listRecords(tld, label) });
@@ -371,7 +376,7 @@ moshpitRouter.post("/api/moshpit/tlds/:tld/records", async (req, res) => {
     const conflict = /CNAME/.test(result.error || "");
     return bad(res, result.error || "could not publish that record", conflict ? 409 : 400);
   }
-  res.status(201).json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), record: result.record });
+  res.status(201).json({ tld: normalizeTld(req.params.tld), label: normalizeRecordLabel(req.body?.label), record: result.record });
 });
 
 /** DELETE /api/moshpit/tlds/:tld/records { label, type, value } */
@@ -382,7 +387,7 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/records", async (req, res) => {
     type: req.body?.type, value: req.body?.value,
   });
   if (!result.ok) return bad(res, result.error || "could not withdraw that record", 404);
-  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), removed: true });
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeRecordLabel(req.body?.label), removed: true });
 });
 
 /* ---- serving a name over the clearnet ---- */
@@ -1064,9 +1069,13 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
   // wants an address (which is all the bridge and the DoH server ask for) must
   // not pay for a lookup it will throw away. Callers that want the whole set
   // ask for it, or use /api/moshpit/records.
-  const resolved = parseMoshpitName(resolution.resolved);
+  //
+  // recordsWithWildcard rather than listRecords: a third-level name answers
+  // with its own records when it has them and its parent's wildcard set
+  // otherwise, and the answer has to be the same one recordsForName gives.
+  const resolved = parseMoshpitQueryName(resolution.resolved);
   const records = req.query.records && resolution.name_registered && resolved
-    ? await listRecords(resolved.tld, resolved.label)
+    ? (await recordsWithWildcard(resolved.tld, resolved.label)).records
     : null;
 
   res.json({

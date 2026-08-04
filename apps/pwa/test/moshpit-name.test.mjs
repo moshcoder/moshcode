@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  RESERVED_TLDS, normalizeLabel, normalizeTld, tldRejection, parseMoshpitName,
-  normalizeMode, resolutionPreference,
+  RESERVED_TLDS, normalizeLabel, normalizeRecordLabel, normalizeTld, tldRejection, parseMoshpitName,
+  parseMoshpitQueryName, normalizeMode, resolutionPreference,
 } from "../src/lib/moshpit-name.mjs";
 
 test("normalizeTld accepts what people actually type", () => {
@@ -63,6 +63,38 @@ test("parseMoshpitName splits exactly one dot", () => {
   assert.equal(parseMoshpitName("nodot"), null);
   assert.equal(parseMoshpitName(""), null);
   assert.equal(parseMoshpitName("-bad.agentic"), null);
+});
+
+test("parseMoshpitQueryName takes one more label on the left, for the record paths only", () => {
+  assert.deepEqual(parseMoshpitQueryName("blue.eggs"),
+    { label: "blue", tld: "eggs", sub: null, parent: "blue", wildcard: false });
+  // The records table keys on (tld, label), so a third-level name is a dotted
+  // label — no new shape, and `parent` names the registered name it hangs off.
+  assert.deepEqual(parseMoshpitQueryName("foo.chovy.hacker"),
+    { label: "foo.chovy", tld: "hacker", sub: "foo", parent: "chovy", wildcard: false });
+  assert.deepEqual(parseMoshpitQueryName("*.chovy.hacker"),
+    { label: "*.chovy", tld: "hacker", sub: "*", parent: "chovy", wildcard: true });
+
+  // `*` is the whole leftmost label or it is nothing.
+  assert.equal(parseMoshpitQueryName("f*.chovy.hacker"), null);
+  assert.equal(parseMoshpitQueryName("foo.*.hacker"), null);
+  assert.equal(parseMoshpitQueryName("*.*.hacker"), null);
+  assert.equal(parseMoshpitQueryName("a.b.c.d"), null, "two levels deep at most");
+  assert.equal(parseMoshpitQueryName("foo.1.420"), null, "the IPv4-literal guard still holds");
+
+  // Registration is not weakened: the strict parser still refuses all of this.
+  assert.equal(parseMoshpitName("foo.chovy.hacker"), null);
+  assert.equal(parseMoshpitName("*.chovy.hacker"), null);
+});
+
+test("normalizeRecordLabel takes a label or the wildcard form of one", () => {
+  assert.equal(normalizeRecordLabel("chovy"), "chovy");
+  assert.equal(normalizeRecordLabel("*.chovy"), "*.chovy");
+  assert.equal(normalizeRecordLabel("*.CHOVY"), "*.chovy");
+  assert.equal(normalizeRecordLabel("*"), null);
+  assert.equal(normalizeRecordLabel("ch*vy"), null);
+  assert.equal(normalizeRecordLabel("*.*"), null);
+  assert.equal(normalizeRecordLabel(""), null);
 });
 
 /* ---- resolution precedence: the tronbrowser.dev setting ---- */

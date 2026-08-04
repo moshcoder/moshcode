@@ -153,8 +153,12 @@ the resolver will go to port 80 regardless of what the target says.
   colleague who hasn't installed it, not Googlebot, not a webhook from a payment
   provider. `pit.moshcode.sh/n/foo.whatever` is the URL to send people who have
   installed nothing — it fetches the target server-side and hands back the page.
-- **One level deep.** `foo.whatever` resolves; `www.foo.whatever` does not.
-  Moshpit names are exactly one label and one ending.
+- **One level deep, plus a wildcard.** `foo.whatever` resolves; `www.foo.whatever`
+  does not — unless you publish a record on `*.foo.whatever`, in which case
+  every name under yours answers with it, as the name that was asked. The
+  wildcard is a record name, not a name: registration stays exactly one label
+  and one ending, and `*` is legal only there. A name under yours with no
+  wildcard covering it is NXDOMAIN, even when `foo.whatever` itself is real.
 - **The gateway is not a file host.** It gives the origin 10 seconds and caps
   the body at 5 MB, strips cookies and `Authorization` in both directions, and
   sandboxes the result with CSP.

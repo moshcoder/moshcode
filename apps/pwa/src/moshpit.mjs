@@ -19,8 +19,10 @@ import {
   MAX_BULK_TLDS,
   MAX_CHILD_PRICE_USD,
   normalizeLabel,
+  normalizeRecordLabel,
   normalizeTld,
   parseMoshpitName,
+  parseMoshpitQueryName,
   parseTldList,
   tldRejection,
 } from "./lib/moshpit-name.mjs";
@@ -32,8 +34,8 @@ import {
 } from "./lib/moshpit-records.mjs";
 
 export {
-  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_CHUNK, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
-  parseTldList, tldRejection, normalizeMode, resolutionPreference, STARTER_LABELS, suggestedLabels,
+  RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_CHUNK, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeRecordLabel, normalizeTld, parseMoshpitName,
+  parseMoshpitQueryName, parseTldList, tldRejection, normalizeMode, resolutionPreference, STARTER_LABELS, suggestedLabels,
 } from "./lib/moshpit-name.mjs";
 
 export {
@@ -380,7 +382,11 @@ export async function releaseName({ tld: tldInput, label: labelInput, userId }) 
   await run(`DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   // Records go with the name for the same reason, and it matters more: an
   // inherited MX would route the next holder's mail to the last one's server.
-  await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  // The wildcard hangs off the name rather than existing beside it, so
+  // `*.chovy`'s records go too — an inherited one would answer for every
+  // subdomain of a name whose owner just changed.
+  await run(`DELETE FROM moshpit_records WHERE tld = ? AND (label = ? OR label = ?)`,
+    [owned.tld, owned.label, `*.${owned.label}`]);
   await run(`DELETE FROM moshpit_names WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await logAction(owned.tld, userId, `unname:${owned.label}`);
   return { ok: true };
@@ -393,6 +399,23 @@ async function ownedName(tldInput, labelInput, userId) {
   const existing = await getName(tld, label);
   if (!existing) return { ok: false, error: `${label}.${tld} is not registered` };
   if (existing.user_id !== userId) return { ok: false, error: `you do not own ${label}.${tld}` };
+  return { ok: true, tld, label };
+}
+
+/**
+ * Ownership of the name a record goes on — including the wildcard form.
+ *
+ * Records for `*.chovy` are authorized by owning `chovy`: the wildcard answers
+ * for everything under the name, so it belongs to whoever the name belongs to.
+ * The wildcard label itself is what comes back, because that is the key the
+ * records table stores — the parent only decided whether you may write there.
+ */
+async function ownedRecordName(tldInput, labelInput, userId) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeRecordLabel(labelInput);
+  if (!tld || !label) return { ok: false, error: "not a valid name" };
+  const owned = await ownedName(tld, label.startsWith("*.") ? label.slice(2) : label, userId);
+  if (!owned.ok) return owned;
   return { ok: true, tld, label };
 }
 
@@ -611,13 +634,20 @@ export async function listNamePurchases(userId, limit = 50) {
  * under it keeps its own identity on the other side.
  */
 export async function resolveMoshpitName(input) {
-  const parsed = parseMoshpitName(input);
+  const parsed = parseMoshpitQueryName(input);
   if (!parsed) return null;
   const { label, tld } = parsed;
   const name = `${label}.${tld}`;
 
   const owner = await getTld(tld);
-  if (!owner) return { name, resolved: name, aliased: false, registered: false, name_registered: false, target: null };
+  if (!owner) {
+    // A third-level name under an ending nobody holds is not a name at all:
+    // null, so the API's callers say "not a Moshpit name" rather than parking
+    // something the pit has no authority over. Two-label names keep the old
+    // answer — the extension's precedence rule reads `registered` off it.
+    if (parsed.sub) return null;
+    return { name, resolved: name, aliased: false, registered: false, name_registered: false, target: null };
+  }
 
   // Where the name ends up: itself, unless the TLD points elsewhere and this
   // name is not held back from that alias. Exemption is checked at read time,
@@ -625,6 +655,28 @@ export async function resolveMoshpitName(input) {
   const aliased = Boolean(owner.alias_of) && !(await isExempt(tld, label));
   const resolvedTld = aliased ? owner.alias_of : tld;
   const resolved = `${label}.${resolvedTld}`;
+
+  // A third-level name has no moshpit_names row — registration is strictly two
+  // labels. What it can have is records: its own exact set, or the wildcard
+  // set of its parent. With neither it does not exist at all, and null is how
+  // a resolver hears NXDOMAIN rather than "parked" — a parked answer would
+  // send every typo under a real name to the for-sale page.
+  if (parsed.sub) {
+    const found = await recordsWithWildcard(resolvedTld, label);
+    if (!found.records.length) return null;
+    return {
+      name,
+      resolved,
+      aliased,
+      registered: true,
+      // The name "exists" in the only way a third-level name can: something
+      // answers for it. `target` is derived from those records the same way
+      // addRecord derives it for a registered name, so a wildcard AAAA is the
+      // address answer exactly as an exact AAAA would be.
+      name_registered: true,
+      target: effectiveTarget(null, found.records),
+    };
+  }
 
   // The name is looked up on the TLD it actually resolves to -- that is the one
   // whose operator mints names there, so it is the only place the answer can
@@ -777,10 +829,38 @@ const RECORD_ORDER = `CASE type WHEN 'AAAA' THEN 0 WHEN 'CNAME' THEN 1 WHEN 'MX'
 
 export async function listRecords(tldInput, labelInput) {
   const tld = normalizeTld(tldInput);
-  const label = normalizeLabel(labelInput);
-  if (!tld || !label) return [];
+  // Read by the label exactly as stored — an ordinary label, the wildcard
+  // `*.chovy`, or a third-level `foo.chovy` on the exact side of a wildcard
+  // lookup. Writes are the strict half (normalizeRecordLabel, in addRecord);
+  // a read that re-validated the key could never see a third-level row at all.
+  const label = String(labelInput ?? "").trim().toLowerCase();
+  if (!tld || !label || label.length > 127) return [];
   return all(`SELECT ${RECORD_COLS} FROM moshpit_records WHERE tld = ? AND label = ?
               ORDER BY ${RECORD_ORDER}`, [tld, label]);
+}
+
+/**
+ * The set a query for (tld, label) answers with, wildcard and all.
+ *
+ * Lookup order is DNS's own: the exact name first, then the wildcard of the
+ * parent. `foo.chovy` under `hacker` is answered by records stored as
+ * (hacker, "foo.chovy") when it has any — there normally are none, because a
+ * third-level name cannot be registered and only the wildcard form can be
+ * published — and otherwise by (hacker, "*.chovy"), answered AS the asked
+ * name, which is what a wildcard means everywhere else in DNS too.
+ *
+ * A two-label name and the wildcard name itself are exact lookups: `*.chovy`
+ * does not answer for `chovy`, and nothing answers for `*.chovy` but its own
+ * records.
+ */
+export async function recordsWithWildcard(tld, label) {
+  if (!String(label).includes(".") || String(label).startsWith("*.")) {
+    return { label, records: await listRecords(tld, label) };
+  }
+  const exact = await listRecords(tld, label);
+  if (exact.length) return { label, records: exact };
+  const wildcard = `*.${String(label).slice(String(label).indexOf(".") + 1)}`;
+  return { label: wildcard, records: await listRecords(tld, wildcard) };
 }
 
 /**
@@ -798,7 +878,7 @@ export async function recordsForName(input) {
   const resolution = await resolveMoshpitName(input);
   if (!resolution || !resolution.registered) return null;
 
-  const parsed = parseMoshpitName(resolution.resolved);
+  const parsed = parseMoshpitQueryName(resolution.resolved);
   if (!parsed) return null;
 
   return {
@@ -808,7 +888,7 @@ export async function recordsForName(input) {
     label: parsed.label,
     name_registered: resolution.name_registered,
     target: resolution.target,
-    records: await listRecords(parsed.tld, parsed.label),
+    records: (await recordsWithWildcard(parsed.tld, parsed.label)).records,
   };
 }
 
@@ -825,7 +905,7 @@ export async function recordsForName(input) {
  * what they wanted.
  */
 export async function addRecord({ tld: tldInput, label: labelInput, type, value, ttl, priority, userId }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await ownedRecordName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const name = `${owned.label}.${owned.tld}`;
@@ -860,7 +940,13 @@ export async function addRecord({ tld: tldInput, label: labelInput, type, value,
   // name with a perfectly good AAAA record would still resolve to the parking
   // page. Never the other way: an owner who typed a target is not overruled by
   // a record they added afterwards.
-  if (!(await getName(owned.tld, owned.label))?.target) {
+  //
+  // A wildcard has no moshpit_names row to mirror into — `*.chovy` is not a
+  // registered name, and writing the parent's target would answer for the
+  // parent itself, which the wildcard deliberately does not do. Its address
+  // answer is derived from the records at resolve time instead, by
+  // resolveMoshpitName, through the same effectiveTarget rule.
+  if (!owned.label.startsWith("*.") && !(await getName(owned.tld, owned.label))?.target) {
     const target = effectiveTarget(null, await listRecords(owned.tld, owned.label));
     if (target) await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`, [target, owned.tld, owned.label]);
   }
@@ -877,7 +963,7 @@ export async function addRecord({ tld: tldInput, label: labelInput, type, value,
  * that already knows exactly which record it means.
  */
 export async function removeRecord({ tld: tldInput, label: labelInput, type, value, userId }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await ownedRecordName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const wanted = normalizeRecordType(type);

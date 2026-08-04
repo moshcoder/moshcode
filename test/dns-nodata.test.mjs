@@ -143,7 +143,9 @@ test("a name the registry cannot hold is still NXDOMAIN, on every type", async (
   const reg = parked();
   const server = await serve(t, reg);
   for (const type of [TYPE_A, TYPE_HTTPS]) {
-    const reply = await ask(server, query("deep.sub.eggs", { type }));
+    // Four labels: three is a name under a name now and is looked up, so it no
+    // longer proves the bridge refuses a shape on sight.
+    const reply = await ask(server, query("too.deep.sub.eggs", { type }));
     assert.equal(rcode(reply), RCODE_NXDOMAIN, `type ${type} on a non-name`);
   }
   assert.equal(reg.calls.length, 0, "a shape the registry cannot hold is never looked up");

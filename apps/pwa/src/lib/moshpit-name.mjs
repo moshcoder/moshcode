@@ -96,6 +96,68 @@ export function parseMoshpitName(input) {
 }
 
 /**
+ * A label as the records table may hold it: an ordinary label, or the wildcard
+ * form `*.<label>`.
+ *
+ * `*` is legal as the whole leftmost label of a record name and nowhere else.
+ * `*.chovy` is "every name under chovy", which is a thing DNS has always been
+ * able to say; `ch*vy` or `*.*` is nothing, and a parser that guessed at it
+ * would publish a record no resolver will ever match.
+ *
+ * Registration does not use this — moshpit_names stays strictly one label, and
+ * normalizeLabel is still the only door into it. This is for the paths that
+ * read and write DNS records, where a wildcard is a record name, not a name.
+ */
+export function normalizeRecordLabel(input) {
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (!raw.startsWith("*.")) return normalizeLabel(raw);
+  const parent = normalizeLabel(raw.slice(2));
+  return parent ? `*.${parent}` : null;
+}
+
+/**
+ * A name as the record and resolve paths may see it: everything
+ * parseMoshpitName accepts, plus one more label on the left.
+ *
+ * `foo.chovy.hacker` comes back as tld "hacker", label "foo.chovy" — the
+ * records table keys on (tld, label), so a third-level name needs no new
+ * shape, only a second dot in the label half. The wildcard spelling
+ * `*.chovy.hacker` is the same with `*` as the leftmost label, and it is the
+ * only place `*` may stand.
+ *
+ * Returned alongside: `sub`, the leftmost label as written (null for a
+ * two-label name), and `parent`, the registered name the wildcard hangs off —
+ * `foo.chovy.hacker` is answered by the records of `*.chovy`, never by
+ * registering `foo.chovy`, because registration stays two labels.
+ *
+ * parseMoshpitName is deliberately untouched: registration, pricing and the
+ * bulk-claim list all keep the strict two-label rule, and only the paths that
+ * answer DNS questions take this one.
+ */
+export function parseMoshpitQueryName(input) {
+  const raw = String(input ?? "").trim().toLowerCase().replace(/^\.+/, "").replace(/\.+$/, "");
+  if (!raw) return null;
+  const parts = raw.split(".");
+  if (parts.length === 2) {
+    const name = parseMoshpitName(raw);
+    return name ? { ...name, sub: null, parent: name.label, wildcard: false } : null;
+  }
+  if (parts.length !== 3) return null;
+  const [sub, parentLabel, ending] = parts;
+  const parent = normalizeLabel(parentLabel);
+  const tld = normalizeTld(ending);
+  if (!parent || !tld) return null;
+  if (sub !== "*" && !normalizeLabel(sub)) return null;
+
+  // The same IPv4-literal guard parseMoshpitName applies, on the registered
+  // half: `foo.1.420` reads as an address with something in front of it.
+  if (/^\d+$/.test(parent) && /^\d+$/.test(tld)) return null;
+
+  const left = sub === "*" ? "*" : normalizeLabel(sub);
+  return { label: `${left}.${parent}`, tld, sub: left, parent, wildcard: sub === "*" };
+}
+
+/**
  * Labels worth offering under an ending that has nothing under it yet.
  *
  * A new ending's page is empty by definition, and "nothing lives here yet" is a

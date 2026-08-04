@@ -109,3 +109,49 @@ test("IPv6 clients are limited by /64, as on the UDP side", async () => {
   const next = await handle({ method: "POST", body: query("blue.eggs"), address: "2001:db8:1:2::99" });
   assert.equal(rcode(next.body), 5, "moving within the prefix does not buy a fresh bucket");
 });
+
+/* ------------------------------------------------------------------ wildcards */
+
+/** A registry holding `*.chovy.hacker` and nothing under it. */
+const wildcardRegistry = (target) => async (url) => {
+  const wants = url.includes("records=1");
+  const asked = decodeURIComponent(new URL(url).searchParams.get("name"));
+  const held = asked === "*.chovy.hacker";
+  return {
+    ok: true,
+    json: async () => ({
+      name_registered: held,
+      target: held ? target : null,
+      ...(wants ? { records: [] } : {}),
+    }),
+  };
+};
+
+test("a third-level name is answered by its parent's wildcard, as the asked name", async () => {
+  // The UDP bridge answers the same question the same way — dns-records.test
+  // holds that half — and the two must never disagree.
+  const handle = createDohHandler({
+    tldSet: new Set(["hacker"]),
+    fetchImpl: wildcardRegistry("2606:4700:4700::1111"),
+  });
+  const res = await handle({ method: "POST", body: query("foo.chovy.hacker", TYPE_AAAA) });
+  assert.equal(res.status, 200);
+  assert.equal(answers(res.body), 1);
+  // The answer's owner is the question's name (the 0xc00c pointer readAnswers
+  // asserts on the bridge side), and the address is the wildcard's.
+  assert.deepEqual([...res.body.subarray(res.body.length - 16).subarray(0, 4)], [0x26, 0x06, 0x47, 0x00]);
+});
+
+test("a third-level name nobody holds is NXDOMAIN, never parked", async () => {
+  // Parking is for names that are for sale; a sub-name never is. Not held
+  // exactly, not held by wildcard — NXDOMAIN, where a two-label miss would
+  // have been sent to the parking page.
+  const handle = createDohHandler({
+    tldSet: new Set(["hacker"]),
+    parkingAddress: "203.0.113.9",
+    fetchImpl: okJson({ name_registered: false, target: null }),
+  });
+  const res = await handle({ method: "POST", body: query("foo.chovy.hacker", TYPE_AAAA) });
+  assert.equal(rcode(res.body), 3, "NXDOMAIN");
+  assert.equal(answers(res.body), 0);
+});

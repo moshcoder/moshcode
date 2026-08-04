@@ -224,12 +224,17 @@ test("an unregistered name under a claimed ending is parked, not denied", async 
   assert.equal(count(reply), 0);
 });
 
-test("a record question about something that is not a name at all is NXDOMAIN", async (t) => {
-  // Three labels cannot be a Moshpit name — the namespace is one level deep —
-  // so there is nothing here to be waiting to be pointed.
-  const server = await serve(t, registry({ records: [] }));
+test("a record question about a third-level name nobody holds is NXDOMAIN", async (t) => {
+  // Three labels is a name under a name now, so it cannot be refused on sight
+  // anymore — but a name the registry does not hold, exactly or by wildcard,
+  // has nothing to park to and is NXDOMAIN rather than parked.
+  const reg = registry({ records: [], registered: false });
+  const server = await serve(t, reg);
   const reply = await ask(server, query("not.a.name", { type: TYPE_TXT }));
   assert.equal(rcode(reply), RCODE_NXDOMAIN);
+  // The wildcard got its chance before the name was denied: exact first, then
+  // `*.a.name`, and only then NXDOMAIN.
+  assert.ok(reg.calls.some((u) => u.includes("name=*.a.name")), "the wildcard was never asked");
 });
 
 test("a published CNAME answers the address question that had nothing to say", async (t) => {
@@ -280,11 +285,13 @@ test("answerRecords separates 'no such record' from 'no such name'", async () =>
   assert.deepEqual(await answerRecords("blue.eggs", { fetchImpl: here.fetchImpl, type: "MX" }),
     { exists: true, records: [] });
 
-  // Not a name this registry can be asked about at all.
-  const reg = registry({ records: [] });
+  // A third-level name nobody holds — not exactly, and not by wildcard. It can
+  // no longer be rejected on sight (three labels are a name under a name now),
+  // so it costs the exact question and the wildcard one, and no more.
+  const reg = registry({ records: [], registered: false });
   assert.deepEqual(await answerRecords("not.a.name", { fetchImpl: reg.fetchImpl, type: "MX" }),
     { exists: false, records: [] });
-  assert.equal(reg.calls.length, 0, "a name it could reject on sight still cost a round trip");
+  assert.equal(reg.calls.length, 2, "exact name, then the wildcard, then done");
 });
 
 test("answerRecords asks the registry for the record set exactly once", async () => {
@@ -319,4 +326,94 @@ test("DoH follows a published CNAME on an address question too", async () => {
   const res = await handle({ method: "POST", body: query("blue.eggs", { type: TYPE_A }), address: "203.0.113.9" });
   const [answer] = readAnswers(res.body, "blue.eggs");
   assert.equal(answer.type, TYPE_CNAME, "the two resolvers disagree, which is the bug DoH exists to avoid");
+});
+
+/* ------------------------------------------------------------------ wildcards */
+
+/**
+ * A registry that holds `*.chovy.hacker` and nothing under it.
+ *
+ * Deliberately dumber than the real pit, which applies the wildcard match
+ * itself: this one knows the wildcard only as a name of its own, so the
+ * exact-then-wildcard fallback in resolveName is what makes the answer — which
+ * is the half of the feature that lives on this side of HTTP.
+ */
+function wildcardOnly({ target = null, records = [] } = {}) {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const wants = url.includes("records=1");
+    const asked = decodeURIComponent(new URL(url).searchParams.get("name"));
+    const held = asked === "*.chovy.hacker";
+    return {
+      ok: true,
+      json: async () => ({
+        name_registered: held,
+        target: held ? target : null,
+        ...(wants ? { records: held ? records : [] } : {}),
+      }),
+    };
+  };
+  return { fetchImpl, calls };
+}
+
+test("a third-level name is answered by its parent's wildcard, as the asked name", async (t) => {
+  const reg = wildcardOnly({ records: [{ type: "TXT", value: "wild", ttl: 300, priority: null }] });
+  const server = await serve(t, reg);
+  const reply = await ask(server, query("foo.chovy.hacker", { type: TYPE_TXT }));
+
+  assert.equal(rcode(reply), RCODE_OK);
+  const [answer] = readAnswers(reply, "foo.chovy.hacker");
+  // readAnswers asserts the owner is the question's name — a wildcard answer
+  // names what was asked, never the `*.chovy.hacker` it came from.
+  assert.equal(answer.value, "wild");
+  assert.ok(reg.calls.some((u) => u.includes("name=*.chovy.hacker")), "the wildcard was never asked");
+});
+
+test("an exact third-level answer beats the wildcard, which is never asked", async (t) => {
+  // Exact first, always: a name with its own records does not fall through to
+  // the wildcard that would otherwise cover it.
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const wants = url.includes("records=1");
+    const asked = decodeURIComponent(new URL(url).searchParams.get("name"));
+    const exact = asked === "foo.chovy.hacker";
+    return {
+      ok: true,
+      json: async () => ({
+        name_registered: true,
+        target: null,
+        ...(wants ? { records: [{ type: "TXT", value: exact ? "exact" : "wild", ttl: 300, priority: null }] } : {}),
+      }),
+    };
+  };
+  const server = await serve(t, { fetchImpl, calls });
+  const reply = await ask(server, query("foo.chovy.hacker", { type: TYPE_TXT }));
+
+  const [answer] = readAnswers(reply, "foo.chovy.hacker");
+  assert.equal(answer.value, "exact");
+  assert.ok(!calls.some((u) => u.includes("name=*")), "the wildcard was asked despite an exact answer");
+});
+
+test("a two-label name never pays for the wildcard question", async (t) => {
+  // The fallback is for names under names. An unregistered two-label name is
+  // parked on one question, exactly as before.
+  const reg = registry({ records: [], registered: false });
+  const server = await serve(t, reg);
+  await ask(server, query("nobody.eggs", { type: TYPE_TXT }));
+  assert.equal(reg.calls.length, 1);
+  assert.ok(!reg.calls.some((u) => u.includes("name=*")));
+});
+
+test("DoH answers a third-level name by wildcard exactly as the bridge does", async () => {
+  // The one invariant this endpoint exists under: the two resolvers must not
+  // disagree, or DoH reintroduces the gap it was built to close.
+  const reg = wildcardOnly({ records: [{ type: "TXT", value: "wild", ttl: 300, priority: null }] });
+  const handle = createDohHandler({ fetchImpl: reg.fetchImpl, tldSet: new Set(["hacker"]) });
+
+  const res = await handle({ method: "POST", body: query("foo.chovy.hacker", { type: TYPE_TXT }), address: "203.0.113.9" });
+  assert.equal(res.status, 200);
+  const [answer] = readAnswers(res.body, "foo.chovy.hacker");
+  assert.equal(answer.value, "wild");
 });

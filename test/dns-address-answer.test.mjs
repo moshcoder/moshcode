@@ -293,3 +293,75 @@ test("a name the registry does not hold is still NXDOMAIN on an address question
   const reply = await ask(server, query("scrambled.eggs"));
   assert.equal(rcode(reply), RCODE_NXDOMAIN);
 });
+
+/* ------------------------------------------------------------------ wildcards */
+
+/**
+ * A registry that holds `*.chovy.hacker` and nothing under it — dumber than
+ * the real pit on purpose, so the exact-then-wildcard fallback on this side of
+ * HTTP is what produces the answer.
+ */
+function wildcardOnly({ target = null, records = [] } = {}) {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const wants = url.includes("records=1");
+    const asked = decodeURIComponent(new URL(url).searchParams.get("name"));
+    const held = asked === "*.chovy.hacker";
+    return {
+      ok: true,
+      json: async () => ({
+        name_registered: held,
+        target: held ? target : null,
+        ...(wants ? { records: held ? records : [] } : {}),
+      }),
+    };
+  };
+  return { fetchImpl, calls };
+}
+
+test("a wildcard AAAA answers a third-level address question, as the asked name", async (t) => {
+  // The primary use of the feature: `*.chovy.hacker` publishes the owner's
+  // IPv6, and every name under chovy answers with it.
+  const server = await serve(t, wildcardOnly({ target: "2606:4700:4700::1111" }));
+  const reply = await ask(server, query("foo.chovy.hacker", { type: TYPE_AAAA }));
+
+  assert.equal(rcode(reply), RCODE_OK);
+  const [record] = readAnswers(reply, "foo.chovy.hacker");
+  assert.equal(record.owner, "foo.chovy.hacker", "the answer carries the asked name, not the wildcard");
+  assert.equal(record.type, TYPE_AAAA);
+  assert.equal(record.rdata.readUInt16BE(0), 0x2606);
+});
+
+test("a wildcard AAAA record answers when the wildcard has no target of its own", async (t) => {
+  // The registry need not mirror the record into `target`: the records path
+  // finds the address exactly as it does for a registered name.
+  const server = await serve(t, wildcardOnly({
+    records: [{ type: "AAAA", value: "2606:4700:4700::1111", ttl: 300 }],
+  }));
+  const reply = await ask(server, query("foo.chovy.hacker", { type: TYPE_AAAA }));
+
+  assert.equal(rcode(reply), RCODE_OK);
+  const [record] = readAnswers(reply, "foo.chovy.hacker");
+  assert.equal(record.type, TYPE_AAAA);
+  assert.equal(record.rdata.readUInt16BE(0), 0x2606);
+});
+
+test("a third-level name is never parked", async (t) => {
+  // Parking is for names that are for sale, and a sub-name is never for sale —
+  // it exists only through a wildcard. A wildcard that exists but has no
+  // address to give is NODATA, and sending it to the for-sale page would be
+  // the one answer that is always wrong.
+  const reg = wildcardOnly({});
+  const plan = await addressAnswer("foo.chovy.hacker", {
+    fetchImpl: reg.fetchImpl,
+    parkingAddress: "198.51.100.9",
+  });
+  assert.equal(plan.kind, "nodata");
+  assert.notEqual(plan.address, "198.51.100.9");
+
+  const server = await serve(t, reg);
+  const reply = await ask(server, query("foo.chovy.hacker", { type: TYPE_AAAA }));
+  assert.equal(rcode(reply), RCODE_OK);
+  assert.equal(answers(reply), 0);
+});

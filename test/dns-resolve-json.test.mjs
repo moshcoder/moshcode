@@ -82,10 +82,12 @@ test("JSON preserves failure statuses and exit codes", async (t) => {
 
   await t.test("invalid Moshpit name", async () => {
     globalThis.fetch = async () => { throw new Error("must not fetch"); };
-    const { code, value } = await run("three.part.name");
+    // Four labels: three is a name under a name now, so it no longer proves
+    // the parser refused anything.
+    const { code, value } = await run("four.part.name.here");
     assert.equal(code, 1);
     assert.deepEqual(value, {
-      name: "three.part.name",
+      name: "four.part.name.here",
       status: "not-a-name",
       target: null,
       pitUrl: null,

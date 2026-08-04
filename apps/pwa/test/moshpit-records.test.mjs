@@ -266,3 +266,105 @@ test("moshpit records: publishing them", { skip: installed ? false : "pwa depend
 
   await run(`DELETE FROM moshpit_records`);
 });
+
+/* ---------- the wildcard: records for everything under a name ---------- */
+
+test("moshpit records: the wildcard", { skip: installed ? false : "pwa dependencies not installed" }, async (t) => {
+  const { moshpit, run } = await boot();
+
+  const claimed = await moshpit.registerTld({ tld: "hacker", userId: ALICE, ownerEmail: "alice@example.com" });
+  assert.equal(claimed.ok, true, claimed.error);
+  await moshpit.registerName({ tld: "hacker", label: "chovy", userId: ALICE });
+
+  await t.test("the parent's owner publishes it, stored as `*.chovy`", async () => {
+    const added = await moshpit.addRecord({ tld: "hacker", label: "*.chovy", userId: ALICE, type: "AAAA", value: V6 });
+    assert.equal(added.ok, true, added.error);
+    const records = await moshpit.listRecords("hacker", "*.chovy");
+    assert.deepEqual(records.map((r) => [r.type, r.value]), [["AAAA", V6]]);
+
+    // The wildcard is not the parent: the apex itself publishes nothing, and
+    // no target is mirrored onto it — `*.chovy` answers for what is under
+    // chovy, never for chovy.
+    assert.deepEqual(await moshpit.listRecords("hacker", "chovy"), []);
+    assert.equal((await moshpit.getName("hacker", "chovy")).target, null);
+  });
+
+  await t.test("only the parent's owner may publish or withdraw it", async () => {
+    const added = await moshpit.addRecord({ tld: "hacker", label: "*.chovy", userId: BOB, type: "TXT", value: "mine" });
+    assert.equal(added.ok, false);
+    assert.match(added.error, /do not own/);
+
+    const removed = await moshpit.removeRecord({ tld: "hacker", label: "*.chovy", userId: BOB, type: "AAAA", value: V6 });
+    assert.equal(removed.ok, false);
+    assert.match(removed.error, /do not own/);
+    assert.equal((await moshpit.listRecords("hacker", "*.chovy")).length, 1, "bob withdrew nothing");
+  });
+
+  await t.test("`*` is a whole leftmost label or it is refused", async () => {
+    for (const label of ["*", "ch*vy", "*.*", "foo.*"]) {
+      const result = await moshpit.addRecord({ tld: "hacker", label, userId: ALICE, type: "TXT", value: "x" });
+      assert.equal(result.ok, false, `${label} was accepted`);
+    }
+    // Registration keeps refusing it everywhere — a wildcard is a record name,
+    // never a name.
+    assert.equal((await moshpit.registerName({ tld: "hacker", label: "*", userId: ALICE })).ok, false);
+  });
+
+  await t.test("every name under chovy answers with the wildcard's records, as itself", async () => {
+    const found = await moshpit.recordsForName("foo.chovy.hacker");
+    assert.equal(found.name, "foo.chovy.hacker");
+    assert.equal(found.name_registered, true);
+    assert.deepEqual(found.records.map((r) => [r.type, r.value]), [["AAAA", V6]]);
+
+    // The wildcard's address is the effective target, through the same
+    // effectiveTarget rule a registered name's first AAAA takes.
+    const resolution = await moshpit.resolveMoshpitName("foo.chovy.hacker");
+    assert.equal(resolution.target, V6);
+    assert.equal(resolution.name_registered, true);
+  });
+
+  await t.test("an exact third-level record beats the wildcard", async () => {
+    // No route publishes one — a third-level name cannot be registered — but
+    // the table can hold it and the lookup order is DNS's own: exact, then
+    // wildcard.
+    await run(`INSERT INTO moshpit_records (tld, label, type, value, ttl, priority, user_id, created_at)
+               VALUES ('hacker', 'foo.chovy', 'TXT', 'exact', 300, NULL, ?, ?)`, [ALICE, Date.now()]);
+
+    const found = await moshpit.recordsForName("foo.chovy.hacker");
+    assert.deepEqual(found.records.map((r) => r.value), ["exact"]);
+    // A sibling without its own records still gets the wildcard's answer.
+    const other = await moshpit.recordsForName("bar.chovy.hacker");
+    assert.deepEqual(other.records.map((r) => r.value), [V6]);
+  });
+
+  await t.test("no wildcard is not-exists, even when the parent is real", async () => {
+    await moshpit.registerName({ tld: "hacker", label: "plain", userId: ALICE });
+    assert.equal(await moshpit.resolveMoshpitName("foo.plain.hacker"), null);
+    assert.equal(await moshpit.recordsForName("foo.plain.hacker"), null);
+  });
+
+  await t.test("the wildcard's own name answers with its own records", async () => {
+    const found = await moshpit.recordsForName("*.chovy.hacker");
+    assert.deepEqual(found.records.map((r) => r.value), [V6]);
+  });
+
+  await t.test("withdrawing the wildcard's record makes the subdomains not-exists again", async () => {
+    const gone = await moshpit.removeRecord({ tld: "hacker", label: "*.chovy", userId: ALICE, type: "AAAA", value: V6 });
+    assert.equal(gone.ok, true, gone.error);
+    // foo.chovy still has its exact TXT, so it answers; bar has nothing left.
+    assert.equal(await moshpit.resolveMoshpitName("bar.chovy.hacker"), null);
+    assert.equal((await moshpit.recordsForName("foo.chovy.hacker")).records.length, 1);
+  });
+
+  await t.test("a released name takes its wildcard with it", async () => {
+    await moshpit.registerName({ tld: "hacker", label: "temp", userId: ALICE });
+    await moshpit.addRecord({ tld: "hacker", label: "*.temp", userId: ALICE, type: "TXT", value: "gone soon" });
+    await moshpit.releaseName({ tld: "hacker", label: "temp", userId: ALICE });
+
+    // Same rule as the records on the name itself: the next holder of temp
+    // must not inherit answers for everything under it.
+    assert.deepEqual(await moshpit.listRecords("hacker", "*.temp"), []);
+  });
+
+  await run(`DELETE FROM moshpit_records WHERE tld = 'hacker'`);
+});

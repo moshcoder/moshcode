@@ -374,13 +374,21 @@ export function buildResponse(query, buf, address, ttl = DEFAULT_TTL, exists = B
 
 /* ------------------------------------------------------------------ registry */
 
-/** Names the registry can hold: exactly one label and one TLD. */
+/**
+ * Names the registry can hold: exactly one label and one TLD, or a third label
+ * under such a name — including `*` as the whole leftmost label, the wildcard
+ * an owner publishes for everything under their name.
+ *
+ * A third-level answer is shaped { sub, label, tld } — `foo.chovy.hacker` is
+ * sub "foo" under the registered name label "chovy" — because the wildcard
+ * question it may fall back to is built from those parts: `*.chovy.hacker`.
+ */
 export function parseRegistryName(hostname) {
   const host = String(hostname || "").trim().toLowerCase().replace(/\.$/, "");
   if (!host || host.includes(":")) return null;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
   const parts = host.split(".");
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2 && parts.length !== 3) return null;
   // Letters and digits only, matching the registry. A dash is the cheapest way
   // to mint a look-alike of an ending someone else holds, and in a namespace
   // one level deep and first come first served there is nowhere to retreat to.
@@ -388,6 +396,14 @@ export function parseRegistryName(hostname) {
   // rule itself: a name this bridge accepts and the registry rejects resolves
   // to a page that says it does not exist.
   const LABEL = /^[a-z0-9]{1,63}$/;
+  if (parts.length === 3) {
+    const [sub, label, tld] = parts;
+    // `*` is a label only whole and only leftmost — `f*.chovy.hacker` and
+    // `foo.*.hacker` are not names the registry can be asked about.
+    if (sub !== "*" && !LABEL.test(sub)) return null;
+    if (!LABEL.test(label) || !LABEL.test(tld)) return null;
+    return { sub, label, tld };
+  }
   const [label, tld] = parts;
   if (!LABEL.test(label) || !LABEL.test(tld)) return null;
   return { label, tld };
@@ -446,6 +462,10 @@ export async function fetchTlds({ registryBase = DEFAULT_REGISTRY_BASE, fetchImp
  * name with no target is NOT an error, it is a name waiting to be pointed
  * somewhere. Handing back the parking host means `curl california.oranges`
  * reaches a page that explains itself instead of failing to resolve.
+ *
+ * A third-level name adds a fourth: it exists only through its parent or a
+ * wildcard the parent published, so missing both is NXDOMAIN — there is
+ * nothing to park it to.
  */
 export async function resolveName(
   name,
@@ -454,15 +474,42 @@ export async function resolveName(
   const parsed = parseRegistryName(name);
   if (!parsed) return { status: "not-a-name", target: null, records: [] };
 
+  const full = `${parsed.sub ? `${parsed.sub}.` : ""}${parsed.label}.${parsed.tld}`;
+  const ask = (asked) => askRegistry(asked, { registryBase, fetchImpl, timeoutMs, records });
+
+  let result = await ask(full);
+  // A third-level name the registry does not hold may still be covered by a
+  // wildcard its owner published. The registry applies that match itself;
+  // asking for the literal `*.parent` is the fallback for one old enough to
+  // only know the wildcard as a name of its own. A bare label keeps parking on
+  // a miss — a sub-name has nothing to park to, so missing everywhere is
+  // NXDOMAIN. The answer keeps the asked name either way: the wire codec
+  // writes the question's name into every owner field, as a wildcard answer
+  // should.
+  const missed = (r) => r.status === "parked" && r.registered === false;
+  if (parsed.sub && missed(result)) {
+    if (parsed.sub !== "*") result = await ask(`*.${parsed.label}.${parsed.tld}`);
+    if (missed(result)) {
+      return { status: "nxdomain", target: null, ...(records ? { records: [] } : {}) };
+    }
+  }
+  return result;
+}
+
+/**
+ * One question to the registry's resolve endpoint.
+ *
+ * `&records=1` only when the question needs the whole set. Every address
+ * lookup on the machine comes through here, and the registry does a second
+ * query to answer it — a browser opening a page must not pay for records it
+ * will never read.
+ */
+async function askRegistry(asked, { registryBase, fetchImpl, timeoutMs, records }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // `&records=1` only when the question needs the whole set. Every address
-    // lookup on the machine comes through here, and the registry does a second
-    // query to answer it — a browser opening a page must not pay for records it
-    // will never read.
     const url = `${registryBase.replace(/\/+$/, "")}/api/moshpit/resolve?name=${encodeURIComponent(
-      `${parsed.label}.${parsed.tld}`,
+      asked,
     )}${records ? "&records=1" : ""}`;
     const res = await fetchImpl(url, { signal: controller.signal });
     if (!res.ok) return { status: "unreachable", target: null };
@@ -619,8 +666,11 @@ export async function addressAnswer(name, options = {}) {
   if (!exists) return { exists: false, kind: "nxdomain", records: [], address: null, cname: null };
 
   // Parking is checked before anything the registry published: a parked name's
-  // whole job is to reach the page explaining that it is for sale.
-  if (result.status === "parked") {
+  // whole job is to reach the page explaining that it is for sale. A third-level
+  // name is never for sale — it exists only through a wildcard its parent
+  // published — so "parked" there means the wildcard has no address to give,
+  // and the records it published are the answer.
+  if (result.status === "parked" && !parseRegistryName(name)?.sub) {
     return parkingAddress ? plan("address", { address: parkingAddress }) : plan("nodata");
   }
 
@@ -1136,8 +1186,10 @@ export function createServer(options = {}) {
  *
  * The probe name has three labels on purpose. A two-label name is a Moshpit
  * name to any build: an older bridge answers it with the parking address, an
- * answer, which would read as working forwarding. Three labels cannot be a
- * Moshpit name, so only a bridge that forwards can produce an answer at all.
+ * answer, which would read as working forwarding. A name under an ending
+ * nobody can claim — `.sh` is clearnet, not a Moshpit TLD anyone holds — is
+ * never ours to answer, so only a bridge that forwards can produce an answer
+ * at all.
  */
 export const CLEARNET_PROBE = "pit.moshcode.sh";
 
@@ -2065,8 +2117,9 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const explain = {
       live: () => `${name} → ${result.target}`,
       parked: () => `${name} → ${pitUrl}  [parked — claimed but not pointed at an IP]`,
+      nxdomain: () => `${name} → NXDOMAIN  [not held — not exactly, and not by a wildcard on its parent]`,
       unreachable: () => `${name} → NXDOMAIN  [registry unreachable — not parking a name we could not look up]`,
-      "not-a-name": () => `${name} → NXDOMAIN  [not a Moshpit name: needs exactly one label and one TLD]`,
+      "not-a-name": () => `${name} → NXDOMAIN  [not a Moshpit name: one label and one TLD, or one more under such a name]`,
     };
     if (asJson) {
       out(JSON.stringify({
