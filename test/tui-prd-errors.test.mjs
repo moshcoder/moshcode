@@ -34,7 +34,12 @@ function runTui(input, cwd) {
     const child = spawn(process.execPath, [BIN], {
       stdio: ["pipe", "pipe", "pipe"],
       cwd,
-      env: { ...process.env, PATH: NO_ENGINES },
+      env: {
+        ...process.env,
+        HOME: NO_ENGINES,
+        KIMI_CODE_HOME: join(NO_ENGINES, ".kimi-code"),
+        PATH: NO_ENGINES,
+      },
     });
     let stdout = "";
     let stderr = "";
