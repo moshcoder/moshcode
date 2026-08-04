@@ -104,8 +104,9 @@ autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
 At the mosh prompt, `/new` opens and switches to another independent moshcode
 tab. Run `/agents <engine>` in each tab and switch between them with tmux's
 `Ctrl-b n`, `Ctrl-b p`, or `Ctrl-b <number>` keys. If moshcode is already inside
-tmux, `/new` adds a window to that session. Otherwise the first `/new` opens a
-private two-tab workspace with its tab bar at the bottom.
+tmux, `/new` adds a window to that session and respects its configured window
+keys. Otherwise the first `/new` opens an isolated two-tab workspace with those
+default keys and its tab bar at the bottom.
 
 Each tab is a separate moshcode process and provider CLIs still receive an
 ordinary inherited terminal. Moshcode does not intercept or reinterpret their
