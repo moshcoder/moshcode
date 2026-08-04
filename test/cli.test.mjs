@@ -161,6 +161,7 @@ test("aiExecArgs maps each engine to its headless invocation", () => {
   assert.deepEqual(aiExecArgs("gemini", "hi"), ["-p", "hi"]);
   assert.deepEqual(aiExecArgs("opencode", "hi"), ["run", "hi"]);
   assert.deepEqual(aiExecArgs("aider", "hi").slice(0, 2), ["--message", "hi"]);
+  assert.deepEqual(aiExecArgs("kimi", "hi"), ["-p", "hi"]);
   assert.throws(() => aiExecArgs("nope", "hi"), /no headless mode/);
 });
 

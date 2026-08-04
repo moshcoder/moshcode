@@ -61,6 +61,7 @@ moshcode install opencode   # install opencode (curl … | bash)
 moshcode install privacycode # curl -fsSL https://getprivacycode.com/install | sh
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
+moshcode install kimi       # curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
 ```
 
 ### Autonomous agents versus raw starts
@@ -76,6 +77,7 @@ moshcode agents opencode    # opencode agent list                          (agen
 moshcode agents privacycode # privacycode agent list                       (agent view)
 moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
 moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
+moshcode agents kimi        # kimi --yolo                                       (autonomous)
 moshcode agents aider       # aider --yes-always                                (autonomous)
 ```
 
@@ -216,7 +218,9 @@ moshcode mcp add porkbun          # expands to: npx -y @porkbunllc/mcp-server
 ```
 
 That registers it across every engine that supports MCP (claude, gemini, codex,
-opencode, privacycode) in one go.
+opencode, privacycode) in one go. Kimi is skipped with a reason: it runs MCP
+servers but has no command to register one from a script — add those in-session
+with its own `/mcp-config`, or in `~/.kimi-code/mcp.json`.
 
 The catalog is a convenience, never a gate — an explicit command always wins, so
 `moshcode mcp add porkbun -- node ./my-fork.js` runs your fork.

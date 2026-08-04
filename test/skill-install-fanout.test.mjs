@@ -87,8 +87,11 @@ test("the engines with a primitive still come first, in SKILL_ENGINES order", ()
   assert.deepEqual(keys.slice(0, SKILL_ENGINES.length), SKILL_ENGINES);
 });
 
-test("SKILL_ENGINES is unchanged: no engine gained a primitive", () => {
-  assert.deepEqual(SKILL_ENGINES, ["claude", "gemini"]);
+// Pinned for the same reason as MCP_ENGINES: a wider fan-out must never widen
+// the claimed capability. kimi moved it because kimi really does have a skills
+// primitive (it scans ~/.kimi/skills), not because the plan now iterates it.
+test("SKILL_ENGINES names exactly the engines with a skills primitive", () => {
+  assert.deepEqual(SKILL_ENGINES, ["claude", "gemini", "kimi"]);
 });
 
 test("claude still clones the source into its skills dir, byte for byte", () => {

@@ -21,11 +21,16 @@ test("the plan covers every engine, not just the ones with MCP support", () => {
   assert.deepEqual([...keys].sort(), Object.keys(ENGINES).sort());
 });
 
-test("every engine without MCP support carries the skip reason", () => {
+test("every engine without MCP support carries a skip reason", () => {
+  // R6 asks for a *stated reason*, not one shared string: "no MCP support" fits
+  // aider, which has none, but not kimi, which runs servers and only lacks a way
+  // to register one from a script. What must hold for all of them is that the
+  // row says why.
   const plan = byKey(planMcpAdd(REMOTE, { installedSet: new Set() }));
   assert.ok(NO_MCP.length, "expected at least one engine with no MCP support");
   for (const key of NO_MCP) {
-    assert.equal(plan[key]?.skip, "no MCP support", `${key} has no skip reason`);
+    assert.equal(typeof plan[key]?.skip, "string", `${key} has no skip reason`);
+    assert.ok(plan[key].skip.length, `${key}'s skip reason is empty`);
   }
 });
 
@@ -40,7 +45,7 @@ test("the fan-out reports the no-MCP engines as skipped", async () => {
   const results = byKey(await runMcpAdd(plan, { run: async () => ({ ok: true, code: 0 }) }));
   for (const key of NO_MCP) {
     assert.equal(results[key]?.status, "skipped", `${key} missing from the summary`);
-    assert.equal(results[key]?.reason, "no MCP support");
+    assert.ok(results[key]?.reason, `${key} was skipped without saying why`);
   }
 });
 
@@ -74,6 +79,18 @@ test("the fan-out and the /mcp list matrix name the same engines", () => {
 
 test("MCP_ENGINES is unchanged — no engine gained MCP support", () => {
   assert.deepEqual(MCP_ENGINES, ["claude", "gemini", "codex", "opencode", "privacycode"]);
+});
+
+test("kimi is skipped for the reason that actually applies to it", () => {
+  // Kimi Code runs MCP servers; it just has no command to register one from a
+  // script (config file, or the /mcp-config picker inside a session). Reporting
+  // that as the blanket "no MCP support" would send someone off to look for an
+  // MCP-capable engine they already have installed.
+  const { skip, argv } = mcpAddArgs("kimi", REMOTE);
+  assert.equal(argv, undefined, "a skipped engine must not carry an argv");
+  assert.match(skip, /no scriptable `mcp add`/);
+  assert.match(skip, /mcp-config|mcp\.json/);
+  assert.notEqual(skip, "no MCP support");
 });
 
 test("the MCP-capable engines still come first, in their original order", () => {
@@ -146,3 +163,4 @@ test("mcpAddArgs itself is untouched for a supported and an unsupported key", ()
   assert.equal(mcpAddArgs("aider", REMOTE).skip, "no MCP support");
   assert.deepEqual(mcpAddArgs("codex", REMOTE).argv, ["mcp", "add", "sentry", "--url", "https://mcp.sentry.dev/mcp"]);
 });
+
