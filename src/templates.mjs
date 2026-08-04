@@ -275,7 +275,7 @@ export async function fetchRemote(
 
 const USAGE = `moshcode template — starting stacks for Moshpit-hosted services
 
-  moshcode template list                    the templates that ship with moshcode
+  moshcode template list [--json]           the templates that ship with moshcode
   moshcode template install <name>          copy a bundled one into this directory
   moshcode template install <url>           copy one from a git repo or a .tar.gz
   moshcode template install <owner/repo>    the GitHub shorthand
@@ -283,6 +283,7 @@ const USAGE = `moshcode template — starting stacks for Moshpit-hosted services
   --into <dir>   write somewhere other than the current directory
   --force        overwrite files that are already there
   --dry-run      show every create/overwrite without writing anything
+  --json         print the template list as JSON
 
 Nothing in a template is executed on install — the files are copied and what to
 run is yours to decide. Read them before you do.`;
@@ -339,7 +340,16 @@ export async function templateCommand(
   }
 
   if (sub === "list") {
+    const unknown = rest.filter((arg) => arg !== "--json");
+    if (unknown.length) {
+      out(`moshcode template list: unknown option ${JSON.stringify(unknown[0])}`);
+      return 1;
+    }
     const templates = await listTemplates();
+    if (rest.includes("--json")) {
+      out(JSON.stringify(templates, null, 2));
+      return 0;
+    }
     if (!templates.length) {
       out("no templates bundled with this install");
       return 0;

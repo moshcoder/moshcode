@@ -249,6 +249,7 @@ something to put behind it:
 
 ```sh
 moshcode template list                        # what there is
+moshcode template list --json                 # machine-readable template metadata
 moshcode template install bun-caddy-sqlite    # into the current directory
 moshcode template install caddy-static --into /srv/site
 moshcode template install owner/repo          # or a git URL, or a .tar.gz

@@ -229,8 +229,14 @@ export const CORE_CLI_COMMANDS = [
     group: "hosting",
     description: "scaffold a stack for a Moshpit-hosted service",
     synopsis: [
-      ["moshcode template list", "what there is"],
+      ["moshcode template list [--json]", "what there is"],
       ["moshcode template install <name>", "write it here"],
+    ],
+    flags: [
+      ["--into <dir>", "write somewhere other than the current directory", ""],
+      ["--force", "overwrite files that are already there", ""],
+      ["--dry-run", "show changes without writing anything", ""],
+      ["--json", "machine-readable template list", ""],
     ],
     examples: [["moshcode template install bun-caddy-sqlite", ""]],
     seeAlso: ["site"],

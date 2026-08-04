@@ -246,7 +246,7 @@ test("flags that the dispatcher parses are documented", () => {
       for (const flag of verb.flags) for (const f of flag.flags.split(/[ ,]+/)) documented.add(f.replace(/[<>].*$/, "").trim());
     }
   }
-  for (const flag of ["--json", "--max", "-n", "--dry-run", "--yes", "-y", "--device", "-d",
+  for (const flag of ["--json", "--max", "-n", "--dry-run", "--into", "--force", "--yes", "-y", "--device", "-d",
     "--browser", "-b", "--port", "--bind", "--ttyd", "--url", "--name", "-t", "-e", "-H",
     "--registry", "--check", "--nginx", "--all"]) {
     assert.ok(documented.has(flag), `${flag} is parsed somewhere but documented nowhere`);
