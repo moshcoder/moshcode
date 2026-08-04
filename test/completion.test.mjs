@@ -140,6 +140,9 @@ test("bash completion respects argument depth and preserves file fallbacks", () 
   assert.ok(bashCompletions(["moshcode", "skills", "list", "--"]).includes("--json"));
 
   assert.ok(bashCompletions(["moshcode", "dns", ""]).includes("resolve"));
+  // `dns trust` is a real verb (src/dns.mjs dispatch) but was missing from the
+  // completion verb list, so tab-completion never offered it.
+  assert.ok(bashCompletions(["moshcode", "dns", ""]).includes("trust"));
   assert.ok(bashCompletions(["moshcode", "dns", "resolve", "--j"]).includes("--json"));
   assert.ok(bashCompletions(["moshcode", "template", ""]).includes("install"));
   assert.ok(bashCompletions(["moshcode", "template", "list", "--j"]).includes("--json"));
@@ -165,6 +168,19 @@ _moshcode_completion
     completionScript("bash"),
     /complete -o bashdefault -o default -F _moshcode_completion moshcode/,
   );
+});
+
+test("every shell offers the dns trust verb, so it does not silently drift", () => {
+  // The dns verb list is spelled out once per shell rather than shared, so a
+  // new verb can land in the dispatcher yet be missing from a shell's
+  // completion. `trust` (src/dns.mjs) drifted this way; guard all three shells.
+  for (const shell of ["bash", "zsh", "fish"]) {
+    assert.match(
+      completionScript(shell),
+      /resolve start install trust/,
+      `${shell} completion is missing the dns verb "trust"`,
+    );
+  }
 });
 
 test("completion normalizes shell names and rejects unsupported values", () => {
