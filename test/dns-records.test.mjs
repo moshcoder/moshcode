@@ -225,10 +225,11 @@ test("an unregistered name under a claimed ending is parked, not denied", async 
 });
 
 test("a record question about something that is not a name at all is NXDOMAIN", async (t) => {
-  // Three labels cannot be a Moshpit name — the namespace is one level deep —
-  // so there is nothing here to be waiting to be pointed.
+  // Four labels cannot be a Moshpit name. Three can — that is a name under a
+  // name, answered through the owner's wildcard — so the shape that has nothing
+  // waiting to be pointed is one level deeper than it used to be.
   const server = await serve(t, registry({ records: [] }));
-  const reply = await ask(server, query("not.a.name", { type: TYPE_TXT }));
+  const reply = await ask(server, query("not.a.real.name", { type: TYPE_TXT }));
   assert.equal(rcode(reply), RCODE_NXDOMAIN);
 });
 
@@ -280,9 +281,10 @@ test("answerRecords separates 'no such record' from 'no such name'", async () =>
   assert.deepEqual(await answerRecords("blue.eggs", { fetchImpl: here.fetchImpl, type: "MX" }),
     { exists: true, records: [] });
 
-  // Not a name this registry can be asked about at all.
+  // Not a name this registry can be asked about at all — four labels, one
+  // deeper than the third-level names an owner's wildcard covers.
   const reg = registry({ records: [] });
-  assert.deepEqual(await answerRecords("not.a.name", { fetchImpl: reg.fetchImpl, type: "MX" }),
+  assert.deepEqual(await answerRecords("not.a.real.name", { fetchImpl: reg.fetchImpl, type: "MX" }),
     { exists: false, records: [] });
   assert.equal(reg.calls.length, 0, "a name it could reject on sight still cost a round trip");
 });
