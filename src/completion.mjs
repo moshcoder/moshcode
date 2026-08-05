@@ -164,7 +164,11 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
   } else {
     switch ($command) {
       { $_ -in @('agents', 'start') } {
-        if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionEngines }
+        if ($argumentIndex -eq 2) {
+          $choices = if ($command -eq 'agents' -and $wordToComplete.StartsWith('-')) {
+            $script:MoshcodeCompletionJson
+          } else { $script:MoshcodeCompletionEngines }
+        }
       }
       'install' {
         if ($argumentIndex -eq 2) { $choices = $script:MoshcodeCompletionInstall }
@@ -262,7 +266,12 @@ _moshcode_completion() {
     choices="${names(model.top)}"
   else
     case "$subcommand" in
-      agents|start)
+      agents)
+        if (( COMP_CWORD == 2 )); then
+          if [[ "$cur" == -* ]]; then choices="--json"; else choices="${names(model.engines)}"; fi
+        fi
+        ;;
+      start)
         (( COMP_CWORD == 2 )) && choices="${names(model.engines)}"
         ;;
       install)
@@ -365,7 +374,19 @@ _moshcode() {
   fi
 
   case "\${words[2]}" in
-    agents|start)
+    agents)
+      if (( CURRENT == 3 )); then
+        if [[ "$PREFIX" == -* ]]; then
+          _values "agent option" --json
+        else
+          choices=(${zshValues(model.engines)})
+          _describe "engine" choices
+        fi
+      else
+        _files
+      fi
+      ;;
+    start)
       if (( CURRENT == 3 )); then
         choices=(${zshValues(model.engines)})
         _describe "engine" choices
@@ -535,7 +556,7 @@ complete -c moshcode -n '__moshcode_nested_is mcp list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is skill list; or __moshcode_nested_is skills list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is login' -l browser -s b -d 'use browser authentication'
 complete -c moshcode -n '__moshcode_command_is login' -l device -s d -d 'use device-code authentication'
-complete -c moshcode -n '__moshcode_command_is engines tools commands' -l json -d 'print JSON'
+complete -c moshcode -n '${atSecondToken("agents engines tools commands")}' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is run' -l dry-run -d 'show actions without executing'
 complete -c moshcode -n '__moshcode_command_is run' -l max -s n -r -d 'maximum loop count'
 complete -c moshcode -n '__moshcode_command_is uninstall remove' -l yes -s y -d 'confirm deleting a binary'

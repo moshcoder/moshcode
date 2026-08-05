@@ -33,7 +33,7 @@ for (const command of ["help", "--help", "-h"]) {
   });
 }
 
-for (const command of ["engines", "tools"]) {
+for (const command of ["agents", "engines", "tools"]) {
   test(`moshcode ${command} --json prints machine-readable install status`, () => {
     const result = spawnSync(process.execPath, [BIN, command, "--json"], {
       encoding: "utf8",
@@ -52,6 +52,18 @@ for (const command of ["engines", "tools"]) {
     }
   });
 }
+
+test("moshcode agents preserves engine arguments named --json", () => {
+  const result = spawnSync(
+    process.execPath,
+    [BIN, "agents", "nonexistent-engine-for-passthrough-test", "--json"],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /unknown engine "nonexistent-engine-for-passthrough-test"/);
+});
 
 test("moshcode commands --json prints the machine-readable vocabulary", () => {
   const result = spawnSync(process.execPath, [BIN, "commands", "--json"], {
