@@ -10,8 +10,15 @@
 # that failed on something transient; it is safe because a version already on
 # the registry is skipped rather than attempted.
 #
-# Requires a repository secret `NPM_TOKEN` — an npm automation token, which is
-# the kind that publishes without a 2FA prompt.
+# Authenticates by trusted publishing (OIDC) rather than a stored token: npm
+# trades the short-lived token GitHub mints for this specific workflow run for
+# permission to publish, so there is no long-lived credential in the repository
+# to leak, rotate or forget.
+#
+# The other half of that trust lives on npmjs.com, under the package's Trusted
+# Publisher settings, and it is pinned to the *filename* of this workflow.
+# Renaming this file silently breaks publishing — npm will refuse the exchange
+# because the run no longer matches what was configured.
 name: publish
 
 on:
@@ -21,9 +28,9 @@ on:
 
 permissions:
   contents: read
-  # For npm provenance: the attestation is signed with a short-lived OIDC token
-  # rather than anything stored here, and it is what lets npm show which build
-  # this tarball actually came from.
+  # The whole basis of the exchange: this is what lets the run mint the OIDC
+  # token npm authenticates against. Without it there is no credential at all
+  # and publishing fails outright.
   id-token: write
 
 jobs:
@@ -43,6 +50,22 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      # Node 22 bundles npm 10, which predates trusted publishing and would fall
+      # back to looking for a token that no longer exists — an auth failure that
+      # reads as a credential problem rather than a version one. 11.5.1 is the
+      # floor; the check below says so plainly if that ever regresses.
+      - name: Install an npm that understands trusted publishing
+        run: |
+          npm install -g npm@latest
+          VERSION="$(npm --version)"
+          MINIMUM=11.5.1
+          echo "npm $VERSION"
+          # Lowest of the two must be the minimum, or this npm is older than it.
+          if [ "$(printf '%s\n%s\n' "$MINIMUM" "$VERSION" | sort -V | head -n1)" != "$MINIMUM" ]; then
+            echo "::error::npm $VERSION cannot use trusted publishing — $MINIMUM or later is required"
+            exit 1
+          fi
 
       - run: pnpm install --frozen-lockfile
 
@@ -88,23 +111,11 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Said plainly here, rather than as the 401 npm would otherwise return
-      # partway through a release.
-      - name: Require an npm token
-        if: steps.published.outputs.already == 'false'
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN is not set — add an npm automation token as a repository secret named NPM_TOKEN"
-            exit 1
-          fi
-
+      # No token, and no `--provenance` either: publishing through trusted
+      # publishing generates and attaches the attestation on its own.
       - name: Publish
         if: steps.published.outputs.already == 'false'
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Confirm the registry has it
         if: steps.published.outputs.already == 'false'
