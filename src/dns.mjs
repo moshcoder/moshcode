@@ -378,13 +378,17 @@ export function buildResponse(query, buf, address, ttl = DEFAULT_TTL, exists = B
 
 /* ------------------------------------------------------------------ registry */
 
-/** Names the registry can hold: exactly one label and one TLD. */
+/**
+ * Names the registry can hold: exactly one label and one TLD, or a third label
+ * under such a name — including `*` as the whole leftmost label, the wildcard
+ * an owner publishes for everything under their name.
+ */
 export function parseRegistryName(hostname) {
   const host = String(hostname || "").trim().toLowerCase().replace(/\.$/, "");
   if (!host || host.includes(":")) return null;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
   const parts = host.split(".");
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2 && parts.length !== 3) return null;
   // Letters and digits only, matching the registry. A dash is the cheapest way
   // to mint a look-alike of an ending someone else holds, and in a namespace
   // one level deep and first come first served there is nowhere to retreat to.
@@ -392,6 +396,14 @@ export function parseRegistryName(hostname) {
   // rule itself: a name this bridge accepts and the registry rejects resolves
   // to a page that says it does not exist.
   const LABEL = /^[a-z0-9]{1,63}$/;
+  if (parts.length === 3) {
+    const [sub, label, tld] = parts;
+    // `*` is a label only whole and only leftmost — `f*.chovy.hacker` and
+    // `foo.*.hacker` are not names the registry can be asked about.
+    if (sub !== "*" && !LABEL.test(sub)) return null;
+    if (!LABEL.test(label) || !LABEL.test(tld)) return null;
+    return { sub, label, tld };
+  }
   const [label, tld] = parts;
   if (!LABEL.test(label) || !LABEL.test(tld)) return null;
   return { label, tld };
@@ -450,41 +462,72 @@ export async function fetchTlds({ registryBase = DEFAULT_REGISTRY_BASE, fetchImp
  * name with no target is NOT an error, it is a name waiting to be pointed
  * somewhere. Handing back the parking host means `curl california.oranges`
  * reaches a page that explains itself instead of failing to resolve.
+ *
+ * A third-level name adds a fourth: it exists only through its parent or a
+ * wildcard the parent published, so missing both is NXDOMAIN — there is
+ * nothing to park it to.
  */
 export async function resolveName(
   name,
   { registryBase = DEFAULT_REGISTRY_BASE, fetchImpl = fetch, timeoutMs = 4000, records = false } = {},
 ) {
   const parsed = parseRegistryName(name);
-  if (!parsed) return { status: "not-a-name", target: null, records: [] };
+  if (!parsed) return { status: "not-a-name", target: null };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const full = `${parsed.sub ? `${parsed.sub}.` : ""}${parsed.label}.${parsed.tld}`;
   try {
     // `&records=1` only when the question needs the whole set. Every address
     // lookup on the machine comes through here, and the registry does a second
     // query to answer it — a browser opening a page must not pay for records it
     // will never read.
-    const url = `${registryBase.replace(/\/+$/, "")}/api/moshpit/resolve?name=${encodeURIComponent(
-      `${parsed.label}.${parsed.tld}`,
-    )}${records ? "&records=1" : ""}`;
-    const res = await fetchImpl(url, { signal: controller.signal });
-    if (!res.ok) return { status: "unreachable", target: null };
-    const json = await res.json();
-    const claimed =
-      typeof json?.name_registered === "boolean" ? json.name_registered : json?.registered;
-    if (typeof claimed !== "boolean") return { status: "unreachable", target: null };
-    // The `records` key appears only when it was asked for. Every caller that
-    // wants an address deep-compares this shape, and an empty array they never
-    // requested is a difference they would have to be taught to ignore.
-    const found = records ? { records: Array.isArray(json.records) ? json.records : [] } : {};
-    const target = typeof json.target === "string" && json.target ? json.target : null;
-    if (target) return { status: "live", target, ...found };
-    return { status: "parked", target: null, registered: claimed, ...found };
+    //
+    // The timeout is per ask rather than per call: the wildcard fallback below
+    // is a second request, and a budget shared with the first would give it
+    // whatever was left over — sometimes nothing.
+    const ask = async (asked) => {
+      const url = `${registryBase.replace(/\/+$/, "")}/api/moshpit/resolve?name=${encodeURIComponent(
+        asked,
+      )}${records ? "&records=1" : ""}`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetchImpl(url, { signal: controller.signal });
+        if (!res.ok) return { status: "unreachable", target: null };
+        const json = await res.json();
+        const claimed =
+          typeof json?.name_registered === "boolean" ? json.name_registered : json?.registered;
+        if (typeof claimed !== "boolean") return { status: "unreachable", target: null };
+        // The `records` key appears only when it was asked for. Every caller that
+        // wants an address deep-compares this shape, and an empty array they never
+        // requested is a difference they would have to be taught to ignore.
+        const found = records ? { records: Array.isArray(json.records) ? json.records : [] } : {};
+        const target = typeof json.target === "string" && json.target ? json.target : null;
+        if (target) return { status: "live", target, ...found };
+        return { status: "parked", target: null, registered: claimed, ...found };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    let result = await ask(full);
+    // A third-level name the registry does not hold may still be covered by a
+    // wildcard its owner published. The registry applies that match itself;
+    // asking for the literal `*.parent` is the fallback for one old enough to
+    // only know the wildcard as a name of its own. A bare label keeps parking
+    // on a miss — a sub-name has nothing to park to, so missing everywhere is
+    // NXDOMAIN. The answer keeps the asked name either way: the wire codec
+    // writes the question's name into every owner field, as a wildcard answer
+    // should.
+    const missed = (r) => r.status === "parked" && r.registered === false;
+    if (parsed.sub && missed(result)) {
+      if (parsed.sub !== "*") result = await ask(`*.${parsed.label}.${parsed.tld}`);
+      if (missed(result)) {
+        return { status: "nxdomain", target: null, ...(records ? { records: [] } : {}) };
+      }
+    }
+    return result;
   } catch {
     return { status: "unreachable", target: null };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -661,12 +704,15 @@ export async function addressAnswer(name, options = {}) {
   if (!exists) return { exists: false, kind: "nxdomain", records: [], address: null, cname: null };
 
   // Parking is checked before anything the registry published: a parked name's
-  // whole job is to reach the page explaining that it is for sale.
+  // whole job is to reach the page explaining that it is for sale. A third-level
+  // name is never for sale — it exists only through a wildcard its parent
+  // published — so "parked" there means the wildcard has no target, and the
+  // records it published are the answer.
   //
   // It is also checked before the proxy, deliberately. A parked name has no
   // origin and no published pin, so handing it to a proxy whose entire job is
   // to verify one would turn "this name is for sale" into a TLS error.
-  if (result.status === "parked") {
+  if (result.status === "parked" && !parseRegistryName(name)?.sub) {
     return parkingAddress ? plan("address", { address: parkingAddress }) : plan("nodata");
   }
 
@@ -2135,7 +2181,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       live: () => `${name} → ${result.target}`,
       parked: () => `${name} → ${pitUrl}  [parked — claimed but not pointed at an IP]`,
       unreachable: () => `${name} → NXDOMAIN  [registry unreachable — not parking a name we could not look up]`,
-      "not-a-name": () => `${name} → NXDOMAIN  [not a Moshpit name: needs exactly one label and one TLD]`,
+      // A third-level name that missed both itself and its parent's wildcard.
+      // Distinct from parked on purpose: a name under someone else's name is
+      // not for sale, so there is no page to send anyone to.
+      nxdomain: () => `${name} → NXDOMAIN  [no such name, and its parent publishes no wildcard covering it]`,
+      "not-a-name": () => `${name} → NXDOMAIN  [not a Moshpit name: needs one label and one TLD, or one more label under such a name]`,
     };
     if (asJson) {
       out(JSON.stringify({

@@ -80,7 +80,14 @@ test("buildResponse says NXDOMAIN when there is no address", () => {
 
 test("only registry-shaped names are ours to answer", () => {
   assert.deepEqual(parseRegistryName("california.oranges"), { label: "california", tld: "oranges" });
-  assert.equal(parseRegistryName("a.b.c"), null);
+  // A third label is a name under a name, which the registry holds through the
+  // owner's wildcard. A fourth is not a shape it can hold at all.
+  assert.deepEqual(parseRegistryName("a.b.c"), { sub: "a", label: "b", tld: "c" });
+  assert.deepEqual(parseRegistryName("*.chovy.hacker"), { sub: "*", label: "chovy", tld: "hacker" });
+  assert.equal(parseRegistryName("deep.sub.chovy.hacker"), null);
+  // `*` is a label only whole and only leftmost.
+  assert.equal(parseRegistryName("f*.chovy.hacker"), null);
+  assert.equal(parseRegistryName("foo.*.hacker"), null);
   assert.equal(parseRegistryName("localhost"), null);
   assert.equal(parseRegistryName("127.0.0.1"), null);
 });

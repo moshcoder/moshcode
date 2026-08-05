@@ -82,14 +82,63 @@ test("JSON preserves failure statuses and exit codes", async (t) => {
 
   await t.test("invalid Moshpit name", async () => {
     globalThis.fetch = async () => { throw new Error("must not fetch"); };
-    const { code, value } = await run("three.part.name");
+    // Four parts. Three is a name under a name now, and would be looked up.
+    const { code, value } = await run("four.part.long.name");
     assert.equal(code, 1);
     assert.deepEqual(value, {
-      name: "three.part.name",
+      name: "four.part.long.name",
       status: "not-a-name",
       target: null,
       pitUrl: null,
     });
+  });
+
+  await t.test("a sub-name under no wildcard", async () => {
+    registryResponse({ name_registered: false, target: null });
+    const { code, value } = await run("www.chovy.hacker");
+    assert.equal(code, 1);
+    assert.deepEqual(value, {
+      name: "www.chovy.hacker",
+      status: "nxdomain",
+      target: null,
+      pitUrl: null,
+    });
+  });
+});
+
+test("every status resolve can report has something to print", async (t) => {
+  // Without this, a status the resolver learned to return but the printer was
+  // never taught crashes the command: `explain[status]` is undefined and the
+  // call throws a TypeError over the top of the answer. That is how `nxdomain`
+  // shipped broken — every other test here asks for --json, which never touches
+  // the human branch.
+  const cases = [
+    ["live.eggs", { name_registered: true, target: "203.0.113.7" }],
+    ["parked.eggs", { name_registered: true, target: null }],
+    ["www.chovy.hacker", { name_registered: false, target: null }],
+  ];
+  for (const [name, body] of cases) {
+    await t.test(name, async () => {
+      registryResponse(body);
+      const output = [];
+      await dnsCommand(["resolve", name, "--registry", REGISTRY], (line) => output.push(String(line)));
+      assert.ok(output.length >= 1, "said nothing at all");
+      assert.match(output[0], new RegExp(`^${name.replace(/\./g, "\\.")} → `));
+    });
+  }
+
+  await t.test("unreachable registry", async () => {
+    globalThis.fetch = async () => { throw new Error("offline"); };
+    const output = [];
+    await dnsCommand(["resolve", "lost.eggs", "--registry", REGISTRY], (line) => output.push(String(line)));
+    assert.match(output[0], /^lost\.eggs → /);
+  });
+
+  await t.test("not a name at all", async () => {
+    globalThis.fetch = async () => { throw new Error("must not fetch"); };
+    const output = [];
+    await dnsCommand(["resolve", "four.part.long.name", "--registry", REGISTRY], (line) => output.push(String(line)));
+    assert.match(output[0], /^four\.part\.long\.name → /);
   });
 });
 
