@@ -2,6 +2,7 @@ import {
   CORE_CLI_COMMANDS,
   MCP_VERBS,
   SKILL_VERBS,
+  TRADE_VERBS,
   UPGRADE_TARGETS,
 } from "./cli-schema.mjs";
 import { ENGINES, ENGINE_ALIASES } from "./engines.mjs";
@@ -53,6 +54,16 @@ export function completionModel() {
     mcp: uniqueEntries(MCP_VERBS),
     mcpServerSpecs: uniqueEntries(MCP_VERBS.filter(({ acceptsServerSpec }) => acceptsServerSpec)),
     skills: uniqueEntries(SKILL_VERBS),
+    trade: uniqueEntries(TRADE_VERBS),
+    tradeOrderOptions: uniqueEntries([
+      entry("--submit", "place the order instead of previewing"),
+      entry("--qty", "share quantity"),
+      entry("--notional", "dollar amount"),
+      entry("--type", "market, limit, stop, stop_limit, or trailing_stop"),
+      entry("--limit-price", "limit price"),
+      entry("--stop-price", "stop price"),
+      entry("--time-in-force", "order time in force"),
+    ]),
     skillSources: uniqueEntries(SKILL_VERBS.filter(({ acceptsSource }) => acceptsSource)),
     shells: COMPLETION_SHELLS.map((name) => entry(name, `generate ${name} completion`)),
     // `moshcode help <topic>` accepts anything help can answer for: a command,
@@ -119,6 +130,8 @@ ${powershellEntries("MoshcodeCompletionUpgrade", model.upgrade)}
 ${powershellEntries("MoshcodeCompletionMcp", model.mcp)}
 ${powershellEntries("MoshcodeCompletionMcpServerSpecs", model.mcpServerSpecs)}
 ${powershellEntries("MoshcodeCompletionSkills", model.skills)}
+${powershellEntries("MoshcodeCompletionTrade", model.trade)}
+${powershellEntries("MoshcodeCompletionTradeOrderOptions", model.tradeOrderOptions)}
 ${powershellEntries("MoshcodeCompletionSkillSources", model.skillSources)}
 ${powershellEntries("MoshcodeCompletionShells", model.shells)}
 ${powershellEntries("MoshcodeCompletionHelpTopics", model.helpTopics)}
@@ -190,6 +203,13 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
           $choices = $script:MoshcodeCompletionSkillOptions
         }
       }
+      'trade' {
+        if ($argumentIndex -eq 2) {
+          $choices = $script:MoshcodeCompletionTrade
+        } elseif ($nested -in @('buy', 'sell') -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionTradeOrderOptions
+        }
+      }
       'login' { if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionLogin } }
       { $_ -in @('engines', 'tools', 'commands') } {
         if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionJson }
@@ -205,6 +225,8 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
       { $_ -in @('template', 'templates') } {
         if ($argumentIndex -eq 2) {
           $choices = $script:MoshcodeCompletionTemplate
+        } elseif ($nested -eq 'list' -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionJson
         } elseif ($nested -eq 'install' -and $wordToComplete.StartsWith('-')) {
           $choices = $script:MoshcodeCompletionTemplateInstall
         }
@@ -280,6 +302,13 @@ _moshcode_completion() {
           choices="--name"
         fi
         ;;
+      trade)
+        if (( COMP_CWORD == 2 )); then
+          choices="${names(model.trade)}"
+        elif [[ "$nested" == "buy" || "$nested" == "sell" ]] && [[ "$cur" == -* ]]; then
+          choices="${names(model.tradeOrderOptions)}"
+        fi
+        ;;
       login)
         [[ "$cur" == -* ]] && choices="--browser -b --device -d"
         ;;
@@ -298,7 +327,7 @@ _moshcode_completion() {
         ;;
       dns)
         if (( COMP_CWORD == 2 )); then
-          choices="enable disable status tlds resolve start install"
+          choices="enable disable status tlds resolve start install trust"
         elif [[ "$nested" == "resolve" && "$cur" == -* ]]; then
           choices="--json --open --registry"
         fi
@@ -306,6 +335,8 @@ _moshcode_completion() {
       template|templates)
         if (( COMP_CWORD == 2 )); then
           choices="list install"
+        elif [[ "$nested" == "list" && "$cur" == -* ]]; then
+          choices="--json"
         elif [[ "$nested" == "install" && "$cur" == -* ]]; then
           choices="--into --force --dry-run"
         fi
@@ -398,6 +429,17 @@ _moshcode() {
         if [[ "$PREFIX" == -* ]]; then _values "skill option" --name; else _files; fi
       fi
       ;;
+    trade)
+      if (( CURRENT == 3 )); then
+        choices=(${zshValues(model.trade)})
+        _describe "trade command" choices
+      elif [[ "\${words[3]}" == "buy" || "\${words[3]}" == "sell" ]] && [[ "$PREFIX" == -* ]]; then
+        choices=(${zshValues(model.tradeOrderOptions)})
+        _describe "trade order option" choices
+      else
+        _files
+      fi
+      ;;
     login)
       _values "login option" --browser -b --device -d
       ;;
@@ -422,7 +464,7 @@ _moshcode() {
       ;;
     dns)
       if (( CURRENT == 3 )); then
-        _values "dns command" enable disable status tlds resolve start install
+        _values "dns command" enable disable status tlds resolve start install trust
       elif [[ "\${words[3]}" == "resolve" && "$PREFIX" == -* ]]; then
         _values "dns resolve option" --json --open --registry
       else
@@ -432,6 +474,8 @@ _moshcode() {
     template|templates)
       if (( CURRENT == 3 )); then
         _values "template command" list install
+      elif [[ "\${words[3]}" == "list" && "$PREFIX" == -* ]]; then
+        _values "template list option" --json
       elif [[ "\${words[3]}" == "install" && "$PREFIX" == -* ]]; then
         _values "template install option" --into --force --dry-run
       else
@@ -485,6 +529,8 @@ ${fishEntries(atSecondToken("completion"), model.shells)}
 ${fishEntries(atSecondToken("help"), model.helpTopics)}
 ${fishEntries(atSecondToken("mcp"), model.mcp)}
 ${fishEntries(atSecondToken("skill skills"), model.skills)}
+${fishEntries(atSecondToken("trade"), model.trade)}
+${fishEntries("__moshcode_nested_is trade buy; or __moshcode_nested_is trade sell", model.tradeOrderOptions)}
 complete -c moshcode -n '__moshcode_nested_is mcp list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is skill list; or __moshcode_nested_is skills list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is login' -l browser -s b -d 'use browser authentication'
@@ -499,11 +545,12 @@ complete -c moshcode -n '${atSecondToken("console")}' -a '--url' -d 'print a gat
 complete -c moshcode -n '__moshcode_nested_is console serve' -l port -r -d 'local HTTP port'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l ttyd -r -d 'ttyd host and port'
 complete -c moshcode -n '__moshcode_nested_is console serve' -l bind -r -d 'bind address'
-complete -c moshcode -n '${atSecondToken("dns")}' -a 'enable disable status tlds resolve start install' -d 'dns command'
+complete -c moshcode -n '${atSecondToken("dns")}' -a 'enable disable status tlds resolve start install trust' -d 'dns command'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l open -d 'open a parked name in the Pit'
 complete -c moshcode -n '__moshcode_nested_is dns resolve' -l registry -r -d 'registry base URL'
 complete -c moshcode -n '${atSecondToken("template templates")}' -a 'list install' -d 'template command'
+complete -c moshcode -n '__moshcode_nested_is template list; or __moshcode_nested_is templates list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l into -r -d 'target directory'
 complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l force -d 'overwrite existing files'
 complete -c moshcode -n '__moshcode_nested_is template install; or __moshcode_nested_is templates install' -l dry-run -d 'preview without writing'

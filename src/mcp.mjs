@@ -81,6 +81,15 @@ export function mcpAddArgs(key, spec) {
       else argv.push(target, ...args);
       return { argv };
     }
+    case "kimi":
+      // Kimi Code runs MCP servers, but nothing registers one from a script: it
+      // reads ~/.kimi-code/mcp.json, edited by hand or through the in-session
+      // /mcp-config picker. (The deprecated Python kimi-cli did have `kimi mcp
+      // add`; Kimi Code dropped the subcommand.) MoshCode drives each engine's
+      // own CLI rather than writing its config file, so this is a stated skip —
+      // and a more useful one than the blanket "no MCP support", which would
+      // read as "kimi cannot do MCP at all".
+      return { skip: "no scriptable `mcp add` — add it in kimi with /mcp-config, or in ~/.kimi-code/mcp.json" };
     case "codex": {
       if (headers.length) {
         return { skip: "Codex supports only a bearer-token env var, not literal headers" };
@@ -124,7 +133,7 @@ export function planMcpAdd(spec, { installedSet } = {}) {
   const rest = Object.keys(ENGINES).filter((key) => !MCP_ENGINES.includes(key));
   return [...MCP_ENGINES, ...rest].map((key) => {
     const bin = ENGINES[key].bin;
-    const installed = installedSet ? installedSet.has(key) : isInstalled(bin);
+    const installed = installedSet ? installedSet.has(key) : isInstalled(bin, ENGINES[key].binDirs);
     return { key, bin, installed, ...mcpAddArgs(key, spec) };
   });
 }

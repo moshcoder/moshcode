@@ -45,6 +45,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
+| `moshcode trade` | tools | look up markets and trade through Alpaca |
 | `moshcode commands` | script | list built-in moshscript commands |
 | `moshcode completion` | extend | print a shell completion script |
 | `moshcode run` | script | run a moshscript |
@@ -61,6 +62,9 @@ moshcode install opencode   # install opencode (curl … | bash)
 moshcode install privacycode # curl -fsSL https://getprivacycode.com/install | sh
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
+moshcode install kimi       # curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+moshcode install qwen       # npm i -g @qwen-code/qwen-code
+moshcode install deepseek   # npm i -g @serjm/deepseek-code
 ```
 
 ### Autonomous agents versus raw starts
@@ -76,6 +80,9 @@ moshcode agents opencode    # opencode agent list                          (agen
 moshcode agents privacycode # privacycode agent list                       (agent view)
 moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
 moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
+moshcode agents kimi        # kimi --yolo                                       (autonomous)
+moshcode agents qwen        # qwen --approval-mode=yolo                         (autonomous)
+moshcode agents deepseek    # deepseek-code --turbo                             (autonomous)
 moshcode agents aider       # aider --yes-always                                (autonomous)
 ```
 
@@ -91,6 +98,21 @@ Bare engine commands remain raw for backward compatibility, so `moshcode claude`
 is shorthand for `moshcode start claude`. In the TUI, use `/agents <engine>` for
 autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
 `/agents` without an engine still lists engines and their install status.
+
+### Parallel pit tabs
+
+At the mosh prompt, `/new` opens and switches to another independent moshcode
+tab. Run `/agents <engine>` in each tab and switch between them with tmux's
+`Ctrl-b n`, `Ctrl-b p`, or `Ctrl-b <number>` keys. If moshcode is already inside
+tmux, `/new` adds a window to that session and respects its configured window
+keys. Otherwise the first `/new` opens an isolated two-tab workspace with those
+default keys and its tab bar at the bottom.
+
+Each tab is a separate moshcode process and provider CLIs still receive an
+ordinary inherited terminal. Moshcode does not intercept or reinterpret their
+input, output, full-screen UI, or provider-specific shortcuts. The feature
+requires `tmux`; without it `/new` reports that requirement and leaves the
+current pit untouched.
 
 The modes are not identical across providers. In particular, OpenCode `--auto`
 auto-approves permission requests but continues to enforce explicit deny rules.
@@ -154,6 +176,41 @@ native setup and authentication commands. CoinPay currently requires Node.js
 In the TUI, use `/tools`, `/ugig [args…]`, or `/coinpay [args…]`. The native CLI
 owns the terminal until it exits, then MoshCode returns to the pit.
 
+### Alpaca trading
+
+Alpaca is a workflow tool, not a coding engine. Install its official Go CLI,
+use `alpaca` for exact native passthrough, or use `trade` for the shorter market
+and order vocabulary:
+
+```sh
+moshcode install alpaca            # go install github.com/alpacahq/cli/cmd/alpaca@latest
+moshcode trade login               # Alpaca profile login; paper trading is the default
+moshcode trade ticker AAPL         # asset get --symbol-or-asset-id AAPL
+moshcode trade quote AAPL          # latest quote
+moshcode trade analysis AAPL       # quote/trade/bar snapshot for analysis
+moshcode trade watch               # list watchlists
+moshcode trade positions           # list open positions
+moshcode trade orders              # list open orders
+```
+
+`buy` and `sell` are safe previews unless `--submit` is explicit. Other Alpaca
+order flags pass through, including limit prices and its separate live-trading
+opt-in:
+
+```sh
+moshcode trade buy AAPL 1                          # adds --type market --dry-run
+moshcode trade buy AAPL 1 --type limit --limit-price 185
+moshcode trade buy AAPL --notional 100              # preview a $100 market buy
+moshcode trade buy AAPL 1 --submit                 # places the paper order
+moshcode trade raw data news --symbol AAPL         # any native Alpaca command
+moshcode alpaca order submit --help                # exact native passthrough
+```
+
+The same facade is `/trade …` in the pit and `trade(…)` in moshscript.
+Alpaca's CLI has no confirmation prompts; `--submit` intentionally removes
+MoshCode's preview guard. Live trading additionally requires Alpaca's `--live`
+opt-in or corresponding environment setting.
+
 ## Browser terminal (`moshcode console`)
 
 A real terminal in the browser — arrow keys, history, full-screen TUIs — because
@@ -216,7 +273,9 @@ moshcode mcp add porkbun          # expands to: npx -y @porkbunllc/mcp-server
 ```
 
 That registers it across every engine that supports MCP (claude, gemini, codex,
-opencode, privacycode) in one go.
+opencode, privacycode) in one go. Kimi is skipped with a reason: it runs MCP
+servers but has no command to register one from a script — add those in-session
+with its own `/mcp-config`, or in `~/.kimi-code/mcp.json`.
 
 The catalog is a convenience, never a gate — an explicit command always wins, so
 `moshcode mcp add porkbun -- node ./my-fork.js` runs your fork.
@@ -249,6 +308,7 @@ something to put behind it:
 
 ```sh
 moshcode template list                        # what there is
+moshcode template list --json                 # machine-readable template metadata
 moshcode template install bun-caddy-sqlite    # into the current directory
 moshcode template install caddy-static --into /srv/site
 moshcode template install owner/repo          # or a git URL, or a .tar.gz

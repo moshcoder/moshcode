@@ -20,7 +20,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import {
-  CORE_CLI_COMMANDS, MCP_VERBS, SKILL_VERBS, UPGRADE_TARGETS, DNS_VERBS,
+  CORE_CLI_COMMANDS, MCP_VERBS, SKILL_VERBS, TRADE_VERBS, UPGRADE_TARGETS, DNS_VERBS,
 } from "../src/cli-schema.mjs";
 import {
   WIDTH, findCommand, findPitCommand, helpModel, pitHelpModel, renderCommand, renderOverview,
@@ -219,7 +219,7 @@ test("every dispatched command has a schema entry with a description", async () 
 });
 
 test("every sub-verb has a description", () => {
-  for (const [label, table] of [["mcp", MCP_VERBS], ["skill", SKILL_VERBS], ["upgrade", UPGRADE_TARGETS], ["dns", DNS_VERBS]]) {
+  for (const [label, table] of [["mcp", MCP_VERBS], ["skill", SKILL_VERBS], ["trade", TRADE_VERBS], ["upgrade", UPGRADE_TARGETS], ["dns", DNS_VERBS]]) {
     for (const verb of table) {
       assert.ok(verb.description?.length, `${label} ${verb.name} has no description`);
     }
@@ -246,7 +246,7 @@ test("flags that the dispatcher parses are documented", () => {
       for (const flag of verb.flags) for (const f of flag.flags.split(/[ ,]+/)) documented.add(f.replace(/[<>].*$/, "").trim());
     }
   }
-  for (const flag of ["--json", "--max", "-n", "--dry-run", "--yes", "-y", "--device", "-d",
+  for (const flag of ["--json", "--max", "-n", "--dry-run", "--into", "--force", "--yes", "-y", "--device", "-d",
     "--browser", "-b", "--port", "--bind", "--ttyd", "--url", "--name", "-t", "-e", "-H",
     "--registry", "--check", "--nginx", "--all"]) {
     assert.ok(documented.has(flag), `${flag} is parsed somewhere but documented nowhere`);

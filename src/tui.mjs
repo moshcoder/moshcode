@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
+import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
@@ -21,6 +22,7 @@ import { mcpCommand, skillCommand } from "./integrations.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
+import { openNewTab } from "./tabs.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
 
@@ -370,7 +372,12 @@ function installTarget(key) {
     console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
     console.log(hr());
     const child = spawn(target.install.cmd, target.install.args, { stdio: "inherit" });
-    child.on("error", (e) => { console.log(hr()); console.log(err(`install failed: ${e.message}`)); resolve(); });
+    child.on("error", (e) => {
+      console.log(hr());
+      console.log(err(`install failed: ${e.message}`));
+      if (e.code === "ENOENT" && target.installHelp) console.log(info(target.installHelp));
+      resolve();
+    });
     child.on("exit", (code) => { console.log(hr()); console.log(code === 0 ? ok(`${key} installed. 🤘`) : err(`install exited ${code}`)); resolve(); });
   });
 }
@@ -447,7 +454,7 @@ export async function tui() {
   printEngines();
   console.log();
   printTools();
-  console.log("\n" + ash("  /help for commands · /quit to leave") + "\n");
+  console.log("\n" + ash("  /help for commands · /new for a tab · /quit to leave") + "\n");
 
   const ad = await motd;
   if (ad) console.log(dim(ad) + "\n");
@@ -495,6 +502,24 @@ export async function tui() {
     // still reaches gh.
     if (findPitCommand(cmd) && wantsHelp(rest, { stopAt: cmd === "run" })) {
       printHelp(cmd);
+      continue;
+    }
+    if (cmd === "new") {
+      if (rest.length) { console.log(err("usage: /new")); continue; }
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(err("/new needs an interactive terminal"));
+        continue;
+      }
+      rl.close();
+      console.log(info(process.env.TMUX
+        ? "opening a new mosh tab — switch with your tmux window keys…"
+        : "opening a two-tab mosh workspace — switch with Ctrl-b n/p or Ctrl-b <number>…"));
+      const result = await openNewTab();
+      if (!result.ok) {
+        console.log(err(`can't open a tab: ${result.error?.message || result.error}`));
+        console.log(ash("   /new uses tmux so every provider CLI still owns a real terminal"));
+      }
+      rl = mkrl();
       continue;
     }
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
@@ -600,6 +625,19 @@ export async function tui() {
       const [key, tool] = resolved;
       rl.close();
       await openWorkflowTool(key, { ...tool, installed: toolStatus().find((entry) => entry.key === key)?.installed }, rest.slice(1));
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "trade") {
+      const translated = tradeArgs(rest);
+      if (translated.usage) { console.log(tradeUsage()); continue; }
+      if (translated.error) { console.log(err(translated.error)); continue; }
+      rl.close();
+      const tool = TOOLS.alpaca;
+      await openWorkflowTool("alpaca", {
+        ...tool,
+        installed: toolStatus().find((entry) => entry.key === "alpaca")?.installed,
+      }, translated.args);
       rl = mkrl();
       continue;
     }

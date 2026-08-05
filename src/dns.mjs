@@ -1989,7 +1989,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
-import { applyTrust, verifyStockTls } from "./trust.mjs";
+import { applyTrust, createAutoTrust, trustName, verifyStockTls } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2072,6 +2072,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     bridgeStatus = daemonStatus,
     startBridge = startDaemon,
     proxyReachableImpl = proxyReachable,
+    autoTrustImpl = createAutoTrust,
     stopBridge = stopDaemon,
     dropins = readDropins,
     manifestFile = manifestPath(),
@@ -2103,6 +2104,14 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const tlds = await fetchTlds({ registryBase });
     out(tlds.length ? tlds.map((t) => `.${t}`).join("\n") : "no TLDs claimed yet");
     return 0;
+  }
+
+  if (sub === "trust") {
+    // resolveArgument, not a bare `find(!startsWith("-"))`: the latter grabs the
+    // value after `--registry`/`--port` (a URL does not start with "-"), so
+    // `dns trust --registry <url> <name>` would trust the registry host instead
+    // of <name>. The sibling `resolve` verb below already parses it this way.
+    return trustName(resolveArgument(rest) || "", out, { registryBase, ...deps });
   }
 
   if (sub === "resolve") {
@@ -2245,6 +2254,18 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // so a busy port answered with a node:dgram stack trace. This one is fatal
     // where the parking server's is not, so it ends the command rather than
     // carrying on: the shape serve.mjs uses for a step it cannot complete.
+    // Trust every name as it resolves, rather than one command per name. Only
+    // useful as root — the trust store is not writable otherwise — so it says
+    // so once here instead of failing per name, forever, in the query log.
+    const wantsTrustAll = rest.includes("--trust-all");
+    if (wantsTrustAll && uid !== 0) {
+      out("! --trust-all needs root to write to the trust store — certificates will not be installed");
+    }
+    const autoTrust = wantsTrustAll && uid === 0
+      ? autoTrustImpl({ registryBase, out, uid })
+      : null;
+    if (autoTrust) out("trusting names as they resolve — only where the registry publishes a matching pin");
+
     let server;
     try {
       server = await createServer({
@@ -2254,7 +2275,13 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         upstreams,
         tldSet,
         proxyAddress,
-        onQuery: ({ name, address }) => out(`  ${name} → ${address || "NXDOMAIN"}`),
+        onQuery: ({ name, address, forwarded }) => {
+          out(`  ${name} → ${address || "NXDOMAIN"}`);
+          // Only a name that actually resolved to something of ours. A forwarded
+          // clearnet name is not ours to trust, and NXDOMAIN has no origin to
+          // fetch a certificate from.
+          if (autoTrust && address && !forwarded) autoTrust.consider(name);
+        },
         onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
       });
     } catch (err) {
@@ -2318,12 +2345,17 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const wanted = requiredPort(platform, port);
 
     let tlds = [];
+    let tldError = null;
     try {
       tlds = await fetchTldsImpl({ registryBase });
-    } catch {
+    } catch (err) {
       // disable does not need the list on Linux, and on macOS a stale list is
       // better than refusing to clean up because the registry is unreachable.
+      // enable does need it, and the reason it is empty is the whole difference
+      // between "nobody has claimed an ending" and "we could not ask" — see the
+      // refusal below, which used to report the second as the first.
       tlds = [];
+      tldError = err?.message || String(err);
     }
 
     // Phase 1, and it runs before every other question is asked — including the
@@ -2386,7 +2418,18 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     }
 
     if (sub === "enable" && !tlds.length) {
-      out("no TLDs claimed yet — nothing to route");
+      // Two very different situations, and reporting the second as the first
+      // sends someone to claim an ending they already own. The registry holds
+      // thousands; a machine that sees none of them has almost certainly failed
+      // to ask rather than found an empty namespace.
+      if (tldError) {
+        out(`could not read the ending list from ${registryBase} — ${tldError}`);
+        out("  nothing has been changed. This is a failure to ask, not an empty registry:");
+        out(`  check with  curl -s '${registryBase}/api/moshpit/tlds?limit=5&offset=0'`);
+      } else {
+        out("the registry reports no claimed endings — nothing to route");
+        out(`  that is the registry's answer, not a local failure: ${registryBase}/api/moshpit/tlds`);
+      }
       return 1;
     }
 

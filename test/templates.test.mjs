@@ -39,6 +39,29 @@ test("the bundled templates are listed with what they are for", async () => {
   }
 });
 
+test("template list --json prints the stable template metadata", async () => {
+  const lines = [];
+  const code = await templateCommand(["list", "--json"], (line) => lines.push(line));
+  const templates = JSON.parse(lines.join("\n"));
+
+  assert.equal(code, 0);
+  assert.ok(Array.isArray(templates));
+  assert.deepEqual(templates.map((template) => template.name), ["bun-caddy-sqlite", "caddy-proxy", "caddy-static"]);
+  for (const template of templates) {
+    assert.deepEqual(Object.keys(template), ["name", "description"]);
+    assert.equal(typeof template.description, "string");
+    assert.ok(template.description.length > 0, `${template.name} has no description`);
+  }
+});
+
+test("template list rejects options it does not understand", async () => {
+  const lines = [];
+  const code = await templateCommand(["list", "--jsn"], (line) => lines.push(line));
+
+  assert.equal(code, 1);
+  assert.deepEqual(lines, ['moshcode template list: unknown option "--jsn"']);
+});
+
 test("an archive member that escapes the target is refused", () => {
   // Each of these writes outside the directory the user chose.
   for (const evil of [

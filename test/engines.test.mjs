@@ -24,6 +24,9 @@ const EXPECTED_AGENT_ARGS = {
   claude: ["--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
+  kimi: ["--yolo"],
+  qwen: ["--approval-mode=yolo"],
+  deepseek: ["--turbo"],
   aider: ["--yes-always"],
 };
 
@@ -35,6 +38,9 @@ const EXPECTED_LAUNCH_ARGS = {
   claude: ["agents", "--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
+  kimi: ["--yolo"], // no agents view — kimi has no agent list to land on
+  qwen: ["--approval-mode=yolo"],
+  deepseek: ["--turbo"],
   aider: ["--yes-always"],
 };
 
@@ -96,10 +102,15 @@ test("every engine declares its reviewed autonomous-mode arguments", () => {
 });
 
 for (const [key, expected] of Object.entries(EXPECTED_LAUNCH_ARGS)) {
+  // The stub has to be named after the engine's *binary*, which is not always
+  // the engine's name — deepseek launches `deepseek-code`. Writing a stub called
+  // `deepseek` would leave nothing on PATH for moshcode to find.
+  const stub = ENGINES[key].bin;
+
   test(`agents ${key} injects its agent-launch args before user arguments`, async () => {
     const nativeBin = tempDir();
     mkdirSync(nativeBin, { recursive: true });
-    writeEngine(nativeBin, key);
+    writeEngine(nativeBin, stub);
 
     const result = await run(["agents", key, "--user-arg", "two words"], nativeBin);
 
@@ -111,7 +122,7 @@ for (const [key, expected] of Object.entries(EXPECTED_LAUNCH_ARGS)) {
   test(`start ${key} injects no arguments`, async () => {
     const nativeBin = tempDir();
     mkdirSync(nativeBin, { recursive: true });
-    writeEngine(nativeBin, key);
+    writeEngine(nativeBin, stub);
 
     const result = await run(["start", key, "--user-arg", "two words"], nativeBin);
 

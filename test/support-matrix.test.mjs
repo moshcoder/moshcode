@@ -108,13 +108,18 @@ test("/mcp list lists every engine exactly once", () => {
 });
 
 test("/mcp list splits the rows by MCP_ENGINES", () => {
+  // The column reports what moshcode can drive, so it says "no mcp add command"
+  // rather than "no MCP support" — kimi runs MCP servers and only lacks a way to
+  // register one from a script, and a row claiming otherwise sends the reader
+  // looking for an engine they already have.
   const out = capture(printMcpTargets);
   for (const key of Object.keys(ENGINES)) {
     const supported = MCP_ENGINES.includes(key);
     assert.match(
       out,
-      new RegExp(`${key}\\s+${supported ? "mcp add supported" : "no MCP support"}`),
-      `${key} row should say ${supported ? "supported" : "no MCP support"}`,
+      new RegExp(`${key}\\s+${supported ? "mcp add supported" : "no mcp add command"}`),
+      `${key} row should say ${supported ? "supported" : "no mcp add command"}`,
     );
   }
+  assert.doesNotMatch(out, /no MCP support/, "the matrix must not claim an engine cannot do MCP at all");
 });

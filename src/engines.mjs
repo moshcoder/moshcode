@@ -12,7 +12,7 @@
 // approvals bypassed/auto-approved.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { followFile, ptyEnabled, ptySpec, scriptFlavor, stripScriptBanner } from "./pty.mjs";
@@ -70,6 +70,59 @@ export const ENGINES = {
     agentArgs: ["--approval-mode=yolo"],
     install: { cmd: "npm", args: ["install", "-g", "@google/gemini-cli"] },
   },
+  kimi: {
+    desc: "Kimi Code — Moonshot AI's agentic CLI",
+    bin: "kimi",
+    // `--yolo` auto-approves regular tool calls while the agent can still ask a
+    // question — the same shape as gemini's yolo and aider's --yes-always. Kimi
+    // also has `--auto`, which additionally suppresses the questions; that is a
+    // step past what /agents means for every other engine here.
+    agentArgs: ["--yolo"],
+    // No agentsView: Kimi Code has no agent list to land on. `--agent <name>`
+    // picks a profile for the session it is starting, and there is no `kimi
+    // agents` subcommand, so agent mode is the autonomous session above.
+    //
+    // Install the kimi-code installer directly rather than the code.kimi.com
+    // /install.sh wrapper the older docs point at. That wrapper now installs the
+    // deprecated Python kimi-cli, and it *prompts* — Enter, or a 30s timeout,
+    // silently redirects to this same script. A vendor installer that blocks on
+    // a human for half a minute is not something `moshcode install` can drive.
+    install: { cmd: "bash", args: ["-c", "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash"] },
+    upgrade: { cmd: "kimi", args: ["upgrade"] },
+    // The installer drops the binary in ~/.kimi-code/bin and only appends that
+    // to your shell rc, so PATH won't see it until the next shell — including in
+    // the moshcode session that just installed it. (A custom KIMI_INSTALL_DIR
+    // lands in the rc the same way; only the default needs bridging here.)
+    binDirs: [path.join(homedir(), ".kimi-code", "bin")],
+  },
+  qwen: {
+    desc: "Qwen Code — Alibaba's agentic coding CLI",
+    bin: "qwen",
+    // A Gemini CLI fork, so it takes gemini's approval-mode flag. `--yolo`/`-y`
+    // selects the same mode by another name, and passing both is a hard error
+    // ("Cannot use --yolo (-y) and --approval-mode together"), so this stays on
+    // the one form — the gemini-shaped one, matching the entry above.
+    agentArgs: ["--approval-mode=yolo"],
+    install: { cmd: "npm", args: ["install", "-g", "@qwen-code/qwen-code"] },
+  },
+  deepseek: {
+    desc: "DeepSeek Code — terminal coding agent on DeepSeek models",
+    // Community-built (SerjMihashin), not a DeepSeek-published CLI — DeepSeek
+    // ships no first-party agentic CLI. The two other names that get suggested
+    // are dead ends: `deepseek-tui` is now a stub whose own description says it
+    // was renamed to `codewhale`, and `deepseek-cli` has not been touched since
+    // January 2025.
+    //
+    // The package installs two identical bins, `dsc` and `deepseek-code`. Take
+    // the long one: `dsc` is also Microsoft's Desired State Configuration
+    // binary, so on a machine that has both, the short name would silently
+    // launch the wrong program.
+    bin: "deepseek-code",
+    // `--turbo` is its "auto-approve all actions" mode (equivalently
+    // `--approval-mode turbo`, alongside plan/default/auto-edit).
+    agentArgs: ["--turbo"],
+    install: { cmd: "npm", args: ["install", "-g", "@serjm/deepseek-code"] },
+  },
   aider: {
     desc: "Aider — pair-programming in your terminal",
     bin: "aider",
@@ -92,6 +145,11 @@ export function upgradeSpec(engine) {
 export const ENGINE_ALIASES = {
   cc: "claude", "claude-code": "claude", openai: "codex", gpt: "codex", google: "gemini",
   pc: "privacycode", getprivacycode: "privacycode", privacy: "privacycode",
+  "kimi-cli": "kimi", "kimi-code": "kimi", moonshot: "kimi",
+  "qwen-code": "qwen", qwencode: "qwen", alibaba: "qwen",
+  // `dsc` and `deepseek-code` are the binary names the package installs; accept
+  // both as engine names so whichever one someone has seen resolves.
+  ds: "deepseek", dsc: "deepseek", "deepseek-code": "deepseek",
 };
 
 /** Resolve a name/alias to `[key, engine]`, or null. */
@@ -172,6 +230,9 @@ const AI_EXEC = {
   opencode: (p) => ["run", p],                               // opencode one-shot
   privacycode: (p) => ["run", p],                            // privacycode one-shot (opencode-derived)
   aider: (p) => ["--message", p, "--yes", "--no-auto-commits"], // aider single message
+  kimi: (p) => ["-p", p],                                    // kimi prompt mode (prints the response, text by default)
+  qwen: (p) => ["-p", p],                                    // qwen prompt mode (gemini-derived)
+  deepseek: (p) => ["--headless", "-p", p],                  // deepseek: -p runs one prompt and exits; --headless drops the TUI so stdout is pipe-clean
 };
 
 /** argv that runs `prompt` headlessly on `engine` (throws if it has no headless mode). */
@@ -193,16 +254,19 @@ export function aiExecArgs(engine, prompt) {
  */
 export function pickAiEngine(preferred) {
   const wanted = preferred ? resolveEngine(preferred)?.[0] : null;
-  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "aider"];
+  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "aider"];
   for (const key of order) {
-    if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin)) return key;
+    if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin, ENGINES[key].binDirs)) return key;
   }
   return null;
 }
 
 /** Engine entries annotated with install status. */
 export function engineStatus() {
-  return Object.entries(ENGINES).map(([key, e]) => ({ key, ...e, installed: isInstalled(e.bin) }));
+  // Search each engine's own install dir as well as PATH — kimi's installer only
+  // adds ~/.kimi-code/bin to your shell rc, so PATH alone reports it missing in
+  // the very session that installed it. (Inert for engines without binDirs.)
+  return Object.entries(ENGINES).map(([key, e]) => ({ key, ...e, installed: isInstalled(e.bin, e.binDirs) }));
 }
 
 export function engineList() {

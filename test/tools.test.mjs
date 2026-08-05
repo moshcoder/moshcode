@@ -107,6 +107,47 @@ test("cloud CLIs resolve and are listed as workflow tools", () => {
   assert.deepEqual(resolveTool("GH"), ["gh", TOOLS.gh]);
 });
 
+test("Alpaca is a workflow tool installed from its official Go command", () => {
+  assert.deepEqual(resolveTool("ALPACA"), ["alpaca", TOOLS.alpaca]);
+  assert.deepEqual(TOOLS.alpaca.install, {
+    cmd: "go",
+    args: ["install", "github.com/alpacahq/cli/cmd/alpaca@latest"],
+  });
+  assert.deepEqual(TOOLS.alpaca.binDirs, [path.join(homedir(), "go", "bin")]);
+  assert.match(toolList(), /alpaca/);
+});
+
+test("install alpaca delegates to the official Go package", async () => {
+  const root = tempDir("moshcode-install-alpaca-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "go-args.json");
+  mkdirSync(nativeBin);
+  writeExecutable(nativeBin, "go", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.GO_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "alpaca"], {
+    binDir: nativeBin,
+    env: { GO_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "install", "github.com/alpacahq/cli/cmd/alpaca@latest",
+  ]);
+});
+
+test("install alpaca explains a missing Go prerequisite", async () => {
+  const emptyPath = tempDir("moshcode-install-alpaca-no-go-");
+  const result = await run(["install", "alpaca"], { env: { PATH: emptyPath } });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /install failed/);
+  assert.match(result.stderr, /Go is required to install Alpaca/);
+  assert.match(result.stderr, /moshcode install alpaca/);
+});
+
 test("railway installs from the official npm package", () => {
   // Railway's shell installer needs bash process substitution, which does not
   // survive `sh -c`, so the npm package is the portable path.

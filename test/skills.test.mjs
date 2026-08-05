@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  SKILL_ENGINES, claudeSkillsDir, planSkillInstall, runSkillInstall, skillInstallAction, skillName,
+  SKILL_ENGINES, claudeSkillsDir, kimiSkillsDir, planSkillInstall, runSkillInstall, skillInstallAction, skillName,
 } from "../src/skills.mjs";
 
 test("skillName derives from a git url or path, or takes an override", () => {
@@ -29,12 +29,13 @@ test("skillName never yields `.` or `..`, which would escape the skills dir", ()
   assert.equal(skillName("whatever", ".."), "skill");
 });
 
-test("the claude clone destination stays inside the skills dir", () => {
-  const dir = claudeSkillsDir();
-  for (const source of [".", "./", "..", "../", "a/b/."]) {
-    const { args } = skillInstallAction("claude", { source, name: skillName(source) });
-    const dest = args.at(-1);
-    assert.equal(path.dirname(dest), dir, `${source} escaped to ${dest}`);
+test("a clone destination stays inside the engine's skills dir", () => {
+  for (const [key, dir] of [["claude", claudeSkillsDir()], ["kimi", kimiSkillsDir()]]) {
+    for (const source of [".", "./", "..", "../", "a/b/."]) {
+      const { args } = skillInstallAction(key, { source, name: skillName(source) });
+      const dest = args.at(-1);
+      assert.equal(path.dirname(dest), dir, `${key}: ${source} escaped to ${dest}`);
+    }
   }
 });
 
@@ -44,6 +45,15 @@ test("skillInstallAction: gemini installs natively, claude clones into its skill
 
   const claude = skillInstallAction("claude", { source: "https://x/y", name: "y" });
   assert.deepEqual(claude, { cmd: "git", args: ["clone", "--depth", "1", "https://x/y", path.join(claudeSkillsDir(), "y")] });
+
+  // Kimi Code discovers skills by scanning dirs too, so it clones into its own.
+  const kimi = skillInstallAction("kimi", { source: "https://x/y", name: "y" });
+  assert.deepEqual(kimi, { cmd: "git", args: ["clone", "--depth", "1", "https://x/y", path.join(kimiSkillsDir(), "y")] });
+});
+
+test("kimiSkillsDir follows KIMI_CODE_HOME, which is what moves kimi's skills", () => {
+  assert.equal(kimiSkillsDir({}), path.join(os.homedir(), ".kimi-code", "skills"));
+  assert.equal(kimiSkillsDir({ KIMI_CODE_HOME: "/opt/kimi" }), path.join("/opt/kimi", "skills"));
 });
 
 test("skillInstallAction: engines without a skills primitive are skipped", () => {
@@ -57,7 +67,7 @@ test("claudeSkillsDir points at the personal skills directory", () => {
 });
 
 test("SKILL_ENGINES is exactly the engines with a skills primitive", () => {
-  assert.deepEqual(SKILL_ENGINES, ["claude", "gemini"]);
+  assert.deepEqual(SKILL_ENGINES, ["claude", "gemini", "kimi"]);
 });
 
 test("runSkillInstall summarizes installed / not-installed", async () => {

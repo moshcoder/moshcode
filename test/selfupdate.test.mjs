@@ -148,6 +148,28 @@ test("control: a valid --interval still writes the units it always did", async (
   assert.match(lines.join("\n"), /checking on a schedule/);
 });
 
+// The units on disk mean nothing if systemd never took them. When `systemctl
+// enable --now` fails — no systemd (container/WSL/macOS) or no root — the
+// command must not claim it is "checking on a schedule now"; that would promise
+// an auto-update that never fires.
+test("--install reports failure when systemctl cannot start the timer", async () => {
+  const written = new Map();
+  const lines = [];
+  const code = await selfUpdateCommand(
+    ["--timer", "--interval", "1h", "--install"],
+    (l) => lines.push(l),
+    {
+      write: async (p, b) => written.set(p, b),
+      runner: async (cmd, args) => (cmd === "systemctl" && args[0] === "enable" ? { ok: false } : { ok: true }),
+    },
+  );
+
+  assert.equal(code, 1);
+  assert.equal(written.size, 2); // units were still written, we just did not lie about the timer
+  assert.doesNotMatch(lines.join("\n"), /checking on a schedule now/);
+  assert.match(lines.join("\n"), /systemctl could not start the timer/);
+});
+
 test("control: --timer with no --interval is still the default", async () => {
   const lines = [];
   assert.equal(await selfUpdateCommand(["--timer"], (l) => lines.push(l), {}), 0);

@@ -140,6 +140,37 @@ test("a name that is not a Moshpit name is refused before anything else", async 
   }
 });
 
+test("a --proxy port that is not 1-65535 is refused, not silently misconfigured", async () => {
+  // 0 is falsy downstream, so it dropped to a static root; 99999 wrote a
+  // proxy_pass to a port that cannot exist. Both used to exit 0 and write.
+  for (const bad of ["0", "99999", "70000", "-1", "abc", ""]) {
+    const lines = [];
+    let wrote = false;
+    const code = await serveCommand(["blue.eggs", "--proxy", bad, "--install"], (l) => lines.push(l), {
+      detect: async () => "nginx",
+      write: async () => { wrote = true; },
+      mkdir: async () => {},
+      copy: async () => {},
+      runner: async () => ({ ok: true }),
+    });
+    assert.equal(code, 1, `--proxy ${bad} should be refused`);
+    assert.equal(wrote, false, `--proxy ${bad} must not write a config`);
+    assert.ok(lines.some((l) => /--proxy needs a decimal integer from 1 to 65535/.test(l)), `--proxy ${bad} message`);
+  }
+  // Control: a real port still installs a reverse proxy, unchanged.
+  const lines = [];
+  let content = null;
+  const code = await serveCommand(["blue.eggs", "--proxy", "3000", "--install"], (l) => lines.push(l), {
+    detect: async () => "nginx",
+    write: async (_p, c) => { content = c; },
+    mkdir: async () => {},
+    copy: async () => {},
+    runner: async () => ({ ok: true }),
+  });
+  assert.equal(code, 0);
+  assert.match(content, /proxy_pass http:\/\/127\.0\.0\.1:3000;/);
+});
+
 test("a fresh site is seeded, because an empty root is a 404 that reads as broken", async () => {
   // The moment someone is trying to tell "the name resolved" from "the install
   // failed" is exactly the moment an empty root answers 404 and refuses to

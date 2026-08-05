@@ -1,4 +1,5 @@
 // The HTTP half of the DoH resolver.
+import http from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -158,4 +159,50 @@ test("a server built with defaults actually enforces them", async (t) => {
   const limited = await ask();
   const body = Buffer.from(await limited.arrayBuffer());
   assert.equal(body.readUInt16BE(2) & 0x000f, 5, "REFUSED once the burst is spent");
+});
+
+test("overriding one guard keeps the guards you did not mention", async (t) => {
+  // A caller mounting this programmatically may tune a single guard and leave
+  // the rest at their defaults. The un-mentioned guards have to stay the safe
+  // defaults `server.guards` reports, not silently fall to the handler's own
+  // off-by-default null/null/0 — a resolver that says it rate limits and does
+  // not is exactly the open resolver these guards exist to prevent.
+  const registry = http.createServer((req, res) => {
+    // The only thing the resolver needs from the registry here is that our
+    // ending is ours, so a query for it reaches the handler as an answerable
+    // name (NXDOMAIN) rather than a not-ours REFUSED, which rate limiting also
+    // returns and would mask the very thing under test.
+    if ((req.url || "").startsWith("/api/moshpit/tlds")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ tlds: ["moshtest"], total: 1 }));
+    } else {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end("{}");
+    }
+  });
+  await new Promise((r) => registry.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => registry.close(r)));
+  const registryBase = `http://127.0.0.1:${registry.address().port}`;
+
+  // Override only maxResponseBytes; rateLimit is left unmentioned.
+  const server = await createDohServer({ port: 0, registryBase, maxResponseBytes: 4096 });
+  t.after(() => server.close());
+  assert.deepEqual(server.guards.rateLimit, { perSecond: 20, burst: 40 },
+    "reports the default rate limit is in force");
+
+  const ask = () => fetch(`http://127.0.0.1:${server.port}${DOH_PATH}`, {
+    method: "POST",
+    headers: { "content-type": DNS_MESSAGE, "x-forwarded-for": "198.51.100.9" },
+    body: query("x.moshtest"),
+  });
+  // Default burst is 40. Fire well past it at once so token refill during the
+  // run cannot stand in for a limiter that was dropped.
+  const rcodes = await Promise.all(
+    Array.from({ length: 120 }, () => ask().then(async (r) =>
+      Buffer.from(await r.arrayBuffer()).readUInt16BE(2) & 0x000f)),
+  );
+  assert.ok(rcodes.some((c) => c !== 5),
+    "an ours-name below the limit is answered, not REFUSED");
+  assert.ok(rcodes.some((c) => c === 5),
+    "the unmentioned default rate limit still REFUSES once the burst is spent");
 });

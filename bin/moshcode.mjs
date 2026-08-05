@@ -15,6 +15,7 @@ import {
   runCmd,
 } from "../src/engines.mjs";
 import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
+import { tradeArgs, tradeUsage } from "../src/trade.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
 import { selfUpdateCommand } from "../src/selfupdate.mjs";
 import { describeUninstall, uninstallPlan } from "../src/uninstall.mjs";
@@ -317,6 +318,29 @@ async function main() {
     }
     return;
   }
+  if (cmd === "trade") {
+    const translated = tradeArgs(rest);
+    if (translated.usage) {
+      console.log(tradeUsage());
+      return;
+    }
+    if (translated.error) {
+      console.error(`${translated.error}\n\n${tradeUsage()}`);
+      process.exitCode = 1;
+      return;
+    }
+    const tool = TOOLS.alpaca;
+    const r = await openTool(tool, translated.args);
+    if (!r.ok) {
+      console.error(r.error?.code === "ENOENT"
+        ? `alpaca isn't installed (\`${tool.bin}\`). run: moshcode install alpaca`
+        : `launch failed: ${r.error?.message || r.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    propagateExit(r.code, r.signal);
+    return;
+  }
   if (cmd === "console") {
     const code = await consoleCommand(rest);
     if (code) process.exitCode = code;
@@ -345,6 +369,7 @@ async function main() {
     const result = await runCmd(install.cmd, install.args);
     if (!result.ok) {
       console.error(`install failed: ${result.error?.message || result.error || "unknown error"}`);
+      if (result.error?.code === "ENOENT" && entry.installHelp) console.error(entry.installHelp);
       process.exitCode = 1;
       return;
     }
@@ -417,7 +442,7 @@ async function main() {
           return results.filter((r) => !r.ok).length ? 1 : 0;
         },
         write: (path, body) => fsp.writeFile(path, body),
-        runner: (cmd2, args2) => new Promise((res) => execFile(cmd2, args2, () => res({ ok: true }))),
+        runner: (cmd2, args2) => new Promise((res) => execFile(cmd2, args2, (err) => res({ ok: !err }))),
       })) || 0;
       return;
     }
