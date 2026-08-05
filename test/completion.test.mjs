@@ -118,6 +118,8 @@ for (const [shell, args] of [
 test("bash completion respects argument depth and preserves file fallbacks", () => {
   assert.ok(bashCompletions(["moshcode", "cl"]).includes("claude"));
   assert.ok(bashCompletions(["moshcode", "agents", ""]).includes("cc"));
+  assert.deepEqual(bashCompletions(["moshcode", "agents", "--"]), ["--json"]);
+  assert.deepEqual(bashCompletions(["moshcode", "agents", "claude", "--"]), []);
   assert.ok(bashCompletions(["moshcode", "install", ""]).includes("claude"));
   assert.deepEqual(bashCompletions(["moshcode", "install", "claude", ""]), []);
 

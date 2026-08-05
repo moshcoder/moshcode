@@ -35,10 +35,15 @@ export const CORE_CLI_COMMANDS = [
     description: "list engines or launch one autonomously",
     synopsis: [
       ["moshcode agents", "list engines and their install status"],
+      ["moshcode agents --json", "list engine status as machine-readable JSON"],
       ["moshcode agents <engine> [args…]", "open the engine's agent view, or start it autonomously"],
+    ],
+    flags: [
+      ["--json", "print engine status as JSON", ""],
     ],
     examples: [
       ["moshcode agents", "which engines are here"],
+      ["moshcode agents --json", "pipe engine status into a script"],
       ["moshcode agents claude", "claude's agent list"],
     ],
     seeAlso: ["start", "engines", "install"],

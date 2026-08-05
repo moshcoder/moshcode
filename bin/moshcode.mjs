@@ -283,7 +283,10 @@ async function main() {
     return;
   }
   if (cmd === "agents") {
-    if (!rest.length) { printEngineStatus(); return; }
+    if (!rest.length || (rest.length === 1 && rest[0] === "--json")) {
+      printEngineStatus(rest[0] === "--json");
+      return;
+    }
     const resolved = resolveEngine(rest[0]);
     if (!resolved) {
       console.error(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`);

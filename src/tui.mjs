@@ -127,7 +127,16 @@ function commandRemainder(line) {
   return firstWord ? String(line).slice(firstWord[0].length).trim() : "";
 }
 
-function printEngines() {
+function printEngines(json = false) {
+  if (json) {
+    console.log(JSON.stringify(engineStatus().map(({ key, desc, bin, installed }) => ({
+      name: key,
+      description: desc,
+      binary: bin,
+      installed,
+    })), null, 2));
+    return;
+  }
   console.log(bone("  engines") + ash("  — autonomous ") + acid("/agents <name>") + ash(" · raw ") + acid("/start <name>"));
   for (const e of engineStatus()) {
     const dot = e.installed ? acid("●") : ash("○");
@@ -582,7 +591,10 @@ export async function tui() {
       continue;
     }
     if (cmd === "agents" || cmd === "agent" || cmd === "engines") {
-      if (!rest[0]) { printEngines(); continue; }
+      if (!rest[0] || (rest.length === 1 && rest[0] === "--json")) {
+        printEngines(rest[0] === "--json");
+        continue;
+      }
       const resolved = resolveEngine(rest[0]);
       if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
       const [key, engine] = resolved;

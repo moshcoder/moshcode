@@ -51,6 +51,24 @@ test("TUI command parsing rejects incomplete quoting", () => {
   assert.throws(() => splitCommandLine("/ugig trailing\\"), /trailing escape/);
 });
 
+test("TUI /agents --json prints machine-readable engine status", async () => {
+  const result = await runTui("/agents --json\n/quit\n");
+
+  assert.equal(result.status, 0);
+  const json = result.stdout.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+  assert.ok(json, "expected a JSON status array");
+  const statuses = JSON.parse(json[0]);
+  assert.ok(statuses.some(({ name }) => name === "claude"));
+  for (const status of statuses) {
+    assert.deepEqual(Object.keys(status), ["name", "description", "binary", "installed"]);
+    assert.equal(typeof status.name, "string");
+    assert.equal(typeof status.description, "string");
+    assert.equal(typeof status.binary, "string");
+    assert.equal(typeof status.installed, "boolean");
+  }
+  assert.doesNotMatch(result.stdout, /unknown engine "--json"/);
+});
+
 test("TUI /run rejects unknown options before reading a script file", async () => {
   const result = await runTui("/run --dryrun\n/quit\n");
 
