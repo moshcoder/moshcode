@@ -1,0 +1,124 @@
+# Publish the release to npm.
+#
+# moshcode's own install path is `curl … install.sh | sh`, and npm is a second
+# channel rather than the primary one — which is exactly why it needs to be
+# automatic. A channel that only updates when someone remembers is a channel
+# that silently serves an old version forever.
+#
+# Runs on a published GitHub release, so the release itself is the trigger and
+# there is no separate step to forget. `workflow_dispatch` is for re-running one
+# that failed on something transient; it is safe because a version already on
+# the registry is skipped rather than attempted.
+#
+# Requires a repository secret `NPM_TOKEN` — an npm automation token, which is
+# the kind that publishes without a 2FA prompt.
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # For npm provenance: the attestation is signed with a short-lived OIDC token
+  # rather than anything stored here, and it is what lets npm show which build
+  # this tarball actually came from.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version is read from the "packageManager" field in package.json.
+      # Do not pin a version here — it conflicts with packageManager and fails
+      # with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # Publishing is the one action here that cannot be taken back — npm will
+      # not let a version be replaced — so the tests run first, on the exact
+      # tree about to be packed.
+      - run: pnpm run --if-present test
+        env:
+          CI: true
+
+      - name: Read the version being published
+        id: version
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "moshcode@$VERSION"
+
+      # A release tagged v0.25.0 carrying package.json 0.24.0 would publish the
+      # wrong tree under a version nobody can reuse. Cheap to check, impossible
+      # to undo.
+      - name: Check the tag matches package.json
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::release tag $TAG does not match package.json version $VERSION"
+            exit 1
+          fi
+
+      # Makes a re-run harmless. Without it, dispatching the workflow twice
+      # fails the second time on an E403 that reads like something broke.
+      - name: Skip if this version is already on npm
+        id: published
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "moshcode@$VERSION" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "moshcode@$VERSION is already published — nothing to do"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Said plainly here, rather than as the 401 npm would otherwise return
+      # partway through a release.
+      - name: Require an npm token
+        if: steps.published.outputs.already == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is not set — add an npm automation token as a repository secret named NPM_TOKEN"
+            exit 1
+          fi
+
+      - name: Publish
+        if: steps.published.outputs.already == 'false'
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Confirm the registry has it
+        if: steps.published.outputs.already == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # The registry is read-through cached, so a fresh publish can 404 for
+          # a moment. Retry rather than report a good publish as a failure.
+          for _ in 1 2 3 4 5; do
+            if [ "$(npm view "moshcode@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+              echo "moshcode@$VERSION is on the registry"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::published, but the registry does not report moshcode@$VERSION yet"
+          exit 1
