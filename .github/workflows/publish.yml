@@ -10,15 +10,15 @@
 # that failed on something transient; it is safe because a version already on
 # the registry is skipped rather than attempted.
 #
-# Authenticates by trusted publishing (OIDC) rather than a stored token: npm
-# trades the short-lived token GitHub mints for this specific workflow run for
-# permission to publish, so there is no long-lived credential in the repository
-# to leak, rotate or forget.
+# Authenticates with a stored npm automation token, in the repository secret
+# `NPM_TOKEN`. Trusted publishing (OIDC) would avoid the stored credential, but
+# it needs a trusted publisher registered against this workflow's filename on
+# npmjs.com, which can only be done through the web UI — and until that exists
+# npm rejects the publish as E404/no-permission, which is how v0.24.1 failed.
 #
-# The other half of that trust lives on npmjs.com, under the package's Trusted
-# Publisher settings, and it is pinned to the *filename* of this workflow.
-# Renaming this file silently breaks publishing — npm will refuse the exchange
-# because the run no longer matches what was configured.
+# Worth knowing when this is next revisited: npm is restricting tokens that
+# bypass 2FA for direct publishing, so the token path has a horizon.
+# https://gh.io/npm-gat-bypass2fa-deprecation
 name: publish
 
 on:
@@ -28,9 +28,9 @@ on:
 
 permissions:
   contents: read
-  # The whole basis of the exchange: this is what lets the run mint the OIDC
-  # token npm authenticates against. Without it there is no credential at all
-  # and publishing fails outright.
+  # Still needed with token auth: provenance is signed with a short-lived OIDC
+  # token even though the publish itself authenticates with NPM_TOKEN. Without
+  # it `--provenance` fails.
   id-token: write
 
 jobs:
@@ -50,22 +50,6 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-
-      # Node 22 bundles npm 10, which predates trusted publishing and would fall
-      # back to looking for a token that no longer exists — an auth failure that
-      # reads as a credential problem rather than a version one. 11.5.1 is the
-      # floor; the check below says so plainly if that ever regresses.
-      - name: Install an npm that understands trusted publishing
-        run: |
-          npm install -g npm@latest
-          VERSION="$(npm --version)"
-          MINIMUM=11.5.1
-          echo "npm $VERSION"
-          # Lowest of the two must be the minimum, or this npm is older than it.
-          if [ "$(printf '%s\n%s\n' "$MINIMUM" "$VERSION" | sort -V | head -n1)" != "$MINIMUM" ]; then
-            echo "::error::npm $VERSION cannot use trusted publishing — $MINIMUM or later is required"
-            exit 1
-          fi
 
       - run: pnpm install --frozen-lockfile
 
@@ -111,11 +95,24 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # No token, and no `--provenance` either: publishing through trusted
-      # publishing generates and attaches the attestation on its own.
+      # Said plainly here, rather than as the E404/no-permission npm otherwise
+      # returns partway through a release — an error that reads as "the package
+      # does not exist" rather than "there is no credential".
+      - name: Require an npm token
+        if: steps.published.outputs.already == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is not set — add an npm automation token as a repository secret named NPM_TOKEN"
+            exit 1
+          fi
+
       - name: Publish
         if: steps.published.outputs.already == 'false'
-        run: npm publish --access public
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Confirm the registry has it
         if: steps.published.outputs.already == 'false'
