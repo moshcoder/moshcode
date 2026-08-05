@@ -637,8 +637,13 @@ export function proxyReachable(address, port = 443, { connect = null, timeoutMs 
     try {
       const net = connect || netConnect;
       socket = net({ host: address, port });
+      // Deliberately not unref'd. This timer is the only thing that guarantees
+      // the promise settles at all, and an unref'd one does not hold the loop
+      // open — so a connect that stalls without keeping a handle alive let the
+      // process reach an idle event loop with this still pending, which node
+      // reports as a cancelled await rather than the `false` the caller needs.
+      // It cannot outlive the probe: both settle paths clear it.
       const timer = setTimeout(() => done(false), timeoutMs);
-      timer.unref?.();
       socket.once("connect", () => { clearTimeout(timer); done(true); });
       socket.once("error", () => { clearTimeout(timer); done(false); });
     } catch {
