@@ -2231,6 +2231,17 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     if (proxyIndex >= 0) {
       const given = rest[proxyIndex + 1];
       const host = given && !given.startsWith("-") ? given : null;
+      // A host name passes the reachability probe (connect resolves it) but a
+      // DNS answer can only carry an address — isIP would leave both families
+      // null, so the mode would announce success and then NODATA every live
+      // name. That is the very outage the gate below exists to refuse, so it is
+      // refused here for the same reason rather than warned about.
+      if (host && !isIP(host)) {
+        out(`! --proxy needs an IP address, not a host name like "${host}"`);
+        out("  a name here answers every live Moshpit name with nothing, which reads");
+        out("  as a total outage — pass the proxy's address (127.0.0.1 or ::1) instead.");
+        return 1;
+      }
       const candidates = host ? [host] : ["127.0.0.1", "::1"];
       const reachable = [];
       for (const candidate of candidates) {
