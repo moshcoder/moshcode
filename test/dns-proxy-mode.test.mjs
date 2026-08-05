@@ -189,3 +189,28 @@ test("an explicit --proxy host is the only one probed", async () => {
     await held.release();
   }
 });
+
+test("--proxy with a host name refuses instead of NODATA'ing every live name", async () => {
+  // A name like `localhost` passes the reachability probe (connect resolves it)
+  // but cannot go in an A/AAAA answer, so the mode would announce success and
+  // then answer every live name with nothing — the outage the gate exists for.
+  // Hold the resolver port so that even without the fix `start` cannot bind and
+  // sit on the loop — the assertion is about the refusal, not the bind.
+  const held = await holdUdp();
+  try {
+    const lines = [];
+    let probed = false;
+    const code = await dnsCommand(["start", "--proxy", "localhost", "--port", String(held.port)], (l) => lines.push(l), {
+      tlds: async () => ["eggs"],
+      proxyReachableImpl: async () => { probed = true; return true; },
+    });
+
+    assert.equal(code, 1);
+    assert.equal(probed, false, "a host name is rejected before anything is probed");
+    const text = lines.join("\n");
+    assert.match(text, /needs an IP address/);
+    assert.doesNotMatch(text, /proxying every live name/, "it must not claim to have started proxying");
+  } finally {
+    await held.release();
+  }
+});
