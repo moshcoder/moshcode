@@ -215,7 +215,7 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
         }
       }
       'login' { if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionLogin } }
-      { $_ -in @('engines', 'tools', 'commands') } {
+      { $_ -in @('whoami', 'engines', 'tools', 'commands') } {
         if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionJson }
       }
       'run' { if ($wordToComplete.StartsWith('-')) { $choices = $script:MoshcodeCompletionRun } }
@@ -321,7 +321,7 @@ _moshcode_completion() {
       login)
         [[ "$cur" == -* ]] && choices="--browser -b --device -d"
         ;;
-      engines|tools|commands)
+      whoami|engines|tools|commands)
         [[ "$cur" == -* ]] && choices="--json"
         ;;
       run)
@@ -464,7 +464,7 @@ _moshcode() {
     login)
       _values "login option" --browser -b --device -d
       ;;
-    engines|tools|commands)
+    whoami|engines|tools|commands)
       _values "option" --json
       ;;
     run)
@@ -556,7 +556,7 @@ complete -c moshcode -n '__moshcode_nested_is mcp list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_nested_is skill list; or __moshcode_nested_is skills list' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is login' -l browser -s b -d 'use browser authentication'
 complete -c moshcode -n '__moshcode_command_is login' -l device -s d -d 'use device-code authentication'
-complete -c moshcode -n '${atSecondToken("agents engines tools commands")}' -l json -d 'print JSON'
+complete -c moshcode -n '${atSecondToken("agents whoami engines tools commands")}' -l json -d 'print JSON'
 complete -c moshcode -n '__moshcode_command_is run' -l dry-run -d 'show actions without executing'
 complete -c moshcode -n '__moshcode_command_is run' -l max -s n -r -d 'maximum loop count'
 complete -c moshcode -n '__moshcode_command_is uninstall remove' -l yes -s y -d 'confirm deleting a binary'

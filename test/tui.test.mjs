@@ -69,6 +69,23 @@ test("TUI /agents --json prints machine-readable engine status", async () => {
   assert.doesNotMatch(result.stdout, /unknown engine "--json"/);
 });
 
+test("TUI /whoami --json forwards the option and prints JSON", async () => {
+  const home = mkdtempSync(join(tmpdir(), "moshcode-whoami-"));
+  const result = await runTuiWithHome(home, "/whoami --json\n/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const json = result.stdout.match(/\{\s*"status":\s*"not_logged_in"[\s\S]*?\n\}/);
+  assert.ok(json, "expected JSON account status");
+  assert.equal(JSON.parse(json[0]).status, "not_logged_in");
+});
+
+test("TUI /whoami rejects unknown options", async () => {
+  const result = await runTui("/whoami --josn\n/quit\n");
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /usage: \/whoami \[--json\]/);
+});
+
 test("TUI /run rejects unknown options before reading a script file", async () => {
   const result = await runTui("/run --dryrun\n/quit\n");
 

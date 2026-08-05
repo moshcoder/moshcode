@@ -119,6 +119,7 @@ test("bash completion respects argument depth and preserves file fallbacks", () 
   assert.ok(bashCompletions(["moshcode", "cl"]).includes("claude"));
   assert.ok(bashCompletions(["moshcode", "agents", ""]).includes("cc"));
   assert.deepEqual(bashCompletions(["moshcode", "agents", "--"]), ["--json"]);
+  assert.deepEqual(bashCompletions(["moshcode", "whoami", "--"]), ["--json"]);
   assert.deepEqual(bashCompletions(["moshcode", "agents", "claude", "--"]), []);
   assert.ok(bashCompletions(["moshcode", "install", ""]).includes("claude"));
   assert.deepEqual(bashCompletions(["moshcode", "install", "claude", ""]), []);
@@ -183,6 +184,16 @@ test("every shell offers the dns trust verb, so it does not silently drift", () 
       `${shell} completion is missing the dns verb "trust"`,
     );
   }
+});
+
+test("every shell offers the whoami JSON option", () => {
+  assert.match(completionScript("bash"), /whoami\|engines\|tools\|commands/);
+  assert.match(completionScript("zsh"), /whoami\|engines\|tools\|commands/);
+  assert.match(completionScript("fish"), /agents whoami engines tools commands/);
+  assert.match(
+    completionScript("powershell"),
+    /@\('whoami', 'engines', 'tools', 'commands'\)/,
+  );
 });
 
 test("completion normalizes shell names and rejects unsupported values", () => {

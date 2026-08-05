@@ -546,7 +546,15 @@ async function main() {
     } catch (e) { console.error(String(e.message || e)); process.exitCode = 1; }
     return;
   }
-  if (cmd === "whoami") { await whoami(); return; }
+  if (cmd === "whoami") {
+    if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--json")) {
+      console.error("usage: moshcode whoami [--json]");
+      process.exitCode = 1;
+      return;
+    }
+    await whoami({ json: rest[0] === "--json" });
+    return;
+  }
   if (cmd === "logout") { logout(); return; }
   if (cmd === "run") {
     let max = 3, dryRun = false;

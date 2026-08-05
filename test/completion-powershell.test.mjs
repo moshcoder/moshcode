@@ -62,6 +62,7 @@ test("PowerShell completes commands, install targets, and nested options", (t) =
   const templateListOptions = expand(executable, "moshcode template list --j");
   const templateOptions = expand(executable, "moshcode template install --d");
   const templateAliasOptions = expand(executable, "moshcode templates install --i");
+  const whoamiOptions = expand(executable, "moshcode whoami --j");
   assert.ok(commands.includes("engines"), JSON.stringify(commands));
   assert.ok(installs.includes("claude"), JSON.stringify(installs));
   assert.ok(options.includes("--json"), JSON.stringify(options));
@@ -69,4 +70,5 @@ test("PowerShell completes commands, install targets, and nested options", (t) =
   assert.ok(templateListOptions.includes("--json"), JSON.stringify(templateListOptions));
   assert.ok(templateOptions.includes("--dry-run"), JSON.stringify(templateOptions));
   assert.ok(templateAliasOptions.includes("--into"), JSON.stringify(templateAliasOptions));
+  assert.ok(whoamiOptions.includes("--json"), JSON.stringify(whoamiOptions));
 });
