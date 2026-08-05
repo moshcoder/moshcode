@@ -1,0 +1,8 @@
+{
+  "name": "caddy-proxy",
+  "description": "Caddy proxying a Moshpit name to a service already running on the box — no app, no database, just the name in front",
+  "vars": {
+    "MOSHPIT_NAME": "the registered name to serve, e.g. foo.whatever",
+    "APP_ADDR": "where the local service listens, loopback only (default 127.0.0.1:8080)"
+  }
+}

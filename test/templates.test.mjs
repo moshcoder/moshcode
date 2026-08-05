@@ -46,7 +46,7 @@ test("template list --json prints the stable template metadata", async () => {
 
   assert.equal(code, 0);
   assert.ok(Array.isArray(templates));
-  assert.deepEqual(templates.map((template) => template.name), ["bun-caddy-sqlite", "caddy-static"]);
+  assert.deepEqual(templates.map((template) => template.name), ["bun-caddy-sqlite", "caddy-proxy", "caddy-static"]);
   for (const template of templates) {
     assert.deepEqual(Object.keys(template), ["name", "description"]);
     assert.equal(typeof template.description, "string");

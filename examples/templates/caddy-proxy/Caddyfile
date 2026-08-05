@@ -1,0 +1,36 @@
+# Caddy in front of a service already running on this box, published at a
+# Moshpit name.
+#
+# The `http://` is required and is not a style choice. A Moshpit ending is not
+# in the public DNS root, so no certificate authority will issue for it — leave
+# the scheme off and Caddy will try to provision a certificate, fail, and never
+# bring the site up. Everything served at a Moshpit name is plain HTTP.
+#
+# Nothing here resolves the name. The visitor's resolver did that; by the time a
+# request arrives Caddy has only a Host header to match on, which is why the
+# site address must be the name exactly as it is registered.
+
+http://{$MOSHPIT_NAME:foo.whatever} {
+	reverse_proxy {$APP_ADDR:127.0.0.1:8080}
+
+	log {
+		output file /var/log/caddy/moshpit-service.log
+	}
+}
+
+# Every subdomain too. This block answers only once the name publishes a
+# wildcard record — DNS Records tab in the Pit, the `*.` option with an AAAA
+# at this box — because until then `anything.foo.whatever` resolves to nothing
+# and no request reaches Caddy to match. Uncomment both together.
+#
+# The app sees which subdomain was asked for in the Host header, and Caddy
+# matches exactly one label deep: `api.foo.whatever` answers,
+# `a.b.foo.whatever` does not.
+#
+# http://*.{$MOSHPIT_NAME:foo.whatever} {
+# 	reverse_proxy {$APP_ADDR:127.0.0.1:8080}
+#
+# 	log {
+# 		output file /var/log/caddy/moshpit-service.log
+# 	}
+# }
