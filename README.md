@@ -46,6 +46,8 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
 | `moshcode trade` | tools | look up markets and trade through Alpaca |
+| `moshcode ticker` <br>`advisor` | tools | equity research from advis0r.com |
+| `moshcode plugin` <br>`plugins` | extend | install moshcode's slash commands into Claude Code |
 | `moshcode commands` | script | list built-in moshscript commands |
 | `moshcode completion` | extend | print a shell completion script |
 | `moshcode run` | script | run a moshscript |
@@ -211,6 +213,31 @@ Alpaca's CLI has no confirmation prompts; `--submit` intentionally removes
 MoshCode's preview guard. Live trading additionally requires Alpaca's `--live`
 opt-in or corresponding environment setting.
 
+### Equity research (`moshcode ticker`)
+
+Where `trade` is Alpaca's order book, `ticker` is the research desk:
+[advis0r.com](https://advis0r.com/api)'s public read-only API, rendered in the
+pit. No key, no login, no write routes, no binary to install:
+
+```sh
+moshcode ticker NVDA               # score, technicals, fundamentals, thesis, signals
+moshcode ticker lookup rivian      # company name → RIVN
+moshcode ticker signals AAPL       # what was said, quoted and sourced
+moshcode ticker search "data center"  # across every indexed transcript
+moshcode ticker reports --limit 10 # the stored index, best score first
+moshcode ticker discover fusion    # a ranked watchlist (slow — analyzes each candidate)
+moshcode ticker open NVDA          # the shareable report page
+```
+
+Add `--json` to any of them for the raw response. The same facade is `/ticker …`
+in the pit, and `MOSHCODE_ADVISOR_URL` points it at another instance.
+
+Reports are **stored snapshots**, not live quotes: every response carries
+`reportGeneratedAt` and every renderer prints it, alongside whether the price is
+delayed and which feed produced it. Scores labelled `offline` come from
+deterministic rules rather than a model. It is a research aid, not advice, and
+nothing under `ticker` can place an order.
+
 ### Social posting from the pit
 
 The pit can hand a prepared post to Bluesky or Nostr without storing either
@@ -304,6 +331,34 @@ them into five engines' config files, which would be five places to leak them
 from and five to rotate. Porkbun's API access is off by default and enabled
 per-domain — and its documentation tools work with no keys at all, which is a
 sensible way to try the server before trusting it with DNS writes.
+
+## Claude Code plugins
+
+MoshCode publishes its own plugin marketplace, so the pit's slash commands work
+inside your engine too:
+
+```sh
+moshcode plugin list              # what the marketplace ships, and who can take it
+moshcode plugin install           # add the marketplace + install `ticker`
+moshcode plugin remove ticker     # take it back off
+```
+
+`ticker@moshcode` adds `/ticker`, `/signals`, `/research`, `/lookup`,
+`/reports`, and `/discover` — the same advis0r research surface described above,
+driven from inside a coding session. Restart the engine afterwards; a newly
+installed plugin is not live in a session that is already running.
+
+The equivalent by hand:
+
+```sh
+claude plugin marketplace add moshcoder/moshcode
+claude plugin install ticker@moshcode
+```
+
+Claude Code is currently the only engine with a plugin primitive. The others are
+reported as skipped with a reason, the same way they are for skills, rather than
+being left out of the summary. `MOSHCODE_PLUGIN_SOURCE=.` installs from a local
+checkout instead of GitHub, which is how you try an unreleased plugin.
 
 ## Upgrade everything
 

@@ -23,4 +23,5 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0005](0005-hosted-moshpit-resolver.md) | A hosted Moshpit resolver, for the devices that cannot run the bridge | Draft |
 | [0006](0006-help.md) | --help | Draft |
 | [0007](0007-profullstack-site-init.md) | Generate batteries-included Profullstack sites for Moshpit names | Draft |
+| [0008](0008-ticker-research-and-plugin-marketplace.md) | Bring equity research into the pit, and ship the pit's slash commands as a plugin | Draft |
 <!-- PRD-INDEX:END -->

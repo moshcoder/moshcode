@@ -19,7 +19,9 @@ import { tradeArgs, tradeUsage } from "../src/trade.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
 import { selfUpdateCommand } from "../src/selfupdate.mjs";
 import { describeUninstall, uninstallPlan } from "../src/uninstall.mjs";
-import { mcpCommand, skillCommand } from "../src/integrations.mjs";
+import { mcpCommand, pluginCommand, skillCommand } from "../src/integrations.mjs";
+import { tickerCommand } from "../src/advisor.mjs";
+import { canOpenBrowser, openBrowser } from "../src/open-url.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { loginAuto, whoami, logout } from "../src/auth.mjs";
@@ -342,6 +344,18 @@ async function main() {
       return;
     }
     propagateExit(r.code, r.signal);
+    return;
+  }
+  if (cmd === "ticker" || cmd === "advisor") {
+    const code = await tickerCommand(rest, {
+      openUrl: (url) => canOpenBrowser() && openBrowser(url),
+    });
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === "plugin" || cmd === "plugins") {
+    const code = await pluginCommand(rest);
+    if (code) process.exitCode = code;
     return;
   }
   if (cmd === "console") {
