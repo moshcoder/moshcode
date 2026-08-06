@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "moshcode",
+  "description": "moshcode's own Claude Code plugins — the pit's slash commands, in your engine",
+  "owner": {
+    "name": "moshcoder",
+    "url": "https://moshcode.sh"
+  },
+  "plugins": [
+    {
+      "name": "ticker",
+      "description": "Equity research slash commands backed by advis0r.com: scored reports, extracted signals, transcript search, company-name lookup, and ranked watchlists.",
+      "source": "./plugins/ticker",
+      "category": "productivity",
+      "author": {
+        "name": "moshcoder",
+        "url": "https://moshcode.sh"
+      },
+      "homepage": "https://github.com/moshcoder/moshcode#ticker",
+      "keywords": ["stocks", "equity", "research", "markets", "advis0r"]
+    }
+  ]
+}

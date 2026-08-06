@@ -8,8 +8,12 @@ import {
 import {
   SKILL_ENGINES, planSkillInstall, runSkillInstall, skillName,
 } from "./skills.mjs";
+import {
+  MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, marketplaceSource, planPluginCommand,
+  pluginId, resolvePlugin, runPluginCommand,
+} from "./plugins.mjs";
 import { catalogList, resolveCatalog } from "./mcp-catalog.mjs";
-import { MCP_VERBS, SKILL_VERBS } from "./cli-schema.mjs";
+import { MCP_VERBS, PLUGIN_VERBS, SKILL_VERBS } from "./cli-schema.mjs";
 import { acid, ash, bone, ok, err, info } from "./ui.mjs";
 
 function splitKV(pair) {
@@ -180,7 +184,7 @@ export function printSkillTargets(json = false) {
 
 function summarize(results) {
   for (const r of results) {
-    if (r.status === "added" || r.status === "installed") console.log(line(r.key, ok(r.status)));
+    if (r.status === "added" || r.status === "installed" || r.status === "removed") console.log(line(r.key, ok(r.status)));
     else if (r.status === "failed") console.log(line(r.key, err(`failed${r.code != null ? ` (code ${r.code})` : r.signal ? ` (${r.signal})` : ""}`)));
     else if (r.status === "not-installed") console.log(line(r.key, ash("not installed — /install " + r.key)));
     else console.log(line(r.key, ash(`skipped — ${r.reason}`)));
@@ -261,5 +265,75 @@ export async function skillCommand(tokens, { run, installedSet } = {}) {
   console.log(info(`installing skill ${bone(spec.name)} → ${ash(source)} across skills engines…`));
   const results = await runSkillInstall(planSkillInstall(spec, { installedSet }), run ? { run } : {});
   summarize(results);
+  return anyFailed(results) ? 1 : 0;
+}
+
+/**
+ * `/plugin list` — what this marketplace ships, and which engines can take it.
+ *
+ * Two tables rather than one: the plugin list is a property of moshcode, the
+ * engine support is a property of this machine, and merging them into a single
+ * list is how "installed" and "installable" get confused.
+ */
+export function printPluginTargets(json = false, { installedSet } = {}) {
+  const targets = integrationTargetStatus(PLUGIN_ENGINES, { installedSet }).map((t) => ({
+    ...t, supported: PLUGIN_ENGINES.includes(t.name),
+  }));
+  if (json) {
+    console.log(JSON.stringify({
+      marketplace: { name: MARKETPLACE_NAME, source: marketplaceSource() },
+      plugins: PLUGINS,
+      engines: targets,
+    }, null, 2));
+    return;
+  }
+  console.log(bone("  plugins") + ash("  — install moshcode's slash commands with ") + acid("/plugin install"));
+  for (const plugin of PLUGINS) {
+    console.log(`   ${acid(pluginId(plugin.name).padEnd(18))}${ash(plugin.description)}`);
+    console.log(`   ${" ".repeat(18)}${ash(plugin.commands.join("  "))}`);
+  }
+  console.log("");
+  for (const target of targets) {
+    const dot = target.supported && target.installed ? DOT.installed : DOT.missing;
+    console.log(`   ${dot} ${bone(target.name.padEnd(9))} ${ash(target.supported ? "plugins supported" : "no plugin primitive")}`);
+  }
+}
+
+/** Run `/plugin …`. `tokens` are the words after `plugin`. */
+export async function pluginCommand(tokens, { run, installedSet } = {}) {
+  const verb = tokens[0];
+  if (!verb || verb === "list") {
+    printPluginTargets(tokens.slice(1).includes("--json"), { installedSet });
+    return 0;
+  }
+  if (verb !== "install" && verb !== "remove") {
+    console.log(err(`unknown plugin verb "${verb}" — try ${PLUGIN_VERBS.map(({ name }) => name).join(", ")}`));
+    return 1;
+  }
+
+  const rest = tokens.slice(1).filter((t) => t !== "--json");
+  const stray = rest.find((t) => String(t).startsWith("-"));
+  if (stray) { console.log(err(`unknown plugin flag "${stray}"`)); return 1; }
+
+  const plugin = resolvePlugin(rest[0]);
+  if (!plugin) {
+    console.log(err(`unknown plugin "${rest[0]}" — this marketplace ships ${PLUGINS.map((p) => p.name).join(", ")}`));
+    return 1;
+  }
+
+  const source = marketplaceSource();
+  console.log(verb === "install"
+    ? info(`installing ${bone(pluginId(plugin.name))} ${ash(`from ${source}`)} across plugin engines…`)
+    : info(`removing ${bone(pluginId(plugin.name))} from plugin engines…`));
+
+  const plan = planPluginCommand({ plugin, source }, { installedSet, verb });
+  const results = await runPluginCommand(plan, { verb, ...(run ? { run } : {}) });
+  summarize(results);
+
+  // A newly installed plugin is not live in an already-running engine, and the
+  // first thing anyone does is type the slash command and conclude it failed.
+  if (!anyFailed(results) && verb === "install" && results.some((r) => r.status === "installed")) {
+    console.log(info(`restart the engine, then try ${acid(`${plugin.commands[0]} NVDA`)}`));
+  }
   return anyFailed(results) ? 1 : 0;
 }

@@ -19,7 +19,9 @@ import { createMirror, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
-import { mcpCommand, skillCommand } from "./integrations.mjs";
+import { mcpCommand, pluginCommand, skillCommand } from "./integrations.mjs";
+import { tickerCommand } from "./advisor.mjs";
+import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
@@ -668,6 +670,16 @@ export async function tui() {
         installed: toolStatus().find((entry) => entry.key === "alpaca")?.installed,
       }, translated.args);
       rl = mkrl();
+      continue;
+    }
+    // `/ticker` renders in the pit rather than handing the terminal to a tool:
+    // there is no advis0r binary to launch, only a public read-only API.
+    if (cmd === "ticker" || cmd === "advisor") {
+      await tickerCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
+      continue;
+    }
+    if (cmd === "plugin" || cmd === "plugins") {
+      await pluginCommand(rest);
       continue;
     }
     if (cmd === "socials" || cmd === "social") {

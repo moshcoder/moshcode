@@ -290,6 +290,48 @@ export const CORE_CLI_COMMANDS = [
     note: "buy/sell inject --dry-run unless --submit is present. Alpaca defaults to paper trading; live trading requires its separate --live opt-in.",
   },
   {
+    name: "ticker",
+    group: "tools",
+    description: "equity research from advis0r.com",
+    synopsis: [
+      ["moshcode ticker <symbol>", "the stored research report for one ticker"],
+      ["moshcode ticker <verb> [args…]", ""],
+    ],
+    verbs: "TICKER_VERBS",
+    flags: [
+      ["--json", "print the raw API response", ""],
+      ["--limit <n>", "cap results (search/lookup/reports/discover)", "the API's own default"],
+      ["--sort <s>", "reports order: recent | score | ticker", "score"],
+      ["--horizon <n>", "discover: quarters to look ahead (1 or 2)", "2"],
+      ["--provider <p>", "discover: analysis provider", "offline"],
+    ],
+    examples: [
+      ["moshcode ticker NVDA", "score, technicals, thesis, signals, sources"],
+      ["moshcode ticker lookup rivian", "company name → RIVN"],
+      ["moshcode ticker signals AAPL", "what was actually said, with sources"],
+      ["moshcode ticker search 'data center'", "across every indexed transcript"],
+      ["moshcode ticker reports --limit 10", "the stored index, best score first"],
+    ],
+    seeAlso: ["trade", "plugin", "tools"],
+    note: "research aid, not advice — reports are stored snapshots and every one prints when it was generated. Set MOSHCODE_ADVISOR_URL to point at another instance.",
+  },
+  { name: "advisor", aliasOf: "ticker", description: "alias for ticker" },
+  {
+    name: "plugin",
+    group: "extend",
+    description: "install moshcode's slash commands into Claude Code",
+    synopsis: [["moshcode plugin <verb> [name]", ""]],
+    verbs: "PLUGIN_VERBS",
+    flags: [["--json", "machine-readable", ""]],
+    examples: [
+      ["moshcode plugin install", "add the marketplace and install ticker"],
+      ["moshcode plugin list", "what this marketplace ships, and what is installed"],
+    ],
+    seeAlso: ["skill", "mcp", "ticker"],
+    note: "Claude Code is the only engine with a plugin primitive; the others are reported as skipped, exactly as they are for skills.",
+  },
+  { name: "plugins", aliasOf: "plugin", description: "alias for plugin" },
+  {
     name: "commands",
     group: "script",
     description: "list built-in moshscript commands",
@@ -466,6 +508,51 @@ export const DNS_VERBS = [
   { name: "trust", description: "trust one name's certificate, after checking it against the registry pin" },
 ];
 
+/**
+ * `ticker`'s verbs.
+ *
+ * `report` exists so a symbol that collides with a verb name still has an
+ * unambiguous spelling; without it, the bare-symbol shortcut would have no
+ * escape hatch. src/advisor.mjs owns the parser and test/advisor.test.mjs
+ * fails when the two lists disagree.
+ */
+export const TICKER_VERBS = [
+  { name: "report", description: "the stored research report for one ticker", synopsis: [["moshcode ticker report <symbol>", "same as `moshcode ticker <symbol>`"]] },
+  { name: "signals", description: "every extracted signal for a ticker", synopsis: [["moshcode ticker signals <symbol>", ""]] },
+  {
+    name: "search", description: "full-text search across indexed transcripts",
+    synopsis: [["moshcode ticker search <words…> [--limit n]", ""]],
+  },
+  {
+    name: "lookup", description: "find a ticker by company name",
+    synopsis: [["moshcode ticker lookup <company…> [--limit n]", "rivian → RIVN"]],
+  },
+  {
+    name: "reports", description: "every stored report",
+    synopsis: [["moshcode ticker reports [--sort recent|score|ticker] [--limit n]", ""]],
+  },
+  {
+    name: "discover", description: "a ranked watchlist for a topic",
+    synopsis: [["moshcode ticker discover [topic…] [--horizon 1|2] [--provider p] [--limit n]", ""]],
+    note: "ranks by analyzing each candidate — this one takes minutes, not milliseconds.",
+  },
+  { name: "tickers", description: "every ticker present in the index", synopsis: [["moshcode ticker tickers", ""]] },
+  { name: "stats", description: "index coverage counts", synopsis: [["moshcode ticker stats", ""]] },
+  { name: "open", description: "open the shareable report page in a browser", synopsis: [["moshcode ticker open <symbol>", ""]] },
+];
+
+export const PLUGIN_VERBS = [
+  {
+    name: "install", description: "add the marketplace and install a plugin",
+    synopsis: [
+      ["moshcode plugin install", "the default plugin (ticker)"],
+      ["moshcode plugin install <name>", ""],
+    ],
+  },
+  { name: "list", description: "show what the marketplace ships and what is installed", synopsis: [["moshcode plugin list [--json]", ""]] },
+  { name: "remove", description: "uninstall a plugin from Claude Code", synopsis: [["moshcode plugin remove <name>", ""]] },
+];
+
 /** Sub-verb tables, by the name a command's `verbs` field refers to. */
 export const VERB_TABLES = {
   MCP_VERBS,
@@ -473,6 +560,8 @@ export const VERB_TABLES = {
   UPGRADE_TARGETS,
   DNS_VERBS,
   TRADE_VERBS,
+  TICKER_VERBS,
+  PLUGIN_VERBS,
 };
 
 /**
@@ -499,6 +588,10 @@ export const PIT_COMMANDS = [
     description: "list workflow tools, or run one" },
   { name: "trade", args: "<verb> [args…]", cli: "trade",
     description: "look up markets and preview/place Alpaca orders" },
+  { name: "ticker", aliases: ["advisor"], args: "<symbol|verb> [args…]", cli: "ticker",
+    description: "equity research from advis0r.com" },
+  { name: "plugin", aliases: ["plugins"], args: "<verb> [name]", cli: "plugin",
+    description: "install moshcode's slash commands into Claude Code" },
   { name: "socials", aliases: ["social"], pitOnly: true,
     description: "list social networks available for posting" },
   { name: "post", args: '<social> "message"', pitOnly: true,

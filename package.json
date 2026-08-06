@@ -25,6 +25,8 @@
     "src",
     "examples",
     "prd",
+    ".claude-plugin",
+    "plugins",
     "install.sh",
     "README.md"
   ],
