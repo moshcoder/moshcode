@@ -76,8 +76,8 @@ use this only in an isolated container, VM, or workspace you trust:
 
 ```sh
 moshcode agents claude      # claude agents --dangerously-skip-permissions  (agent view)
-moshcode agents opencode    # opencode agent list                          (agent view)
-moshcode agents privacycode # privacycode agent list                       (agent view)
+moshcode agents opencode    # opencode --auto                              (autonomous)
+moshcode agents privacycode # privacycode --auto                           (autonomous)
 moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
 moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
 moshcode agents kimi        # kimi --yolo                                       (autonomous)

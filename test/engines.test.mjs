@@ -8,7 +8,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -31,10 +31,12 @@ const EXPECTED_AGENT_ARGS = {
 };
 
 // What an agent-mode launch actually runs (agentLaunchArgs): the engine's native
-// agents-view invocation where it has one, else its autonomous bypass flags.
+// interactive agents view where it has one, else its autonomous bypass flags.
+// `opencode agent list` and `privacycode agent list` print data and exit, so
+// those are not interactive views and must not be used here.
 const EXPECTED_LAUNCH_ARGS = {
-  opencode: ["agent", "list"],
-  privacycode: ["agent", "list"],
+  opencode: ["--auto"],
+  privacycode: ["--auto"],
   claude: ["agents", "--dangerously-skip-permissions"],
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   gemini: ["--approval-mode=yolo"],
@@ -217,6 +219,12 @@ test("executable lookup searches a tool's own install dir when PATH misses it", 
   const r = await openPassthrough({ bin: "faketool", binDirs: [dir] });
   assert.equal(r.ok, true);
   assert.equal(r.code, 0);
+});
+
+test("curl-installed engines declare their installer bin directories", () => {
+  assert.deepEqual(ENGINES.opencode.binDirs, [path.join(homedir(), ".opencode", "bin")]);
+  assert.deepEqual(ENGINES.privacycode.binDirs, [path.join(homedir(), ".privacycode", "bin")]);
+  assert.deepEqual(ENGINES.kimi.binDirs, [path.join(homedir(), ".kimi-code", "bin")]);
 });
 
 test("PATH still wins over a tool's install dir", async () => {
