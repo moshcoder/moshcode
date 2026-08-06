@@ -26,6 +26,12 @@
 # Removing it changed the error from E404 to ENEEDAUTH but did not publish.
 # actions/setup-node#1551, npm/cli#9088.
 #
+# Since then setup-node v7 stopped exporting a dummy NODE_AUTH_TOKEN when no
+# token is set (actions/setup-node#1558), which is the half of that trap that
+# corrupted .npmrc under OIDC. It does not affect the token path — we set
+# NODE_AUTH_TOKEN explicitly — but it means trusted publishing is worth a third
+# attempt before the 2FA-bypass deprecation below forces one.
+#
 # Worth knowing when this is next revisited: npm is restricting tokens that
 # bypass 2FA for direct publishing, so the token path has a horizon.
 # https://gh.io/npm-gat-bypass2fa-deprecation
@@ -48,17 +54,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # pnpm version is read from the "packageManager" field in package.json.
       # Do not pin a version here — it conflicts with packageManager and fails
       # with ERR_PNPM_BAD_PM_VERSION.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       # `registry-url` is what makes setup-node write the .npmrc line that feeds
       # NODE_AUTH_TOKEN to npm. Required for token auth — and the thing to delete
       # first if this ever moves back to OIDC.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
