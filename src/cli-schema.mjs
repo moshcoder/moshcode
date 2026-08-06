@@ -161,7 +161,9 @@ export const CORE_CLI_COMMANDS = [
     name: "whoami",
     group: "account",
     description: "show the logged-in account",
-    synopsis: [["moshcode whoami", ""]],
+    synopsis: [["moshcode whoami [--json]", ""]],
+    flags: [["--json", "print account status as machine-readable JSON", ""]],
+    examples: [["moshcode whoami --json", "inspect the current session from a script"]],
     seeAlso: ["login", "logout"],
   },
   {

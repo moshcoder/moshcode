@@ -167,22 +167,88 @@ export async function loginAuto({ device = false, browser = false } = {}) {
 }
 
 /** Print who is logged in (verified against the app). */
-export async function whoami() {
+export async function whoami({ json = false } = {}) {
   const creds = loadCreds();
-  if (!creds?.token) { console.log("not logged in — run: moshcode login"); return; }
+  if (!creds?.token) {
+    if (json) {
+      console.log(JSON.stringify({
+        status: "not_logged_in",
+        verified: false,
+        api: API(),
+        user: null,
+      }, null, 2));
+    } else {
+      console.log("not logged in — run: moshcode login");
+    }
+    return;
+  }
+  const api = creds.api || API();
+  const localUser = {
+    id: creds.id ?? null,
+    email: creds.email ?? null,
+    name: null,
+    credits: null,
+  };
+  const printJson = (value) => console.log(JSON.stringify(value, null, 2));
   try {
-    const res = await fetch(`${creds.api || API()}/api/me`, { headers: { authorization: `Bearer ${creds.token}` } });
-    if (res.status === 401) { console.log("session expired — run: moshcode login"); return; }
+    const res = await fetch(`${api}/api/me`, { headers: { authorization: `Bearer ${creds.token}` } });
+    if (res.status === 401) {
+      if (json) {
+        printJson({
+          status: "expired",
+          verified: false,
+          api,
+          user: localUser,
+          error: { type: "auth", status: 401 },
+        });
+      }
+      else console.log("session expired — run: moshcode login");
+      return;
+    }
     // Any other error status still has a body, and it isn't an account — reading
     // it as one prints a made-up identity for a session the app just refused.
     if (!res.ok) {
-      console.log(`${creds.email || "logged in"} @ ${creds.api || API()} (couldn't verify — the app returned ${res.status})`);
+      if (json) {
+        printJson({
+          status: "unverified",
+          verified: false,
+          api,
+          user: localUser,
+          error: { type: "http", status: res.status },
+        });
+      } else {
+        console.log(`${creds.email || "logged in"} @ ${api} (couldn't verify — the app returned ${res.status})`);
+      }
       return;
     }
     const me = await res.json();
-    console.log(`${me.email || me.name || "moshcoder"} 🤘  (${me.credits ?? "?"} credits)  @ ${creds.api || API()}`);
+    if (json) {
+      printJson({
+        status: "authenticated",
+        verified: true,
+        api,
+        user: {
+          id: me.id ?? creds.id ?? null,
+          email: me.email ?? creds.email ?? null,
+          name: me.name ?? null,
+          credits: me.credits ?? null,
+        },
+      });
+    } else {
+      console.log(`${me.email || me.name || "moshcoder"} 🤘  (${me.credits ?? "?"} credits)  @ ${api}`);
+    }
   } catch {
-    console.log(`${creds.email || "logged in"} @ ${creds.api || API()} (couldn't reach the app to verify)`);
+    if (json) {
+      printJson({
+        status: "unreachable",
+        verified: false,
+        api,
+        user: localUser,
+        error: { type: "network" },
+      });
+    } else {
+      console.log(`${creds.email || "logged in"} @ ${api} (couldn't reach the app to verify)`);
+    }
   }
 }
 

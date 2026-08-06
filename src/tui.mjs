@@ -539,7 +539,14 @@ export async function tui() {
       catch (e) { console.log(err(String(e.message || e))); }
       continue;
     }
-    if (cmd === "whoami") { await whoami(); continue; }
+    if (cmd === "whoami") {
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--json")) {
+        console.log(err("usage: /whoami [--json]"));
+        continue;
+      }
+      await whoami({ json: rest[0] === "--json" });
+      continue;
+    }
     if (cmd === "logout") { logout(); continue; }
     if (cmd === "run") {
       await runFile(rest);

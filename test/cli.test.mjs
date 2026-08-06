@@ -53,6 +53,16 @@ for (const command of ["agents", "engines", "tools"]) {
   });
 }
 
+test("moshcode whoami rejects unknown arguments", () => {
+  const result = spawnSync(process.execPath, [BIN, "whoami", "--josn"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /usage: moshcode whoami \[--json\]/);
+});
+
 test("moshcode agents preserves engine arguments named --json", () => {
   const result = spawnSync(
     process.execPath,

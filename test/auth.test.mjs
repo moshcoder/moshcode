@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,17 +19,25 @@ const { saveCreds, whoami } = await import("../src/auth.mjs");
 const posixMode = process.platform === "win32" ? { skip: "POSIX permission bits" } : {};
 
 /** Run whoami against a canned app response and collect what it printed. */
-async function whoamiAgainst({ status, body }) {
+async function whoamiWithFetch(fetchImpl, options) {
   const realFetch = globalThis.fetch;
   const realLog = console.log;
   const lines = [];
-  globalThis.fetch = async () => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+  globalThis.fetch = fetchImpl;
   console.log = (...args) => lines.push(args.join(" "));
-  try { await whoami(); } finally {
+  try { await whoami(options); } finally {
     globalThis.fetch = realFetch;
     console.log = realLog;
   }
   return lines.join("\n");
+}
+
+/** Run whoami against a canned app response and collect what it printed. */
+function whoamiAgainst({ status, body }, options) {
+  return whoamiWithFetch(
+    async () => ({ status, ok: status >= 200 && status < 300, json: async () => body }),
+    options,
+  );
 }
 
 test("whoami does not report an account when the app refuses the token", async () => {
@@ -55,6 +63,83 @@ test("whoami still prints the account the app confirms", async () => {
 test("whoami still calls out an expired session on 401", async () => {
   const out = await whoamiAgainst({ status: 401, body: { error: "unauthorized" } });
   assert.match(out, /session expired/);
+});
+
+test("whoami JSON exposes verified account status without credentials", async () => {
+  const out = await whoamiAgainst(
+    { status: 200, body: { id: "user_1", email: "me@example.test", name: "Me", credits: 42 } },
+    { json: true },
+  );
+  const result = JSON.parse(out);
+
+  assert.deepEqual(result, {
+    status: "authenticated",
+    verified: true,
+    api: "https://app.example.test",
+    user: { id: "user_1", email: "me@example.test", name: "Me", credits: 42 },
+  });
+  assert.doesNotMatch(out, /tok_revoked/);
+});
+
+test("whoami JSON stays machine-readable when verification fails", async () => {
+  const out = await whoamiAgainst(
+    { status: 403, body: { error: "token revoked" } },
+    { json: true },
+  );
+  const result = JSON.parse(out);
+
+  assert.equal(result.status, "unverified");
+  assert.equal(result.verified, false);
+  assert.equal(result.error.status, 403);
+  assert.equal(result.user.email, "me@example.test");
+  assert.doesNotMatch(out, /tok_revoked/);
+});
+
+test("whoami JSON reports when no credentials are available", async () => {
+  const credentials = join(home, ".moshcode", "credentials.json");
+  const original = readFileSync(credentials);
+  writeFileSync(credentials, JSON.stringify({ api: "https://app.example.test", token: "" }));
+
+  let out;
+  try {
+    out = await whoamiWithFetch(
+      async () => { throw new Error("fetch should not be called without a token"); },
+      { json: true },
+    );
+  } finally {
+    writeFileSync(credentials, original);
+  }
+
+  const result = JSON.parse(out);
+  assert.equal(result.status, "not_logged_in");
+  assert.equal(result.verified, false);
+  assert.equal(result.user, null);
+});
+
+test("whoami JSON reports an expired session", async () => {
+  const out = await whoamiAgainst(
+    { status: 401, body: { error: "unauthorized" } },
+    { json: true },
+  );
+  const result = JSON.parse(out);
+
+  assert.equal(result.status, "expired");
+  assert.equal(result.verified, false);
+  assert.deepEqual(result.error, { type: "auth", status: 401 });
+  assert.doesNotMatch(out, /tok_revoked/);
+});
+
+test("whoami JSON stays machine-readable when the app is unreachable", async () => {
+  const out = await whoamiWithFetch(
+    async () => { throw new Error("network failed with tok_revoked"); },
+    { json: true },
+  );
+  const result = JSON.parse(out);
+
+  assert.equal(result.status, "unreachable");
+  assert.equal(result.verified, false);
+  assert.deepEqual(result.error, { type: "network" });
+  assert.doesNotMatch(out, /tok_revoked/);
 });
 
 test("saving credentials tightens a world-readable existing file", posixMode, () => {
