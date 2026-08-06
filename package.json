@@ -12,8 +12,8 @@
     "url": "https://github.com/moshcoder/moshcode/issues"
   },
   "bin": {
-    "moshcode": "./bin/moshcode.mjs",
-    "moshscript": "./bin/moshscript.mjs"
+    "moshcode": "bin/moshcode.mjs",
+    "moshscript": "bin/moshscript.mjs"
   },
   "scripts": {
     "start": "node bin/moshcode.mjs",
