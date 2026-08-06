@@ -5,11 +5,11 @@
 //
 // `agentsView` (optional) is the exact argv that opens the engine's native
 // agent list/view — used by `/agents <name>` when the engine actually has one
-// (claude, opencode). It's the FULL leading args (subcommand + any flags that
-// subcommand accepts), because not every agents-subcommand takes the engine's
-// bypass flag (e.g. `opencode agent list` takes none). Engines without an
-// `agentsView` fall back to `agentArgs` — an autonomous session with native
-// approvals bypassed/auto-approved.
+// (currently claude). It's the FULL leading args (subcommand + any flags that
+// subcommand accepts). Engines without an `agentsView` fall back to
+// `agentArgs` — an autonomous session with native approvals
+// bypassed/auto-approved. Do not use a machine-readable, one-shot list command
+// as an agents view: `/agents` promises to hand the terminal to a live session.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -22,17 +22,19 @@ export const ENGINES = {
     desc: "opencode — the open-source coding agent (SST/anomalyco)",
     bin: "opencode",
     agentArgs: ["--auto"],
-    agentsView: ["agent", "list"], // `opencode agent list` — lists agents; the `agent` subcommand takes no bypass flag
     install: { cmd: "bash", args: ["-c", "curl -fsSL https://opencode.ai/install | bash"] },
     upgrade: { cmd: "opencode", args: ["upgrade"] },
+    // The installer appends this directory to a shell profile. The moshcode
+    // process that ran it cannot see that PATH change, so search it directly.
+    binDirs: [path.join(homedir(), ".opencode", "bin")],
   },
   privacycode: {
     desc: "privacycode — privacy-first coding agent (profullstack)",
     bin: "privacycode",
     // An opencode derivative, so it speaks the same flags/subcommands.
     agentArgs: ["--auto"],
-    agentsView: ["agent", "list"],
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
+    binDirs: [path.join(homedir(), ".privacycode", "bin")],
     // Deliberately no native updater. `privacycode upgrade` is opencode's, and
     // it works out how to update itself by recognising where it was installed —
     // it knows opencode's own locations, not this fork's ~/.privacycode/bin. It
@@ -263,9 +265,10 @@ export function pickAiEngine(preferred) {
 
 /** Engine entries annotated with install status. */
 export function engineStatus() {
-  // Search each engine's own install dir as well as PATH — kimi's installer only
-  // adds ~/.kimi-code/bin to your shell rc, so PATH alone reports it missing in
-  // the very session that installed it. (Inert for engines without binDirs.)
+  // Search each engine's own install dir as well as PATH — several curl-based
+  // installers only add their bin directory to a shell rc, so PATH alone
+  // reports them missing in the very session that installed them. (Inert for
+  // engines without binDirs.)
   return Object.entries(ENGINES).map(([key, e]) => ({ key, ...e, installed: isInstalled(e.bin, e.binDirs) }));
 }
 
