@@ -1,8 +1,16 @@
 {
   "name": "moshcode",
-  "version": "0.24.1",
+  "version": "0.24.2",
   "type": "module",
   "description": "moshcode — a metal wrapper for coding engines and native UGig/CoinPay workflow CLIs, with OpenPRD and moshscript",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moshcoder/moshcode.git"
+  },
+  "homepage": "https://github.com/moshcoder/moshcode#readme",
+  "bugs": {
+    "url": "https://github.com/moshcoder/moshcode/issues"
+  },
   "bin": {
     "moshcode": "./bin/moshcode.mjs",
     "moshscript": "./bin/moshscript.mjs"
