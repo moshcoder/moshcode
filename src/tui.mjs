@@ -10,6 +10,7 @@ import path from "node:path";
 import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
+import { postSocial, socialRoster } from "./socials.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
@@ -154,6 +155,15 @@ function printTools() {
   }
   console.log(ash("   the primary dev toolchain runs through moshcode as a dev.profullstack.com user"));
   console.log(ash("   → ") + acid("https://dev.profullstack.com/"));
+}
+
+function printSocials() {
+  console.log(bone("  socials") + ash("  — compose with ") + acid('/post <social> "message"'));
+  for (const social of socialRoster()) {
+    const aliases = social.aliases.length ? ` (${social.aliases.join(", ")})` : "";
+    console.log(`   ${acid("●")} ${bone(social.name.padEnd(9))} ${ash(social.description + aliases)}`);
+  }
+  console.log(ash("   the browser always asks you to confirm before anything is published"));
 }
 
 /**
@@ -658,6 +668,21 @@ export async function tui() {
         installed: toolStatus().find((entry) => entry.key === "alpaca")?.installed,
       }, translated.args);
       rl = mkrl();
+      continue;
+    }
+    if (cmd === "socials" || cmd === "social") {
+      printSocials();
+      continue;
+    }
+    if (cmd === "post") {
+      const result = postSocial(rest);
+      if (!result.ok) { console.log(err(result.error)); continue; }
+      if (result.opened) {
+        console.log(ok(`opened the ${result.social} composer — confirm the post in your browser 🤘`));
+      } else {
+        console.log(info(`open this ${result.social} composer in a browser:`));
+        console.log(`  ${result.url}`);
+      }
       continue;
     }
     // Bare engine name → open it.
