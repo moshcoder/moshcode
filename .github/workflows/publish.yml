@@ -10,31 +10,25 @@
 # that failed on something transient; it is safe because a version already on
 # the registry is skipped rather than attempted.
 #
-# Authenticates by trusted publishing (OIDC) rather than a stored token: npm
-# trades the short-lived token GitHub mints for this specific workflow run for
-# permission to publish, so there is no long-lived credential in the repository
-# to leak, rotate or forget.
+# Authenticates with a stored npm automation token, in the repository secret
+# `NPM_TOKEN`. Trusted publishing (OIDC) would avoid the stored credential and
+# was tried twice; both attempts failed with npm reporting no credential at all,
+# and the registration on npmjs.com — the web-UI half of it, pinned to this
+# file's name — is what remains unconfirmed. See #305, #309, #311.
 #
-# The other half of that trust lives on npmjs.com, under the package's Trusted
-# Publisher settings, and it is pinned to the *filename* of this workflow.
-# Renaming this file silently breaks publishing — npm will refuse the exchange
-# because the run no longer matches what was configured.
+# If you go back to OIDC, the trap is below: `registry-url` is *required* here
+# and *fatal* there. setup-node writes
 #
-# When it goes wrong the error names neither OIDC nor trusted publishing:
+#   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
 #
-#   npm error code E404
-#   npm error 404 Not Found - PUT https://registry.npmjs.org/moshcode
-#   npm error 404  ... could not be found or you do not have permission
+# which is how the token reaches npm — and under OIDC, with no token to fill it,
+# resolves to an empty credential that stops npm attempting the exchange.
+# Removing it changed the error from E404 to ENEEDAUTH but did not publish.
+# actions/setup-node#1551, npm/cli#9088.
 #
-# That is an unauthenticated PUT, reported as though the package did not exist.
-# It has two quite different causes, and it took v0.24.3 to tell them apart:
-#
-#   1. anything that leaves an empty auth token in an .npmrc, which stops npm
-#      attempting the exchange at all — see the setup-node note below; or
-#   2. no trusted publisher registered for this package, or one registered
-#      against a different workflow filename.
-#
-# Check 1 first. It is in this file, and it is the one that looks like 2.
+# Worth knowing when this is next revisited: npm is restricting tokens that
+# bypass 2FA for direct publishing, so the token path has a horizon.
+# https://gh.io/npm-gat-bypass2fa-deprecation
 name: publish
 
 on:
@@ -44,9 +38,9 @@ on:
 
 permissions:
   contents: read
-  # The whole basis of the exchange: this is what lets the run mint the OIDC
-  # token npm authenticates against. Without it there is no credential at all
-  # and publishing fails outright.
+  # Still needed with token auth: provenance is signed with a short-lived OIDC
+  # token even though the publish itself authenticates with NPM_TOKEN. Without
+  # it `--provenance` fails.
   id-token: write
 
 jobs:
@@ -61,38 +55,14 @@ jobs:
       # with ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
 
-      # Deliberately no `registry-url`. With it, setup-node always writes
-      #
-      #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-      #
-      # into an .npmrc — correct for token auth, and quietly fatal here. Under
-      # trusted publishing there is no NODE_AUTH_TOKEN, so that line resolves to
-      # an empty token, and npm stops before ever attempting the OIDC exchange:
-      # it believes it already has credentials. The registry then answers the
-      # unauthenticated PUT with E404, which names nothing to do with OIDC and
-      # is what sent us looking at the npmjs.com config instead of at this file.
-      #
-      # actions/setup-node#1551. Without registry-url no .npmrc is written and
-      # npm defaults to registry.npmjs.org anyway, which is where we publish.
+      # `registry-url` is what makes setup-node write the .npmrc line that feeds
+      # NODE_AUTH_TOKEN to npm. Required for token auth — and the thing to delete
+      # first if this ever moves back to OIDC.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-
-      # Node 24 bundles npm 11, but pin the floor anyway rather than depend on
-      # what a runner image happens to ship: below 11.5.1 there is no trusted
-      # publishing, and the failure would again look like a credential problem.
-      - name: Install an npm that understands trusted publishing
-        run: |
-          npm install -g npm@latest
-          VERSION="$(npm --version)"
-          MINIMUM=11.5.1
-          echo "npm $VERSION"
-          # Lowest of the two must be the minimum, or this npm is older than it.
-          if [ "$(printf '%s\n%s\n' "$MINIMUM" "$VERSION" | sort -V | head -n1)" != "$MINIMUM" ]; then
-            echo "::error::npm $VERSION cannot use trusted publishing — $MINIMUM or later is required"
-            exit 1
-          fi
+          registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
 
@@ -138,13 +108,24 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # No token. `--provenance` is passed even though npm documents it as
-      # automatic under trusted publishing: reports differ on whether it really
-      # is, and asking for it explicitly costs nothing and cannot produce a
-      # weaker result. v0.24.2 published with an attestation using this flag.
+      # Said plainly here, rather than as the E404/no-permission npm otherwise
+      # returns partway through a release — an error that reads as "the package
+      # does not exist" rather than "there is no credential".
+      - name: Require an npm token
+        if: steps.published.outputs.already == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is not set — add an npm automation token as a repository secret named NPM_TOKEN"
+            exit 1
+          fi
+
       - name: Publish
         if: steps.published.outputs.already == 'false'
         run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Confirm the registry has it
         if: steps.published.outputs.already == 'false'
