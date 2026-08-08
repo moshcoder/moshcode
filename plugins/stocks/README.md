@@ -41,6 +41,7 @@ Or straight from Claude Code:
 
 ```bash
 claude plugin marketplace add moshcoder/moshcode
+claude plugin marketplace update moshcode   # `add` is a no-op if you already have it
 claude plugin install stocks@moshcode
 ```
 

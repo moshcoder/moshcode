@@ -392,9 +392,15 @@ The equivalent by hand:
 
 ```sh
 claude plugin marketplace add moshcoder/moshcode
+claude plugin marketplace update moshcode   # `add` is a no-op if you already have it
 claude plugin install stocks@moshcode
 claude plugin install crypto@moshcode
 ```
+
+The `update` line matters if you have ever installed from this marketplace
+before: `add` declines to do anything for a marketplace already on disk, so
+without a refresh the install reads a stale copy and fails with "not found in
+any marketplace". `moshcode plugin install` runs both steps for you.
 
 ### Upgrading from `ticker@moshcode`
 

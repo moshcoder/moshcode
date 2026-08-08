@@ -41,14 +41,29 @@ test("an engine that is not installed is reported, not attempted", async () => {
 
 // --- what actually runs ------------------------------------------------------
 
-test("install adds the marketplace before installing, every time", () => {
-  // A machine that added this marketplace before the plugin existed would fail
-  // the install with "not found in any marketplace" if `add` were skipped.
+test("install adds *and refreshes* the marketplace before installing, every time", () => {
+  // `add` alone is not enough and this is the regression that proves it: it is
+  // a no-op for a marketplace already on disk, so a machine that installed from
+  // this marketplace before a plugin existed reads a stale local copy and fails
+  // with "not found in any marketplace". That shipped twice — `crypto` in
+  // v0.27.0, `stocks` in v0.29.0 — before anything caught it.
   const plan = byKey(planPluginCommand(SPEC, { installedSet: new Set(["claude"]) }));
   assert.deepEqual(plan.claude.actions.map((a) => a.args), [
     ["plugin", "marketplace", "add", "moshcoder/moshcode"],
+    ["plugin", "marketplace", "update", "moshcode"],
     ["plugin", "install", "stocks@moshcode"],
   ]);
+});
+
+test("the refresh names the marketplace, not the source, and carries no scope", () => {
+  // `claude plugin marketplace update` takes a marketplace name and rejects
+  // --scope; passing the source here would update nothing and report success.
+  const plan = byKey(planPluginCommand(
+    { ...SPEC, scope: "project" },
+    { installedSet: new Set(["claude"]) },
+  ));
+  const update = plan.claude.actions.find((a) => a.args[2] === "update");
+  assert.deepEqual(update.args, ["plugin", "marketplace", "update", MARKETPLACE_NAME]);
 });
 
 test("a failing step stops the chain rather than installing from nothing", async () => {

@@ -82,15 +82,29 @@ export function pluginId(name) {
 /**
  * The commands one engine needs to install a plugin.
  *
- * Adding the marketplace is idempotent and separate from installing, so it runs
- * every time: a machine that added the marketplace before this plugin existed
- * would otherwise fail the install with "not found in any marketplace".
+ * Both marketplace steps run every time, and they do different jobs:
+ *
+ *   add    — makes the marketplace exist. A no-op when it is already on disk,
+ *            which is exactly why it is not sufficient on its own.
+ *   update — re-fetches it. Without this, a machine that added the marketplace
+ *            before a plugin existed installs from its stale local copy and
+ *            fails with "not found in any marketplace" — the failure `add` was
+ *            supposed to prevent and cannot, because it declines to do anything
+ *            for a marketplace it already has.
+ *
+ * That gap is not theoretical: it broke `plugin install crypto` in v0.27.0 and
+ * `plugin install stocks` in v0.29.0, on every machine that had installed a
+ * plugin from this marketplace beforehand — which is all of them.
+ *
+ * `marketplace update` takes the marketplace *name*, not the source, and
+ * accepts no --scope.
  */
 export function pluginInstallActions(key, { plugin, source, scope }) {
   switch (key) {
     case "claude":
       return [
         { cmd: "claude", args: ["plugin", "marketplace", "add", source, ...(scope ? ["--scope", scope] : [])] },
+        { cmd: "claude", args: ["plugin", "marketplace", "update", MARKETPLACE_NAME] },
         { cmd: "claude", args: ["plugin", "install", pluginId(plugin.name), ...(scope ? ["--scope", scope] : [])] },
       ];
     default:
