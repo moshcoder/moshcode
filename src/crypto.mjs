@@ -488,7 +488,11 @@ function priceLine(snapshot, quote) {
   const bits = [bone(price(last, quote))];
   if (change) {
     const paint = changeTone(change.percent);
-    bits.push(paint(`${change.absolute >= 0 ? "+" : ""}${price(change.absolute, quote, { like: last })}`), paint(`(${pct(change.percent)})`));
+    // Sign the magnitude, don't let price() sign it: a signed price puts the
+    // minus after the currency mark ("$-186.36"), so a down move reads unlike
+    // the up move's "+$186.36". The sign leads, the way pct() already signs.
+    const signed = `${change.absolute >= 0 ? "+" : "-"}${price(Math.abs(Number(change.absolute)), quote, { like: last })}`;
+    bits.push(paint(signed), paint(`(${pct(change.percent)})`));
   }
   const feed = [
     snapshot?.delayed === false ? "live" : snapshot?.delayed === true ? "delayed" : null,
