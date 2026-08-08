@@ -6,16 +6,21 @@ across Alpaca's US crypto venue.
 
 | command | what it does |
 | --- | --- |
-| `/crypto BTC` | price, technicals, score, supply, order book |
-| `/quote ETH-USD` | latest trade and quote, with the spread in bps |
-| `/book BTC-USD` | top of the order book, both sides |
-| `/bars ETH-USD` | historical OHLCV at any supported timeframe |
-| `/spark BTC ETH SOL` | recent moves across pairs, ranked |
-| `/pairs` | every supported pair, grouped by quote asset |
-| `/coin bitcoin` | asset name → `BTC/USD` |
+| `/crypto:crypto BTC` | price, technicals, score, supply, order book |
+| `/crypto:quote ETH-USD` | latest trade and quote, with the spread in bps |
+| `/crypto:book BTC-USD` | top of the order book, both sides |
+| `/crypto:bars ETH-USD` | historical OHLCV at any supported timeframe |
+| `/crypto:spark BTC ETH SOL` | recent moves across pairs, ranked |
+| `/crypto:pairs` | every supported pair, grouped by quote asset |
+| `/crypto:coin bitcoin` | asset name → `BTC/USD` |
 
 Pairs are accepted as `BTC`, `BTC-USD`, `BTC/USD` or `BTCUSD`. A bare asset
 resolves to that asset's USD pair.
+
+The `crypto:` prefix is not optional. Claude Code namespaces every plugin
+command as `/<plugin>:<command>` — always, not only when two plugins collide —
+so a bare `/crypto` answers `Unknown command`. Typing `/` and picking from the
+menu inserts the right form for you.
 
 ## Install
 
@@ -45,9 +50,9 @@ Point the commands at another instance with `MOSHCODE_ADVISOR_URL`.
 ## Why this is separate from `stocks`
 
 They answer different questions from different data, and share only a hostname.
-A `/stocks` report is a **stored snapshot** built from transcripts, SEC
+A `/stocks:stocks` report is a **stored snapshot** built from transcripts, SEC
 fundamentals and extracted signals — its risk is a stale price read as a live
-one. A `/crypto` report is a **live venue read** with no transcripts, no
+one. A `/crypto:crypto` report is a **live venue read** with no transcripts, no
 filings and no signals — its risk is the opposite: a price that is accurate to
 the second and stale by the time you act on it.
 

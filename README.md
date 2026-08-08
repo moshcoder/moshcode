@@ -376,17 +376,24 @@ moshcode plugin install crypto    # add the marketplace + install `crypto`
 moshcode plugin remove stocks     # take it back off
 ```
 
-`stocks@moshcode` adds `/stocks`, `/signals`, `/research`, `/lookup`,
-`/reports`, and `/discover` — the same advis0r research surface described above,
+`stocks@moshcode` adds `/stocks:stocks`, `/stocks:signals`, `/stocks:research`,
+`/stocks:lookup`, `/stocks:reports`, and `/stocks:discover` — the same advis0r research surface described above,
 driven from inside a coding session.
 
-`crypto@moshcode` adds `/crypto`, `/quote`, `/book`, `/bars`, `/spark`,
-`/pairs`, and `/coin`. It ships separately because it is a different surface,
+`crypto@moshcode` adds `/crypto:crypto`, `/crypto:quote`, `/crypto:book`,
+`/crypto:bars`, `/crypto:spark`, `/crypto:pairs`, and `/crypto:coin`. It ships separately because it is a different surface,
 not a mode of the first: live venue reads instead of stored snapshots, and a
 score that must not be ranked against an equity's.
 
 Restart the engine after installing either; a newly installed plugin is not live
 in a session that is already running.
+
+Plugin commands are namespaced `/<plugin>:<command>` — always, not only when two
+plugins collide — so it is `/stocks:signals AAPL`, and a bare `/signals` answers
+`Unknown command`. Typing `/` and picking from the menu inserts the right form.
+This is the one place the two surfaces differ: inside the moshcode pit the same
+research is plain `/stocks …` and `/crypto …`, because those are moshcode's own
+commands rather than a plugin's.
 
 The equivalent by hand:
 
@@ -405,7 +412,7 @@ any marketplace". `moshcode plugin install` runs both steps for you.
 ### Upgrading from `ticker@moshcode`
 
 `stocks` was called `ticker` before v0.29.0. Installing the new id does **not**
-replace the old one — engines install plugins side by side, so `/stocks` would
+replace the old one — engines install plugins side by side, so `/stocks:stocks` would
 come from two plugins at once. Remove the old id first:
 
 ```sh

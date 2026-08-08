@@ -6,21 +6,29 @@ and ranked watchlists.
 
 | command | what it does |
 | --- | --- |
-| `/stocks NVDA` | score, technicals, fundamentals, thesis, signals, sources |
-| `/signals AAPL` | what was actually said, quoted and sourced |
-| `/research data center` | full-text search across every indexed transcript |
-| `/lookup rivian` | company name → `RIVN` |
-| `/reports` | every stored report, best score first |
-| `/discover fusion` | a ranked watchlist for a topic (slow) |
+| `/stocks:stocks NVDA` | score, technicals, fundamentals, thesis, signals, sources |
+| `/stocks:signals AAPL` | what was actually said, quoted and sourced |
+| `/stocks:research data center` | full-text search across every indexed transcript |
+| `/stocks:lookup rivian` | company name → `RIVN` |
+| `/stocks:reports` | every stored report, best score first |
+| `/stocks:discover fusion` | a ranked watchlist for a topic (slow) |
+
+The `stocks:` prefix is not optional. Claude Code namespaces every plugin
+command as `/<plugin>:<command>` — always, not only when two plugins collide —
+so a bare `/stocks` answers `Unknown command`. Typing `/` and picking from the
+menu inserts the right form for you.
+
+(Inside the moshcode pit itself, `/stocks …` *is* bare — that is moshcode's own
+command, not this plugin's.)
 
 ## Upgrading from `ticker@moshcode`
 
 This plugin used to be called `ticker`. Both it and its headline command were
-renamed so the name says which market it covers, now that `/crypto` sits beside
+renamed so the name says which market it covers, now that `/crypto:crypto` sits beside
 it.
 
 Installing the new one does **not** replace the old one — engines install
-plugins side by side, so `/stocks` would come from two plugins at once. Remove
+plugins side by side, so `/stocks:stocks` would come from two plugins at once. Remove
 the old id first:
 
 ```bash

@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import { ENGINES } from "../src/engines.mjs";
 import {
   MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, RETIRED_PLUGINS, marketplaceSource,
-  planPluginCommand, pluginId, resolvePlugin, resolveRetiredPlugin, runPluginCommand,
+  planPluginCommand, pluginCommandName, pluginId, resolvePlugin, resolveRetiredPlugin,
+  runPluginCommand,
 } from "../src/plugins.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -144,10 +145,21 @@ test("every plugin the marketplace lists exists, with a manifest and its command
 
     const catalog = PLUGINS.find((p) => p.name === entry.name);
     const files = fs.readdirSync(new URL("commands/", dir)).filter((f) => f.endsWith(".md"));
+    // Namespaced, because that is how Claude Code invokes them. Comparing bare
+    // filenames is what let the catalog advertise `/crypto` for two releases —
+    // a name that matched the file on disk and did not exist as a command.
     assert.deepEqual(
-      files.map((f) => `/${f.replace(/\.md$/, "")}`).sort(),
+      files.map((f) => pluginCommandName(entry.name, f)).sort(),
       [...catalog.commands].sort(),
       `${entry.name} advertises commands it does not ship`,
+    );
+    assert.ok(
+      catalog.example?.startsWith(`/${entry.name}:`),
+      `${entry.name}'s example must invoke one of its own namespaced commands`,
+    );
+    assert.ok(
+      catalog.commands.includes(catalog.example.split(" ")[0]),
+      `${entry.name}'s example invokes a command it does not ship`,
     );
   }
 });

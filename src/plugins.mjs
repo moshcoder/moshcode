@@ -26,19 +26,39 @@ export function marketplaceSource(env = process.env) {
   return String(env.MOSHCODE_PLUGIN_SOURCE || "moshcoder/moshcode").trim() || "moshcoder/moshcode";
 }
 
-/** The plugins this marketplace ships. Mirrors .claude-plugin/marketplace.json. */
+/**
+ * The plugins this marketplace ships. Mirrors .claude-plugin/marketplace.json.
+ *
+ * `commands` carry their namespace because that is how they are actually
+ * invoked. Claude Code namespaces every plugin command as
+ * `/<plugin>:<command>` — always, not only when two plugins collide — so a bare
+ * `/crypto` is simply not a command, and advertising one sends people to
+ * "Unknown command: /crypto" on their first try.
+ * https://code.claude.com/docs/en/plugins
+ *
+ * `example` exists because the invitation printed after an install has to be
+ * runnable. It used to append a hardcoded "NVDA" to whatever came first in
+ * `commands`, which told anyone installing the crypto plugin to try a stock.
+ */
 export const PLUGINS = [
   {
     name: "stocks",
     description: "equity research slash commands backed by advis0r.com",
-    commands: ["/stocks", "/signals", "/research", "/lookup", "/reports", "/discover"],
+    commands: ["/stocks:stocks", "/stocks:signals", "/stocks:research", "/stocks:lookup", "/stocks:reports", "/stocks:discover"],
+    example: "/stocks:stocks NVDA",
   },
   {
     name: "crypto",
     description: "crypto market data slash commands backed by advis0r.com",
-    commands: ["/crypto", "/quote", "/book", "/bars", "/spark", "/pairs", "/coin"],
+    commands: ["/crypto:crypto", "/crypto:quote", "/crypto:book", "/crypto:bars", "/crypto:spark", "/crypto:pairs", "/crypto:coin"],
+    example: "/crypto:crypto BTC",
   },
 ];
+
+/** How Claude Code namespaces a plugin's command. */
+export function pluginCommandName(plugin, file) {
+  return `/${plugin}:${String(file).replace(/\.md$/, "")}`;
+}
 
 export const DEFAULT_PLUGIN = PLUGINS[0].name;
 
