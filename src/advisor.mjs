@@ -279,8 +279,18 @@ function compact(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
-  for (const [size, suffix] of units) {
-    if (Math.abs(n) >= size) return `${(n / size).toFixed(2).replace(/\.?0+$/, "")}${suffix}`;
+  for (let i = 0; i < units.length; i++) {
+    const [size, suffix] = units[i];
+    if (Math.abs(n) < size) continue;
+    // Rounding to 2 decimals can push a value just under the next boundary up to
+    // a full thousand of this unit (999,999,999 → "1000M"); carry it to the next
+    // unit up (→ "1B") so the number never reads as an un-carried thousand.
+    const scaled = (n / size).toFixed(2);
+    if (Math.abs(Number(scaled)) >= 1000 && i > 0) {
+      const [upSize, upSuffix] = units[i - 1];
+      return `${(n / upSize).toFixed(2).replace(/\.?0+$/, "")}${upSuffix}`;
+    }
+    return `${scaled.replace(/\.?0+$/, "")}${suffix}`;
   }
   return String(n);
 }

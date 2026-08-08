@@ -185,6 +185,19 @@ test("a report missing its optional sections still renders", () => {
   assert.match(renderAdvisor("report", bare, { columns: 88 }), /AAA/);
 });
 
+test("fundamentals just under a magnitude boundary carry to the next unit", () => {
+  // 999,999,999 rounds to 1000.00 of a million; it must read "1B", not "1000M".
+  const near = {
+    ticker: "AAA", lastPrice: null, disclaimer: "d",
+    facts: { source: "sec", marketCap: 999999999, revenue: 999999, freeCashFlow: 999999999999 },
+  };
+  const out = renderAdvisor("report", near, { columns: 88 });
+  assert.match(out, /cap 1B\b/);
+  assert.match(out, /rev 1M\b/);
+  assert.match(out, /fcf 1T\b/);
+  assert.doesNotMatch(out, /1000M|1000K|1000B/);
+});
+
 test("empty result sets say so instead of rendering an empty table", () => {
   assert.match(renderAdvisor("signals", { ticker: "AAA", signals: [] }), /no signals indexed/);
   assert.match(renderAdvisor("search", { query: "zzz", results: [] }), /nothing indexed matches/);
