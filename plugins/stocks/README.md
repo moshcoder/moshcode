@@ -1,4 +1,4 @@
-# ticker — equity research in your engine 🤘
+# stocks — equity research in your engine 🤘
 
 Slash commands backed by [advis0r.com](https://advis0r.com/api): scored research
 reports, extracted signals with sources, transcript search, company-name lookup,
@@ -13,11 +13,23 @@ and ranked watchlists.
 | `/reports` | every stored report, best score first |
 | `/discover fusion` | a ranked watchlist for a topic (slow) |
 
-The headline command is `/stocks`, not `/ticker` — it was renamed so the verb
-says what it covers, now that `/crypto` sits beside it. **The plugin itself is
-still `ticker@moshcode`**, deliberately: renaming the plugin would force
-everyone who already installed it to uninstall and reinstall, and an id is not
-worth that. Existing installs pick `/stocks` up on the next plugin update.
+## Upgrading from `ticker@moshcode`
+
+This plugin used to be called `ticker`. Both it and its headline command were
+renamed so the name says which market it covers, now that `/crypto` sits beside
+it.
+
+Installing the new one does **not** replace the old one — engines install
+plugins side by side, so `/stocks` would come from two plugins at once. Remove
+the old id first:
+
+```bash
+moshcode plugin remove ticker
+moshcode plugin install stocks
+```
+
+`moshcode plugin remove ticker` keeps working for exactly this reason, even
+though `moshcode plugin install ticker` no longer does.
 
 ## Install
 
@@ -29,7 +41,7 @@ Or straight from Claude Code:
 
 ```bash
 claude plugin marketplace add moshcoder/moshcode
-claude plugin install ticker@moshcode
+claude plugin install stocks@moshcode
 ```
 
 Restart the engine afterwards — a newly installed plugin is not live in a

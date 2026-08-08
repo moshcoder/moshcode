@@ -1,13 +1,13 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
-  "name": "ticker",
+  "name": "stocks",
   "description": "Equity research slash commands backed by advis0r.com: scored reports, extracted signals, transcript search, company-name lookup, and ranked watchlists.",
   "version": "0.1.0",
   "author": {
     "name": "moshcoder",
     "url": "https://moshcode.sh"
   },
-  "homepage": "https://github.com/moshcoder/moshcode#ticker",
+  "homepage": "https://github.com/moshcoder/moshcode#stocks",
   "license": "MIT",
   "keywords": ["stocks", "equity", "research", "markets", "advis0r"]
 }

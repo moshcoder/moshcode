@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import { ENGINES } from "../src/engines.mjs";
 import {
-  MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, marketplaceSource, planPluginCommand,
-  pluginId, resolvePlugin, runPluginCommand,
+  MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, RETIRED_PLUGINS, marketplaceSource,
+  planPluginCommand, pluginId, resolvePlugin, resolveRetiredPlugin, runPluginCommand,
 } from "../src/plugins.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -47,7 +47,7 @@ test("install adds the marketplace before installing, every time", () => {
   const plan = byKey(planPluginCommand(SPEC, { installedSet: new Set(["claude"]) }));
   assert.deepEqual(plan.claude.actions.map((a) => a.args), [
     ["plugin", "marketplace", "add", "moshcoder/moshcode"],
-    ["plugin", "install", "ticker@moshcode"],
+    ["plugin", "install", "stocks@moshcode"],
   ]);
 });
 
@@ -65,7 +65,7 @@ test("a failing step stops the chain rather than installing from nothing", async
 
 test("remove uninstalls the qualified id, and touches no marketplace", () => {
   const plan = byKey(planPluginCommand(SPEC, { installedSet: new Set(["claude"]), verb: "remove" }));
-  assert.deepEqual(plan.claude.actions.map((a) => a.args), [["plugin", "uninstall", "ticker@moshcode"]]);
+  assert.deepEqual(plan.claude.actions.map((a) => a.args), [["plugin", "uninstall", "stocks@moshcode"]]);
 });
 
 test("a successful run reports installed / removed, matching the verb", async () => {
@@ -82,9 +82,27 @@ test("a successful run reports installed / removed, matching the verb", async ()
 // --- names -------------------------------------------------------------------
 
 test("the default plugin resolves from nothing, and an unknown one does not", () => {
-  assert.equal(resolvePlugin()?.name, "ticker");
-  assert.equal(resolvePlugin("ticker@moshcode")?.name, "ticker", "a qualified id should resolve");
+  assert.equal(resolvePlugin()?.name, "stocks");
+  assert.equal(resolvePlugin("stocks@moshcode")?.name, "stocks", "a qualified id should resolve");
   assert.equal(resolvePlugin("nonsense"), null);
+});
+
+test("a retired plugin stays removable, and stays uninstallable", () => {
+  // The asymmetry is the whole point. The old plugin is still sitting installed
+  // in someone's engine serving the same slash commands, and installing the new
+  // one puts a second copy beside it rather than replacing it — so `remove` has
+  // to reach a name `install` refuses, or the rename strands people.
+  for (const retired of RETIRED_PLUGINS) {
+    assert.equal(resolvePlugin(retired.name), null, `${retired.name} must not install`);
+    assert.equal(resolveRetiredPlugin(retired.name)?.renamedTo, retired.renamedTo);
+    assert.equal(resolveRetiredPlugin(`${retired.name}@moshcode`)?.name, retired.name, "a qualified id should resolve");
+    assert.ok(
+      PLUGINS.some((p) => p.name === retired.renamedTo),
+      `${retired.name} points at ${retired.renamedTo}, which must be a plugin this marketplace ships`,
+    );
+  }
+  assert.equal(resolveRetiredPlugin("nonsense"), null);
+  assert.equal(resolveRetiredPlugin(), null);
 });
 
 test("the source is overridable, so an unreleased plugin is installable", () => {
@@ -147,7 +165,7 @@ test("every shipped command declares a description and parseable frontmatter", (
 });
 
 test("pluginId is the form the engine disambiguates with", () => {
-  assert.equal(pluginId("ticker"), "ticker@moshcode");
+  assert.equal(pluginId("stocks"), "stocks@moshcode");
 });
 
 test("the README documents the install command it actually ships", () => {

@@ -10,7 +10,7 @@ import {
 } from "./skills.mjs";
 import {
   MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, marketplaceSource, planPluginCommand,
-  pluginId, resolvePlugin, runPluginCommand,
+  pluginId, resolvePlugin, resolveRetiredPlugin, runPluginCommand,
 } from "./plugins.mjs";
 import { catalogList, resolveCatalog } from "./mcp-catalog.mjs";
 import { MCP_VERBS, PLUGIN_VERBS, SKILL_VERBS } from "./cli-schema.mjs";
@@ -315,10 +315,22 @@ export async function pluginCommand(tokens, { run, installedSet } = {}) {
   const stray = rest.find((t) => String(t).startsWith("-"));
   if (stray) { console.log(err(`unknown plugin flag "${stray}"`)); return 1; }
 
-  const plugin = resolvePlugin(rest[0]);
+  let plugin = resolvePlugin(rest[0]);
   if (!plugin) {
-    console.log(err(`unknown plugin "${rest[0]}" — this marketplace ships ${PLUGINS.map((p) => p.name).join(", ")}`));
-    return 1;
+    // A retired name still has to be removable: the old plugin is installed in
+    // someone's engine right now, and installing its replacement puts a second
+    // copy of the same slash commands beside it rather than replacing it.
+    const retired = resolveRetiredPlugin(rest[0]);
+    if (retired && verb === "remove") {
+      plugin = { name: retired.name, description: `retired — renamed to ${retired.renamedTo}`, commands: [] };
+    } else if (retired) {
+      console.log(err(`"${retired.name}" is now "${retired.renamedTo}" — install ${bone(pluginId(retired.renamedTo))}`));
+      console.log(info(`already have the old one? ${bone(`moshcode plugin remove ${retired.name}`)} first`));
+      return 1;
+    } else {
+      console.log(err(`unknown plugin "${rest[0]}" — this marketplace ships ${PLUGINS.map((p) => p.name).join(", ")}`));
+      return 1;
+    }
   }
 
   const source = marketplaceSource();

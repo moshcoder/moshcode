@@ -8,15 +8,15 @@
   },
   "plugins": [
     {
-      "name": "ticker",
+      "name": "stocks",
       "description": "Equity research slash commands backed by advis0r.com: scored reports, extracted signals, transcript search, company-name lookup, and ranked watchlists.",
-      "source": "./plugins/ticker",
+      "source": "./plugins/stocks",
       "category": "productivity",
       "author": {
         "name": "moshcoder",
         "url": "https://moshcode.sh"
       },
-      "homepage": "https://github.com/moshcoder/moshcode#ticker",
+      "homepage": "https://github.com/moshcoder/moshcode#stocks",
       "keywords": ["stocks", "equity", "research", "markets", "advis0r"]
     },
     {
