@@ -47,6 +47,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode tools` | tools | list workflow tools and installation status |
 | `moshcode trade` | tools | look up markets and trade through Alpaca |
 | `moshcode ticker` <br>`advisor` | tools | equity research from advis0r.com |
+| `moshcode crypto` <br>`coins` | tools | crypto market data from advis0r.com |
 | `moshcode plugin` <br>`plugins` | extend | install moshcode's slash commands into Claude Code |
 | `moshcode commands` | script | list built-in moshscript commands |
 | `moshcode completion` | extend | print a shell completion script |
@@ -238,6 +239,37 @@ delayed and which feed produced it. Scores labelled `offline` come from
 deterministic rules rather than a model. It is a research aid, not advice, and
 nothing under `ticker` can place an order.
 
+### Crypto market data (`moshcode crypto`)
+
+`crypto` is `ticker`'s sibling on the same host: advis0r's read-only crypto
+routes over Alpaca's US crypto venue, which trades 24/7 and needs no extra
+subscription.
+
+```sh
+moshcode crypto BTC                     # price, technicals, score, supply, order book
+moshcode crypto lookup bitcoin          # asset name → BTC/USD
+moshcode crypto quote ETH-USD           # latest trade + quote, spread in bps
+moshcode crypto spark BTC ETH SOL       # recent moves across pairs, as sparklines
+moshcode crypto bars ETH-USD --timeframe 1Hour   # historical OHLCV
+moshcode crypto book BTC-USD --depth 5  # top of book, both sides
+moshcode crypto assets                  # every supported pair
+moshcode crypto open BTC                # the shareable page
+```
+
+Pairs are accepted as `BTC`, `BTC-USD`, `BTC/USD` or `BTCUSD` — a bare asset
+resolves to that asset's USD pair. `--json` gives the raw response, `/crypto …`
+is the same facade in the pit, and `MOSHCODE_ADVISOR_URL` points it elsewhere.
+
+Unlike a `ticker` report, this is a **live venue read**, not a stored snapshot —
+there are no transcripts, no filings and no signals behind a crypto pair, and
+the failure mode runs the other way: the price is accurate to the second and
+stale by the time you act on it. Every response stamps when it was fetched.
+
+The technical score counts venue-local liquidity, so it is **not comparable** to
+an equity's score, and each response ships the `caveats` that say so. Prices are
+Alpaca's US venue alone and can differ materially from other exchanges. Research
+aid, not advice — and like `ticker`, nothing under `crypto` can place an order.
+
 ### Social posting from the pit
 
 The pit can hand a prepared post to Bluesky or Nostr without storing either
@@ -340,19 +372,28 @@ inside your engine too:
 ```sh
 moshcode plugin list              # what the marketplace ships, and who can take it
 moshcode plugin install           # add the marketplace + install `ticker`
+moshcode plugin install crypto    # add the marketplace + install `crypto`
 moshcode plugin remove ticker     # take it back off
 ```
 
 `ticker@moshcode` adds `/ticker`, `/signals`, `/research`, `/lookup`,
 `/reports`, and `/discover` — the same advis0r research surface described above,
-driven from inside a coding session. Restart the engine afterwards; a newly
-installed plugin is not live in a session that is already running.
+driven from inside a coding session.
+
+`crypto@moshcode` adds `/crypto`, `/quote`, `/book`, `/bars`, `/spark`,
+`/pairs`, and `/coin`. It ships separately because it is a different surface,
+not a mode of the first: live venue reads instead of stored snapshots, and a
+score that must not be ranked against an equity's.
+
+Restart the engine after installing either; a newly installed plugin is not live
+in a session that is already running.
 
 The equivalent by hand:
 
 ```sh
 claude plugin marketplace add moshcoder/moshcode
 claude plugin install ticker@moshcode
+claude plugin install crypto@moshcode
 ```
 
 Claude Code is currently the only engine with a plugin primitive. The others are

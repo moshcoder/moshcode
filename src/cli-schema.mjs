@@ -317,6 +317,36 @@ export const CORE_CLI_COMMANDS = [
   },
   { name: "advisor", aliasOf: "ticker", description: "alias for ticker" },
   {
+    name: "crypto",
+    group: "tools",
+    description: "crypto market data from advis0r.com",
+    synopsis: [
+      ["moshcode crypto <pair>", "the full report for one pair"],
+      ["moshcode crypto <verb> [args…]", ""],
+    ],
+    verbs: "CRYPTO_VERBS",
+    flags: [
+      ["--json", "print the raw API response", ""],
+      ["--timeframe <tf>", "bars: 1Min | 5Min | 15Min | 1Hour | 1Day | 1Week", "1Day"],
+      ["--start <iso>", "bars: window start", "the API's own default"],
+      ["--end <iso>", "bars: window end", "now"],
+      ["--limit <n>", "cap results (bars/lookup)", "the API's own default"],
+      ["--depth <n>", "book: levels per side", "10"],
+      ["--period <p>", "spark: 24h | 7d", "24h"],
+      ["--horizon <n>", "technicals: quarters the score looks ahead (1 or 2)", "2"],
+    ],
+    examples: [
+      ["moshcode crypto BTC", "price, technicals, score, supply, order book"],
+      ["moshcode crypto lookup bitcoin", "asset name → BTC/USD"],
+      ["moshcode crypto spark BTC ETH SOL", "24h closes as sparklines"],
+      ["moshcode crypto bars ETH --timeframe 1Hour", "historical OHLCV"],
+      ["moshcode crypto book BTC-USD --depth 5", "top of book, both sides"],
+    ],
+    seeAlso: ["ticker", "trade", "plugin"],
+    note: "research aid, not advice — prices are Alpaca's US crypto venue alone and can differ materially from other exchanges. Crypto trades 24/7 with no circuit breakers. Set MOSHCODE_ADVISOR_URL to point at another instance.",
+  },
+  { name: "coins", aliasOf: "crypto", description: "alias for crypto" },
+  {
     name: "plugin",
     group: "extend",
     description: "install moshcode's slash commands into Claude Code",
@@ -541,6 +571,42 @@ export const TICKER_VERBS = [
   { name: "open", description: "open the shareable report page in a browser", synopsis: [["moshcode ticker open <symbol>", ""]] },
 ];
 
+/**
+ * `crypto`'s verbs.
+ *
+ * `report` earns its place for the same reason ticker's does — a bare pair is
+ * the shortcut, so a pair that collides with a verb name needs a spelling that
+ * cannot be mistaken for one. src/crypto.mjs owns the parser and
+ * test/crypto.test.mjs fails when the two lists disagree.
+ */
+export const CRYPTO_VERBS = [
+  { name: "report", description: "the full report for one pair", synopsis: [["moshcode crypto report <pair>", "same as `moshcode crypto <pair>`"]] },
+  { name: "quote", description: "latest trade and quote, with the bid/ask spread", synopsis: [["moshcode crypto quote <pair>", ""]] },
+  {
+    name: "snapshot", description: "trade, quote and daily bars for several pairs",
+    synopsis: [["moshcode crypto snapshot <pair…>", "up to 20 pairs"]],
+  },
+  {
+    name: "technicals", description: "indicators and the technical score",
+    synopsis: [["moshcode crypto technicals <pair> [--horizon 1|2]", ""]],
+  },
+  {
+    name: "bars", description: "historical OHLCV",
+    synopsis: [["moshcode crypto bars <pair> [--timeframe tf] [--start iso] [--end iso] [--limit n]", ""]],
+  },
+  { name: "book", description: "top of the order book, both sides", synopsis: [["moshcode crypto book <pair> [--depth n]", ""]] },
+  {
+    name: "spark", description: "recent closes, drawn as sparklines",
+    synopsis: [["moshcode crypto spark <pair…> [--period 24h|7d]", ""]],
+  },
+  { name: "assets", description: "every supported pair", synopsis: [["moshcode crypto assets", ""]] },
+  {
+    name: "lookup", description: "find a pair by asset name",
+    synopsis: [["moshcode crypto lookup <name…> [--limit n]", "bitcoin → BTC/USD"]],
+  },
+  { name: "open", description: "open the shareable page in a browser", synopsis: [["moshcode crypto open <pair>", ""]] },
+];
+
 export const PLUGIN_VERBS = [
   {
     name: "install", description: "add the marketplace and install a plugin",
@@ -561,6 +627,7 @@ export const VERB_TABLES = {
   DNS_VERBS,
   TRADE_VERBS,
   TICKER_VERBS,
+  CRYPTO_VERBS,
   PLUGIN_VERBS,
 };
 
@@ -590,6 +657,8 @@ export const PIT_COMMANDS = [
     description: "look up markets and preview/place Alpaca orders" },
   { name: "ticker", aliases: ["advisor"], args: "<symbol|verb> [args…]", cli: "ticker",
     description: "equity research from advis0r.com" },
+  { name: "crypto", aliases: ["coins"], args: "<pair|verb> [args…]", cli: "crypto",
+    description: "crypto market data from advis0r.com" },
   { name: "plugin", aliases: ["plugins"], args: "<verb> [name]", cli: "plugin",
     description: "install moshcode's slash commands into Claude Code" },
   { name: "socials", aliases: ["social"], pitOnly: true,

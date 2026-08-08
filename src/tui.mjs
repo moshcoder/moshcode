@@ -21,6 +21,7 @@ import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "./integrations.mjs";
 import { tickerCommand } from "./advisor.mjs";
+import { cryptoCommand } from "./crypto.mjs";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
@@ -676,6 +677,12 @@ export async function tui() {
     // there is no advis0r binary to launch, only a public read-only API.
     if (cmd === "ticker" || cmd === "advisor") {
       await tickerCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
+      continue;
+    }
+    // `/crypto` renders in the pit for the same reason `/ticker` does: there is
+    // no crypto binary to hand the terminal to, only a public read-only API.
+    if (cmd === "crypto" || cmd === "coins") {
+      await cryptoCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
       continue;
     }
     if (cmd === "plugin" || cmd === "plugins") {
