@@ -24,7 +24,7 @@ import {
 } from "../src/cli-schema.mjs";
 import {
   WIDTH, findCommand, findPitCommand, helpModel, pitHelpModel, renderCommand, renderOverview,
-  renderPitCommand, renderScriptVerb, README_START, README_END, suggest, wantsHelp,
+  renderPitCommand, renderScriptVerb, README_START, README_END, RENAMED_COMMANDS, suggest, wantsHelp,
   withCommandTable, wrap,
 } from "../src/help.mjs";
 import { ENGINES } from "../src/engines.mjs";
@@ -272,6 +272,16 @@ test("suggest is tight enough to stay useful", () => {
   // command.
   assert.equal(suggest("xyzzy"), null);
   assert.equal(suggest(""), null);
+});
+
+test("a renamed command points at its replacement, and stays gone", () => {
+  // Edit distance cannot reach `stocks` from `ticker`, so without the rename
+  // table a verb that worked one release ago gets a bare "unknown command".
+  assert.equal(suggest("ticker"), "stocks");
+  for (const [old, now] of Object.entries(RENAMED_COMMANDS)) {
+    assert.equal(findCommand(old), null, `${old} was renamed — it must not still dispatch`);
+    assert.ok(findCommand(now), `${old} points at ${now}, which must exist`);
+  }
 });
 
 test("findCommand resolves aliases and rejects strangers", () => {

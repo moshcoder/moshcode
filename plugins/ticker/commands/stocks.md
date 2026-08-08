@@ -1,7 +1,7 @@
 ---
 description: Research one ticker — score, technicals, fundamentals, thesis, signals, and sources.
 argument-hint: <SYMBOL>
-allowed-tools: Bash(moshcode ticker:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
 ---
 
 ## Task
@@ -11,7 +11,7 @@ Pull the stored research report for `$ARGUMENTS` and summarize it for the user.
 Run:
 
 ```bash
-moshcode ticker $ARGUMENTS --json
+moshcode stocks $ARGUMENTS --json
 ```
 
 If `moshcode` is not installed, fall back to the API directly:

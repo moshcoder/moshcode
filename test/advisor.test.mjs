@@ -1,35 +1,35 @@
-// `moshcode ticker` — argument translation, request building, and the two
+// `moshcode stocks` — argument translation, request building, and the two
 // things this command must never get wrong: presenting a stored snapshot as a
 // live quote, and dropping the API's disclaimer.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  DEFAULT_ADVISOR_URL, TICKER_VERB_NAMES, advisorBase, advisorUrl, fetchAdvisor,
-  normalizeSymbol, renderAdvisor, resolveVerb, tickerArgs, tickerCommand, tickerUsage,
+  DEFAULT_ADVISOR_URL, STOCKS_VERB_NAMES, advisorBase, advisorUrl, fetchAdvisor,
+  normalizeSymbol, renderAdvisor, resolveVerb, stocksArgs, stocksCommand, stocksUsage,
 } from "../src/advisor.mjs";
-import { TICKER_VERBS } from "../src/cli-schema.mjs";
+import { STOCKS_VERBS } from "../src/cli-schema.mjs";
 
 // --- the bare-symbol shortcut ------------------------------------------------
 
 test("a bare symbol is the report, and is upper-cased on the way out", () => {
-  assert.deepEqual(tickerArgs(["nvda"]), {
+  assert.deepEqual(stocksArgs(["nvda"]), {
     verb: "report", symbol: "NVDA", path: "/api/ticker", query: { symbol: "NVDA" }, json: false,
   });
-  assert.deepEqual(tickerArgs(["report", "brk.b"]), {
+  assert.deepEqual(stocksArgs(["report", "brk.b"]), {
     verb: "report", symbol: "BRK.B", path: "/api/ticker", query: { symbol: "BRK.B" }, json: false,
   });
 });
 
 test("no arguments prints usage rather than guessing a symbol", () => {
-  assert.deepEqual(tickerArgs([]), { usage: true });
-  assert.match(tickerUsage(), /usage: moshcode ticker/);
+  assert.deepEqual(stocksArgs([]), { usage: true });
+  assert.match(stocksUsage(), /usage: moshcode stocks/);
 });
 
 test("a company name is refused with the lookup that resolves it", () => {
-  const result = tickerArgs(["some very long company name"]);
+  const result = stocksArgs(["some very long company name"]);
   assert.match(result.error, /is not a ticker symbol/);
-  assert.match(result.error, /moshcode ticker lookup/);
+  assert.match(result.error, /moshcode stocks lookup/);
 });
 
 // --- verbs -------------------------------------------------------------------
@@ -37,8 +37,8 @@ test("a company name is refused with the lookup that resolves it", () => {
 test("every verb the schema documents is one the parser resolves", () => {
   // The schema drives help and completion; the parser drives behaviour. A verb
   // in one and not the other is a command that completes and then fails.
-  assert.deepEqual(TICKER_VERBS.map(({ name }) => name).sort(), [...TICKER_VERB_NAMES].sort());
-  for (const { name } of TICKER_VERBS) assert.equal(resolveVerb(name), name, `${name} does not resolve`);
+  assert.deepEqual(STOCKS_VERBS.map(({ name }) => name).sort(), [...STOCKS_VERB_NAMES].sort());
+  for (const { name } of STOCKS_VERBS) assert.equal(resolveVerb(name), name, `${name} does not resolve`);
 });
 
 test("aliases resolve, and anything else is treated as a symbol", () => {
@@ -49,18 +49,18 @@ test("aliases resolve, and anything else is treated as a symbol", () => {
 });
 
 test("search and lookup take words, not symbols", () => {
-  assert.deepEqual(tickerArgs(["search", "data", "center", "--limit", "5"]), {
+  assert.deepEqual(stocksArgs(["search", "data", "center", "--limit", "5"]), {
     verb: "search", path: "/api/search", query: { q: "data center", limit: "5" }, json: false,
   });
-  assert.deepEqual(tickerArgs(["lookup", "rivian"]), {
+  assert.deepEqual(stocksArgs(["lookup", "rivian"]), {
     verb: "lookup", path: "/api/lookup", query: { q: "rivian" }, json: false,
   });
 });
 
 test("reports defaults to score order and discover to the offline provider", () => {
-  assert.deepEqual(tickerArgs(["reports"]).query, { sort: "score" });
-  assert.deepEqual(tickerArgs(["reports", "--sort", "recent"]).query, { sort: "recent" });
-  assert.deepEqual(tickerArgs(["discover", "fusion"]).query, {
+  assert.deepEqual(stocksArgs(["reports"]).query, { sort: "score" });
+  assert.deepEqual(stocksArgs(["reports", "--sort", "recent"]).query, { sort: "recent" });
+  assert.deepEqual(stocksArgs(["discover", "fusion"]).query, {
     topic: "fusion", provider: "offline", horizon: "2",
   });
 });
@@ -68,28 +68,28 @@ test("reports defaults to score order and discover to the offline provider", () 
 test("discover is marked slow, because it analyzes every candidate", () => {
   // The flag is what buys it the longer timeout in fetchAdvisor. Without it the
   // route reliably aborts mid-ranking and looks like an outage.
-  assert.equal(tickerArgs(["discover"]).slow, true);
-  assert.equal(tickerArgs(["reports"]).slow, undefined);
+  assert.equal(stocksArgs(["discover"]).slow, true);
+  assert.equal(stocksArgs(["reports"]).slow, undefined);
 });
 
 // --- flags -------------------------------------------------------------------
 
 test("flag values are validated rather than forwarded", () => {
-  assert.match(tickerArgs(["reports", "--limit", "0"]).error, /positive number/);
-  assert.match(tickerArgs(["reports", "--limit"]).error, /positive number/);
-  assert.match(tickerArgs(["reports", "--sort", "sideways"]).error, /recent, score, ticker/);
-  assert.match(tickerArgs(["discover", "--horizon", "9"]).error, /must be 1 or 2/);
+  assert.match(stocksArgs(["reports", "--limit", "0"]).error, /positive number/);
+  assert.match(stocksArgs(["reports", "--limit"]).error, /positive number/);
+  assert.match(stocksArgs(["reports", "--sort", "sideways"]).error, /recent, score, ticker/);
+  assert.match(stocksArgs(["discover", "--horizon", "9"]).error, /must be 1 or 2/);
 });
 
 test("an unknown flag is an error, not a search term", () => {
   // Left alone it would join `q` and be searched for verbatim, which returns
   // nothing and reads as "the index has no coverage".
-  assert.match(tickerArgs(["search", "--depth", "3"]).error, /unknown ticker flag/);
+  assert.match(stocksArgs(["search", "--depth", "3"]).error, /unknown stocks flag/);
 });
 
 test("--json survives anywhere in the argument list", () => {
-  assert.equal(tickerArgs(["--json", "nvda"]).json, true);
-  assert.equal(tickerArgs(["nvda", "--json"]).json, true);
+  assert.equal(stocksArgs(["--json", "nvda"]).json, true);
+  assert.equal(stocksArgs(["nvda", "--json"]).json, true);
 });
 
 // --- symbols -----------------------------------------------------------------
@@ -109,12 +109,12 @@ test("the base URL is overridable, so a local instance is testable", () => {
 });
 
 test("query values are encoded, not concatenated", () => {
-  const url = advisorUrl(tickerArgs(["search", "data center & more"]), { base: "https://example.test" });
+  const url = advisorUrl(stocksArgs(["search", "data center & more"]), { base: "https://example.test" });
   assert.equal(url, "https://example.test/api/search?q=data+center+%26+more");
 });
 
 test("open builds the shareable page URL and makes no request", () => {
-  const request = tickerArgs(["open", "nvda"]);
+  const request = stocksArgs(["open", "nvda"]);
   assert.equal(request.path, undefined);
   assert.equal(advisorUrl(request, { base: "https://example.test" }), "https://example.test/ticker/NVDA");
 });
@@ -126,7 +126,7 @@ const jsonResponse = (body, { ok = true, status = 200 } = {}) => ({
 });
 
 test("a non-JSON body is a failure, not a silent empty render", () => {
-  return fetchAdvisor(tickerArgs(["stats"]), {
+  return fetchAdvisor(stocksArgs(["stats"]), {
     fetchImpl: async () => ({ ok: false, status: 502, text: async () => "<html>bad gateway" }),
   }).then((res) => {
     assert.equal(res.ok, false);
@@ -135,7 +135,7 @@ test("a non-JSON body is a failure, not a silent empty render", () => {
 });
 
 test("a transport failure is reported, never thrown at the caller", async () => {
-  const res = await fetchAdvisor(tickerArgs(["stats"]), {
+  const res = await fetchAdvisor(stocksArgs(["stats"]), {
     fetchImpl: async () => { throw new Error("ECONNREFUSED"); },
   });
   assert.equal(res.ok, false);
@@ -214,7 +214,7 @@ function capture() {
 
 test("--json prints the response verbatim and renders nothing", async () => {
   const io = capture();
-  const code = await tickerCommand(["stats", "--json"], {
+  const code = await stocksCommand(["stats", "--json"], {
     ...io, fetchImpl: async () => jsonResponse({ documents: 3 }),
   });
   assert.equal(code, 0);
@@ -223,7 +223,7 @@ test("--json prints the response verbatim and renders nothing", async () => {
 
 test("the API's own error is surfaced, with its did-you-mean", async () => {
   const io = capture();
-  const code = await tickerCommand(["RIVIAN"], {
+  const code = await stocksCommand(["RIVIAN"], {
     ...io,
     fetchImpl: async () => jsonResponse(
       { error: '"RIVIAN" is not a ticker — did you mean RIVN?', didYouMean: { symbol: "RIVN", name: "Rivian" } },
@@ -233,13 +233,13 @@ test("the API's own error is surfaced, with its did-you-mean", async () => {
   assert.equal(code, 1, "a failed lookup must not exit 0");
   const output = io.lines.join("\n");
   assert.match(output, /did you mean RIVN/);
-  assert.match(output, /moshcode ticker RIVN/);
+  assert.match(output, /moshcode stocks RIVN/);
 });
 
 test("a bad argument exits non-zero without touching the network", async () => {
   const io = capture();
   let called = false;
-  const code = await tickerCommand(["reports", "--sort", "sideways"], {
+  const code = await stocksCommand(["reports", "--sort", "sideways"], {
     ...io, fetchImpl: async () => { called = true; return jsonResponse({}); },
   });
   assert.equal(code, 1);
@@ -249,7 +249,7 @@ test("a bad argument exits non-zero without touching the network", async () => {
 test("open never makes a request, and prints the URL when no browser opens", async () => {
   const io = capture();
   let called = false;
-  const code = await tickerCommand(["open", "nvda"], {
+  const code = await stocksCommand(["open", "nvda"], {
     ...io,
     base: "https://example.test",
     openUrl: () => false,

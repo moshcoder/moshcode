@@ -20,7 +20,7 @@ import { runUpgrade } from "../src/upgrade.mjs";
 import { selfUpdateCommand } from "../src/selfupdate.mjs";
 import { describeUninstall, uninstallPlan } from "../src/uninstall.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "../src/integrations.mjs";
-import { tickerCommand } from "../src/advisor.mjs";
+import { stocksCommand } from "../src/advisor.mjs";
 import { cryptoCommand } from "../src/crypto.mjs";
 import { canOpenBrowser, openBrowser } from "../src/open-url.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
@@ -347,8 +347,8 @@ async function main() {
     propagateExit(r.code, r.signal);
     return;
   }
-  if (cmd === "ticker" || cmd === "advisor") {
-    const code = await tickerCommand(rest, {
+  if (cmd === "stocks" || cmd === "advisor") {
+    const code = await stocksCommand(rest, {
       openUrl: (url) => canOpenBrowser() && openBrowser(url),
     });
     if (code) process.exitCode = code;

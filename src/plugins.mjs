@@ -31,7 +31,7 @@ export const PLUGINS = [
   {
     name: "ticker",
     description: "equity research slash commands backed by advis0r.com",
-    commands: ["/ticker", "/signals", "/research", "/lookup", "/reports", "/discover"],
+    commands: ["/stocks", "/signals", "/research", "/lookup", "/reports", "/discover"],
   },
   {
     name: "crypto",

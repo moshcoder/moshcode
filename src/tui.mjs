@@ -20,12 +20,12 @@ import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "./integrations.mjs";
-import { tickerCommand } from "./advisor.mjs";
+import { stocksCommand } from "./advisor.mjs";
 import { cryptoCommand } from "./crypto.mjs";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
-import { findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
+import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
 import { openNewTab } from "./tabs.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
@@ -673,13 +673,13 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
-    // `/ticker` renders in the pit rather than handing the terminal to a tool:
+    // `/stocks` renders in the pit rather than handing the terminal to a tool:
     // there is no advis0r binary to launch, only a public read-only API.
-    if (cmd === "ticker" || cmd === "advisor") {
-      await tickerCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
+    if (cmd === "stocks" || cmd === "advisor") {
+      await stocksCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
       continue;
     }
-    // `/crypto` renders in the pit for the same reason `/ticker` does: there is
+    // `/crypto` renders in the pit for the same reason `/stocks` does: there is
     // no crypto binary to hand the terminal to, only a public read-only API.
     if (cmd === "crypto" || cmd === "coins") {
       await cryptoCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
@@ -722,7 +722,12 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
-    console.log(err(`unknown command "${line}". /help for the list.`));
+    // A renamed verb gets pointed at its replacement; `/ticker` was a pit
+    // command for a release, so a bare "unknown command" is a dead end here.
+    const renamed = RENAMED_COMMANDS[cmd];
+    console.log(err(renamed
+      ? `unknown command "${line}" — /${cmd} is now /${renamed}.`
+      : `unknown command "${line}". /help for the list.`));
   }
 
   try { rl.close(); } catch { /* noop */ }
