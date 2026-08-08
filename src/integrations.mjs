@@ -345,7 +345,7 @@ export async function pluginCommand(tokens, { run, installedSet } = {}) {
   // A newly installed plugin is not live in an already-running engine, and the
   // first thing anyone does is type the slash command and conclude it failed.
   if (!anyFailed(results) && verb === "install" && results.some((r) => r.status === "installed")) {
-    console.log(info(`restart the engine, then try ${acid(`${plugin.commands[0]} NVDA`)}`));
+    console.log(info(`restart the engine, then try ${acid(plugin.example ?? plugin.commands[0])}`));
   }
   return anyFailed(results) ? 1 : 0;
 }

@@ -42,9 +42,9 @@ resolves to that asset's USD pair.
 - Crypto trades 24/7 with no circuit breakers and no market close. Never
   describe a crypto price as "at the close" or "premarket".
 - State `generatedAt` / `fetchedAt`. This is a live read, so it goes stale in
-  seconds, not days — the opposite failure mode from a stored `/stocks` report.
+  seconds, not days — the opposite failure mode from a stored `/stocks:stocks` report.
 - The score's liquidity component counts venue-local volume only, so it is
-  **not comparable** to an equity's score from `/stocks`. Do not rank the two
+  **not comparable** to an equity's score from `/stocks:stocks`. Do not rank the two
   against each other.
 - End with the response's own `disclaimer`. This is research, not advice.
 - Link the shareable page: `https://advis0r.com/crypto/<PAIR>`.

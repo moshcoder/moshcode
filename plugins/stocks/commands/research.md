@@ -25,5 +25,5 @@ hit is a hit — but relevance is not ranked. Read before summarizing.
 - Cluster the hits by ticker and say which companies came up, with dates.
 - Quote sparingly and attribute each quote to its speaker and ticker.
 - If nothing matches, say the *index* has no match — this searches advis0r's
-  indexed corpus, not the whole web. Suggest `/lookup` if the query looks like
+  indexed corpus, not the whole web. Suggest `/stocks:lookup` if the query looks like
   a company name.
