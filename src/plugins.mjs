@@ -33,6 +33,11 @@ export const PLUGINS = [
     description: "equity research slash commands backed by advis0r.com",
     commands: ["/ticker", "/signals", "/research", "/lookup", "/reports", "/discover"],
   },
+  {
+    name: "crypto",
+    description: "crypto market data slash commands backed by advis0r.com",
+    commands: ["/crypto", "/quote", "/book", "/bars", "/spark", "/pairs", "/coin"],
+  },
 ];
 
 export const DEFAULT_PLUGIN = PLUGINS[0].name;

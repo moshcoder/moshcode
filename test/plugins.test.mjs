@@ -121,20 +121,29 @@ test("every plugin the marketplace lists exists, with a manifest and its command
 
 test("every shipped command declares a description and parseable frontmatter", () => {
   // Unparseable frontmatter loads the command with empty metadata — no
-  // description, no allowed-tools — and nothing at runtime says so.
-  const dir = new URL("../plugins/ticker/commands/", import.meta.url);
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".md"))) {
-    const text = fs.readFileSync(new URL(file, dir), "utf8");
-    const match = text.match(/^---\n([\s\S]*?)\n---\n/);
-    assert.ok(match, `${file} has no frontmatter block`);
-    assert.match(match[1], /^description: \S/m, `${file} has no description`);
-    // A value opening with `[` is a YAML flow sequence, and `[--limit n]` in one
-    // is a parse error that silently drops every field in the block.
-    for (const line of match[1].split("\n")) {
-      const value = line.match(/^[a-z-]+: (.*)$/)?.[1];
-      if (value?.startsWith("[")) assert.fail(`${file}: unquoted "[" in frontmatter — ${line}`);
+  // description, no allowed-tools — and nothing at runtime says so. Driven from
+  // the manifest rather than one hard-coded directory, so a plugin added later
+  // cannot ship unchecked.
+  const manifest = JSON.parse(fs.readFileSync(new URL("../.claude-plugin/marketplace.json", import.meta.url), "utf8"));
+  let checked = 0;
+  for (const entry of manifest.plugins) {
+    const dir = new URL(`../${String(entry.source).replace(/^\.\//, "")}/commands/`, import.meta.url);
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+      const id = `${entry.name}/${file}`;
+      const text = fs.readFileSync(new URL(file, dir), "utf8");
+      const match = text.match(/^---\n([\s\S]*?)\n---\n/);
+      assert.ok(match, `${id} has no frontmatter block`);
+      assert.match(match[1], /^description: \S/m, `${id} has no description`);
+      // A value opening with `[` is a YAML flow sequence, and `[--limit n]` in one
+      // is a parse error that silently drops every field in the block.
+      for (const line of match[1].split("\n")) {
+        const value = line.match(/^[a-z-]+: (.*)$/)?.[1];
+        if (value?.startsWith("[")) assert.fail(`${id}: unquoted "[" in frontmatter — ${line}`);
+      }
+      checked++;
     }
   }
+  assert.ok(checked >= 6, "found no commands to check");
 });
 
 test("pluginId is the form the engine disambiguates with", () => {
