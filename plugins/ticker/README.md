@@ -6,12 +6,18 @@ and ranked watchlists.
 
 | command | what it does |
 | --- | --- |
-| `/ticker NVDA` | score, technicals, fundamentals, thesis, signals, sources |
+| `/stocks NVDA` | score, technicals, fundamentals, thesis, signals, sources |
 | `/signals AAPL` | what was actually said, quoted and sourced |
 | `/research data center` | full-text search across every indexed transcript |
 | `/lookup rivian` | company name → `RIVN` |
 | `/reports` | every stored report, best score first |
 | `/discover fusion` | a ranked watchlist for a topic (slow) |
+
+The headline command is `/stocks`, not `/ticker` — it was renamed so the verb
+says what it covers, now that `/crypto` sits beside it. **The plugin itself is
+still `ticker@moshcode`**, deliberately: renaming the plugin would force
+everyone who already installed it to uninstall and reinstall, and an id is not
+worth that. Existing installs pick `/stocks` up on the next plugin update.
 
 ## Install
 
@@ -31,7 +37,7 @@ session that is already running.
 
 ## How it works
 
-Each command shells out to `moshcode ticker …`, which calls advis0r's public,
+Each command shells out to `moshcode stocks …`, which calls advis0r's public,
 read-only API. No key, no login, no write routes. With `moshcode` absent, every
 command falls back to `curl` against the same endpoints.
 

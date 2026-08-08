@@ -46,7 +46,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
 | `moshcode trade` | tools | look up markets and trade through Alpaca |
-| `moshcode ticker` <br>`advisor` | tools | equity research from advis0r.com |
+| `moshcode stocks` <br>`advisor` | tools | equity research from advis0r.com |
 | `moshcode crypto` <br>`coins` | tools | crypto market data from advis0r.com |
 | `moshcode plugin` <br>`plugins` | extend | install moshcode's slash commands into Claude Code |
 | `moshcode commands` | script | list built-in moshscript commands |
@@ -214,34 +214,34 @@ Alpaca's CLI has no confirmation prompts; `--submit` intentionally removes
 MoshCode's preview guard. Live trading additionally requires Alpaca's `--live`
 opt-in or corresponding environment setting.
 
-### Equity research (`moshcode ticker`)
+### Equity research (`moshcode stocks`)
 
-Where `trade` is Alpaca's order book, `ticker` is the research desk:
+Where `trade` is Alpaca's order book, `stocks` is the research desk:
 [advis0r.com](https://advis0r.com/api)'s public read-only API, rendered in the
 pit. No key, no login, no write routes, no binary to install:
 
 ```sh
-moshcode ticker NVDA               # score, technicals, fundamentals, thesis, signals
-moshcode ticker lookup rivian      # company name → RIVN
-moshcode ticker signals AAPL       # what was said, quoted and sourced
-moshcode ticker search "data center"  # across every indexed transcript
-moshcode ticker reports --limit 10 # the stored index, best score first
-moshcode ticker discover fusion    # a ranked watchlist (slow — analyzes each candidate)
-moshcode ticker open NVDA          # the shareable report page
+moshcode stocks NVDA               # score, technicals, fundamentals, thesis, signals
+moshcode stocks lookup rivian      # company name → RIVN
+moshcode stocks signals AAPL       # what was said, quoted and sourced
+moshcode stocks search "data center"  # across every indexed transcript
+moshcode stocks reports --limit 10 # the stored index, best score first
+moshcode stocks discover fusion    # a ranked watchlist (slow — analyzes each candidate)
+moshcode stocks open NVDA          # the shareable report page
 ```
 
-Add `--json` to any of them for the raw response. The same facade is `/ticker …`
+Add `--json` to any of them for the raw response. The same facade is `/stocks …`
 in the pit, and `MOSHCODE_ADVISOR_URL` points it at another instance.
 
 Reports are **stored snapshots**, not live quotes: every response carries
 `reportGeneratedAt` and every renderer prints it, alongside whether the price is
 delayed and which feed produced it. Scores labelled `offline` come from
 deterministic rules rather than a model. It is a research aid, not advice, and
-nothing under `ticker` can place an order.
+nothing under `stocks` can place an order.
 
 ### Crypto market data (`moshcode crypto`)
 
-`crypto` is `ticker`'s sibling on the same host: advis0r's read-only crypto
+`crypto` is `stocks`'s sibling on the same host: advis0r's read-only crypto
 routes over Alpaca's US crypto venue, which trades 24/7 and needs no extra
 subscription.
 
@@ -260,7 +260,7 @@ Pairs are accepted as `BTC`, `BTC-USD`, `BTC/USD` or `BTCUSD` — a bare asset
 resolves to that asset's USD pair. `--json` gives the raw response, `/crypto …`
 is the same facade in the pit, and `MOSHCODE_ADVISOR_URL` points it elsewhere.
 
-Unlike a `ticker` report, this is a **live venue read**, not a stored snapshot —
+Unlike a `stocks` report, this is a **live venue read**, not a stored snapshot —
 there are no transcripts, no filings and no signals behind a crypto pair, and
 the failure mode runs the other way: the price is accurate to the second and
 stale by the time you act on it. Every response stamps when it was fetched.
@@ -268,7 +268,7 @@ stale by the time you act on it. Every response stamps when it was fetched.
 The technical score counts venue-local liquidity, so it is **not comparable** to
 an equity's score, and each response ships the `caveats` that say so. Prices are
 Alpaca's US venue alone and can differ materially from other exchanges. Research
-aid, not advice — and like `ticker`, nothing under `crypto` can place an order.
+aid, not advice — and like `stocks`, nothing under `crypto` can place an order.
 
 ### Social posting from the pit
 
@@ -376,7 +376,7 @@ moshcode plugin install crypto    # add the marketplace + install `crypto`
 moshcode plugin remove ticker     # take it back off
 ```
 
-`ticker@moshcode` adds `/ticker`, `/signals`, `/research`, `/lookup`,
+`ticker@moshcode` adds `/stocks`, `/signals`, `/research`, `/lookup`,
 `/reports`, and `/discover` — the same advis0r research surface described above,
 driven from inside a coding session.
 

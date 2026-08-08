@@ -1,7 +1,7 @@
 ---
 description: Build a ranked watchlist for a topic (slow — it analyzes each candidate).
 argument-hint: "[topic]"
-allowed-tools: Bash(moshcode ticker:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
 ---
 
 ## Task
@@ -9,7 +9,7 @@ allowed-tools: Bash(moshcode ticker:*), Bash(curl -sS https://advis0r.com/api/:*
 Rank candidates for `$ARGUMENTS` (no topic → the default watchlist).
 
 ```bash
-moshcode ticker discover $ARGUMENTS --limit 10 --json
+moshcode stocks discover $ARGUMENTS --limit 10 --json
 ```
 
 Fallback: `curl -sS --max-time 180 "https://advis0r.com/api/discover?topic=<url-encoded>&provider=offline&horizon=2&limit=10"`

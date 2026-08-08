@@ -5,8 +5,8 @@
 // function of the decoded JSON. Every route is public and read-only, so there
 // is no login verb and no write verb — `moshcode trade` is where orders live.
 //
-// This is a *sibling* of `ticker`, not a mode of it, because the two answer
-// different questions from different data. A ticker report is a stored snapshot
+// This is a *sibling* of `stocks`, not a mode of it, because the two answer
+// different questions from different data. A stocks report is a stored snapshot
 // built from transcripts, SEC fundamentals and extracted signals. A crypto
 // report is a live read of Alpaca's US crypto venue: no transcripts, no
 // filings, no signals, and a `fetchedAt` measured in seconds rather than days.
@@ -50,7 +50,7 @@ export const CRYPTO_VERB_NAMES = [
   "report", "quote", "snapshot", "technicals", "bars", "book", "spark", "assets", "lookup", "open",
 ];
 
-// The same reasoning as ticker's alias table: `/crypto price BTC` and
+// The same reasoning as stocks's alias table: `/crypto price BTC` and
 // `/crypto candles BTC` should not be errors when the intent is obvious.
 // `search` maps to lookup rather than erroring — crypto has no transcript
 // index to search, and a directory lookup is what the word means here.
@@ -83,7 +83,7 @@ export function resolveVerb(word) {
  * the API resolves it to that asset's USD pair, and inventing the `-USD` here
  * would silently break the day a base has no USD pair.
  *
- * Deliberately narrow, like ticker's: the whole job of the check is to tell
+ * Deliberately narrow, like stocks's: the whole job of the check is to tell
  * `BTC` from `bitcoin` and send the second one to lookup with a useful message
  * instead of a 400. Bases run to five characters (SUSHI, MATIC, TRUMP), so six
  * leaves room for the concatenated `BTCUSD` spelling without swallowing words.
@@ -293,7 +293,7 @@ export function cryptoUrl(request, { base = advisorBase() } = {}) {
  * Execute a translated request. `fetchImpl` is injectable for tests.
  *
  * Every crypto route is a live venue read, so one timeout fits all of them —
- * unlike ticker, which has to budget separately for `discover`'s per-candidate
+ * unlike stocks, which has to budget separately for `discover`'s per-candidate
  * analysis.
  */
 export async function fetchCrypto(request, { fetchImpl = globalThis.fetch, base = advisorBase(), timeoutMs = 45_000 } = {}) {

@@ -104,6 +104,18 @@ function distance(a, b) {
 }
 
 /**
+ * Commands that were renamed, and what they became.
+ *
+ * Edit distance cannot help here — `ticker` is nowhere near `stocks` — so a
+ * rename that isn't recorded leaves people with a bare "unknown command" for a
+ * verb that worked yesterday. This is deliberately *not* an alias table: the
+ * old name stays dead, it just says where its replacement went.
+ */
+export const RENAMED_COMMANDS = {
+  ticker: "stocks",
+};
+
+/**
  * The nearest command to something that is not one, or null.
  *
  * Drawn from the same set completion offers (R11), so the two can never
@@ -114,6 +126,8 @@ function distance(a, b) {
 export function suggest(input, extra = []) {
   const typed = String(input ?? "").toLowerCase();
   if (!typed) return null;
+  // A known rename beats any distance match — it is not a guess.
+  if (RENAMED_COMMANDS[typed]) return RENAMED_COMMANDS[typed];
   const candidates = [...CORE_CLI_COMMANDS.map((c) => c.name), ...extra]
     .filter((n) => !n.startsWith("-"));
 

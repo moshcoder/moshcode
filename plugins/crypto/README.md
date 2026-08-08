@@ -41,10 +41,10 @@ command falls back to `curl` against the same endpoints.
 
 Point the commands at another instance with `MOSHCODE_ADVISOR_URL`.
 
-## Why this is separate from `ticker`
+## Why this is separate from `stocks`
 
 They answer different questions from different data, and share only a hostname.
-A `/ticker` report is a **stored snapshot** built from transcripts, SEC
+A `/stocks` report is a **stored snapshot** built from transcripts, SEC
 fundamentals and extracted signals — its risk is a stale price read as a live
 one. A `/crypto` report is a **live venue read** with no transcripts, no
 filings and no signals — its risk is the opposite: a price that is accurate to

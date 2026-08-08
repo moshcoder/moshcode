@@ -1,4 +1,4 @@
-// `moshcode ticker` — equity research from advis0r.com, in the pit.
+// `moshcode stocks` — equity research from advis0r.com, in the pit.
 //
 // Same split as src/trade.mjs: argument translation is pure and testable, the
 // network call is injectable, and rendering is a function of the decoded JSON.
@@ -18,7 +18,7 @@ export function advisorBase(env = process.env) {
   return (raw || DEFAULT_ADVISOR_URL).replace(/\/+$/, "");
 }
 
-const USAGE = `usage: moshcode ticker <symbol|verb> [args…]
+const USAGE = `usage: moshcode stocks <symbol|verb> [args…]
 
   <symbol>                       the stored research report for one ticker
   report <symbol>                same thing, when a symbol looks like a verb
@@ -40,17 +40,17 @@ const USAGE = `usage: moshcode ticker <symbol|verb> [args…]
 Research aid, not advice. Every route is public, read-only, and served from
 stored snapshots — see the generated-at stamp printed with each report.`;
 
-export function tickerUsage() {
+export function stocksUsage() {
   return USAGE;
 }
 
-/** Verb names, in help order. cli-schema's TICKER_VERBS must match (drift test). */
-export const TICKER_VERB_NAMES = [
+/** Verb names, in help order. cli-schema's STOCKS_VERBS must match (drift test). */
+export const STOCKS_VERB_NAMES = [
   "report", "signals", "search", "lookup", "reports", "discover", "tickers", "stats", "open",
 ];
 
-// Aliases exist because muscle memory differs: `/ticker news AAPL` and
-// `/ticker quotes AAPL` should not be errors when the intent is obvious.
+// Aliases exist because muscle memory differs: `/stocks news AAPL` and
+// `/stocks quotes AAPL` should not be errors when the intent is obvious.
 const VERB_ALIASES = {
   signal: "signals", news: "signals",
   find: "search", grep: "search", q: "search",
@@ -66,7 +66,7 @@ const VERB_ALIASES = {
 /** Resolve a first argument to a canonical verb, or null when it is a symbol. */
 export function resolveVerb(word) {
   const key = String(word ?? "").toLowerCase();
-  if (TICKER_VERB_NAMES.includes(key)) return key;
+  if (STOCKS_VERB_NAMES.includes(key)) return key;
   return VERB_ALIASES[key] ?? null;
 }
 
@@ -114,13 +114,13 @@ function positiveInt(value, { max }) {
 const SORTS = ["recent", "score", "ticker"];
 
 /**
- * Translate `ticker` arguments into a request the caller can execute.
+ * Translate `stocks` arguments into a request the caller can execute.
  *
  * Returns one of `{ usage }`, `{ error }`, or
  * `{ verb, path, query, json, open? }` — never performs IO, so the whole
  * argument surface is testable without a network.
  */
-export function tickerArgs(input = []) {
+export function stocksArgs(input = []) {
   const args = input.map(String);
   const jsonFlag = takeFlag(args, "--json", { boolean: true });
   let rest = jsonFlag.rest;
@@ -131,26 +131,26 @@ export function tickerArgs(input = []) {
   const horizonFlag = takeFlag(rest, "--horizon"); rest = horizonFlag.rest;
   const providerFlag = takeFlag(rest, "--provider"); rest = providerFlag.rest;
 
-  if (limitFlag.missing) return { error: "ticker --limit requires a positive number" };
-  if (sortFlag.missing) return { error: `ticker --sort requires one of ${SORTS.join(", ")}` };
-  if (horizonFlag.missing) return { error: "ticker --horizon requires 1 or 2" };
-  if (providerFlag.missing) return { error: "ticker --provider requires a name" };
+  if (limitFlag.missing) return { error: "stocks --limit requires a positive number" };
+  if (sortFlag.missing) return { error: `stocks --sort requires one of ${SORTS.join(", ")}` };
+  if (horizonFlag.missing) return { error: "stocks --horizon requires 1 or 2" };
+  if (providerFlag.missing) return { error: "stocks --provider requires a name" };
 
   // A limit above the server's own cap is silently clamped there; clamping here
   // too keeps `--limit 9999` from reading like a promise the API never made.
   const limit = limitFlag.value == null ? null : positiveInt(limitFlag.value, { max: 50 });
   if (limitFlag.value != null && limit == null) {
-    return { error: "ticker --limit requires a positive number" };
+    return { error: "stocks --limit requires a positive number" };
   }
   if (sortFlag.value != null && !SORTS.includes(sortFlag.value.toLowerCase())) {
-    return { error: `ticker --sort must be one of ${SORTS.join(", ")}` };
+    return { error: `stocks --sort must be one of ${SORTS.join(", ")}` };
   }
   if (horizonFlag.value != null && !["1", "2"].includes(String(horizonFlag.value))) {
-    return { error: "ticker --horizon must be 1 or 2" };
+    return { error: "stocks --horizon must be 1 or 2" };
   }
 
   const stray = rest.find((arg) => arg.startsWith("-") && arg !== "-");
-  if (stray) return { error: `unknown ticker flag ${JSON.stringify(stray)}` };
+  if (stray) return { error: `unknown stocks flag ${JSON.stringify(stray)}` };
 
   const [first, ...tail] = rest;
   if (!first) return { usage: true };
@@ -158,16 +158,16 @@ export function tickerArgs(input = []) {
   const verb = resolveVerb(first);
   const words = verb ? tail : rest;
 
-  // No verb → the first word is the ticker. `/ticker AAPL` is the headline
+  // No verb → the first word is the ticker. `/stocks AAPL` is the headline
   // case and must stay the shortest thing anyone types.
   const wantsReport = verb == null || verb === "report" || verb === "open";
   if (wantsReport) {
     const raw = words[0];
-    if (!raw) return { error: `ticker ${verb === "open" ? "open" : "report"} requires a ticker symbol` };
+    if (!raw) return { error: `stocks ${verb === "open" ? "open" : "report"} requires a ticker symbol` };
     const symbol = normalizeSymbol(raw);
     if (!symbol) {
       return {
-        error: `${JSON.stringify(String(raw))} is not a ticker symbol — try: moshcode ticker lookup ${String(raw)}`,
+        error: `${JSON.stringify(String(raw))} is not a ticker symbol — try: moshcode stocks lookup ${String(raw)}`,
       };
     }
     if (verb === "open") return { verb: "open", symbol, open: `/ticker/${encodeURIComponent(symbol)}`, json };
@@ -176,16 +176,16 @@ export function tickerArgs(input = []) {
 
   if (verb === "signals") {
     const symbol = normalizeSymbol(words[0]);
-    if (!words[0]) return { error: "ticker signals requires a ticker symbol" };
+    if (!words[0]) return { error: "stocks signals requires a ticker symbol" };
     if (!symbol) {
-      return { error: `${JSON.stringify(String(words[0]))} is not a ticker symbol — try: moshcode ticker lookup ${words[0]}` };
+      return { error: `${JSON.stringify(String(words[0]))} is not a ticker symbol — try: moshcode stocks lookup ${words[0]}` };
     }
     return { verb, symbol, path: "/api/signals", query: { ticker: symbol }, json };
   }
 
   if (verb === "search" || verb === "lookup") {
     const q = words.join(" ").trim();
-    if (!q) return { error: `ticker ${verb} requires something to look for` };
+    if (!q) return { error: `stocks ${verb} requires something to look for` };
     const path = verb === "search" ? "/api/search" : "/api/lookup";
     return { verb, path, query: { q, ...(limit ? { limit: String(limit) } : {}) }, json };
   }
@@ -221,7 +221,7 @@ export function tickerArgs(input = []) {
   if (verb === "tickers") return { verb, path: "/api/tickers", query: {}, json };
   if (verb === "stats") return { verb, path: "/api/stats", query: {}, json };
 
-  return { error: `unknown ticker command ${JSON.stringify(String(first))}` };
+  return { error: `unknown stocks command ${JSON.stringify(String(first))}` };
 }
 
 /** Build the absolute URL for a translated request. */
@@ -248,7 +248,7 @@ export async function fetchAdvisor(request, { fetchImpl = globalThis.fetch, base
   try {
     const res = await fetchImpl(url, {
       signal: controller.signal,
-      headers: { accept: "application/json", "user-agent": "moshcode-ticker" },
+      headers: { accept: "application/json", "user-agent": "moshcode-stocks" },
     });
     const text = await res.text();
     let data;
@@ -468,7 +468,7 @@ function renderLookup(d) {
     const report = m.hasReport ? acid("  ✓ report") : ash("  · no report yet");
     lines.push(`  ${acid(String(m.symbol).padEnd(8))}${bone(clip(m.name, 44).padEnd(46))}${ash(String(m.exchange ?? ""))}${report}`);
   }
-  lines.push("", `  ${ash("then:")} ${bone(`moshcode ticker ${matches[0].symbol}`)}`);
+  lines.push("", `  ${ash("then:")} ${bone(`moshcode stocks ${matches[0].symbol}`)}`);
   return lines.join("\n");
 }
 
@@ -484,7 +484,7 @@ function renderReports(d) {
       `${bone(money(r.lastPrice).padStart(11))}  ${ash(clip(r.companyName, 28).padEnd(29))}${ash(day(r.generatedAt))}`,
     );
   }
-  lines.push("", `  ${ash("detail:")} ${bone(`moshcode ticker ${reports[0].ticker}`)}`);
+  lines.push("", `  ${ash("detail:")} ${bone(`moshcode stocks ${reports[0].ticker}`)}`);
   return lines.join("\n");
 }
 
@@ -550,12 +550,12 @@ export function renderAdvisor(verb, data, { columns } = {}) {
 }
 
 /**
- * Run a `ticker` invocation end to end. Returns a process exit code.
+ * Run a `stocks` invocation end to end. Returns a process exit code.
  *
  * `deps` exists so tests drive the whole command — parse, fetch, render — with
  * no network and no stdout.
  */
-export async function tickerCommand(argv = [], deps = {}) {
+export async function stocksCommand(argv = [], deps = {}) {
   const {
     out = (s) => console.log(s),
     fail = (s) => console.error(s),
@@ -565,8 +565,8 @@ export async function tickerCommand(argv = [], deps = {}) {
     columns = process.stdout.columns,
   } = deps;
 
-  const request = tickerArgs(argv);
-  if (request.usage) { out(tickerUsage()); return 0; }
+  const request = stocksArgs(argv);
+  if (request.usage) { out(stocksUsage()); return 0; }
   if (request.error) { fail(danger(`✗ ${request.error}`)); return 1; }
 
   if (request.verb === "open") {
@@ -587,7 +587,7 @@ export async function tickerCommand(argv = [], deps = {}) {
     if (request.json) { out(JSON.stringify(res.data, null, 2)); return 1; }
     fail(danger(`✗ ${message}`));
     if (res.data?.didYouMean?.symbol) {
-      fail(`  ${ash("try:")} ${bone(`moshcode ticker ${res.data.didYouMean.symbol}`)}`);
+      fail(`  ${ash("try:")} ${bone(`moshcode stocks ${res.data.didYouMean.symbol}`)}`);
     }
     return 1;
   }

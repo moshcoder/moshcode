@@ -1,7 +1,7 @@
 ---
 description: Every stored advis0r research report, best score first.
 argument-hint: "[--limit n] [--sort recent|score|ticker]"
-allowed-tools: Bash(moshcode ticker:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
 ---
 
 ## Task
@@ -9,7 +9,7 @@ allowed-tools: Bash(moshcode ticker:*), Bash(curl -sS https://advis0r.com/api/:*
 List the stored reports.
 
 ```bash
-moshcode ticker reports $ARGUMENTS --json
+moshcode stocks reports $ARGUMENTS --json
 ```
 
 Fallback: `curl -sS "https://advis0r.com/api/reports?sort=score&limit=25"`
@@ -26,5 +26,5 @@ generatedAt }`, and `total` is how many exist.
 - **`generatedAt` per row, always.** These are snapshots taken at different
   times; a table that hides that reads as one consistent as-of date.
 - A row with no `aiProvider` was scored deterministically, not by a model.
-- Offer `/ticker <SYMBOL>` for anything worth a closer look.
+- Offer `/stocks <SYMBOL>` for anything worth a closer look.
 - This is a coverage list, not a recommendation list. Rank order is score order.
