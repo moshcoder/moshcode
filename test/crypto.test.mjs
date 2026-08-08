@@ -186,6 +186,20 @@ test("the report renders the live stamp, the score and the disclaimer", () => {
   assert.match(out, /Research aid, not advice\./);
 });
 
+test("a down move signs the change like the up move, mark and all", () => {
+  const render = (absolute, percent) => renderCrypto("report", {
+    symbol: "ETH/USD", quote: "USD",
+    snapshot: { latestTrade: { price: 3200.55 }, change: { absolute, percent } },
+  }, { columns: 88 }).replace(/\x1b\[[0-9;]*m/g, "");
+
+  const down = render(-186.363, -5.5);
+  assert.match(down, /-\$186\.36/, "the sign leads the currency mark, not follows it");
+  assert.doesNotMatch(down, /\$-186\.36/, "a currency mark must never sit after the minus");
+
+  const up = render(186.363, 5.5);
+  assert.match(up, /\+\$186\.36/, "an up move keeps its leading plus");
+});
+
 test("--limit on bars is honoured here, because upstream does not honour it", () => {
   // The API treats limit as a page size over its own window, so a renderer that
   // just printed everything would silently break the flag's promise.
