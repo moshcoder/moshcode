@@ -29,7 +29,7 @@ export function marketplaceSource(env = process.env) {
 /** The plugins this marketplace ships. Mirrors .claude-plugin/marketplace.json. */
 export const PLUGINS = [
   {
-    name: "ticker",
+    name: "stocks",
     description: "equity research slash commands backed by advis0r.com",
     commands: ["/stocks", "/signals", "/research", "/lookup", "/reports", "/discover"],
   },
@@ -42,10 +42,36 @@ export const PLUGINS = [
 
 export const DEFAULT_PLUGIN = PLUGINS[0].name;
 
+/**
+ * Plugins this marketplace no longer ships, and what replaced them.
+ *
+ * A renamed plugin is not the same problem as a renamed command. The old
+ * command simply stops existing; an old *plugin* is still sitting installed in
+ * someone's engine, still serving its slash commands, and the new one installs
+ * alongside it rather than over it — so `/stocks` would resolve to two plugins
+ * at once. Removal therefore has to keep reaching a name that install refuses.
+ */
+export const RETIRED_PLUGINS = [
+  { name: "ticker", renamedTo: "stocks" },
+];
+
 export function resolvePlugin(name) {
   if (!name) return PLUGINS.find((p) => p.name === DEFAULT_PLUGIN) ?? null;
   const key = String(name).toLowerCase().replace(/@.*$/, "");
   return PLUGINS.find((p) => p.name === key) ?? null;
+}
+
+/**
+ * A retired plugin by its old name, or null.
+ *
+ * Deliberately separate from resolvePlugin: `remove ticker` must work so the
+ * stale install can be cleaned up, and `install ticker` must not, or the rename
+ * never actually happens.
+ */
+export function resolveRetiredPlugin(name) {
+  if (!name) return null;
+  const key = String(name).toLowerCase().replace(/@.*$/, "");
+  return RETIRED_PLUGINS.find((p) => p.name === key) ?? null;
 }
 
 /** Fully-qualified plugin id, the form `claude plugin install` disambiguates with. */

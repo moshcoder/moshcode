@@ -371,12 +371,12 @@ inside your engine too:
 
 ```sh
 moshcode plugin list              # what the marketplace ships, and who can take it
-moshcode plugin install           # add the marketplace + install `ticker`
+moshcode plugin install           # add the marketplace + install `stocks`
 moshcode plugin install crypto    # add the marketplace + install `crypto`
-moshcode plugin remove ticker     # take it back off
+moshcode plugin remove stocks     # take it back off
 ```
 
-`ticker@moshcode` adds `/stocks`, `/signals`, `/research`, `/lookup`,
+`stocks@moshcode` adds `/stocks`, `/signals`, `/research`, `/lookup`,
 `/reports`, and `/discover` — the same advis0r research surface described above,
 driven from inside a coding session.
 
@@ -392,9 +392,23 @@ The equivalent by hand:
 
 ```sh
 claude plugin marketplace add moshcoder/moshcode
-claude plugin install ticker@moshcode
+claude plugin install stocks@moshcode
 claude plugin install crypto@moshcode
 ```
+
+### Upgrading from `ticker@moshcode`
+
+`stocks` was called `ticker` before v0.29.0. Installing the new id does **not**
+replace the old one — engines install plugins side by side, so `/stocks` would
+come from two plugins at once. Remove the old id first:
+
+```sh
+moshcode plugin remove ticker
+moshcode plugin install stocks
+```
+
+`remove ticker` keeps working for exactly that reason, even though
+`install ticker` no longer does.
 
 Claude Code is currently the only engine with a plugin primitive. The others are
 reported as skipped with a reason, the same way they are for skills, rather than
