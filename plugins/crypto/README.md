@@ -6,13 +6,19 @@ across Alpaca's US crypto venue.
 
 | command | what it does |
 | --- | --- |
-| `/crypto:crypto BTC` | price, technicals, score, supply, order book |
+| `/crypto:help` | this list, in the engine |
+| `/crypto:report BTC` | price, technicals, score, supply, order book |
 | `/crypto:quote ETH-USD` | latest trade and quote, with the spread in bps |
+| `/crypto:lookup bitcoin` | asset name → `BTC/USD` |
 | `/crypto:book BTC-USD` | top of the order book, both sides |
 | `/crypto:bars ETH-USD` | historical OHLCV at any supported timeframe |
 | `/crypto:spark BTC ETH SOL` | recent moves across pairs, ranked |
 | `/crypto:pairs` | every supported pair, grouped by quote asset |
-| `/crypto:coin bitcoin` | asset name → `BTC/USD` |
+
+The first four names mean the same thing in `stocks@moshcode` — `help`,
+`report`, `quote`, `lookup` — so knowing one plugin gets you half the other.
+The rest are the parts a 24/7 venue has and equities do not: a live order book,
+arbitrary timeframes, and cross-pair comparison.
 
 Pairs are accepted as `BTC`, `BTC-USD`, `BTC/USD` or `BTCUSD`. A bare asset
 resolves to that asset's USD pair.
@@ -50,9 +56,9 @@ Point the commands at another instance with `MOSHCODE_ADVISOR_URL`.
 ## Why this is separate from `stocks`
 
 They answer different questions from different data, and share only a hostname.
-A `/stocks:stocks` report is a **stored snapshot** built from transcripts, SEC
+A `/stocks:report` report is a **stored snapshot** built from transcripts, SEC
 fundamentals and extracted signals — its risk is a stale price read as a live
-one. A `/crypto:crypto` report is a **live venue read** with no transcripts, no
+one. A `/crypto:report` report is a **live venue read** with no transcripts, no
 filings and no signals — its risk is the opposite: a price that is accurate to
 the second and stale by the time you act on it.
 

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { ENGINES } from "../src/engines.mjs";
 import {
-  MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, RETIRED_PLUGINS, marketplaceSource,
+  MARKETPLACE_NAME, PLUGINS, PLUGIN_ENGINES, RETIRED_PLUGINS, SHARED_COMMANDS, marketplaceSource,
   planPluginCommand, pluginCommandName, pluginId, resolvePlugin, resolveRetiredPlugin,
   runPluginCommand,
 } from "../src/plugins.mjs";
@@ -101,6 +101,32 @@ test("the default plugin resolves from nothing, and an unknown one does not", ()
   assert.equal(resolvePlugin()?.name, "stocks");
   assert.equal(resolvePlugin("stocks@moshcode")?.name, "stocks", "a qualified id should resolve");
   assert.equal(resolvePlugin("nonsense"), null);
+});
+
+test("both plugins spell the shared questions the same way", () => {
+  // They cover different markets and can never ship the same set — a pair has
+  // no earnings transcript, an equity has no order book. What they share is
+  // vocabulary, and the natural drift is for one side to grow a synonym:
+  // `coin` for `lookup`, `stocks` for `report`. Both did, for two releases.
+  for (const plugin of PLUGINS) {
+    for (const shared of SHARED_COMMANDS) {
+      assert.ok(
+        plugin.commands.includes(`/${plugin.name}:${shared}`),
+        `${plugin.name} is missing the shared command "${shared}"`,
+      );
+    }
+  }
+});
+
+test("no plugin command repeats its own plugin's name", () => {
+  // `/crypto:crypto` reads as a stutter and was the first thing anyone asked
+  // about. A command named after its plugin is the shape that produces it.
+  for (const plugin of PLUGINS) {
+    assert.ok(
+      !plugin.commands.includes(`/${plugin.name}:${plugin.name}`),
+      `${plugin.name} has a command named after itself — /${plugin.name}:${plugin.name}`,
+    );
+  }
 });
 
 test("a retired plugin stays removable, and stays uninstallable", () => {

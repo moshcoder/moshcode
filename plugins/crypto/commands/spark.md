@@ -32,5 +32,5 @@ Fallback: `curl -sS "https://advis0r.com/api/crypto/sparklines?symbols=BTC-USD,E
 - Name the window (`start` → `end`) and the period. "Up 5%" over 24h and over 7d
   are different claims.
 - Do not extrapolate a trend from 24 points, and do not call a direction
-  "momentum" without the technicals to back it — `/crypto:crypto <PAIR>` has those.
+  "momentum" without the technicals to back it — `/crypto:report <PAIR>` has those.
 - End with the response's own `disclaimer`.

@@ -28,4 +28,4 @@ Fallback: `curl -sS "https://advis0r.com/api/crypto/lookup?q=<url-encoded>&limit
   match is the one they meant.
 - No match: say this venue lists no such pair, and do not invent a symbol. The
   coin may exist and simply not be listed here — those are different answers.
-- Offer `/crypto:crypto <PAIR>` for the match you land on.
+- Offer `/crypto:report <PAIR>` for the match you land on.

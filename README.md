@@ -376,14 +376,20 @@ moshcode plugin install crypto    # add the marketplace + install `crypto`
 moshcode plugin remove stocks     # take it back off
 ```
 
-`stocks@moshcode` adds `/stocks:stocks`, `/stocks:signals`, `/stocks:research`,
-`/stocks:lookup`, `/stocks:reports`, and `/stocks:discover` — the same advis0r research surface described above,
-driven from inside a coding session.
+The two plugins share the four names for the questions both markets answer, and
+differ only where the markets do. Either one's `/…:help` prints its own list.
 
-`crypto@moshcode` adds `/crypto:crypto`, `/crypto:quote`, `/crypto:book`,
-`/crypto:bars`, `/crypto:spark`, `/crypto:pairs`, and `/crypto:coin`. It ships separately because it is a different surface,
-not a mode of the first: live venue reads instead of stored snapshots, and a
-score that must not be ranked against an equity's.
+| | `stocks@moshcode` | `crypto@moshcode` |
+|---|---|---|
+| shared | `help` `report` `quote` `lookup` | `help` `report` `quote` `lookup` |
+| its own | `signals` `research` `reports` `discover` | `book` `bars` `spark` `pairs` |
+
+So `/stocks:report NVDA` and `/crypto:report BTC` are the same question asked of
+different markets, while `/stocks:signals` (what an executive said on a call)
+and `/crypto:book` (live order book depth) have no counterpart on the other
+side. They ship separately because they are different surfaces, not modes of one
+another: stored snapshots versus live venue reads, and a crypto score that must
+not be ranked against an equity's.
 
 Restart the engine after installing either; a newly installed plugin is not live
 in a session that is already running.
@@ -420,7 +426,7 @@ any marketplace". `moshcode plugin install` runs both steps for you.
 ### Upgrading from `ticker@moshcode`
 
 `stocks` was called `ticker` before v0.29.0. Installing the new id does **not**
-replace the old one — engines install plugins side by side, so `/stocks:stocks` would
+replace the old one — engines install plugins side by side, so `/stocks:report` would
 come from two plugins at once. Remove the old id first:
 
 ```sh
