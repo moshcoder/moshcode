@@ -21,6 +21,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { HERD_SOCKET, detectSubstrate, paneIndex, readManifest, tmux } from "./herd.mjs";
 import { roster } from "./herd-cli.mjs";
 import { groupByHerd, parseInput } from "./herd-ui.mjs";
+import { BAR_HEIGHT, BAR_KEY, BAR_TITLE, SIDEBAR_TITLE, paneRoles } from "./herd-bar.mjs";
 import { acid, amber, ash, bone, danger, dim, err, info, ok } from "./ui.mjs";
 
 export const WORKSPACE = "herd";
@@ -59,15 +60,12 @@ export async function herdUi(argv = [], { write = console.log, spawner = spawn, 
     const sidebar = `${process.execPath} ${self} herd sidebar`;
     const made = tmux(["new-session", "-d", "-s", WORKSPACE, "-n", WINDOW, sidebar], { runner });
     if (!made.ok) { write(err(made.stderr.trim() || "could not open the workspace")); return 1; }
-    // The sidebar is the "main" pane of a main-vertical layout, which is what
-    // pins it to the left at a fixed width while the content pane takes the
-    // rest and follows the terminal when it resizes.
-    tmux(["set-option", "-t", WORKSPACE, "main-pane-width", String(SIDEBAR_WIDTH)], { runner });
     tmux(["set-option", "-t", WORKSPACE, "mouse", "on"], { runner });
     tmux(["set-option", "-t", WORKSPACE, "status", "off"], { runner });
     tmux(["set-option", "-t", WORKSPACE, "pane-border-status", "top"], { runner });
     tmux(["set-option", "-t", WORKSPACE, "pane-border-format", " #{pane_title} "], { runner });
-    tmux(["select-pane", "-t", `${TARGET}.0`, "-T", "herd"], { runner });
+    tmux(["select-pane", "-t", `${TARGET}.0`, "-T", SIDEBAR_TITLE], { runner });
+    buildBar({ runner });
   }
 
   return new Promise((resolve) => {
@@ -82,15 +80,56 @@ export async function herdUi(argv = [], { write = console.log, spawner = spawn, 
   });
 }
 
+/* ------------------------------------------------------------------ the bar */
+
+/** How the bar pane starts itself. Separated so tests can run a stand-in. */
+export function barCommand(self = process.argv[1]) {
+  return `${process.execPath} ${self} herd bar`;
+}
+
+/**
+ * Add the one-line mosh prompt under the content, and the key that reaches it.
+ *
+ * The binding goes in tmux's root table, so it is claimed before the pane's
+ * application ever sees it — that is what makes it work from inside an agent
+ * that has taken the keyboard, which is the case the bar exists for. It also
+ * switches the client first, so it is a way out of a member you attached to
+ * directly and not only of the workspace.
+ */
+export function buildBar({ runner = spawnSync, command = barCommand() } = {}) {
+  const made = tmux(
+    ["split-window", "-t", TARGET, "-f", "-v", "-l", String(BAR_HEIGHT), "-P", "-F", "#{pane_id}", command],
+    { runner },
+  );
+  if (!made.ok) return null;
+  const paneId = made.stdout.trim().split("\n")[0];
+  if (!paneId) return null;
+  tmux(["select-pane", "-t", paneId, "-T", BAR_TITLE], { runner });
+  // One string, not separate arguments: a bare ";" argument ends the bind-key
+  // command itself, so tmux binds the first command and runs the second once,
+  // now. That silently produced a key that switched sessions and did nothing
+  // else — the binding has to arrive as a single command sequence.
+  tmux(["bind-key", "-n", BAR_KEY, `switch-client -t ${WORKSPACE} ; select-pane -t ${paneId}`], { runner });
+  tmux(["select-pane", "-t", `${TARGET}.0`], { runner });
+  return paneId;
+}
+
 /* ------------------------------------------------------------- the swapping */
 
-/** The content pane currently on the right, if there is one. */
+/**
+ * The content pane — the one that is neither the sidebar nor the bar.
+ *
+ * Excluding by title rather than "any pane that is not me": the bar made that
+ * shortcut wrong, and wrong here means a swap parks the bar into a session
+ * named after it and the prompt vanishes off the bottom of the screen.
+ */
 export function contentPane({ runner = spawnSync, me = process.env.TMUX_PANE } = {}) {
   const r = tmux(["list-panes", "-t", TARGET, "-F", "#{pane_id}\t#{pane_title}"], { runner });
   if (!r.ok) return null;
   for (const line of r.stdout.split("\n")) {
     const [paneId, title] = line.split("\t");
     if (!paneId || paneId === me) continue;
+    if (title === BAR_TITLE || title === SIDEBAR_TITLE) continue;
     return { paneId, title };
   }
   return null;
@@ -126,13 +165,31 @@ export function showMember(name, { runner = spawnSync, me = process.env.TMUX_PAN
   if (!wanted) return false;
 
   if (current) parkPane(current.paneId, current.title, { runner });
-  const joined = tmux(["join-pane", "-s", wanted.paneId, "-t", TARGET], { runner });
+
+  // Split the SIDEBAR rather than laying the window out.
+  //
+  // `select-layout main-vertical` was the obvious way to do this and it is the
+  // wrong one once a footer exists: it owns every pane in the window, so it
+  // dragged the bar into the right-hand column and gave it an equal share, and
+  // putting it back was a second fight every swap. Splitting the sidebar
+  // touches only the region above the footer, which leaves the bar a full-width
+  // row at the bottom and needs no correction afterwards.
+  const roles = paneRoles(TARGET, { runner });
+  const anchor = roles.sidebar?.paneId || me;
+  const joined = anchor
+    ? tmux(["join-pane", "-h", "-s", wanted.paneId, "-t", anchor], { runner })
+    : tmux(["join-pane", "-s", wanted.paneId, "-t", TARGET], { runner });
   if (!joined.ok) return false;
-  tmux(["select-layout", "-t", TARGET, "main-vertical"], { runner });
-  // main-vertical resets the main pane's width from the option, so re-assert it
-  // after every swap or the sidebar creeps wider each time.
-  tmux(["set-option", "-t", WORKSPACE, "main-pane-width", String(SIDEBAR_WIDTH)], { runner });
+  if (anchor) tmux(["resize-pane", "-t", anchor, "-x", String(SIDEBAR_WIDTH)], { runner });
   tmux(["select-pane", "-t", me], { runner });
+  return true;
+}
+
+/** Hand the keyboard to the session on screen. */
+export function focusContent({ runner = spawnSync, me = process.env.TMUX_PANE } = {}) {
+  const current = contentPane({ runner, me });
+  if (!current) return false;
+  tmux(["select-pane", "-t", current.paneId], { runner });
   return true;
 }
 
@@ -159,6 +216,11 @@ export function sidebarRows(sessions) {
   }
   rows.push({ kind: "gap" }, { kind: "heading", text: "ACTIONS" });
   for (const action of ACTIONS) rows.push({ kind: "action", action });
+  // The two keys that stop the workspace being a one-way trip, on screen at all
+  // times. Everything else here is discoverable by looking; these are not.
+  rows.push({ kind: "gap" });
+  rows.push({ kind: "hint", text: "enter ▸ type in it" });
+  rows.push({ kind: "hint", text: `${BAR_KEY} ▸ mosh bar` });
   return rows.map((row, i) => ({ ...row, line: i + 1 }));
 }
 
@@ -168,6 +230,7 @@ export function renderSidebar(rows, { selected, showing, width = SIDEBAR_WIDTH }
     if (row.kind === "title") { out.push(` ${bone("herd")}`); continue; }
     if (row.kind === "gap") { out.push(""); continue; }
     if (row.kind === "heading") { out.push(` ${ash(row.text)}`); continue; }
+    if (row.kind === "hint") { out.push(` ${dim(row.text)}`); continue; }
     if (row.kind === "herd") { out.push(` ${ash(row.herd.toUpperCase())}`); continue; }
     if (row.kind === "session") {
       const s = row.session;
@@ -262,9 +325,14 @@ export async function herdSidebar({
           const hit = rows.find((r) => r.line === event.row && (r.kind === "session" || r.kind === "action"));
           if (!hit) continue;
           if (hit.kind === "session") {
+            // First click browses. Clicking the one already on screen hands it
+            // the keyboard — the same second-click-opens idiom as the list, and
+            // the only way to reach an agent without using the mouse on it.
+            const already = hit.session.name === showing;
             selected = hit.session.name;
             if (hit.session.alive) { showMember(hit.session.name, { runner, me }); showing = hit.session.name; }
             draw();
+            if (already) focusContent({ runner, me });
           } else {
             selected = hit.action.key;
             draw();
@@ -280,7 +348,13 @@ export async function herdSidebar({
         const at = names.indexOf(selected);
         if (event.key === "\x1b[A" || event.key === "k") selected = names[Math.max(0, at - 1)] || selected;
         if (event.key === "\x1b[B" || event.key === "j") selected = names[Math.min(names.length - 1, at + 1)] || selected;
-        if (event.key === "\r" || event.key === "\n") { showMember(selected, { runner, me }); showing = selected; }
+        if (event.key === "\r" || event.key === "\n") {
+          showMember(selected, { runner, me });
+          showing = selected;
+          draw();
+          focusContent({ runner, me });
+          continue;
+        }
         draw();
       }
     });
