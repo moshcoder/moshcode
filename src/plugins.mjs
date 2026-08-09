@@ -53,17 +53,21 @@ export function marketplaceSource(env = process.env) {
 export const PLUGINS = [
   {
     name: "stocks",
-    version: "0.3.0",
+    version: "0.4.0",
     description: "equity research slash commands backed by advis0r.com",
+    // `list` rather than `reports`: one letter from `report` is a coin-flip at
+    // the prompt, and `index` would read as a market index in a stocks plugin.
+    // The CLI already accepts `moshcode stocks list` as an alias, so the two
+    // surfaces still agree.
     commands: [
       "/stocks:help", "/stocks:report", "/stocks:quote", "/stocks:lookup",
-      "/stocks:signals", "/stocks:research", "/stocks:reports", "/stocks:discover",
+      "/stocks:signals", "/stocks:research", "/stocks:list", "/stocks:discover",
     ],
     example: "/stocks:report NVDA",
   },
   {
     name: "crypto",
-    version: "0.3.0",
+    version: "0.4.0",
     description: "crypto market data slash commands backed by advis0r.com",
     commands: [
       "/crypto:help", "/crypto:report", "/crypto:quote", "/crypto:lookup",

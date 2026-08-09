@@ -14,13 +14,14 @@ below. Render it as a compact table, then the notes.
 | `/stocks:lookup <company>` | company name → ticker (`rivian` → `RIVN`) |
 | `/stocks:signals <SYMBOL>` | what was actually said, quoted and sourced |
 | `/stocks:research <words…>` | full-text search across every indexed transcript |
-| `/stocks:reports` | every stored report, best score first |
+| `/stocks:list` | every ticker with a stored report, best score first |
 | `/stocks:discover <topic>` | a ranked watchlist for a topic (slow — analyzes each candidate) |
 
 ## Notes to pass on
 
-- **`report` and `reports` are different commands.** Singular takes a symbol and
-  returns one write-up; plural takes nothing and lists the whole stored index.
+- `/stocks:report` takes a symbol and returns one write-up; `/stocks:list` takes
+  no symbol and lists everything covered. (`list` used to be called `reports`,
+  which sat one letter from `report` and was a coin-flip at the prompt.)
 - Every command name is namespaced `/stocks:…`. A bare `/report` is not a
   command — Claude Code always prefixes plugin commands with the plugin name.
 - `crypto@moshcode` is the sibling plugin, and the four shared names mean the

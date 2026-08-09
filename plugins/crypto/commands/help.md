@@ -26,7 +26,7 @@ below. Render it as a compact table, then the notes.
 - `stocks@moshcode` is the sibling plugin, and the four shared names mean the
   same thing there: `/stocks:report`, `/stocks:quote`, `/stocks:lookup`,
   `/stocks:help`. It adds `/stocks:signals`, `/stocks:research`,
-  `/stocks:reports` and `/stocks:discover` — transcript and filing work that
+  `/stocks:list` and `/stocks:discover` — transcript and filing work that
   has no crypto equivalent.
 - **These are live venue reads, not stored snapshots** — the opposite of the
   stocks plugin. Prices are Alpaca's US crypto venue alone and can differ

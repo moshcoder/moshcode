@@ -382,7 +382,7 @@ differ only where the markets do. Either one's `/…:help` prints its own list.
 | | `stocks@moshcode` | `crypto@moshcode` |
 |---|---|---|
 | shared | `help` `report` `quote` `lookup` | `help` `report` `quote` `lookup` |
-| its own | `signals` `research` `reports` `discover` | `book` `bars` `spark` `pairs` |
+| its own | `signals` `research` `list` `discover` | `book` `bars` `spark` `pairs` |
 
 So `/stocks:report NVDA` and `/crypto:report BTC` are the same question asked of
 different markets, while `/stocks:signals` (what an executive said on a call)

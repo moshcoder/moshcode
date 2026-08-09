@@ -12,7 +12,7 @@ and ranked watchlists.
 | `/stocks:lookup rivian` | company name → `RIVN` |
 | `/stocks:signals AAPL` | what was actually said, quoted and sourced |
 | `/stocks:research data center` | full-text search across every indexed transcript |
-| `/stocks:reports` | every stored report, best score first |
+| `/stocks:list` | every ticker with a stored report, best score first |
 | `/stocks:discover fusion` | a ranked watchlist for a topic (slow) |
 
 The first four names mean the same thing in `crypto@moshcode` — `help`,
@@ -20,8 +20,10 @@ The first four names mean the same thing in `crypto@moshcode` — `help`,
 The rest are the parts equities have and crypto does not: transcripts, filings,
 and a watchlist built from them.
 
-Note `report` and `reports` are different commands: singular takes a symbol and
-returns one write-up, plural takes nothing and lists the whole stored index.
+`/stocks:report` takes a symbol and returns one write-up; `/stocks:list` takes
+none and lists everything covered. `list` was called `reports` until v0.31.0 —
+one letter from `report`, which made it a coin-flip at the prompt. The CLI has
+accepted `moshcode stocks list` all along, so the two surfaces still agree.
 
 The `stocks:` prefix is not optional. Claude Code namespaces every plugin
 command as `/<plugin>:<command>` — always, not only when two plugins collide —
