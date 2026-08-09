@@ -261,6 +261,11 @@ export function tmuxStartPlan({ name, cwd, command }) {
     // clickable once you are inside. This server is moshcode's and starts from
     // no config, so it is not overriding a preference anyone expressed.
     ";", "set-option", "-t", name, "mouse", "on",
+    // The pane's title is the member's durable handle — it survives being
+    // moved into a tiled window and back, which the session name does not.
+    // Set in the same invocation as the rest so a fast-exiting command cannot
+    // finish before it lands.
+    ";", "select-pane", "-t", name, "-T", name,
   ];
 }
 
@@ -420,9 +425,11 @@ function ptyWrite(name, data) {
 /** Names the substrate says are live right now. */
 export function liveNames({ substrate = detectSubstrate(), runner = spawnSync } = {}) {
   if (substrate === "tmux") {
-    const r = tmux(["list-sessions", "-F", "#{session_name}"], { runner });
-    if (!r.ok) return []; // no server yet is not an error, it is an empty herd
-    return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+    // Panes, not sessions: a tiled member's session is gone but the member is
+    // very much alive. Only names the manifest knows about count, so a stray
+    // pane title on the server cannot invent a roster entry.
+    const known = new Set(Object.keys(readManifest().sessions));
+    return [...paneIndex({ runner }).keys()].filter((name) => known.has(name));
   }
   if (substrate === "pty") {
     // A finished session is still one the runtime has: it stays on the roster
@@ -463,6 +470,42 @@ export function sessionExited(name, { substrate = detectSubstrate(), runner = sp
  * meant a fork per field per row, so a herd of six cost thirteen processes to
  * draw one screen. tmux will format the whole server in one pass.
  */
+/**
+ * Where every member's pane actually is, keyed by member name.
+ *
+ * A member is a *pane*, not a session. It starts life as the only pane in a
+ * session of the same name, but `herd tile` moves panes into one window to lay
+ * them out side by side — and a session whose last pane leaves is gone. Keying
+ * off session names would make every tiled member vanish from the roster, from
+ * `read`, from `prompt` and from `wait`, which is a steep price for a layout.
+ *
+ * The pane's *title* is the durable handle: it is set at creation, it travels
+ * with the pane through join-pane and break-pane, and tmux will report it from
+ * anywhere on the server.
+ */
+export function paneIndex({ runner = spawnSync } = {}) {
+  const r = tmux(["list-panes", "-a", "-F", "#{pane_title}\t#{pane_id}\t#{session_name}\t#{window_id}\t#{pane_dead}"], { runner });
+  const index = new Map();
+  if (!r.ok) return index;
+  for (const line of r.stdout.split("\n")) {
+    if (!line.trim()) continue;
+    const [title, paneId, session, windowId, dead] = line.split("\t");
+    if (!title) continue;
+    index.set(title, { paneId, session, windowId, dead: dead.trim() === "1" });
+  }
+  return index;
+}
+
+/**
+ * The tmux target for a member: its pane id when we can find one, else its
+ * session name. The fallback matters for a session created before pane titles
+ * were set, which would otherwise become unreachable after an upgrade.
+ */
+export function target(name, { runner = spawnSync, index } = {}) {
+  const found = (index || paneIndex({ runner })).get(name);
+  return found ? found.paneId : name;
+}
+
 function tmuxSnapshot({ runner = spawnSync } = {}) {
   const sessions = tmux(["list-sessions", "-F", "#{session_name}\t#{session_attached}"], { runner });
   const attached = new Map();
@@ -540,7 +583,7 @@ export function startSession({
 /** The last `lines` rows of a session's screen — what the classifier reads. */
 export function capture(name, { lines = 60, substrate = detectSubstrate(), runner = spawnSync } = {}) {
   if (substrate === "tmux") {
-    const r = tmux(["capture-pane", "-p", "-t", name, "-S", `-${Math.max(0, lines)}`], { runner });
+    const r = tmux(["capture-pane", "-p", "-t", target(name, { runner }), "-S", `-${Math.max(0, lines)}`], { runner });
     return r.ok ? r.stdout.replace(/\n+$/, "") : "";
   }
   if (substrate === "pty") return ptyCapture(name, lines);
@@ -550,7 +593,7 @@ export function capture(name, { lines = 60, substrate = detectSubstrate(), runne
 /** Raw key relay. `keys` is passed through to tmux's own key vocabulary. */
 export function sendKeys(name, keys, { substrate = detectSubstrate(), runner = spawnSync } = {}) {
   if (substrate === "tmux") {
-    const r = tmux(["send-keys", "-t", name, ...(Array.isArray(keys) ? keys : [keys])], { runner });
+    const r = tmux(["send-keys", "-t", target(name, { runner }), ...(Array.isArray(keys) ? keys : [keys])], { runner });
     return r.ok ? { ok: true } : { ok: false, error: new Error(r.stderr.trim() || "send-keys failed") };
   }
   if (substrate === "pty") {
@@ -571,9 +614,10 @@ export function sendKeys(name, keys, { substrate = detectSubstrate(), runner = s
  */
 export function sendPrompt(name, text, { substrate = detectSubstrate(), runner = spawnSync } = {}) {
   if (substrate === "tmux") {
-    const typed = tmux(["send-keys", "-t", name, "-l", String(text)], { runner });
+    const pane = target(name, { runner });
+    const typed = tmux(["send-keys", "-t", pane, "-l", String(text)], { runner });
     if (!typed.ok) return { ok: false, error: new Error(typed.stderr.trim() || "send-keys failed") };
-    const entered = tmux(["send-keys", "-t", name, "Enter"], { runner });
+    const entered = tmux(["send-keys", "-t", pane, "Enter"], { runner });
     return entered.ok ? { ok: true } : { ok: false, error: new Error(entered.stderr.trim() || "send-keys failed") };
   }
   if (substrate === "pty") return ptyWrite(name, `${String(text)}\r`);
@@ -583,7 +627,9 @@ export function sendPrompt(name, text, { substrate = detectSubstrate(), runner =
 /** End a session and forget it. */
 export function killSession(name, { substrate = detectSubstrate(), runner = spawnSync } = {}) {
   if (substrate === "tmux") {
-    const r = tmux(["kill-session", "-t", name], { runner });
+    // kill-pane, not kill-session: a tiled member shares its session with
+    // every other tiled member, and killing that would take the lot.
+    const r = tmux(["kill-pane", "-t", target(name, { runner })], { runner });
     forgetSession(name);
     return r.ok ? { ok: true } : { ok: false, error: new Error(r.stderr.trim() || "no such session") };
   }
@@ -630,9 +676,19 @@ export async function attachSession(name, {
   stdout = process.stdout,
 } = {}) {
   if (substrate === "tmux") {
+    // A member that has been tiled shares a window with its neighbours, so
+    // attaching has to select its pane and zoom it — otherwise you land on
+    // whichever pane happened to have focus, at a quarter of the screen.
+    const found = paneIndex().get(name);
+    const argv = found
+      ? ["attach-session", "-t", found.session,
+         ";", "select-window", "-t", found.windowId,
+         ";", "select-pane", "-t", found.paneId,
+         ";", "resize-pane", "-Z", "-t", found.paneId]
+      : ["attach-session", "-t", name];
     return new Promise((resolve) => {
       let child;
-      try { child = spawner("tmux", tmuxArgs(["attach-session", "-t", name]), { stdio: "inherit", env }); }
+      try { child = spawner("tmux", tmuxArgs(argv), { stdio: "inherit", env }); }
       catch (error) { resolve({ ok: false, error }); return; }
       child.on("error", (error) => resolve({ ok: false, error }));
       child.on("exit", (code, signal) => resolve({ ok: code === 0, code, signal }));
@@ -726,14 +782,17 @@ export function ptyAttachSession(name, { stdin = process.stdin, stdout = process
  */
 export function listSessions({ substrate = detectSubstrate(), runner = spawnSync, now = Date.now() } = {}) {
   const manifest = readManifest();
+  const panes = substrate === "tmux" ? paneIndex({ runner }) : null;
   const snapshot = substrate === "tmux" ? tmuxSnapshot({ runner }) : null;
-  const live = new Set(snapshot ? snapshot.attached.keys() : liveNames({ substrate, runner }));
+  const live = new Set(panes
+    ? [...panes.keys()].filter((name) => name in manifest.sessions)
+    : liveNames({ substrate, runner }));
   const names = [...new Set([...live, ...Object.keys(manifest.sessions)])].sort();
   return names.map((name) => {
     const meta = manifest.sessions[name] || {};
     const alive = live.has(name);
     const exited = !alive ? null
-      : snapshot ? !snapshot.anyLive.get(name)
+      : panes ? Boolean(panes.get(name)?.dead)
       : sessionExited(name, { substrate, runner });
     return {
       name,
@@ -746,7 +805,11 @@ export function listSessions({ substrate = detectSubstrate(), runner = spawnSync
       age: meta.created ? now - meta.created : null,
       alive,
       exited,
-      attached: alive && snapshot ? snapshot.attached.get(name) || 0 : 0,
+      // Where it currently sits — null when it is in its own session, the
+      // window it was tiled into otherwise. The UI needs this to know whether
+      // a member is already on a layout somewhere.
+      window: alive && panes ? panes.get(name)?.windowId || null : null,
+      attached: alive && snapshot ? snapshot.attached.get(panes?.get(name)?.session) || 0 : 0,
       substrate: meta.substrate || substrate,
     };
   });

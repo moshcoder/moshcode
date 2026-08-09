@@ -125,6 +125,42 @@ moshcode attach api                      # step in; Ctrl-b d steps back out
 moshcode kill api                        # end it
 ```
 
+### Everything on screen at once
+
+```sh
+moshcode herd tile
+```
+
+```
+┌─ work ──────────────────┬─ logs ──────────────────┐
+│ $ npm test              │ tailing deploy.log      │
+│ ✓ 1492 passing          │ 12:04 build ok          │
+├─ api ───────────────────┴─────────────────────────┤
+│ claude — Do you want to proceed?                  │
+│ ❯ 1. Yes    2. No                                 │
+└───────────────────────────────────────────────────┘
+ herd            S:shell A:agent X:stop B:pop out z:zoom
+```
+
+Every member becomes a tile in one window. Click a tile to focus it, `Ctrl-b z`
+to blow it up full-screen and again to come back, `Ctrl-b d` to leave the lot
+running. Start and stop without leaving:
+
+| key | |
+|---|---|
+| `Ctrl-b S` | new shell tile |
+| `Ctrl-b A` | new claude tile |
+| `Ctrl-b X` | stop the focused tile |
+| `Ctrl-b B` | pop it out into its own session |
+| `Ctrl-b z` | zoom / unzoom |
+
+`moshcode herd untile` puts them all back in their own sessions. Tiling is just
+a view — the processes never restart, and a tiled member stays on `moshcode ps`
+and answers `read`, `prompt` and `wait` exactly as before.
+
+Needs tmux. The `script(1)` fallback gives each session its own pty with no way
+to lay them out together, so it says so and points at the list instead.
+
 ### The clickable list
 
 ```sh
