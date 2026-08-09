@@ -129,6 +129,24 @@ Close the terminal, drop the SSH link, come back tomorrow — `moshcode ps` stil
 answers, and `moshcode attach` puts you back inside. In the pit the same verbs
 are `/ps`, `/attach`, `/kill`, and the roster prints on the way in.
 
+### Switching between them without leaving
+
+Every session lives in one tmux server that moshcode owns, so once you are
+attached to any of them you can move around the whole herd without going back to
+the pit:
+
+| key | |
+|---|---|
+| `Ctrl-b s` | pick from a list of every session |
+| `Ctrl-b )` / `Ctrl-b (` | next / previous session |
+| `Ctrl-b L` | back to the one you were just in |
+| `Ctrl-b d` | detach — the session keeps running |
+
+That server is started without your `~/.tmux.conf`, so these are the stock
+bindings whatever your own tmux does with the prefix. Under the no-tmux fallback
+there is no switcher: detach with `Ctrl-]` and `moshcode attach <name>` the next
+one.
+
 ### Which one needs you
 
 Every session carries a state: `working`, `blocked`, `done`, `idle`, or

@@ -103,7 +103,10 @@ export const CORE_CLI_COMMANDS = [
     synopsis: [["moshcode attach <name>", "detach again with Ctrl-b d (or Ctrl-] without tmux)"]],
     examples: [["moshcode attach api", ""]],
     seeAlso: ["ps", "herd", "kill"],
-    note: "detaching leaves the session running. ending it is `moshcode kill`.",
+    note: "detaching leaves the session running; ending it is `moshcode kill`. "
+      + "the whole herd shares one tmux server, so from inside any session Ctrl-b s picks another, "
+      + "Ctrl-b ) and Ctrl-b ( step through them, and Ctrl-b L goes back to the last one — "
+      + "no switcher under the no-tmux fallback, where Ctrl-] detaches instead.",
   },
   {
     name: "kill",
