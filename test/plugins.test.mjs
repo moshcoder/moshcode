@@ -143,6 +143,17 @@ test("every plugin the marketplace lists exists, with a manifest and its command
     const plugin = JSON.parse(fs.readFileSync(new URL(".claude-plugin/plugin.json", dir), "utf8"));
     assert.equal(plugin.name, entry.name, `${entry.name}'s manifest disagrees with the marketplace`);
 
+    // An engine only pulls a new copy of a plugin when its own version moves —
+    // a moshcode release does not carry plugin edits to existing installs on its
+    // own. Both plugins sat at 0.1.0 through v0.29.2, which rewrote every
+    // command file, so this pins the catalog to the manifest that ships.
+    assert.match(plugin.version ?? "", /^\d+\.\d+\.\d+$/, `${entry.name} has no usable plugin.json version`);
+    assert.equal(
+      PLUGINS.find((p) => p.name === entry.name)?.version,
+      plugin.version,
+      `${entry.name}: the catalog and plugin.json disagree on the version`,
+    );
+
     const catalog = PLUGINS.find((p) => p.name === entry.name);
     const files = fs.readdirSync(new URL("commands/", dir)).filter((f) => f.endsWith(".md"));
     // Namespaced, because that is how Claude Code invokes them. Comparing bare

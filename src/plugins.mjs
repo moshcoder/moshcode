@@ -39,16 +39,28 @@ export function marketplaceSource(env = process.env) {
  * `example` exists because the invitation printed after an install has to be
  * runnable. It used to append a hardcoded "NVDA" to whatever came first in
  * `commands`, which told anyone installing the crypto plugin to try a stock.
+ *
+ * `version` mirrors each plugin's own plugin.json, and it is not decoration:
+ * "If set, users only receive updates when you bump this field."
+ * https://code.claude.com/docs/en/plugins-reference#version-management
+ *
+ * So editing a plugin's commands and shipping a moshcode release is *not*
+ * enough — an existing install keeps serving the old copy until this number
+ * moves. Both plugins sat at 0.1.0 through v0.29.2, which rewrote every command
+ * file. Change a plugin's contents, bump its version, in the same commit.
+ * A test fails when this list and the manifests disagree.
  */
 export const PLUGINS = [
   {
     name: "stocks",
+    version: "0.2.0",
     description: "equity research slash commands backed by advis0r.com",
     commands: ["/stocks:stocks", "/stocks:signals", "/stocks:research", "/stocks:lookup", "/stocks:reports", "/stocks:discover"],
     example: "/stocks:stocks NVDA",
   },
   {
     name: "crypto",
+    version: "0.2.0",
     description: "crypto market data slash commands backed by advis0r.com",
     commands: ["/crypto:crypto", "/crypto:quote", "/crypto:book", "/crypto:bars", "/crypto:spark", "/crypto:pairs", "/crypto:coin"],
     example: "/crypto:crypto BTC",
