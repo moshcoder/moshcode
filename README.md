@@ -161,37 +161,45 @@ and answers `read`, `prompt` and `wait` exactly as before.
 Needs tmux. The `script(1)` fallback gives each session its own pty with no way
 to lay them out together, so it says so and points at the list instead.
 
-### The clickable list
+### The workspace
 
 ```sh
 moshcode herd ui
 ```
 
 ```
-  moshcode herd   3 members   1 waiting on you
-
-  MAIN (2)
-   ▸ ! api          claude     blocked  ~/src/coinpay
-     · work         shell      idle     ~/src/coinpay
-
-  SCRATCH (1)
-     · logs         shell      idle     ~/src/ugig.net
-
-  click or ↑↓ to choose · enter to go in · r refresh · q quit
+┌ herd ──────┬─ api ─────────────────────────────┐
+│ herd       │                                   │
+│            │  claude                           │
+│ MAIN       │  Do you want to proceed?          │
+│ ▸ ! api    │  ❯ 1. Yes                         │
+│   · work   │    2. No                          │
+│ SCRATCH    │                                   │
+│   · logs   │                                   │
+│            │                                   │
+│ ACTIONS    │                                   │
+│   + shell  │                                   │
+│   + agent  │                                   │
+│   ✕ stop   │                                   │
+│   ⊞ tile   │                                   │
+│   ← detach │                                   │
+└────────────┴───────────────────────────────────┘
 ```
 
-Click a member to go into it; detach and you land back on the list. Group
-sessions with `--herd <name>` when you start them; anything without one is in
-`main`.
+Members and actions down the left, the selected member's **real terminal** on
+the right. Click a member to show it; click an action to start a shell, start an
+agent, or stop the selected one. `q` detaches and leaves everything running.
 
-It hands the terminal to a **real** attach rather than drawing the session
-itself, so what you get inside is a genuine terminal — full colour, real cursor,
-the agent's own mouse handling. The cost is that the list is not on screen at
-the same time as the session. tmux's model is session → window → pane and a pane
-belongs to exactly one window, so nothing can persist across a switch; a pinned
-sidebar would mean rendering every session from polled snapshots and losing all
-of the above. Once you are attached, `Ctrl-b s` is a clickable picker and the
-status line is a clickable list.
+The right-hand pane is not a picture of a session — it *is* the session's pane,
+moved in. tmux's model is session → window → pane, so moving between *windows*
+cannot keep anything on screen; but `join-pane` moves a running pane into an
+existing window, so swapping only the content pane leaves the sidebar untouched.
+Both panes keep their process and their scrollback because tmux is moving the
+real thing, not redrawing it.
+
+Group sessions with `--herd <name>` when you start them; anything without one is
+in `main`. Without tmux there is nothing to swap panes with, so `herd ui` falls
+back to a plain clickable list.
 
 ### A workspace: a few shells and an agent
 

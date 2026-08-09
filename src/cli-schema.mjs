@@ -744,9 +744,10 @@ export const HERD_VERBS = [
     examples: [["moshcode herd tile", "all of them"], ["moshcode herd tile scratch", "one herd"]] },
   { name: "untile", description: "put tiled members back in their own sessions",
     synopsis: [["moshcode herd untile", ""]] },
-  { name: "ui", description: "the clickable list of herds and their members",
-    synopsis: [["moshcode herd ui", "click to select, again to open · t tiles them all · q quits"]],
-    flags: [] },
+  { name: "ui", description: "sidebar of members and actions, selected one beside it",
+    synopsis: [["moshcode herd ui", "click a member to show it · s shell · a agent · x stop · q detach"]],
+    flags: [],
+    examples: [["moshcode herd ui", "the workspace — start here"]] },
   { name: "run", description: "run ANY command in the herd — an agent moshcode does not ship, a build, a script",
     synopsis: [["moshcode herd run [--name <slug>] -- <command…>", "everything after -- is the command"]],
     flags: [
