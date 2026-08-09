@@ -80,7 +80,25 @@ export const COMMON_RULES = {
     /\bctrl\+c to (?:stop|cancel|interrupt)\b/i,
     /\bpress esc to cancel\b/i,
   ],
-  idle: [],
+  // A prompt sitting at the very end of the screen, waiting for a keystroke —
+  // a shell's `$`, a root `#`, zsh/starship's `❯`/`➜`, an agent's `>` composer.
+  // Anchored to the end of the *capture* rather than to any line, because a `$`
+  // in the middle of output is a dollar sign and not an invitation.
+  //
+  // Checked after blocked and working, so the cost of a false positive is only
+  // `idle` where `unknown` was already the honest answer. This is what stops a
+  // couple of shells in the herd reading `unknown` forever.
+  idle: [
+    // The glyph last: `… $`, `… #`, `… ❯`.
+    /[$%#>❯➜»]\s*$/,
+    // The glyph first, with the path after it: `➜  ~/src/api `, which is what
+    // zsh and starship actually draw. Restricted to ❯ and ➜ because those are
+    // prompt characters and almost nothing else; `>` and `#` in that position
+    // are markdown quotes and headings, which agents print all the time.
+    // Claude Code's `❯ 2. Dark mode` selector reaches the blocked rule first,
+    // so a menu still reads blocked rather than idle.
+    /(?:^|\n)[^\n]*[❯➜][^\n]*$/,
+  ],
 };
 
 /**

@@ -125,6 +125,46 @@ moshcode attach api                      # step in; Ctrl-b d steps back out
 moshcode kill api                        # end it
 ```
 
+### A workspace: a few shells and an agent
+
+This is what most people actually want — a couple of shells to work in and an
+agent or two running beside them, none of which die when the terminal does:
+
+```sh
+cd ~/src/coinpay
+moshcode herd shell --name work          # a plain $SHELL
+moshcode herd shell --name logs          # another
+moshcode agents claude -d --name api     # and an agent
+```
+
+```sh
+$ moshcode ps
+  api    claude  blocked   ~/src/coinpay   3m
+  logs   shell   idle      ~/src/coinpay   3m
+  work   shell   idle      ~/src/coinpay   3m
+
+⚠ 1 waiting on you — moshcode attach api
+```
+
+`moshcode attach work` puts you in one; `Ctrl-b s` hops between all three;
+`Ctrl-b d` leaves the lot running. Close the laptop and they are still there.
+
+### Agents moshcode does not ship
+
+`start` only knows the engines moshcode installs. `run` takes anything —
+an agent with no install spec here, a build, a script:
+
+```sh
+moshcode herd run --name cur -- cursor-agent
+moshcode herd run --name build -- npm run watch
+```
+
+Everything after `--` is the command, flags and all. These get a roster entry
+and the same state detection as a known engine: the shared rules match what a
+terminal *draws* — a y/n prompt, a numbered menu, "esc to interrupt" — not
+anything engine-specific, so an agent moshcode has never heard of still shows up
+`blocked` when it stops to ask you something.
+
 Close the terminal, drop the SSH link, come back tomorrow — `moshcode ps` still
 answers, and `moshcode attach` puts you back inside. In the pit the same verbs
 are `/ps`, `/attach`, `/kill`, and the roster prints on the way in.
