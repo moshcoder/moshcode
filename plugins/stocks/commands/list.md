@@ -1,15 +1,15 @@
 ---
-description: Every stored advis0r research report, best score first.
+description: List every ticker with a stored report, best score first.
 argument-hint: "[--limit n] [--sort recent|score|ticker]"
 allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
 ---
 
 ## Task
 
-List the stored reports.
+List every ticker advis0r has a stored report for.
 
 ```bash
-moshcode stocks reports $ARGUMENTS --json
+moshcode stocks list $ARGUMENTS --json
 ```
 
 Fallback: `curl -sS "https://advis0r.com/api/reports?sort=score&limit=25"`
