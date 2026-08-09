@@ -22,6 +22,6 @@ Fallback: `curl -sS "https://advis0r.com/api/lookup?q=<url-encoded>&limit=10"`
 ## Rules
 
 - Show every match with its exchange — "Delta" is an airline and a faucet company.
-- Mark which ones have a report, and offer `/stocks:stocks <SYMBOL>` for those.
+- Mark which ones have a report, and offer `/stocks:report <SYMBOL>` for those.
 - One unambiguous match: say the symbol and go straight to offering the report.
 - No match: say the *directory* has no match, and do not invent a symbol.

@@ -26,5 +26,5 @@ generatedAt }`, and `total` is how many exist.
 - **`generatedAt` per row, always.** These are snapshots taken at different
   times; a table that hides that reads as one consistent as-of date.
 - A row with no `aiProvider` was scored deterministically, not by a model.
-- Offer `/stocks:stocks <SYMBOL>` for anything worth a closer look.
+- Offer `/stocks:report <SYMBOL>` for anything worth a closer look.
 - This is a coverage list, not a recommendation list. Rank order is score order.

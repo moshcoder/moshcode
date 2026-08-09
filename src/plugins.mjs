@@ -53,19 +53,36 @@ export function marketplaceSource(env = process.env) {
 export const PLUGINS = [
   {
     name: "stocks",
-    version: "0.2.0",
+    version: "0.3.0",
     description: "equity research slash commands backed by advis0r.com",
-    commands: ["/stocks:stocks", "/stocks:signals", "/stocks:research", "/stocks:lookup", "/stocks:reports", "/stocks:discover"],
-    example: "/stocks:stocks NVDA",
+    commands: [
+      "/stocks:help", "/stocks:report", "/stocks:quote", "/stocks:lookup",
+      "/stocks:signals", "/stocks:research", "/stocks:reports", "/stocks:discover",
+    ],
+    example: "/stocks:report NVDA",
   },
   {
     name: "crypto",
-    version: "0.2.0",
+    version: "0.3.0",
     description: "crypto market data slash commands backed by advis0r.com",
-    commands: ["/crypto:crypto", "/crypto:quote", "/crypto:book", "/crypto:bars", "/crypto:spark", "/crypto:pairs", "/crypto:coin"],
-    example: "/crypto:crypto BTC",
+    commands: [
+      "/crypto:help", "/crypto:report", "/crypto:quote", "/crypto:lookup",
+      "/crypto:book", "/crypto:bars", "/crypto:spark", "/crypto:pairs",
+    ],
+    example: "/crypto:report BTC",
   },
 ];
+
+/**
+ * Command names both plugins are expected to share.
+ *
+ * The two cover different markets, so they can never ship the same *set* — a
+ * crypto pair has no earnings transcript and an equity has no order book. What
+ * they can share is vocabulary: the same question is spelled the same way on
+ * both sides, so knowing one plugin means knowing half the other. A test holds
+ * this, because the natural drift is for one side to grow a synonym.
+ */
+export const SHARED_COMMANDS = ["help", "report", "quote", "lookup"];
 
 /** How Claude Code namespaces a plugin's command. */
 export function pluginCommandName(plugin, file) {
