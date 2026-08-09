@@ -745,9 +745,17 @@ export const HERD_VERBS = [
   { name: "untile", description: "put tiled members back in their own sessions",
     synopsis: [["moshcode herd untile", ""]] },
   { name: "ui", description: "sidebar of members and actions, selected one beside it",
-    synopsis: [["moshcode herd ui", "click a member to show it · s shell · a agent · x stop · q detach"]],
+    synopsis: [["moshcode herd ui", "click a member to show it · click it again to type in it · F12 for the mosh bar"]],
     flags: [],
     examples: [["moshcode herd ui", "the workspace — start here"]] },
+  { name: "bar", description: "the one-line mosh prompt under the session (runs inside the workspace)",
+    synopsis: [["moshcode herd bar", "F12 reaches it from inside an agent · Esc goes back · detach leaves"]],
+    flags: [],
+    examples: [
+      ["F12", "jump to the bar from anywhere, even mid-agent"],
+      ["start claude", "another agent, without leaving this one"],
+      ["show api", "put a different member on screen"],
+    ] },
   { name: "run", description: "run ANY command in the herd — an agent moshcode does not ship, a build, a script",
     synopsis: [["moshcode herd run [--name <slug>] -- <command…>", "everything after -- is the command"]],
     flags: [

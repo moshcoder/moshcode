@@ -183,12 +183,41 @@ moshcode herd ui
 │   ✕ stop   │                                   │
 │   ⊞ tile   │                                   │
 │   ← detach │                                   │
-└────────────┴───────────────────────────────────┘
+│            │                                   │
+│ enter ▸ …  │                                   │
+│ F12 ▸ …    │                                   │
+├────────────┴───────────────────────────────────┤
+│ mosh ▸ ps · start claude · show <n> · detach   │
+└────────────────────────────────────────────────┘
 ```
 
 Members and actions down the left, the selected member's **real terminal** on
 the right. Click a member to show it; click an action to start a shell, start an
 agent, or stop the selected one. `q` detaches and leaves everything running.
+
+Click the member that is already on screen — or press Enter — and the keyboard
+goes to it, so you are typing at the agent itself.
+
+### The mosh bar
+
+The row along the bottom is a mosh prompt, and it is always there. **F12** jumps
+to it from anywhere, including from inside an agent that has taken the keyboard,
+which makes it the way out of a session you cannot otherwise leave. Esc goes
+back to the session; `detach` leaves with everything still running.
+
+It takes any `moshcode herd` verb, so you can start a second agent without
+leaving the first:
+
+```
+mosh ▸ start claude          # another agent, now on screen
+mosh ▸ show api              # put a different member up
+mosh ▸ ps                    # the roster, over the session, then out of the way
+```
+
+`attach` means `show` here — in a workspace the word means "put it in the
+content pane", and the real attach would be a tmux client inside a tmux client.
+Output grows the bar over the content for as long as you are reading it, then it
+collapses back to one row.
 
 The right-hand pane is not a picture of a session — it *is* the session's pane,
 moved in. tmux's model is session → window → pane, so moving between *windows*

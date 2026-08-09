@@ -178,7 +178,7 @@ export function herdStart(argv, { write = console.log } = {}) {
   }
   write(ok(`${bone(name)} — ${key} running in the herd. the prompt is yours.`));
   if (flags.agent) write(warn("agent mode: native approvals are bypassed or auto-approved."));
-  write(info(`attach: ${acid(`moshcode attach ${name}`)} · roster: ${acid("moshcode ps")}`));
+  write(info(`workspace: ${acid("moshcode herd ui")} · attach: ${acid(`moshcode attach ${name}`)} · roster: ${acid("moshcode ps")}`));
   const note = substrateNote(substrate);
   if (note) write(info(note));
   return EXIT.matched;
@@ -253,7 +253,7 @@ export function herdRun(argv, { write = console.log, shell = false } = {}) {
     return EXIT.matched;
   }
   write(ok(`${bone(name)} — ${label} running in the herd. the prompt is yours.`));
-  write(info(`attach: ${acid(`moshcode attach ${name}`)} · roster: ${acid("moshcode ps")}`));
+  write(info(`workspace: ${acid("moshcode herd ui")} · attach: ${acid(`moshcode attach ${name}`)} · roster: ${acid("moshcode ps")}`));
   return EXIT.matched;
 }
 
@@ -729,6 +729,7 @@ const VERBS = {
   // inside it for machines with no tmux to swap panes on.
   ui: async (argv, options) => (await import("./herd-workspace.mjs")).herdUi(argv, options),
   sidebar: async (argv, options) => (await import("./herd-workspace.mjs")).herdSidebar(options),
+  bar: async (argv, options) => (await import("./herd-bar.mjs")).herdBar(options),
   tile: async (argv, options) => (await import("./herd-tile.mjs")).herdTile(argv, options),
   untile: async (argv, options) => (await import("./herd-tile.mjs")).herdUntile(argv, options),
   ps: herdPs, list: herdPs, status: herdStatus,

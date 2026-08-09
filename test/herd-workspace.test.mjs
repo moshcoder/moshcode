@@ -85,16 +85,29 @@ test("swapping the content pane leaves the sidebar in place", (t) => {
 
       herd.tmux(["new-session", "-d", "-s", ws.WORKSPACE, "-n", ws.WINDOW,
         "sh -c 'echo SIDEBAR; while read x; do :; done'"]);
-      herd.tmux(["set-option", "-t", ws.WORKSPACE, "main-pane-width", "26"]);
       const me = herd.tmux(["list-panes", "-t", ws.TARGET, "-F", "#{pane_id}"]).stdout.trim();
+      herd.tmux(["select-pane", "-t", me, "-T", ${JSON.stringify("herd")}]);
+      herd.tmux(["resize-window", "-t", ws.TARGET, "-x", "100", "-y", "30"]);
+      ws.buildBar({ command: "sh -c 'echo BAR; while read x; do :; done'" });
 
       const widths = [];
+      const footers = [];
       for (const name of ["alpha", "beta", "alpha"]) {
         ws.showMember(name, { me });
         widths.push(herd.tmux(["list-panes", "-t", ws.TARGET, "-F", "#{pane_title}:#{pane_width}"]).stdout.trim().replace(/\\n/g, "|"));
+        footers.push(herd.tmux(["list-panes", "-t", ws.TARGET,
+          "-F", "#{pane_title}:#{pane_height}:#{pane_width}:#{pane_left}"]).stdout.trim()
+          .split("\\n").find((l) => l.startsWith("mosh-bar:")) || "MISSING");
       }
+      const focused = ws.focusContent({ me });
+      const active = herd.tmux(["list-panes", "-t", ws.TARGET, "-F", "#{pane_title}:#{pane_active}"]).stdout
+        .trim().split("\\n").find((l) => l.endsWith(":1"));
       console.log(JSON.stringify({
         widths,
+        footers,
+        focused,
+        active,
+        jumpKey: herd.tmux(["list-keys", "-T", "root"]).stdout.split("\\n").filter((l) => l.includes("F12")),
         sidebarAlive: herd.tmux(["capture-pane", "-p", "-t", me]).stdout.includes("SIDEBAR"),
         roster: cli.roster().filter((s) => s.alive).map((s) => s.name).sort(),
         contentKept: herd.capture("beta", { lines: 10 }).includes("MARK-beta"),
@@ -108,10 +121,30 @@ test("swapping the content pane leaves the sidebar in place", (t) => {
     // Neither member may be lost by being moved in and out of the workspace.
     assert.deepEqual(out.roster, ["alpha", "beta"]);
     assert.equal(out.contentKept, true, "a swapped-out member keeps its scrollback");
-    // The sidebar must not creep wider each time main-vertical is reapplied.
+    // The sidebar must not creep wider each time the content is swapped.
     for (const state of out.widths) {
       assert.match(state, /:26\b/, `sidebar lost its width: ${state}`);
     }
+
+    // The footer is the only thing on screen that is always visible, so losing
+    // it — or letting a swap give it half the window — is the whole bug back.
+    for (const footer of out.footers) {
+      const [, height, width, left] = footer.split(":");
+      assert.notEqual(footer, "MISSING", "the bar did not survive a swap");
+      assert.equal(height, "1", `the bar grew to ${height} rows: ${footer}`);
+      assert.equal(left, "0", "the bar must span from the left edge");
+      assert.equal(width, "100", `the bar must span the full width, got ${width}`);
+    }
+
+    // Enter has to reach the agent, or the workspace can only ever be watched.
+    assert.equal(out.focused, true);
+    assert.match(out.active, /^alpha:1$/, `focus went to ${out.active} instead of the session`);
+
+    // A bare ";" argument ends bind-key instead of chaining, which bound a key
+    // that switched sessions and did nothing else. Both halves or it is broken.
+    assert.equal(out.jumpKey.length, 1, `expected one F12 binding, got ${out.jumpKey.length}`);
+    assert.match(out.jumpKey[0], /switch-client/);
+    assert.match(out.jumpKey[0], /select-pane/, "the jump key must also land on the bar");
   } finally {
     spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8" });
     fs.rmSync(dir, { recursive: true, force: true });
