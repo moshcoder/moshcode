@@ -670,6 +670,7 @@ export function ptyAttachSession(name, { stdin = process.stdin, stdout = process
     stdin.resume();
 
     let done = false;
+    const cleanupTimers = [];
     const stopFollow = followFile(ptyPaths(name).transcript, (chunk) => stdout.write(chunk), {
       intervalMs: 40, startOffset: size,
     });
@@ -677,6 +678,7 @@ export function ptyAttachSession(name, { stdin = process.stdin, stdout = process
     const finish = (result) => {
       if (done) return;
       done = true;
+      for (const timer of cleanupTimers) clearInterval(timer);
       stdin.off("data", onData);
       try { stdin.setRawMode?.(wasRaw); } catch { /* not a tty */ }
       stdin.pause();
@@ -698,10 +700,16 @@ export function ptyAttachSession(name, { stdin = process.stdin, stdout = process
     stdin.on("data", onData);
 
     // The child can exit while you are watching it; nothing else would notice.
+    //
+    // Not unref'd, for the same reason the poll timer in herd-cli is not: an
+    // attach is a foreground act whose entire purpose is to stay. The follow
+    // timer is unref'd (pty.mjs), so if this one were too, an attach whose
+    // stdin did not hold the loop open would exit the instant it started.
+    // finish() clears it, so it never outlives the attach either.
     const liveness = setInterval(() => {
-      if (!pidAlive(ptyPid(name))) { clearInterval(liveness); finish({ ok: true, ended: true }); }
+      if (!pidAlive(ptyPid(name))) { finish({ ok: true, ended: true }); }
     }, 500);
-    liveness.unref?.();
+    cleanupTimers.push(liveness);
   });
 }
 

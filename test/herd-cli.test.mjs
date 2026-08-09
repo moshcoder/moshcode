@@ -3,10 +3,15 @@
 // becoming the thing everyone switches off.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   EXIT, humanAge, paintState, renderRoster, shouldNotify, splitDetachArgs, waitFor,
 } from "../src/herd-cli.mjs";
+
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const session = (extra = {}) => ({
   name: "api", engine: "claude", cwd: "/x/api", age: 60000, alive: true, state: "working", ...extra,
@@ -79,6 +84,31 @@ test("waiting for done is satisfied by done", async () => {
 test("wait on a session that does not exist says so instead of timing out", async () => {
   const result = await waitFor("nope", ["blocked"], { intervalMs: 1, look: () => null });
   assert.equal(result.outcome, "gone");
+});
+
+test("wait holds the process open between polls", () => {
+  // This has to run in its own process with nothing else pending, because the
+  // test runner itself keeps the event loop alive and hides the bug entirely.
+  //
+  // The failure it guards against is not a hang, it is the opposite and much
+  // worse: with an unref'd poll timer node finds nothing scheduled between
+  // polls and simply exits, so `moshcode wait api --timeout 1h` returns in a
+  // millisecond, exit 0, having waited for nothing. CI caught it; a green local
+  // suite did not.
+  const source = `
+    const { waitFor } = await import(${JSON.stringify(path.join(ROOT, "src", "herd-cli.mjs"))});
+    const started = Date.now();
+    const result = await waitFor("nobody", ["blocked"], {
+      intervalMs: 50, timeoutMs: 600,
+      look: () => ({ name: "nobody", state: "working", alive: true }),
+    });
+    console.log(JSON.stringify({ outcome: result.outcome, elapsed: Date.now() - started }));
+  `;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", source], { encoding: "utf8", cwd: ROOT });
+  assert.equal(run.status, 0, `the wait process died instead of waiting: ${run.stderr}`);
+  const out = JSON.parse(run.stdout.trim());
+  assert.equal(out.outcome, "timeout", "waitFor must settle, not leave the process to exit under it");
+  assert.ok(out.elapsed >= 500, `waited only ${out.elapsed}ms of 600ms — the poll timer is not holding the loop open`);
 });
 
 test("wait times out on a session that just keeps working", async () => {

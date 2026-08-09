@@ -305,7 +305,17 @@ export function herdRead(argv, { write = console.log } = {}) {
   return EXIT.matched;
 }
 
-const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+/**
+ * Deliberately NOT unref'd.
+ *
+ * Everywhere else in moshcode a timer is unref'd so a background nicety — the
+ * mirror, a follow — can never hold the process open. Here that instinct is
+ * exactly backwards: `wait` and `watch` exist to keep the process alive, and an
+ * unref'd timer means node finds nothing pending between polls and exits. It
+ * does not hang; it is worse than that. `moshcode wait api --timeout 1h`
+ * returns in a millisecond, exit 0, having waited for nothing.
+ */
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
 /**
  * Block until a session reaches one of `states`, or the timeout runs out.
