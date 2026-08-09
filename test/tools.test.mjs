@@ -84,6 +84,13 @@ test("tool registry uses the official native CLI packages", () => {
     cmd: "sh",
     args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"],
   });
+  assert.deepEqual(resolveTool("c0upons"), ["c0upons", TOOLS.c0upons]);
+  assert.deepEqual(TOOLS.c0upons.install, {
+    cmd: "sh",
+    args: ["-c", "curl -fsSL https://c0upons.com/install.sh | sh"],
+  });
+  // The c0upons CLI replaces its own binary, so upgrades skip the installer.
+  assert.deepEqual(TOOLS.c0upons.upgrade, { cmd: "c0upons", args: ["upgrade"] });
   assert.deepEqual(resolveTool("secrets"), ["secrets", TOOLS.secrets]);
   // /secrets wraps the `logicsrc` binary and ships via its own install script.
   assert.equal(TOOLS.secrets.bin, process.env.LOGICSRC_BIN || "logicsrc");
@@ -94,6 +101,7 @@ test("tool registry uses the official native CLI packages", () => {
   assert.match(toolList(), /ugig/);
   assert.match(toolList(), /coinpay/);
   assert.match(toolList(), /c0mpute/);
+  assert.match(toolList(), /c0upons/);
   assert.match(toolList(), /secrets/);
 });
 
@@ -297,6 +305,7 @@ for (const [name, shell, script] of [
   ["ugig", "bash", "curl -fsSL https://ugig.net/install.sh | bash"],
   ["coinpay", "sh", "curl -fsSL https://coinpayportal.com/install.sh | sh"],
   ["c0mpute", "sh", "curl -fsSL https://c0mpute.com/install.sh | sh"],
+  ["c0upons", "sh", "curl -fsSL https://c0upons.com/install.sh | sh"],
 ]) {
   test(`install ${name} delegates to its official install script`, async () => {
     const root = tempDir("moshcode-install-");

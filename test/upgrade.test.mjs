@@ -26,7 +26,7 @@ async function withFakeBins(names, fn) {
 
 function withFakeTools(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "moshcode-upgrade-"));
-  for (const name of ["ugig", "coinpay", "c0mpute"]) {
+  for (const name of ["ugig", "coinpay", "c0mpute", "c0upons"]) {
     const file = path.join(dir, name);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);
@@ -58,7 +58,26 @@ test("upgrade tools selects installed workflow tools without self or engines", (
       { key: "ugig", kind: "tool" },
       { key: "coinpay", kind: "tool" },
       { key: "c0mpute", kind: "tool" },
+      { key: "c0upons", kind: "tool" },
     ]);
+  });
+});
+
+// `moshcode upgrade` must carry the coupon CLI along with everything else, so
+// there is no separate step to remember. c0upons is the one workflow tool whose
+// updater is its own binary rather than a re-run of the installer, so assert the
+// spec too: a plan that listed c0upons but re-curled install.sh would still pass
+// the membership check above while silently taking the slower path.
+test("upgrade includes c0upons and uses its own updater", () => {
+  withFakeTools(() => {
+    for (const targets of [[], ["tools"], ["c0upons"]]) {
+      const plan = planUpgrade(targets);
+      const item = plan.items.find(({ key }) => key === "c0upons");
+      assert.ok(item, `upgrade ${targets.join(" ") || "(default)"} must include c0upons`);
+      assert.equal(item.kind, "tool");
+      assert.deepEqual(item.spec, { cmd: "c0upons", args: ["upgrade"] });
+      assert.deepEqual(plan.unknown, []);
+    }
   });
 });
 
