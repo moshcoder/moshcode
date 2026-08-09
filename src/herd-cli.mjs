@@ -130,13 +130,15 @@ export function herdStart(argv, { write = console.log } = {}) {
   const substrate = requireSubstrate(write);
   if (!substrate) return EXIT.usage;
 
-  const flags = { name: null, cwd: process.cwd(), agent: false, json: false };
+  const flags = { name: null, cwd: process.cwd(), agent: false, json: false, herd: "main" };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--name") flags.name = argv[++i];
     else if (a.startsWith("--name=")) flags.name = a.slice(7);
     else if (a === "--cwd") flags.cwd = path.resolve(argv[++i] || ".");
+    else if (a === "--herd") flags.herd = slugifyName(argv[++i]);
+    else if (a.startsWith("--herd=")) flags.herd = slugifyName(a.slice(7));
     else if (a === "--agent") flags.agent = true;
     else if (a === "--json") flags.json = true;
     else rest.push(a);
@@ -168,10 +170,10 @@ export function herdStart(argv, { write = console.log } = {}) {
     write(err(String(started.error?.message || started.error)));
     return EXIT.usage;
   }
-  rememberSession(name, { agent: flags.agent });
+  rememberSession(name, { agent: flags.agent, herd: flags.herd });
 
   if (flags.json) {
-    write(JSON.stringify({ name, engine: key, cwd: flags.cwd, substrate, agent: flags.agent }, null, 2));
+    write(JSON.stringify({ name, engine: key, herd: flags.herd, cwd: flags.cwd, substrate, agent: flags.agent }, null, 2));
     return EXIT.matched;
   }
   write(ok(`${bone(name)} — ${key} running in the herd. the prompt is yours.`));
@@ -203,7 +205,7 @@ export function herdRun(argv, { write = console.log, shell = false } = {}) {
   const substrate = requireSubstrate(write);
   if (!substrate) return EXIT.usage;
 
-  const flags = { name: null, cwd: process.cwd(), json: false };
+  const flags = { name: null, cwd: process.cwd(), json: false, herd: "main" };
   const command = [];
   let afterSeparator = false;
   for (let i = 0; i < argv.length; i++) {
@@ -215,6 +217,8 @@ export function herdRun(argv, { write = console.log, shell = false } = {}) {
     else if (a === "--name") flags.name = argv[++i];
     else if (a.startsWith("--name=")) flags.name = a.slice(7);
     else if (a === "--cwd") flags.cwd = path.resolve(argv[++i] || ".");
+    else if (a === "--herd") flags.herd = slugifyName(argv[++i]);
+    else if (a.startsWith("--herd=")) flags.herd = slugifyName(a.slice(7));
     else if (a === "--json") flags.json = true;
     else command.push(a);
   }
@@ -242,9 +246,10 @@ export function herdRun(argv, { write = console.log, shell = false } = {}) {
     write(err(String(started.error?.message || started.error)));
     return EXIT.usage;
   }
+  rememberSession(name, { herd: flags.herd });
 
   if (flags.json) {
-    write(JSON.stringify({ name, engine: label, cwd: flags.cwd, substrate }, null, 2));
+    write(JSON.stringify({ name, engine: label, herd: flags.herd, cwd: flags.cwd, substrate }, null, 2));
     return EXIT.matched;
   }
   write(ok(`${bone(name)} — ${label} running in the herd. the prompt is yours.`));
@@ -281,8 +286,8 @@ export function splitDetachArgs(args = []) {
 export function herdPs(argv, { write = console.log } = {}) {
   const rows = roster();
   if (argv.includes("--json")) {
-    write(JSON.stringify(rows.map(({ name, engine, state, authority, cwd, age, alive, attached, substrate }) => ({
-      name, engine, state, authority, cwd, ageMs: age, alive, attached, substrate,
+    write(JSON.stringify(rows.map(({ name, engine, herd, state, authority, cwd, age, alive, attached, substrate }) => ({
+      name, engine, herd, state, authority, cwd, ageMs: age, alive, attached, substrate,
     })), null, 2));
     return EXIT.matched;
   }
@@ -718,6 +723,9 @@ export function herdStop(argv, { write = console.log } = {}) {
 // ---------------------------------------------------------------------------
 
 const VERBS = {
+  // Lazy import: the UI pulls in escape-sequence machinery and only matters
+  // when someone asks for it, and herd-ui imports roster() from this file.
+  ui: async (argv, options) => (await import("./herd-ui.mjs")).herdUi(options),
   ps: herdPs, list: herdPs, status: herdStatus,
   start: herdStart, run: herdRun, shell: herdShell,
   attach: herdAttach, kill: herdKill, prune: herdPrune,

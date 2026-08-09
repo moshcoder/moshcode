@@ -125,6 +125,38 @@ moshcode attach api                      # step in; Ctrl-b d steps back out
 moshcode kill api                        # end it
 ```
 
+### The clickable list
+
+```sh
+moshcode herd ui
+```
+
+```
+  moshcode herd   3 members   1 waiting on you
+
+  MAIN (2)
+   ▸ ! api          claude     blocked  ~/src/coinpay
+     · work         shell      idle     ~/src/coinpay
+
+  SCRATCH (1)
+     · logs         shell      idle     ~/src/ugig.net
+
+  click or ↑↓ to choose · enter to go in · r refresh · q quit
+```
+
+Click a member to go into it; detach and you land back on the list. Group
+sessions with `--herd <name>` when you start them; anything without one is in
+`main`.
+
+It hands the terminal to a **real** attach rather than drawing the session
+itself, so what you get inside is a genuine terminal — full colour, real cursor,
+the agent's own mouse handling. The cost is that the list is not on screen at
+the same time as the session. tmux's model is session → window → pane and a pane
+belongs to exactly one window, so nothing can persist across a switch; a pinned
+sidebar would mean rendering every session from polled snapshots and losing all
+of the above. Once you are attached, `Ctrl-b s` is a clickable picker and the
+status line is a clickable list.
+
 ### A workspace: a few shells and an agent
 
 This is what most people actually want — a couple of shells to work in and an
