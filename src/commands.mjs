@@ -240,6 +240,7 @@ const COMMANDS = [
   cliVerb("ugig", "drive the ugig workflow CLI"),
   cliVerb("coinpay", "drive the coinpay workflow CLI"),
   cliVerb("c0mpute", "drive the c0mpute workflow CLI"),
+  cliVerb("c0upons", "drive the c0upons workflow CLI"),
   cliVerb("secrets", "manage/view team secrets via logicsrc (login, teams, credentials)"),
   cliVerb("railway", "drive the Railway CLI (deploys, services, env vars)"),
   cliVerb("gh", "drive the GitHub CLI (repos, PRs, issues, releases)"),

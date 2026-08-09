@@ -51,7 +51,7 @@ test("every CLI verb carries `code` under dry-run, not just the ones spot-checke
   // Derived from the vocabulary rather than hardcoded, so a newly added CLI
   // verb is covered automatically.
   const names = ["agents", "start", "install", "upgrade", "mcp", "skill", "prd",
-    "ugig", "coinpay", "c0mpute", "secrets", "pwd", "run"];
+    "ugig", "coinpay", "c0mpute", "c0upons", "secrets", "pwd", "run"];
   for (const name of names) {
     const res = moshVocabulary().get(name).run(dryCtx(), "test-arg");
     assert.equal(res.code, 0, `${name}() must return code: 0 in dry-run`);

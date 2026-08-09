@@ -1,8 +1,8 @@
 // Adjacent workflow CLIs moshcode can install and transparently invoke.
 // These are deliberately separate from coding engines: UGig owns marketplace
 // workflows, CoinPay owns payment workflows, c0mpute owns the compute network,
-// the cloud CLIs below own deploys/secrets/infra, and moshcode only conducts
-// their native command lines.
+// c0upons owns community coupons and bounties, the cloud CLIs below own
+// deploys/secrets/infra, and moshcode only conducts their native command lines.
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,15 @@ export const TOOLS = {
     bin: "c0mpute",
     // c0mpute ships via its own install script (the v1 stack installer).
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0mpute.com/install.sh | sh"] },
+  },
+  c0upons: {
+    desc: "c0upons — community coupon search, submissions, and bounties",
+    bin: "c0upons",
+    // c0upons ships its own POSIX-sh installer, so `| sh` is enough here (the
+    // script avoids bashisms deliberately) — no npm package to install from.
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0upons.com/install.sh | sh"] },
+    // The CLI updates itself in place from the same origin the installer uses.
+    upgrade: { cmd: "c0upons", args: ["upgrade"] },
   },
   secrets: {
     desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",

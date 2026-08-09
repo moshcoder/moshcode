@@ -114,7 +114,7 @@ test("runMoshcode stringifies args and never spawns under dry-run", async () => 
 
 test("the CLI capabilities are all registered as verbs", () => {
   const reg = moshVocabulary();
-  for (const name of ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "secrets", "alpaca", "trade", "pwd", "ai"]) {
+  for (const name of ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "c0upons", "secrets", "alpaca", "trade", "pwd", "ai"]) {
     assert.ok(reg.has(name), `expected ${name}() in the vocabulary`);
   }
 });
@@ -135,6 +135,7 @@ const VERB_ARGV_CASES = [
   { verb: "ugig",    args: ["--json", "gigs", "list"],       expect: /moshcode ugig --json gigs list/ },
   { verb: "coinpay", args: ["wallet", "balance"],            expect: /moshcode coinpay wallet balance/ },
   { verb: "c0mpute", args: ["status"],                       expect: /moshcode c0mpute status/ },
+  { verb: "c0upons", args: ["search", "nike"],               expect: /moshcode c0upons search nike/ },
   { verb: "secrets", args: ["teams", "list"],               expect: /moshcode secrets teams list/ },
   { verb: "alpaca", args: ["asset", "get", "--symbol-or-asset-id", "AAPL"], expect: /moshcode alpaca asset get --symbol-or-asset-id AAPL/ },
   { verb: "trade",  args: ["ticker", "AAPL"],               expect: /moshcode trade ticker AAPL/ },
@@ -155,7 +156,7 @@ for (const { verb, args, expect: pattern } of VERB_ARGV_CASES) {
 
 // Verify CLI verbs return { ok, dryRun } under dry-run (no real spawn).
 test("all CLI verbs return { ok: true, dryRun: true } in dry-run mode", () => {
-  const cliNames = ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "secrets", "alpaca", "trade", "pwd", "run"];
+  const cliNames = ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "c0upons", "secrets", "alpaca", "trade", "pwd", "run"];
   for (const name of cliNames) {
     const ctx = dryCtx();
     const cmd = moshVocabulary().get(name);

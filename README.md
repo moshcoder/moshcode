@@ -643,6 +643,7 @@ chmod +x deploy.mosh
 | `ugig(args…)` | drive the ugig workflow CLI |
 | `coinpay(args…)` | drive the coinpay workflow CLI |
 | `c0mpute(args…)` | drive the c0mpute workflow CLI |
+| `c0upons(args…)` | drive the c0upons workflow CLI |
 | `secrets(args…)` | drive the logicsrc secrets CLI |
 | `railway(args…)` | drive the Railway CLI |
 | `gh(args…)` | drive the GitHub CLI |
