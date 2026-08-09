@@ -79,6 +79,8 @@ export const CORE_CLI_COMMANDS = [
     verbs: "HERD_VERBS",
     flags: [["--json", "machine-readable, on every verb", ""]],
     examples: [
+      ["moshcode herd ui", "the clickable list — start here"],
+      ["", ""],
       ["# a workspace: two shells and an agent, none of which die with this terminal", ""],
       ["moshcode herd shell --name work", "a plain $SHELL you can come back to"],
       ["moshcode herd shell --name logs", "another one"],
@@ -736,6 +738,9 @@ export const HERD_VERBS = [
       ["--agent", "autonomous mode — bypasses the engine's approvals", ""],
       ["--json", "machine-readable", ""],
     ] },
+  { name: "ui", description: "the clickable list of herds and their members",
+    synopsis: [["moshcode herd ui", "click or ↑↓ to choose, enter to go in, q to quit"]],
+    flags: [] },
   { name: "run", description: "run ANY command in the herd — an agent moshcode does not ship, a build, a script",
     synopsis: [["moshcode herd run [--name <slug>] -- <command…>", "everything after -- is the command"]],
     flags: [

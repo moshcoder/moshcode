@@ -257,6 +257,10 @@ export function tmuxStartPlan({ name, cwd, command }) {
     "-f", "/dev/null",
     "new-session", "-d", "-s", name, "-c", cwd, command,
     ";", "set-option", "-t", name, "remain-on-exit", "on",
+    // Mouse on, so a click selects a pane and the status line's window list is
+    // clickable once you are inside. This server is moshcode's and starts from
+    // no config, so it is not overriding a preference anyone expressed.
+    ";", "set-option", "-t", name, "mouse", "on",
   ];
 }
 
@@ -734,6 +738,9 @@ export function listSessions({ substrate = detectSubstrate(), runner = spawnSync
     return {
       name,
       engine: meta.engine || "?",
+      // Sessions started before herds existed have none. They belong to `main`
+      // rather than to a group rendered as "undefined".
+      herd: meta.herd || "main",
       cwd: meta.cwd || "",
       created: meta.created || null,
       age: meta.created ? now - meta.created : null,
