@@ -28,6 +28,8 @@ import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { loginAuto, whoami, logout } from "../src/auth.mjs";
 import { tui } from "../src/tui.mjs";
 import { consoleCommand } from "../src/console.mjs";
+import { herdCommand, herdStart, splitDetachArgs } from "../src/herd-cli.mjs";
+import { detectSubstrate, substrateNote } from "../src/herd.mjs";
 import { dnsCommand } from "../src/dns.mjs";
 import { templateCommand } from "../src/templates.mjs";
 import { serveCommand } from "../src/serve.mjs";
@@ -117,6 +119,23 @@ function printEngineStatus(json = false) {
 }
 
 async function launchEngine(key, engine, args, { agentMode = false } = {}) {
+  const { detach, name, rest: engineArgs } = splitDetachArgs(args);
+  if (detach) {
+    const substrate = detectSubstrate();
+    if (substrate) {
+      const code = herdStart([
+        key, ...(name ? ["--name", name] : []), ...(agentMode ? ["--agent"] : []), ...engineArgs,
+      ]);
+      if (code) process.exitCode = code;
+      if (!process.stdin.isTTY || process.env.MOSHCODE_NESTED === "1") return;
+      return tui();
+    }
+    // R2: degrade, loudly, once — and then still do the thing that was asked
+    // for. A launch that refuses because the box has no tmux would be a worse
+    // answer than a launch that works and ends with this terminal.
+    console.error(`⚠ ${substrateNote(null)}`);
+  }
+  args = engineArgs;
   if (agentMode) {
     const note = `agent mode: ${key} ${agentLaunchArgs(engine).join(" ")}`;
     console.error(engine.agentsView
@@ -313,6 +332,18 @@ async function main() {
     }
     const [key, engine] = resolved;
     return launchEngine(key, engine, rest.slice(1));
+  }
+  // The herd (PRD 0009). `herd` is the namespace; the five verbs people reach
+  // for most often are also top-level, because `moshcode ps` is what someone
+  // types when they want to know what is running and nobody should have to
+  // learn a namespace to ask that.
+  if (cmd === "herd") {
+    process.exitCode = (await herdCommand(rest)) || 0;
+    return;
+  }
+  if (["ps", "attach", "kill", "wait", "restore"].includes(cmd)) {
+    process.exitCode = (await herdCommand([cmd === "ps" ? "ps" : cmd, ...rest])) || 0;
+    return;
   }
   if (cmd === "tools") {
     const asJson = rest.includes("--json");

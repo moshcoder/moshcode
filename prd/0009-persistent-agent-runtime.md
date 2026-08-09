@@ -2,14 +2,14 @@
 openprd: "0.2"
 id: "0009"
 title: "Keep the herd alive — a persistent runtime, semantic agent state, and one control surface for humans and agents"
-status: Draft
+status: Accepted
 authors:
   - anthony@profullstack.com
 created: 2026-08-09
 updated: 2026-08-09
 repo: https://github.com/moshcoder/moshcode
-discussion:
-implementation:
+discussion: https://github.com/moshcoder/moshcode/pull/341
+implementation: src/herd.mjs, src/herd-state.mjs, src/herd-cli.mjs
 tags: [runtime, sessions, agents, tui, notify]
 supersedes:
 superseded-by:
@@ -203,17 +203,26 @@ entries in a new `runtime` group:
 
 | command | what it does |
 |---|---|
-| `moshcode runtime` | start / inspect / stop the background runtime |
-| `moshcode ps` | list live sessions with state |
+| `moshcode herd` | the namespace: status, start, prompt, read, send-keys, report, notify, watch, prune, stop |
+| `moshcode ps` | list sessions with state |
 | `moshcode attach <name>` | attach to a session |
 | `moshcode kill <name>` | end a session |
 | `moshcode wait <name>` | block until a state transition |
 | `moshcode restore` | rebuild sessions from the manifest |
-| `moshcode agent <verb>` | start / prompt / read / send-keys / stop |
 
-TUI equivalents follow the existing convention: `/ps`, `/attach <name>`,
-`/kill <name>`, `/restore`. `/agents <engine>` keeps its meaning and simply
-gains `--name` and a detachable session underneath it.
+The namespace is `herd`, not the `runtime` / `agent <verb>` this document first
+proposed. Two reasons, both found while building it. `agent` is already a
+registered alias of `agents` in `PIT_COMMANDS`, and a test pins
+`suggest("agent") === "agents"` — so `moshcode agent start` would have meant two
+different things depending on where it was typed. And `runtime` is what
+`src/runtime.mjs` already calls the moshscript interpreter. The five verbs
+people reach for most are top-level anyway, which is what the original table was
+really asking for: nobody should have to learn a namespace to ask what is
+running.
+
+TUI equivalents follow the existing convention: `/herd`, `/ps`, `/attach <name>`,
+`/kill <name>`, `/wait`, `/restore`. `/agents <engine>` and `/start <engine>`
+keep their meaning and simply gain `-d` / `--name`.
 
 **The pit's front door changes.** Today `moshcode` prints a banner and a prompt.
 With anything running it prints the herd first:
@@ -301,3 +310,53 @@ exactly like today. No repeated nagging, no failure.
 - **Scope.** Phases 1–3 are independently shippable and should ship that way.
   Phase 1 alone — sessions that survive the terminal — is the bulk of the value
   and does not require a single line of state detection.
+
+## Implementation Notes
+
+Written after the build, so the document and the code agree.
+
+**A second substrate, which this PRD did not ask for.** R2 promised only to
+degrade gracefully without tmux. That was not good enough: `/new` already
+required tmux and it is the wart people notice. So there are two substrates
+behind one interface — tmux when the box has it, and otherwise `script(1)` with
+the session's stdin on a FIFO, reusing the capability detection `pty.mjs`
+already does. The FIFO is opened `O_RDWR` before the spawn so the child is its
+own writer and never sees EOF when the pit exits, which is the whole trick. Its
+one real limit: nothing outside a pty can ioctl its master, so the size is fixed
+at launch (set from inside by `stty`) and a later resize does not reach it.
+`MOSHCODE_HERD=pty` forces it, which is how the fallback is tested on a box that
+has tmux.
+
+**Two bugs the survival test caught**, both of which would have shipped as
+"finished agents report `gone`". tmux's `remain-on-exit` was being set in a
+second call, and a fast command finishes before that process starts — fixed by
+making the session and its option one invocation using tmux's `;` argument. And
+the pty substrate could not tell "the agent finished" from "the box rebooted",
+since both are a dead pid — fixed by having the session's own shell record its
+exit code on the way out.
+
+**Delivered:** R1–R12 and R14. Both substrates are covered by an integration
+test that starts a session in one process, exits it, and talks to the session
+from another.
+
+**Not delivered, deliberately:**
+
+- **R7 tier-1 hook installation.** The protocol ships and works —
+  `moshcode herd report <name> <state>` takes authority, suppresses screen
+  classification entirely while it is live, and expires so a crashed agent
+  cannot read `working` forever. What is not built is auto-installing that call
+  into each engine's hook config via the `plugins.mjs` / `skills.mjs` fan-out.
+  Until then tier 1 is opt-in and tier 2 carries the roster.
+- **R13, the browser as a real client.** `console.mjs` still points ttyd at a
+  shell rather than at `moshcode attach <name>`, and `mirror.mjs` keeps its
+  documented blind spot. The runtime it would attach to now exists, so this is a
+  small follow-up rather than a design question.
+- **R15, scrollback replay.** P2 and opt-in in this document; still the right
+  call not to write engine output across a reboot by default.
+
+**Rules will rot, and that is planned for.** The shipped patterns are
+conservative and anchored to things a terminal draws — brackets, selectors, line
+anchors — never bare English words, and a test asserts that. `unknown` is
+common and safe. `~/.moshcode/herd/rules.json` lets a rotted pattern be fixed on
+the box it rots on, and a malformed entry there loses that pattern rather than
+the file.

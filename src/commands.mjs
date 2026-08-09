@@ -18,6 +18,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { createRegistry } from "./registry.mjs";
 import { cliVerb, aiVerb } from "./cli.mjs";
 import { ingestApproval, pollApproval } from "./notify.mjs";
+import { capture, killSession, sendPrompt } from "./herd.mjs";
+import { herdStart, roster, waitFor } from "./herd-cli.mjs";
 
 // The moshcoding pit-anthem playlist. mosh() blasts this URL and, on a desktop
 // with a GUI, tries to open it in the default browser.
@@ -221,6 +223,103 @@ const COMMANDS = [
     },
   },
 
+  // The herd (PRD 0009 R12). These are local rather than cliVerbs on purpose:
+  // a cliVerb returns { ok, code }, and the whole reason a script wants the
+  // herd is to fan work out and then read what came back. `herdRead()` has to
+  // hand back a string and `herdList()` an array, which shelling out cannot do.
+  //
+  //   const a = herdStart("claude", { name: "api" });
+  //   const b = herdStart("codex",  { name: "web" });
+  //   herdPrompt("api", "port the auth routes");
+  //   herdPrompt("web", "port the dashboard");
+  //   await herdWait("api"); await herdWait("web");   // both, in parallel
+  //   say(herdRead("api", { lines: 20 }));
+  {
+    name: "herdStart",
+    summary: "start an agent session that outlives this script",
+    usage: 'herdStart(engine, { name, cwd, agent })',
+    detail: "returns { ok, name }; the session keeps running after the script ends",
+    run(ctx, engine, opts = {}) {
+      if (!engine) throw new Error("moshscript: herdStart(engine) requires an engine name");
+      const argv = [String(engine), "--json"];
+      if (opts.name) argv.push("--name", String(opts.name));
+      if (opts.cwd) argv.push("--cwd", String(opts.cwd));
+      if (opts.agent) argv.push("--agent");
+      if (ctx.dryRun) {
+        ctx.out(`  🐑 herdStart(${engine}) → would run: moshcode herd start ${argv.join(" ")}`);
+        return { ok: true, name: opts.name || String(engine), dryRun: true };
+      }
+      let captured = "";
+      const code = herdStart(argv, { write: (s) => { captured += `${s}\n`; } });
+      if (code !== 0) { ctx.out(`  ✗ herdStart(${engine}) → ${captured.trim()}`); return { ok: false, name: null }; }
+      const name = JSON.parse(captured).name;
+      ctx.out(`  🐑 herdStart(${engine}) → ${name}`);
+      return { ok: true, name };
+    },
+  },
+  {
+    name: "herdPrompt",
+    summary: "type a prompt into a herd session",
+    usage: "herdPrompt(name, text)",
+    detail: "returns { ok }; does not wait — use herdWait() to join",
+    run(ctx, name, ...words) {
+      const text = words.join(" ");
+      if (!name || !text) throw new Error("moshscript: herdPrompt(name, text) requires both");
+      if (ctx.dryRun) { ctx.out(`  💬 herdPrompt(${name}) → would send: ${text}`); return { ok: true, dryRun: true }; }
+      ctx.out(`  💬 herdPrompt(${name}) → ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`);
+      const sent = sendPrompt(String(name), text);
+      return { ok: Boolean(sent.ok) };
+    },
+  },
+  {
+    name: "herdWait",
+    summary: "BLOCK until a herd session is blocked, done, or idle",
+    usage: "herdWait(name, { states, timeout })",
+    detail: "returns the state it reached. needs await",
+    async run(ctx, name, opts = {}) {
+      if (!name) throw new Error("moshscript: herdWait(name) requires a session name");
+      const states = opts.states || ["blocked", "done", "idle"];
+      if (ctx.dryRun) { ctx.out(`  ⏳ herdWait(${name}) → would wait for ${states.join("/")}`); return "idle"; }
+      ctx.out(`  ⏳ herdWait(${name}) → waiting for ${states.join("/")}…`);
+      const result = await waitFor(String(name), states, opts.timeout ? { timeoutMs: Number(opts.timeout) } : {});
+      ctx.out(`     ${result.outcome === "matched" ? "✅" : "⌛"} ${name} is ${result.state}`);
+      return result.state;
+    },
+  },
+  {
+    name: "herdRead",
+    summary: "read a herd session's screen as a string",
+    usage: "herdRead(name, { lines })",
+    detail: "returns the last `lines` rows of its screen (default 60)",
+    run(ctx, name, opts = {}) {
+      if (!name) throw new Error("moshscript: herdRead(name) requires a session name");
+      if (ctx.dryRun) { ctx.out(`  📖 herdRead(${name}) → would read its screen`); return ""; }
+      return capture(String(name), { lines: Number(opts.lines) || 60 });
+    },
+  },
+  {
+    name: "herdList",
+    summary: "every herd session and its state",
+    usage: "herdList()",
+    detail: "returns [{ name, engine, state, cwd, alive }, …]",
+    run(ctx) {
+      if (ctx.dryRun) { ctx.out("  🐑 herdList() → would list the herd"); return []; }
+      return roster().map(({ name, engine, state, cwd, alive }) => ({ name, engine, state, cwd, alive }));
+    },
+  },
+  {
+    name: "herdKill",
+    summary: "end a herd session",
+    usage: "herdKill(name)",
+    detail: "returns { ok }",
+    run(ctx, name) {
+      if (!name) throw new Error("moshscript: herdKill(name) requires a session name");
+      if (ctx.dryRun) { ctx.out(`  ⏹ herdKill(${name}) → would end it`); return { ok: true, dryRun: true }; }
+      ctx.out(`  ⏹ herdKill(${name})`);
+      return { ok: Boolean(killSession(String(name)).ok) };
+    },
+  },
+
   // CLI verbs — each is `moshcode <name> ...args`. This is the whole point:
   // scripting the CLI. Add a capability by adding a line here.
   //
@@ -231,6 +330,8 @@ const COMMANDS = [
   // shortcut: ai() runs an engine headlessly and RETURNS its output (see PRD R17)
   aiVerb,
   cliVerb("agents", "launch an autonomous agent session (moshcode agents <engine>)"),
+  cliVerb("herd", "drive the herd (moshcode herd <verb>) — see herdStart/herdWait for values"),
+  cliVerb("ps", "print the herd roster"),
   cliVerb("start", "raw-launch an engine (moshcode start <engine>)"),
   cliVerb("install", "install an engine or workflow tool"),
   cliVerb("upgrade", "upgrade moshcode, engines, and tools"),

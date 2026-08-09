@@ -28,6 +28,12 @@ or miss one that does. A test fails the build when it drifts.
 |---|---|---|
 | `moshcode agents` | engines | list engines or launch one autonomously |
 | `moshcode start` | engines | launch an engine with its native defaults |
+| `moshcode herd` | runtime | run agent sessions that outlive this terminal |
+| `moshcode ps` | runtime | list herd sessions and what each one is doing |
+| `moshcode attach` | runtime | attach this terminal to a herd session |
+| `moshcode kill` | runtime | end a herd session |
+| `moshcode wait` | runtime | block until a session is blocked, done, or idle |
+| `moshcode restore` | runtime | rebuild the herd's sessions after a reboot |
 | `moshcode install` | engines | install an engine or workflow tool |
 | `moshcode uninstall` <br>`remove` | engines | take an engine or workflow tool off this machine |
 | `moshcode upgrade` <br>`update` | engines | update moshcode, engines, or tools |
@@ -101,6 +107,103 @@ Bare engine commands remain raw for backward compatibility, so `moshcode claude`
 is shorthand for `moshcode start claude`. In the TUI, use `/agents <engine>` for
 autonomous mode or `/start <engine>` for raw mode. Running `moshcode agents` or
 `/agents` without an engine still lists engines and their install status.
+
+## The herd — sessions that outlive your terminal
+
+Every launch above hands an engine the whole terminal and waits. That is why
+they feel native, and it is also why the pit can only do one thing at a time and
+why closing the lid kills the work.
+
+The herd inverts it. Add `-d` and the session runs in a runtime that outlives
+the pit, so you get your prompt back immediately:
+
+```sh
+moshcode start claude -d --name api      # runs in the background, prompt returns
+moshcode agents codex -d                 # autonomous, and still detached
+moshcode ps                              # who is running, and who wants you
+moshcode attach api                      # step in; Ctrl-b d steps back out
+moshcode kill api                        # end it
+```
+
+Close the terminal, drop the SSH link, come back tomorrow — `moshcode ps` still
+answers, and `moshcode attach` puts you back inside. In the pit the same verbs
+are `/ps`, `/attach`, `/kill`, and the roster prints on the way in.
+
+### Which one needs you
+
+Every session carries a state: `working`, `blocked`, `done`, `idle`, or
+`unknown`. `blocked` means a human decision is the only thing missing.
+
+```
+  api       claude  blocked   ~/src/coinpay        12m
+  web       codex   working   ~/src/ugig.net        4m
+  audit     opencode  done    ~/src/moshpit-dns     1h
+```
+
+State comes from one authority per session, never two. An engine that reports
+through a lifecycle hook (`moshcode herd report <name> <state>`) is believed and
+its screen is not second-guessed; everything else is classified from the bottom
+of its screen. Nothing recognisable reads `unknown`, which is a safe answer —
+detection never gates a launch. Patterns that go stale can be fixed in
+`~/.moshcode/herd/rules.json` without waiting for a release.
+
+Blocked can also come and find you, using the same notification fan-out as
+`notify()`/`ask()`:
+
+```sh
+moshcode herd notify on --ask            # email/SMS/Slack/Telegram/push
+moshcode herd start claude --name watch  # then run `moshcode herd watch` in the herd
+```
+
+With `--ask`, whatever you reply is typed into the session that was waiting.
+
+### Driving it from a script or another agent
+
+There is no second API — every verb takes `--json`, and that is what a machine
+reads. `wait` exists to be branched on: exit `0` matched, `2` timed out, `3` no
+such session.
+
+```sh
+moshcode herd start claude --name api --json
+moshcode herd prompt api "port the auth routes" --wait
+moshcode herd read api --lines 40
+moshcode wait api --state blocked --timeout 1h
+```
+
+moshscript gets the same surface as values rather than exit codes, which is what
+makes fan-out practical:
+
+```js
+herdStart("claude", { name: "api" });
+herdStart("codex",  { name: "web" });
+herdPrompt("api", "port the auth routes");
+herdPrompt("web", "port the dashboard");
+await herdWait("api"); await herdWait("web");
+say(herdRead("api", { lines: 20 }));
+```
+
+### After a reboot
+
+```sh
+moshcode restore --dry-run       # what would come back
+moshcode restore --resume        # and ask each engine to reopen its conversation
+```
+
+This brings back the *shape* — the sessions, in their directories, on their
+engines. The processes are new. Work that was in flight is not still running,
+and `--resume` only reaches engines that have a resume flag of their own.
+
+### What it runs on
+
+`tmux` when the box has it: real resizing, scrollback, native attach. Without
+tmux, sessions run under `script(1)` with their input on a FIFO — they work and
+they persist, but their size is fixed when they start. With neither, launches
+stay in the foreground and say so once. moshcode does not turn a soft dependency
+into a hard one, so `-d` never fails; at worst it degrades and tells you what
+would fix it.
+
+The session manifest and every transcript are written `0600`: engine argv and
+engine output both carry secrets.
 
 ### Parallel pit tabs
 
