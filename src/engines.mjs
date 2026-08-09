@@ -10,6 +10,19 @@
 // `agentArgs` — an autonomous session with native approvals
 // bypassed/auto-approved. Do not use a machine-readable, one-shot list command
 // as an agents view: `/agents` promises to hand the terminal to a live session.
+//
+// `state` (optional) is how the herd reads this engine's screen when it has no
+// authoritative hook to go on (PRD 0009 R7). It lives here, next to the install
+// spec, so a new engine ships its detection rules with itself rather than in a
+// table somewhere else that nobody remembers to update. Shared patterns — bare
+// y/n prompts, "esc to interrupt" — are in src/herd-state.mjs and do not need
+// repeating; only put a pattern here when it is this engine's own wording.
+// Every pattern is matched against the bottom of the screen with ANSI stripped.
+//
+// `resume` (optional) is the argv that reopens this engine's last conversation,
+// used by `moshcode restore --resume` after a reboot. Omit it rather than guess:
+// a session that starts fresh is a small disappointment, and one that starts
+// with a flag the engine does not have is a crash.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -24,6 +37,10 @@ export const ENGINES = {
     agentArgs: ["--auto"],
     install: { cmd: "bash", args: ["-c", "curl -fsSL https://opencode.ai/install | bash"] },
     upgrade: { cmd: "opencode", args: ["upgrade"] },
+    resume: ["--continue"],
+    state: {
+      blocked: [/\bpermission (?:request|required)\b/i, /\ballow this (?:command|tool)\b/i],
+    },
     // The installer appends this directory to a shell profile. The moshcode
     // process that ran it cannot see that PATH change, so search it directly.
     binDirs: [path.join(homedir(), ".opencode", "bin")],
@@ -35,6 +52,11 @@ export const ENGINES = {
     agentArgs: ["--auto"],
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
     binDirs: [path.join(homedir(), ".privacycode", "bin")],
+    // Same lineage, so the same screen wording and the same resume flag.
+    resume: ["--continue"],
+    state: {
+      blocked: [/\bpermission (?:request|required)\b/i, /\ballow this (?:command|tool)\b/i],
+    },
     // Deliberately no native updater. `privacycode upgrade` is opencode's, and
     // it works out how to update itself by recognising where it was installed —
     // it knows opencode's own locations, not this fork's ~/.privacycode/bin. It
@@ -59,18 +81,37 @@ export const ENGINES = {
       "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
       "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
     ],
+    resume: ["--continue"],
+    state: {
+      // The permission dialog's own heading, and the selector on its first
+      // option — the generic numbered-menu pattern would catch the second only
+      // if the cursor happened to be resting there.
+      blocked: [/\bdo you want to (?:proceed|make this edit|create)\b/i, /^\s*❯\s*1\.\s*yes/im],
+      // Claude Code parks "? for shortcuts" under the composer when it is
+      // waiting on you and nothing else, which is as close to an explicit
+      // "idle" as it publishes.
+      idle: [/\?\s+for shortcuts/i],
+    },
   },
   codex: {
     desc: "Codex — OpenAI's coding CLI",
     bin: "codex",
     agentArgs: ["--dangerously-bypass-approvals-and-sandbox"],
     install: { cmd: "npm", args: ["install", "-g", "@openai/codex"] },
+    resume: ["resume", "--last"],
+    state: {
+      blocked: [/\ballow (?:this )?command\b/i, /\bapprove this (?:command|edit|change)\b/i],
+      working: [/\besc to interrupt\b/i, /^\s*working\b/im],
+    },
   },
   gemini: {
     desc: "Gemini CLI — Google's agentic CLI",
     bin: "gemini",
     agentArgs: ["--approval-mode=yolo"],
     install: { cmd: "npm", args: ["install", "-g", "@google/gemini-cli"] },
+    state: {
+      blocked: [/\bapply this change\?/i, /\ballow execution\b/i],
+    },
   },
   kimi: {
     desc: "Kimi Code — Moonshot AI's agentic CLI",
@@ -131,6 +172,11 @@ export const ENGINES = {
     agentArgs: ["--yes-always"],
     install: { cmd: "bash", args: ["-c", "curl -LsSf https://aider.chat/install.sh | sh"] },
     upgrade: { cmd: "aider", args: ["--upgrade"] },
+    state: {
+      // aider asks in prose and answers in (Y)es/(N)o, which the shared y/n
+      // pattern misses because of the parentheses around the letters.
+      blocked: [/\((?:Y\)es|N\)o)/, /\badd .* to the chat\?/i],
+    },
   },
 };
 

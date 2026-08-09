@@ -27,6 +27,8 @@ import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion 
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
 import { openNewTab } from "./tabs.mjs";
+import { herdCommand, herdStart, renderRoster, roster, splitDetachArgs } from "./herd-cli.mjs";
+import { detectSubstrate, substrateNote } from "./herd.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
 
@@ -146,6 +148,44 @@ function printEngines(json = false) {
     const dot = e.installed ? acid("●") : ash("○");
     console.log(`   ${dot} ${bone(e.key.padEnd(9))} ${ash(e.installed ? "installed" : "not installed — /install " + e.key)}`);
   }
+}
+
+/**
+ * The herd, on the pit's front door.
+ *
+ * Printed before the prompt because "what is already running, and does any of
+ * it want me?" is the first question on opening the pit, and until now the only
+ * way to answer it was to remember. Silent when the herd is empty — a heading
+ * over nothing is noise on every cold start.
+ */
+function printHerd() {
+  const rows = roster();
+  if (!rows.length) return;
+  const blocked = rows.filter((r) => r.state === "blocked").length;
+  console.log(bone("  herd") + ash(`     — ${rows.length} session${rows.length === 1 ? "" : "s"} · attach with `) + acid("/attach <name>"));
+  console.log(renderRoster(rows, { indent: "   " }));
+  if (blocked) console.log("   " + warn(`${blocked} waiting on you`));
+}
+
+/**
+ * `-d` / `--name` on `/agents` and `/start`: run it in the herd instead of
+ * handing over the terminal.
+ *
+ * Returns { taken, args }. `taken` means the herd has it and the caller should
+ * skip its passthrough path; `args` is always the engine's own arguments with
+ * the herd flags removed, so a box with no substrate falls back to a normal
+ * foreground launch instead of passing `-d` on to an engine that has never
+ * heard of it.
+ */
+function detachedLaunch(key, args, { agentMode = false } = {}) {
+  const { detach, name, rest } = splitDetachArgs(args);
+  if (!detach) return { taken: false, args: rest };
+  if (!detectSubstrate()) {
+    console.log(warn(substrateNote(null)));
+    return { taken: false, args: rest };
+  }
+  herdStart([key, ...(name ? ["--name", name] : []), ...(agentMode ? ["--agent"] : []), ...rest]);
+  return { taken: true, args: rest };
 }
 
 function printTools() {
@@ -476,7 +516,9 @@ export async function tui() {
   printEngines();
   console.log();
   printTools();
-  console.log("\n" + ash("  /help for commands · /new for a tab · /quit to leave") + "\n");
+  console.log();
+  printHerd();
+  console.log("\n" + ash("  /help for commands · /ps for the herd · /new for a tab · /quit to leave") + "\n");
 
   const ad = await motd;
   if (ad) console.log(dim(ad) + "\n");
@@ -610,6 +652,23 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
+    // The herd (PRD 0009). These never close the readline interface, because
+    // that is the entire point of them: the pit keeps its prompt while the
+    // sessions run somewhere that outlives it.
+    if (cmd === "herd") { await herdCommand(rest); continue; }
+    if (cmd === "ps") { await herdCommand(["ps", ...rest]); continue; }
+    if (cmd === "kill") { await herdCommand(["kill", ...rest]); continue; }
+    if (cmd === "wait") { await herdCommand(["wait", ...rest]); continue; }
+    if (cmd === "restore") { await herdCommand(["restore", ...rest]); continue; }
+    // `/attach` is the exception — it hands over the terminal like an engine
+    // session does, so readline has to let go of stdin first or the two fight
+    // over every keystroke.
+    if (cmd === "attach") {
+      rl.close();
+      await herdCommand(["attach", ...rest]);
+      rl = mkrl();
+      continue;
+    }
     if (cmd === "agents" || cmd === "agent" || cmd === "engines") {
       if (!rest[0] || (rest.length === 1 && rest[0] === "--json")) {
         printEngines(rest[0] === "--json");
@@ -618,23 +677,27 @@ export async function tui() {
       const resolved = resolveEngine(rest[0]);
       if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
       const [key, engine] = resolved;
+      const detached = detachedLaunch(key, rest.slice(1), { agentMode: true });
+      if (detached.taken) continue;
       rl.close();
       await openEngine(
         key,
         { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed },
-        rest.slice(1),
+        detached.args,
         { agentMode: true },
       );
       rl = mkrl();
       continue;
     }
     if (cmd === "start") {
-      if (!rest[0]) { console.log(err("usage: /start <engine> [args…]")); continue; }
+      if (!rest[0]) { console.log(err("usage: /start <engine> [args…] [-d]")); continue; }
       const resolved = resolveEngine(rest[0]);
       if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
       const [key, engine] = resolved;
+      const detached = detachedLaunch(key, rest.slice(1));
+      if (detached.taken) continue;
       rl.close();
-      await openEngine(key, { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed }, rest.slice(1));
+      await openEngine(key, { ...engine, installed: engineStatus().find((e) => e.key === key)?.installed }, detached.args);
       rl = mkrl();
       continue;
     }

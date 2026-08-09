@@ -92,9 +92,13 @@ export function ptySpec(cmd, args = [], transcript, flavor) {
  * decoding each slice independently turns them into U+FFFD in the mirror. The
  * decoder holds the incomplete tail back until the rest of it arrives.
  */
-export function followFile(file, onChunk, { intervalMs = 100 } = {}) {
+export function followFile(file, onChunk, { intervalMs = 100, startOffset = 0 } = {}) {
   let fd = null;
-  let offset = 0;
+  // Callers that already have the earlier bytes — the herd's `attach` has just
+  // printed the tail of the transcript for context — pass the offset they got
+  // to, so following a session that has been running for hours costs the new
+  // bytes rather than a full replay of everything it ever printed.
+  let offset = Number(startOffset) || 0;
   let stopped = false;
   let decoder = new StringDecoder("utf8");
 
