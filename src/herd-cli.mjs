@@ -725,7 +725,10 @@ export function herdStop(argv, { write = console.log } = {}) {
 const VERBS = {
   // Lazy import: the UI pulls in escape-sequence machinery and only matters
   // when someone asks for it, and herd-ui imports roster() from this file.
-  ui: async (argv, options) => (await import("./herd-ui.mjs")).herdUi(options),
+  // `ui` is the sidebar workspace; the old modal list lives on as the fallback
+  // inside it for machines with no tmux to swap panes on.
+  ui: async (argv, options) => (await import("./herd-workspace.mjs")).herdUi(argv, options),
+  sidebar: async (argv, options) => (await import("./herd-workspace.mjs")).herdSidebar(options),
   tile: async (argv, options) => (await import("./herd-tile.mjs")).herdTile(argv, options),
   untile: async (argv, options) => (await import("./herd-tile.mjs")).herdUntile(argv, options),
   ps: herdPs, list: herdPs, status: herdStatus,
