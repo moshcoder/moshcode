@@ -121,7 +121,12 @@ export function render(rows, { selected = 0, width = 80, substrate = "tmux" } = 
     out.push(`  ${ash("start something with")} ${acid("moshcode herd shell")} ${ash("or")} ${acid("moshcode agents claude -d")}`);
   }
   out.push("");
-  out.push(`  ${dim("click or ↑↓ to choose · enter to go in · r refresh · q quit")}`);
+  // Two lines, grouped by what they do, and the way *back* stated before you
+  // ever go in. The old single crammed line never mentioned it at all, so
+  // clicking into a session was a one-way door as far as the screen was
+  // concerned.
+  out.push(`  ${ash("move")}  ${dim("click · ↑↓ · wheel")}     ${ash("open")}  ${dim("enter or double-click")}`);
+  out.push(`  ${ash("back")}  ${dim("Ctrl-b d from inside")}   ${ash("also")}  ${dim("t tile all · r refresh · q quit")}`);
   if (substrate !== "tmux") out.push(`  ${dim(substrateNote(substrate) || "")}`);
   return out.join("\r\n");
 }
@@ -161,7 +166,7 @@ export function parseInput(buffer) {
     if (parsed) events.push(parsed);
   }
   if (events.length) return events;
-  for (const key of ["\x1b[A", "\x1b[B", "\r", "\n", "q", "\x03", "r", "j", "k"]) {
+  for (const key of ["\x1b[A", "\x1b[B", "\r", "\n", "q", "\x03", "r", "t", "j", "k"]) {
     if (text.includes(key)) events.push({ kind: "key", key });
   }
   return events;
@@ -268,13 +273,30 @@ export async function herdUi({
         if (event.kind === "key" && (event.key === "\x1b[A" || event.key === "k")) selected = moveSelection(rows, selected, -1);
         else if (event.kind === "key" && (event.key === "\x1b[B" || event.key === "j")) selected = moveSelection(rows, selected, 1);
         else if (event.kind === "key" && event.key === "r") { refresh(); continue; }
+        else if (event.kind === "key" && event.key === "t") {
+          // The list and the tiled layout are two views of one herd, so getting
+          // between them should not mean quitting and typing another command.
+          restore();
+          const { herdTile } = await import("./herd-tile.mjs");
+          await herdTile([], { write: (s) => process.stdout.write(`${s}\n`) });
+          if (done) return;
+          enter();
+          refresh();
+          continue;
+        }
         else if (event.kind === "wheel") selected = moveSelection(rows, selected, event.direction);
         else if (event.kind === "click") {
           const hit = rows.find((r) => r.kind === "session" && r.line === event.row);
           if (!hit) continue;
-          selected = rows.indexOf(hit);
+          const index = rows.indexOf(hit);
+          // A single click SELECTS; only a second click on the row already
+          // selected opens it. Opening on first click made one stray click a
+          // one-way trip into a session, which is most of why this felt bad to
+          // navigate — you could not point at a row to read it.
+          const opening = index === selected;
+          selected = index;
           draw();
-          await openSelected();
+          if (opening) await openSelected();
           continue;
         }
         else if (event.kind === "key") { await openSelected(); continue; }

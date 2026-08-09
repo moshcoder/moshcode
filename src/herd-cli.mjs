@@ -726,6 +726,8 @@ const VERBS = {
   // Lazy import: the UI pulls in escape-sequence machinery and only matters
   // when someone asks for it, and herd-ui imports roster() from this file.
   ui: async (argv, options) => (await import("./herd-ui.mjs")).herdUi(options),
+  tile: async (argv, options) => (await import("./herd-tile.mjs")).herdTile(argv, options),
+  untile: async (argv, options) => (await import("./herd-tile.mjs")).herdUntile(argv, options),
   ps: herdPs, list: herdPs, status: herdStatus,
   start: herdStart, run: herdRun, shell: herdShell,
   attach: herdAttach, kill: herdKill, prune: herdPrune,
