@@ -373,13 +373,17 @@ export async function daemonStatus(path = pidfilePath()) {
  * not survive a reboot. `moshcode dns status` says so plainly rather than
  * letting someone discover it when their names stop resolving.
  */
-export async function startDaemon({ port, registryBase, path = pidfilePath(), entry }) {
+export async function startDaemon({ port, registryBase, path = pidfilePath(), entry, proxy = null }) {
   const existing = await daemonStatus(path);
   if (existing.running) return { started: false, pid: existing.pid, alreadyRunning: true };
 
   await mkdir(dirname(path), { recursive: true });
   const args = [entry, "dns", "start", "--port", String(port)];
   if (registryBase) args.push("--registry", registryBase);
+  // Passed at spawn time because it is what the resolver answers with, not
+  // something it can be told later — there is no channel to a detached daemon
+  // short of restarting it, which is why `enable` decides this before starting.
+  if (proxy) args.push("--proxy", proxy);
 
   const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
   child.unref();

@@ -454,6 +454,10 @@ function noSystem() {
     preflight: async () => ({ ok: true, blockers: [], conflicts: [], holder: null }),
     verify: async () => ({ ok: true, checks: [] }),
     bridgeStatus: async () => ({ running: false, pid: null, stale: false }),
+    // No proxy, which is the state these tests were written in. Stubbed rather
+    // than left to the real probe, which would open a TLS connection to
+    // whatever holds 443 on the machine running the suite.
+    findLocalProxyImpl: async () => ({ found: false, why: null, address: { v4: null, v6: null } }),
     startBridge: async () => ({ started: true, pid: 1, alreadyRunning: false }),
     stopBridge: async () => ({ stopped: true, reason: null }),
     dropins: async () => [],

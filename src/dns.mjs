@@ -695,6 +695,111 @@ export function proxyReachable(address, port = 443, { connect = null, timeoutMs 
   });
 }
 
+/** The root moshpit-proxy signs with. Its leaves are how the proxy is recognised. */
+export const PROXY_ROOT_CN = "Moshpit Local CA";
+
+/**
+ * Is the thing on that address *our proxy*, or merely something on port 443?
+ *
+ * `proxyReachable` answers the second question, and on one common class of
+ * machine the two answers differ in the worst possible way. An origin runs
+ * nginx on `0.0.0.0:443`, which covers loopback — so a bare connect succeeds,
+ * proxy mode is turned on, and every live Moshpit name on the machine is
+ * pointed at a web server that knows nothing about them. That is not a
+ * certificate problem, it is every name on the machine serving the wrong site
+ * at once, and the connect probe cannot see it coming.
+ *
+ * So this asks the question that actually distinguishes them: complete a TLS
+ * handshake and look at who issued the certificate. The proxy mints a leaf per
+ * name from the root it generated on this machine, so the issuer is that root.
+ * Anything else — nginx with the origin's own self-signed certificate, some
+ * unrelated service — is issued by something else and is refused.
+ *
+ * `rejectUnauthorized` is off deliberately, and it is not a hole: nothing is
+ * sent, the peer certificate is read rather than trusted, and the only thing
+ * accepted from it is the issuer name. Verifying properly would require the
+ * root to already be installed, which is a step that has not happened yet at
+ * the point this runs.
+ */
+export async function proxyServes(address, name, {
+  port = PROXY_PORT,
+  timeoutMs = 2500,
+  tlsConnect = null,
+} = {}) {
+  const connectImpl = tlsConnect || (await import("node:tls")).connect;
+  return new Promise((resolve) => {
+    let socket;
+    const done = (result) => {
+      try { socket?.destroy(); } catch { /* already gone */ }
+      resolve(result);
+    };
+    try {
+      socket = connectImpl({
+        host: address,
+        port,
+        servername: name,
+        rejectUnauthorized: false,
+        // The proxy forces http/1.1; offering nothing keeps this a pure
+        // handshake rather than a protocol negotiation that could be declined.
+        ALPNProtocols: ["http/1.1"],
+      });
+      // Not unref'd, for the reason proxyReachable spells out: this timer is the
+      // only guarantee the promise settles.
+      const timer = setTimeout(() => done({ ok: false, why: "timed out" }), timeoutMs);
+      socket.once("secureConnect", () => {
+        clearTimeout(timer);
+        const cert = socket.getPeerCertificate?.() || {};
+        const issuer = cert.issuer?.CN || "";
+        if (issuer === PROXY_ROOT_CN) return done({ ok: true, issuer });
+        done({
+          ok: false,
+          issuer,
+          // Named as what it means rather than what was seen: "issuer is
+          // chovy.hacker" is a fact, "something else owns 443" is the reason
+          // proxy mode must stay off.
+          why: issuer
+            ? `something other than the proxy owns ${address}:${port} — it served a certificate issued by ${JSON.stringify(issuer)}`
+            : `something other than the proxy owns ${address}:${port}`,
+        });
+      });
+      socket.once("error", (err) => {
+        clearTimeout(timer);
+        done({ ok: false, why: err?.code || err?.message || "connection failed" });
+      });
+    } catch (err) {
+      resolve({ ok: false, why: err?.message || "connection failed" });
+    }
+  });
+}
+
+/**
+ * Which loopback addresses have the proxy behind them, if any.
+ *
+ * Both families are asked because answering one of them wrongly is an outage:
+ * a v6-only answer for a v4-only listener is a refused connection that reads as
+ * the site being down. `addressAnswer` handles the asymmetry; this just reports
+ * what is actually there.
+ */
+export async function findLocalProxy(name, { candidates = ["127.0.0.1", "::1"], ...options } = {}) {
+  const reachable = [];
+  let why = null;
+  for (const address of candidates) {
+    const result = await proxyServes(address, name, options);
+    if (result.ok) reachable.push(address);
+    // Keep the most informative refusal: "something else owns 443" is worth
+    // saying out loud, where "ECONNREFUSED" just means no proxy is installed.
+    else if (result.issuer && !why) why = result.why;
+  }
+  return {
+    found: reachable.length > 0,
+    why,
+    address: {
+      v4: reachable.find((a) => isIP(a) === 4) || null,
+      v6: reachable.find((a) => isIP(a) === 6) || null,
+    },
+  };
+}
+
 export async function addressAnswer(name, options = {}) {
   const { parkingAddress, wantsV6 = false, proxyAddress = null } = options;
   const plan = (kind, extra) => ({ exists: true, kind, records: [], address: null, cname: null, ...extra });
@@ -2088,6 +2193,10 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
   --no-trust   with enable: route names but skip the local CA. They will
                resolve and then fail TLS, which is the state this flag exists
                to leave you in deliberately.
+  --no-proxy   with enable: answer each name's origin rather than the local
+               pinned-TLS proxy. Only the proxy can hand a stock client a
+               certificate it will accept, so this is the other half of the
+               same deliberate breakage.
 
 The registry speaks HTTP, not DNS, so nothing outside a browser can reach a
 Moshpit name until this bridge is running and your resolver points at it.
@@ -2123,6 +2232,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     bridgeStatus = daemonStatus,
     startBridge = startDaemon,
     proxyReachableImpl = proxyReachable,
+    findLocalProxyImpl = findLocalProxy,
     autoTrustImpl = createAutoTrust,
     stopBridge = stopDaemon,
     dropins = readDropins,
@@ -2723,9 +2833,65 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // serve is silently shadowed by the bridge it said would not be started.
     // Honoring the note is the whole of the fix.
     const reusing = cleared.holder && cleared.holderForwards ? cleared.holder : null;
+
+    // Proxy mode, decided here because the bridge cannot be told later: what a
+    // resolver answers with is fixed when it starts.
+    //
+    // This is the step that was missing, and its absence is why the whole
+    // feature read as broken. Everything else was built — the proxy verifies
+    // origins against registry pins and re-signs with a root `dns enable`
+    // installs, and `addressAnswer` knows how to point names at it — but
+    // nothing ever turned it on, so names resolved straight to their origin and
+    // a stock client got a certificate no CA had signed. Trust was installed
+    // for a proxy that was never on the path.
+    //
+    // Refusing is the safe direction and the default: with proxy mode on and
+    // nothing behind it, every Moshpit name on the machine resolves and then
+    // refuses the connection.
+    let proxyAddress = null;
+    if (reusing) {
+      // A bridge this run did not start keeps whatever mode it was started
+      // with: `startDaemon` decides "already running" from our pidfile, and
+      // there is no channel to a detached daemon to change its mind. So the
+      // probe is skipped rather than run and then discarded — announcing a
+      // proxy and retracting it two lines later is worse than not looking.
+      out("  --   the bridge already running was not started by this run, so it keeps its own");
+      out("       mode — to pick up proxy mode: moshcode dns disable && moshcode dns enable");
+    } else if (!rest.includes("--no-proxy")) {
+      const probeName = moshpitProbe || "";
+      if (!probeName) {
+        out("  --   proxy mode not checked — no Moshpit name to probe with");
+      } else {
+        const local = await findLocalProxyImpl(probeName);
+        if (local.found) {
+          proxyAddress = local.address;
+          const at = [local.address.v4, local.address.v6].filter(Boolean).join(", ");
+          out(`  ok   pinned-TLS proxy on ${at}:${PROXY_PORT} — every live name will answer there`);
+        } else if (local.why) {
+          // The origin case, and the one worth naming precisely. A machine that
+          // serves Moshpit names has nginx on 443, so the proxy cannot be on the
+          // path here and pointing names at loopback would hand all of them to
+          // a web server that has never heard of them.
+          out(`  --   ${local.why}`);
+          out("       proxy mode stays off — names will answer their origin.");
+        } else {
+          out("  --   no pinned-TLS proxy on this machine — names will answer their origin");
+          out("       a stock client cannot verify those: https://github.com/profullstack/moshpit-proxy");
+        }
+      }
+    }
+
     const started = reusing
       ? { started: false, pid: reusing.pid, alreadyRunning: true, reused: true }
-      : await startBridge({ port: wanted, registryBase, entry: cliEntry() });
+      : await startBridge({
+        port: wanted,
+        registryBase,
+        entry: cliEntry(),
+        // v4 by preference: `dns start --proxy` takes one address and probes
+        // both families itself, so handing it the v4 loopback lets it find ::1
+        // too rather than pinning the answer to one family.
+        proxy: proxyAddress ? (proxyAddress.v4 || proxyAddress.v6) : null,
+      });
     out(started.reused
       ? `  ok   using the bridge already on ${DEFAULT_HOST}:${wanted} (pid ${reusing.pid || "?"}) — not starting a second one`
       : started.alreadyRunning
