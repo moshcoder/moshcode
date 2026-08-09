@@ -388,6 +388,14 @@ score that must not be ranked against an equity's.
 Restart the engine after installing either; a newly installed plugin is not live
 in a session that is already running.
 
+Updating an installed plugin is its own step, and upgrading moshcode does not do
+it: an engine only pulls a new copy when the *plugin's* own version moves.
+
+```sh
+claude plugin update stocks@moshcode
+claude plugin update crypto@moshcode
+```
+
 Plugin commands are namespaced `/<plugin>:<command>` — always, not only when two
 plugins collide — so it is `/stocks:signals AAPL`, and a bare `/signals` answers
 `Unknown command`. Typing `/` and picking from the menu inserts the right form.

@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "crypto",
   "description": "Crypto market data slash commands backed by advis0r.com: live prices, technical scores, order books, OHLCV history and sparklines across Alpaca's US crypto venue.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "moshcoder",
     "url": "https://moshcode.sh"
