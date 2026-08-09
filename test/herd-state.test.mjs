@@ -73,6 +73,23 @@ test("only the bottom of the screen decides", () => {
   assert.equal(classify(screen, rulesFor("claude", { userRules: {} })), "unknown");
 });
 
+test("a shell sitting at its prompt is idle", () => {
+  // Without this a couple of shells in the herd read `unknown` forever, which
+  // is the state you get when nobody has written a rule — useless on a roster
+  // whose whole job is telling you what is going on.
+  for (const prompt of ["$ ", "% ", "# ", "❯ ", "➜  ~/src/api "]) {
+    const screen = `some earlier output\n[me@dev] ~/src/api\n${prompt}`;
+    assert.equal(classify(screen, rulesFor("shell", { userRules: {} })), "idle", `prompt ${JSON.stringify(prompt)}`);
+  }
+});
+
+test("a shell running something is not idle just because a $ appeared earlier", () => {
+  // The prompt rule is anchored to the end of the capture on purpose: a dollar
+  // sign in the middle of output is a dollar sign, not an invitation.
+  const screen = "$ npm run build\n> building the bundle\ncompiling modules";
+  assert.equal(classify(screen, rulesFor("shell", { userRules: {} })), "unknown");
+});
+
 test("a quiet screen nobody wrote a rule for is unknown, not idle", () => {
   // R8. A confident wrong answer is worse than an honest absent one, because
   // `unknown` sends you to look and `idle` tells you not to bother.

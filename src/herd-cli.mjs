@@ -11,7 +11,7 @@ import path from "node:path";
 import {
   attachSession, capture, defaultName, detectSubstrate, forgetSession, HERD_SOCKET,
   herdDir, killSession, listSessions, readManifest, rememberSession, sendKeys, sendPrompt,
-  startSession, stopRuntime, substrateNote, validName, NAME_RE,
+  slugifyName, startSession, stopRuntime, substrateNote, validName, NAME_RE,
 } from "./herd.mjs";
 import { clearReport, reportState, STATES, withState } from "./herd-state.mjs";
 import { ENGINES, resolveEngine, resolveExecutable, agentLaunchArgs } from "./engines.mjs";
@@ -181,6 +181,79 @@ export function herdStart(argv, { write = console.log } = {}) {
   if (note) write(info(note));
   return EXIT.matched;
 }
+
+/**
+ * Run anything at all in the herd — a shell, or an agent moshcode does not ship
+ * an install spec for.
+ *
+ * `herd start` is deliberately limited to the engines in ENGINES, because it
+ * does engine-specific things: agent-mode flags, env stripping, resume args.
+ * That made the herd useless for the two most common things people actually
+ * want in it — a couple of shells, and whichever agent they use that moshcode
+ * has never heard of (cursor-agent, copilot, amp, a local script).
+ *
+ * So this is the escape hatch, and it is the same model herdr uses: a session
+ * holds a process, and an agent is just a process we happen to recognise.
+ * Detection still works, because the shared rules in herd-state.mjs match what
+ * a terminal draws — a y/n prompt, a numbered menu, "esc to interrupt" — rather
+ * than anything engine-specific. An unknown agent that stops to ask a question
+ * shows up `blocked` without moshcode knowing what it is.
+ */
+export function herdRun(argv, { write = console.log, shell = false } = {}) {
+  const substrate = requireSubstrate(write);
+  if (!substrate) return EXIT.usage;
+
+  const flags = { name: null, cwd: process.cwd(), json: false };
+  const command = [];
+  let afterSeparator = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (afterSeparator) { command.push(a); continue; }
+    // Everything after `--` belongs to the command, flags included — otherwise
+    // `herd run -- claude --json` would have its --json eaten by us.
+    if (a === "--") { afterSeparator = true; }
+    else if (a === "--name") flags.name = argv[++i];
+    else if (a.startsWith("--name=")) flags.name = a.slice(7);
+    else if (a === "--cwd") flags.cwd = path.resolve(argv[++i] || ".");
+    else if (a === "--json") flags.json = true;
+    else command.push(a);
+  }
+
+  if (shell && !command.length) {
+    command.push(process.env.SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/sh"));
+  }
+  if (!command.length) {
+    write(err('usage: moshcode herd run [--name <slug>] -- <command…>'));
+    write(info(`e.g. ${acid('moshcode herd run --name build -- npm run watch')}`));
+    return EXIT.usage;
+  }
+
+  const [bin, ...args] = command;
+  const label = shell ? "shell" : path.basename(bin);
+  const taken = listSessions().map((s) => s.name);
+  const name = flags.name || defaultName(slugifyName(label), flags.cwd, taken);
+  if (!validName(name)) {
+    write(err(`invalid name ${JSON.stringify(name)} — must match ${NAME_RE}`));
+    return EXIT.usage;
+  }
+
+  const started = startSession({ name, engine: label, bin, args, cwd: flags.cwd, substrate });
+  if (!started.ok) {
+    write(err(String(started.error?.message || started.error)));
+    return EXIT.usage;
+  }
+
+  if (flags.json) {
+    write(JSON.stringify({ name, engine: label, cwd: flags.cwd, substrate }, null, 2));
+    return EXIT.matched;
+  }
+  write(ok(`${bone(name)} — ${label} running in the herd. the prompt is yours.`));
+  write(info(`attach: ${acid(`moshcode attach ${name}`)} · roster: ${acid("moshcode ps")}`));
+  return EXIT.matched;
+}
+
+/** A plain $SHELL in the herd — the common case of herdRun. */
+export const herdShell = (argv, options = {}) => herdRun(argv, { ...options, shell: true });
 
 /**
  * Pull the herd flags out of an engine launch (PRD 0009 R3).
@@ -646,7 +719,8 @@ export function herdStop(argv, { write = console.log } = {}) {
 
 const VERBS = {
   ps: herdPs, list: herdPs, status: herdStatus,
-  start: herdStart, attach: herdAttach, kill: herdKill, prune: herdPrune,
+  start: herdStart, run: herdRun, shell: herdShell,
+  attach: herdAttach, kill: herdKill, prune: herdPrune,
   read: herdRead, prompt: herdPrompt, "send-keys": herdSendKeys,
   wait: herdWait, restore: herdRestore, report: herdReport,
   notify: herdNotify, watch: herdWatch, stop: herdStop,

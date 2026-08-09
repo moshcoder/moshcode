@@ -167,7 +167,11 @@ export function wrap(text, indent = 0, width = WIDTH) {
 
 /** `  name        description`, wrapped, for a two-column list. */
 function row(left, right, pad = 22) {
-  const head = `  ${left.padEnd(pad)}`;
+  // padEnd does nothing when the left column is already wider than the pad, so
+  // a long example used to butt straight against its comment:
+  // `… "run the tests" --wait# hand it work`. One guaranteed space keeps the
+  // two readable however long the command gets.
+  const head = left.length >= pad ? `  ${left} ` : `  ${left.padEnd(pad)}`;
   if (!right) return head.trimEnd();
   const wrapped = wrap(right, head.length, WIDTH);
   return `${head}${wrapped}`;

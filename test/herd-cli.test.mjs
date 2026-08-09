@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  EXIT, humanAge, paintState, renderRoster, shouldNotify, splitDetachArgs, waitFor,
+  EXIT, herdRun, humanAge, paintState, renderRoster, shouldNotify, splitDetachArgs, waitFor,
 } from "../src/herd-cli.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -44,6 +44,35 @@ test("the herd flags never reach the engine", () => {
 test("--name=value is the same as --name value", () => {
   assert.equal(splitDetachArgs(["--name=api"]).name, "api");
   assert.equal(splitDetachArgs(["--name", "api"]).name, "api");
+});
+
+/* ------------------------------------------------------- running anything */
+
+test("everything after -- belongs to the command, flags included", () => {
+  // The reason the separator exists: `herd run -- claude --json` must give
+  // --json to claude, not read it as a request for machine-readable output
+  // from the herd. Without this the escape hatch cannot pass through the very
+  // flags that make it worth having.
+  const source = `
+    const cli = await import(${JSON.stringify(path.join(ROOT, "src", "herd-cli.mjs"))});
+    const lines = [];
+    process.env.MOSHCODE_HERD = "off";
+    cli.herdRun(["--name", "x", "--", "some-agent", "--json", "--name", "theirs"], { write: (s) => lines.push(s) });
+    console.log(JSON.stringify(lines));
+  `;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", source], { encoding: "utf8", cwd: ROOT });
+  // With no substrate it stops before spawning, which is all this needs: the
+  // point is that our own parser did not claim the command's flags.
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout.trim()).join(" ");
+  assert.match(out, /herd needs somewhere to run/, `expected the substrate check, got: ${out}`);
+});
+
+test("run without a command explains itself instead of starting nothing", () => {
+  const lines = [];
+  const code = herdRun([], { write: (s) => lines.push(s) });
+  assert.notEqual(code, 0);
+  assert.match(lines.join(" "), /usage|somewhere to run/);
 });
 
 /* -------------------------------------------------------------- exit codes */
