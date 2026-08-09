@@ -483,14 +483,51 @@ export function leafPath(name, { platform = process.platform } = {}) {
 }
 
 /**
+ * Is this certificate marked as a certificate authority?
+ *
+ * Read with node's X509 parser rather than by grepping openssl's text, because
+ * the answer decides whether a key gets authority over the whole clearnet and
+ * "CA:FALSE" is a substring of nothing but is adjacent to plenty.
+ *
+ * A certificate carrying no basicConstraints at all answers false: absent is
+ * not the same as asserted, and RFC 5280 §4.2.1.9 treats such a certificate as
+ * an end entity.
+ */
+export async function isCertificateAuthority(pem) {
+  const crypto = await import("node:crypto");
+  return new crypto.X509Certificate(pem).ca === true;
+}
+
+/**
  * What `trust <name>` should do, given what the socket served and what the
  * registry says about it.
  *
  * Pure, so the refusal path is testable without a network or a trust store.
  */
-export function leafTrustPlan({ name, pin, published, platform = process.platform } = {}) {
+export function leafTrustPlan({ name, pin, published, platform = process.platform, ca = false } = {}) {
   const accepted = pinAccepted(pin, published);
   if (!accepted.ok) return { ok: false, refused: true, why: accepted.why };
+
+  // A certificate installed here is installed as a *trust anchor*, and an
+  // anchor marked CA:TRUE may issue for any name in the world. The SAN says
+  // what the certificate speaks for; it says nothing about what a key trusted
+  // as an authority may go on to sign — so `subjectAltName=DNS:seo.rank` on a
+  // CA:TRUE certificate is not the bound it looks like, and trusting one would
+  // hand its holder google.com along with their own name.
+  //
+  // This is the same hole `requireNameConstraints` exists to close on the root
+  // path, arriving by the other door. It went unnoticed because openssl's
+  // `req -x509` defaults to CA:TRUE, so every origin set up before that default
+  // was overridden serves exactly the shape that must be refused — and it looks
+  // identical to a correct one until someone trusts it.
+  if (ca) {
+    return {
+      ok: false,
+      refused: true,
+      kind: "ca",
+      why: `${name} serves a certificate marked CA:TRUE — trusted directly, its key could vouch for any name`,
+    };
+  }
 
   const file = leafPath(name, { platform });
   if (!file) return { ok: false, why: `${name} is not a name that can be written to a file` };
@@ -499,10 +536,11 @@ export function leafTrustPlan({ name, pin, published, platform = process.platfor
     ok: true,
     why: accepted.why,
     file,
-    // A self-signed leaf is its own trust anchor, and its SAN limits it to this
-    // one name — so trusting it vouches for `seo.rank` and nothing else. That
-    // is a far smaller grant than a CA, which is why this path needs no
-    // name constraints argument to be defensible.
+    // With CA:FALSE established above, a self-signed leaf is its own trust
+    // anchor and its SAN limits it to this one name — so trusting it vouches
+    // for `seo.rank` and nothing else. That is a far smaller grant than a CA,
+    // which is why this path needs no name-constraints argument to be
+    // defensible. It is only true because of the check above.
     refresh: platform === "darwin"
       ? { command: "security", args: ["add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", file] }
       : { command: "update-ca-certificates", args: [] },
@@ -571,10 +609,25 @@ export async function trustName(name, out, deps = {}) {
     return 1;
   }
 
-  const plan = leafTrustPlan({ name, pin, published, platform });
+  // Read off the certificate rather than assumed: an origin set up before
+  // `setup-origin.sh` overrode openssl's default serves CA:TRUE, and that is
+  // the one shape this must not install.
+  const ca = await isCertificateAuthority(served.stdout).catch(() => true);
+
+  const plan = leafTrustPlan({ name, pin, published, platform, ca });
   if (!plan.ok) {
     out(`REFUSED — ${plan.why}`);
-    if (plan.refused) {
+    if (plan.kind === "ca") {
+      // A refusal with no way forward is a refusal people route around, and
+      // this one has a cheap way forward that costs nothing anywhere else: the
+      // pin is over the key, so re-issuing the certificate from the same key
+      // leaves the published pin untouched. Nothing has to be republished and
+      // no client holding the old pin breaks.
+      out("  its SAN says what it speaks for, not what it may sign — an anchor");
+      out("  marked CA:TRUE is not limited to the name printed on it.");
+      out("  re-issue it as CA:FALSE; the key is reused, so the pin does not move:");
+      out(`    sudo sh scripts/setup-origin.sh ${name}    # from moshpit-proxy`);
+    } else if (plan.refused) {
       out(`  served  ${pin}`);
       out(published.length ? `  pinned  ${published.join("\n          ")}` : "  pinned  (none)");
       out("  moshcode will not trust a certificate the registry does not vouch for.");

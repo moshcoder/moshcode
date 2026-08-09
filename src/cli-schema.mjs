@@ -197,6 +197,7 @@ export const CORE_CLI_COMMANDS = [
       ["--port <n>", "port for the bridge", "5354"],
       ["--registry <url>", "registry to resolve against", "https://pit.moshcode.sh"],
       ["--no-trust", "with enable: route names but skip the local CA", ""],
+      ["--no-proxy", "with enable: answer origins rather than the local proxy", ""],
     ],
     examples: [
       ["sudo moshcode dns enable", "route Moshpit endings here"],

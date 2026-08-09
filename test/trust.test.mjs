@@ -436,8 +436,15 @@ test("the refusal a session prints carries its remedy", async () => {
 
 import { fetchCertificateCommand, leafPath, leafTrustPlan, pinAccepted, pinFromCertificate, trustName } from "../src/trust.mjs";
 
-/** A real self-signed leaf, the shape a Moshpit origin serves. */
-function leaf(cn = "seo.rank") {
+/**
+ * A real self-signed leaf, the shape a Moshpit origin serves.
+ *
+ * `ca` is a parameter because both shapes are real. CA:FALSE is what
+ * `setup-origin.sh` issues and the only shape that may be trusted directly;
+ * CA:TRUE is what openssl's `req -x509` produces by default, which is what
+ * every origin created before that default was overridden is still serving.
+ */
+function leaf(cn = "seo.rank", { ca = false } = {}) {
   try {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "leaf-"));
     const key = path.join(dir, "k.pem");
@@ -445,6 +452,7 @@ function leaf(cn = "seo.rank") {
     execFileSync("openssl", [
       "req", "-x509", "-nodes", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
       "-keyout", key, "-out", crt, "-days", "1", "-subj", `/CN=${cn}`, "-addext", `subjectAltName=DNS:${cn}`,
+      "-addext", `basicConstraints=critical,CA:${ca ? "TRUE" : "FALSE"}`,
     ], { stdio: "ignore" });
     const pem = fs.readFileSync(crt, "utf8");
     fs.rmSync(dir, { recursive: true, force: true });
@@ -562,6 +570,66 @@ test("without root it says so instead of failing obscurely on the write", async 
   });
   assert.equal(code, 1);
   assert.match(lines.join("\n"), /needs root/);
+});
+
+test("a certificate marked CA:TRUE is refused however good its pin is", async () => {
+  // The dangerous shape, and the one that looked safe: a matching pin proves
+  // the registry vouches for the *key*, not that trusting it is bounded. An
+  // anchor marked CA:TRUE may issue for any name, so installing one would hand
+  // its holder the clearnet — the SAN on it constrains nothing it signs.
+  const pem = leaf("seo.rank", { ca: true });
+  if (!pem) return;
+  const pin = await pinFromCertificate(pem);
+  const lines = [];
+  const ran = [];
+  const code = await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => {
+      ran.push(c);
+      return a.join(" ").includes("s_client") ? { ok: true, stdout: pem, stderr: "" } : { ok: true, stdout: "", stderr: "" };
+    },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ pins: [pin] }) }),
+    writeFile: async () => assert.fail("a CA must never be installed as an anchor, pin or no pin"),
+    uid: 0, platform: "linux",
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /REFUSED/);
+  assert.match(lines.join("\n"), /CA:TRUE/);
+  assert.ok(!ran.includes("update-ca-certificates"), "and the store is never refreshed");
+});
+
+test("the CA refusal says how to get past it, since the fix costs no pin change", async () => {
+  // A gate with no way forward is a gate people route around. Re-issuing from
+  // the same key leaves the published pin untouched, so the remedy is free —
+  // and saying so is the difference between "fix it" and "give up".
+  const pem = leaf("seo.rank", { ca: true });
+  if (!pem) return;
+  const pin = await pinFromCertificate(pem);
+  const lines = [];
+  await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => (a.join(" ").includes("s_client") ? { ok: true, stdout: pem, stderr: "" } : { ok: true, stdout: "", stderr: "" }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ pins: [pin] }) }),
+    writeFile: async () => {},
+    uid: 0, platform: "linux",
+  });
+  const said = lines.join("\n");
+  assert.match(said, /CA:FALSE/);
+  assert.match(said, /setup-origin\.sh seo\.rank/);
+  assert.match(said, /pin does not move/);
+});
+
+test("an unreadable certificate is treated as a CA, not waved through", async () => {
+  // The safe direction to fail in. If the parse throws, whether this is an
+  // authority is unknown — and "unknown" must not install an anchor.
+  const lines = [];
+  const code = await trustName("seo.rank", (l) => lines.push(l), {
+    runner: async (c, a) => (a.join(" ").includes("s_client")
+      ? { ok: true, stdout: "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n", stderr: "" }
+      : { ok: true, stdout: "", stderr: "" }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ pins: ["whatever="] }) }),
+    writeFile: async () => assert.fail("nothing may be written when the certificate cannot be read"),
+    uid: 0, platform: "linux",
+  });
+  assert.equal(code, 1);
 });
 
 test("no name asks for one rather than guessing", async () => {
