@@ -140,11 +140,12 @@ test("swapping the content pane leaves the sidebar in place", (t) => {
     assert.equal(out.focused, true);
     assert.match(out.active, /^alpha:1$/, `focus went to ${out.active} instead of the session`);
 
-    // A bare ";" argument ends bind-key instead of chaining, which bound a key
-    // that switched sessions and did nothing else. Both halves or it is broken.
+    // One binding, and it must resolve the bar positionally: the same key has
+    // to work in the workspace and under a plain attach, and a pane id would
+    // have pinned it to whichever bar was built last.
     assert.equal(out.jumpKey.length, 1, `expected one F12 binding, got ${out.jumpKey.length}`);
-    assert.match(out.jumpKey[0], /switch-client/);
-    assert.match(out.jumpKey[0], /select-pane/, "the jump key must also land on the bar");
+    assert.match(out.jumpKey[0], /select-pane/, "the jump key must land on the bar");
+    assert.match(out.jumpKey[0], /\{bottom-right\}/, "the jump key must not be pinned to one pane id");
   } finally {
     spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8" });
     fs.rmSync(dir, { recursive: true, force: true });

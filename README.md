@@ -219,6 +219,13 @@ content pane", and the real attach would be a tmux client inside a tmux client.
 Output grows the bar over the content for as long as you are reading it, then it
 collapses back to one row.
 
+**`moshcode attach <name>` gets the bar too.** A session you attach to directly
+grows the same one-line prompt along the bottom for as long as you are there,
+and it is taken away again when you detach — so a member is a plain member when
+nobody is looking at it. `show <name>` from that bar switches you to another
+member (and gives that one a bar before you land in it). The bar is the bottom
+row either way, which is why one key finds it in both places.
+
 The right-hand pane is not a picture of a session — it *is* the session's pane,
 moved in. tmux's model is session → window → pane, so moving between *windows*
 cannot keep anything on screen; but `join-pane` moves a running pane into an

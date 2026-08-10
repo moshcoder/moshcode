@@ -115,10 +115,13 @@ export const CORE_CLI_COMMANDS = [
     name: "attach",
     group: "runtime",
     description: "attach this terminal to a herd session",
-    synopsis: [["moshcode attach <name>", "detach again with Ctrl-b d (or Ctrl-] without tmux)"]],
+    synopsis: [["moshcode attach <name>", "F12 for the mosh bar · Ctrl-b d detaches (Ctrl-] without tmux)"]],
     examples: [["moshcode attach api", ""]],
     seeAlso: ["ps", "herd", "kill"],
-    note: "detaching leaves the session running; ending it is `moshcode kill`. "
+    note: "under tmux the session gets a one-line mosh bar along the bottom for as long as you are "
+      + "attached, so the way out is on screen even when the agent has the keyboard: F12 reaches it, "
+      + "Esc goes back, `detach` leaves. it is taken away again when you detach. "
+      + "detaching leaves the session running; ending it is `moshcode kill`. "
       + "the whole herd shares one tmux server, so from inside any session Ctrl-b s picks another, "
       + "Ctrl-b ) and Ctrl-b ( step through them, and Ctrl-b L goes back to the last one — "
       + "no switcher under the no-tmux fallback, where Ctrl-] detaches instead.",

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   BAR_HEIGHT, BAR_KEY, BAR_TITLE, HINT, SIDEBAR_TITLE,
-  editLine, helpLines, paneRoles, renderPrompt, resolveCommand,
+  editLine, ensureBar, helpLines, paneRoles, removeBar, renderPrompt, resolveCommand, sweepBars,
 } from "../src/herd-bar.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -141,6 +141,181 @@ test("the sidebar and the bar are told apart by title, not position", (t) => {
     assert.equal(roles.content, null, "with no member on screen there is no content pane");
   } finally {
     spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8" });
+  }
+});
+
+/* ------------------------------------------------------- keeping it tidy */
+
+/** A tmux stand-in that answers each subcommand from a script. */
+const fakeTmux = (answers) => {
+  const calls = [];
+  const runner = (_cmd, args) => {
+    const verb = args[2]; // after -L <socket>
+    calls.push(args.slice(2));
+    const answer = answers[verb];
+    const stdout = typeof answer === "function" ? answer(args) : (answer ?? "");
+    return { status: 0, stdout, stderr: "" };
+  };
+  return { runner, calls };
+};
+
+test("sweepBars leaves alone any session someone is attached to", () => {
+  // A bar belongs to whoever is looking at it. Reaping one out from under
+  // another terminal would take away the only way out that terminal has.
+  const { runner, calls } = fakeTmux({
+    "list-panes": (args) => (args.includes("-a")
+      ? [
+        `watched\t0\tapi\t1`,
+        `watched\t0\t${BAR_TITLE}\t1`,
+        `idle\t0\tweb\t0`,
+        `idle\t0\t${BAR_TITLE}\t0`,
+      ].join("\n")
+      : [`%1\tweb`, `%2\t${BAR_TITLE}`].join("\n")),
+    "kill-pane": "",
+  });
+  const removed = sweepBars({ runner });
+  assert.equal(removed, 1, "only the unattached session's bar comes out");
+  const killed = calls.filter((c) => c[0] === "kill-pane");
+  assert.equal(killed.length, 1);
+});
+
+test("sweepBars skips the workspace, whose bar is permanent", () => {
+  const { runner } = fakeTmux({
+    "list-panes": (args) => (args.includes("-a")
+      ? [`herd\t0\tapi\t0`, `herd\t0\t${BAR_TITLE}\t0`].join("\n")
+      : ""),
+  });
+  assert.equal(sweepBars({ runner, except: "herd" }), 0);
+});
+
+test("a window that is only a bar is left as it is", () => {
+  // Nothing to give the pane back to: killing the last pane would take the
+  // session, and sweeping is meant to be a tidy-up, not a kill.
+  const { runner } = fakeTmux({
+    "list-panes": (args) => (args.includes("-a")
+      ? [`stale\t0\t${BAR_TITLE}\t0`].join("\n")
+      : `%9\t${BAR_TITLE}`),
+  });
+  assert.equal(sweepBars({ runner }), 0);
+});
+
+test("removeBar refuses to empty a window", () => {
+  const { runner, calls } = fakeTmux({ "list-panes": `%9\t${BAR_TITLE}`, "kill-pane": "" });
+  assert.equal(removeBar("solo:0", { runner }), false);
+  assert.equal(calls.filter((c) => c[0] === "kill-pane").length, 0);
+});
+
+test("ensureBar does not add a second bar", () => {
+  const { runner, calls } = fakeTmux({ "list-panes": `%1\tapi\n%2\t${BAR_TITLE}` });
+  const result = ensureBar("api:0", { runner, command: "true" });
+  assert.deepEqual(result, { paneId: "%2", created: false });
+  assert.equal(calls.filter((c) => c[0] === "split-window").length, 0, "it must not split again");
+});
+
+test("a bar under an attached member goes on and comes off cleanly", (t) => {
+  if (!hasTmux) { t.skip("no tmux on this machine"); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-bar-test-"));
+  const socket = `moshcode-barlive-${process.pid}`;
+  const env = { ...process.env, MOSHCODE_HERD_DIR: dir, MOSHCODE_HERD_SOCKET: socket, MOSHCODE_HERD: "tmux" };
+
+  try {
+    const script = `
+      const herd = await import(${JSON.stringify(path.join(ROOT, "src", "herd.mjs"))});
+      const bar  = await import(${JSON.stringify(path.join(ROOT, "src", "herd-bar.mjs"))});
+
+      for (const n of ["api", "web"]) {
+        herd.startSession({ name: n, engine: "test", bin: "sh",
+          args: ["-c", "echo MARK-" + n + "; while read x; do :; done"], cwd: process.cwd() });
+      }
+      await new Promise((r) => setTimeout(r, 900));
+
+      const at = (n) => { const f = herd.paneIndex({}).get(n); return f && f.session + ":" + f.windowId; };
+      const heightOf = (n) => herd.tmux(["list-panes", "-t", at(n), "-F", "#{pane_title}:#{pane_height}"]).stdout
+        .trim().split("\\n").find((l) => l.startsWith(n + ":"));
+
+      const before = heightOf("api");
+      bar.ensureBar(at("api"), { command: "sh -c 'while read x; do :; done'" });
+      const withBar = herd.tmux(["list-panes", "-t", at("api"), "-F", "#{pane_title}"]).stdout.trim().split("\\n");
+      const twice = bar.ensureBar(at("api"), { command: "sh -c 'while read x; do :; done'" });
+
+      // the member is untouched by the pane arriving beside it
+      const stillThere = herd.capture("api", { lines: 20 }).includes("MARK-api");
+
+      bar.removeBar(at("api"), {});
+      const after = heightOf("api");
+
+      // and with a bar still up, killing the member must not leave the session
+      bar.ensureBar(at("web"), { command: "sh -c 'while read x; do :; done'" });
+      herd.killSession("web");
+      await new Promise((r) => setTimeout(r, 300));
+      const sessions = herd.tmux(["list-sessions", "-F", "#{session_name}"]).stdout.trim().split("\\n").filter(Boolean);
+
+      console.log(JSON.stringify({ before, withBar, twiceCreated: twice.created, stillThere, after, sessions }));
+    `;
+    const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8", cwd: ROOT });
+    assert.equal(run.status, 0, `bar round trip crashed: ${run.stderr}`);
+    const out = JSON.parse(run.stdout.trim().split("\n").pop());
+
+    assert.ok(out.withBar.includes(BAR_TITLE), "the bar must actually arrive");
+    assert.equal(out.twiceCreated, false, "a second attach must reuse the bar, not stack another");
+    assert.equal(out.stillThere, true, "the member keeps its scrollback while the bar is up");
+    // The member gives up a row for the bar and gets it back afterwards; if it
+    // does not, every attach shrinks the session a little more.
+    assert.equal(out.after, out.before, `member did not get its height back: ${out.before} → ${out.after}`);
+    // The orphan: a session outliving the member it was named for.
+    assert.ok(!out.sessions.includes("web"), `killing a member with a bar left ${JSON.stringify(out.sessions)}`);
+    assert.ok(out.sessions.includes("api"), "the other member must be untouched");
+  } finally {
+    spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8" });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the bar stays one row when the window is resized under it", (t) => {
+  if (!hasTmux) { t.skip("no tmux on this machine"); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-barsize-test-"));
+  const socket = `moshcode-barsize-${process.pid}`;
+  const env = { ...process.env, MOSHCODE_HERD_DIR: dir, MOSHCODE_HERD_SOCKET: socket, MOSHCODE_HERD: "tmux" };
+
+  try {
+    const script = `
+      const herd = await import(${JSON.stringify(path.join(ROOT, "src", "herd.mjs"))});
+      const bar  = await import(${JSON.stringify(path.join(ROOT, "src", "herd-bar.mjs"))});
+      const cli  = ${JSON.stringify(path.join(ROOT, "bin", "moshcode.mjs"))};
+
+      herd.startSession({ name: "api", engine: "test", bin: "sh",
+        args: ["-c", "while read x; do :; done"], cwd: process.cwd() });
+      await new Promise((r) => setTimeout(r, 800));
+
+      const f = herd.paneIndex({}).get("api");
+      const at = f.session + ":" + f.windowId;
+      herd.tmux(["resize-window", "-t", at, "-x", "80", "-y", "24"]);
+      bar.ensureBar(at, { command: process.execPath + " " + cli + " herd bar" });
+      await new Promise((r) => setTimeout(r, 2000));
+      const small = herd.tmux(["list-panes", "-t", at, "-F", "#{pane_title}:#{pane_height}"]).stdout.trim();
+
+      // the resize that used to stretch it
+      herd.tmux(["resize-window", "-t", at, "-x", "120", "-y", "48"]);
+      await new Promise((r) => setTimeout(r, 2000));
+      const big = herd.tmux(["list-panes", "-t", at, "-F", "#{pane_title}:#{pane_height}"]).stdout.trim();
+      const shown = herd.tmux(["capture-pane", "-p", "-t",
+        bar.paneRoles(at, {}).bar.paneId]).stdout.trim();
+
+      console.log(JSON.stringify({ small, big, shown }));
+    `;
+    const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8", cwd: ROOT });
+    assert.equal(run.status, 0, `bar resize check crashed: ${run.stderr}`);
+    const out = JSON.parse(run.stdout.trim().split("\n").pop());
+
+    const height = (state) => state.split("\n").find((l) => l.startsWith(`${BAR_TITLE}:`))?.split(":")[1];
+    assert.equal(height(out.small), "1", `bar was not one row to begin with: ${out.small}`);
+    // tmux scales panes proportionally on resize, which stretched the bar to
+    // three rows the first time a client attached at a different size.
+    assert.equal(height(out.big), "1", `bar stretched on resize: ${out.big}`);
+    assert.match(out.shown, /mosh/, "and it must still be drawing the prompt afterwards");
+  } finally {
+    spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8" });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

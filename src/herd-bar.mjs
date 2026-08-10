@@ -54,6 +54,90 @@ export function paneRoles(target, { runner = spawnSync } = {}) {
   return roles;
 }
 
+/** How a bar pane starts itself. Separated so tests can run a stand-in. */
+export function barCommand(self = process.argv[1]) {
+  return `${process.execPath} ${self} herd bar`;
+}
+
+/** The window a pane lives in, as a target string. */
+export function ownTarget({ runner = spawnSync, me = process.env.TMUX_PANE } = {}) {
+  if (!me) return null;
+  const r = tmux(["display-message", "-p", "-t", me, "#{session_name}:#{window_index}"], { runner });
+  return r.ok ? r.stdout.trim() || null : null;
+}
+
+/**
+ * Put a bar at the bottom of `target`, or find the one already there.
+ *
+ * Idempotent, because both the workspace and every attach want one and neither
+ * should care which of them got there first.
+ */
+export function ensureBar(target, { runner = spawnSync, command = null } = {}) {
+  const existing = paneRoles(target, { runner }).bar;
+  if (existing) return { paneId: existing.paneId, created: false };
+  const made = tmux(
+    ["split-window", "-t", target, "-f", "-v", "-l", String(BAR_HEIGHT), "-P", "-F", "#{pane_id}", command],
+    { runner },
+  );
+  if (!made.ok) return { paneId: null, created: false };
+  const paneId = made.stdout.trim().split("\n")[0];
+  if (!paneId) return { paneId: null, created: false };
+  tmux(["select-pane", "-t", paneId, "-T", BAR_TITLE], { runner });
+  return { paneId, created: true };
+}
+
+/**
+ * Bind the key that reaches the bar.
+ *
+ * `{bottom-right}` rather than a pane id, so one binding serves the workspace
+ * and every attached session — in both, the bar is the bottom row. A pane id
+ * would have pinned the key to whichever bar happened to be built last.
+ *
+ * The root table is what makes it work at all: tmux claims the key before the
+ * pane's application ever sees it, which is the whole point when the pane holds
+ * an agent that has taken the keyboard.
+ */
+export function bindJumpKey({ runner = spawnSync } = {}) {
+  return tmux(["bind-key", "-n", BAR_KEY, "select-pane", "-t", "{bottom-right}"], { runner }).ok;
+}
+
+/** Drop the bar from a window, leaving whatever else is in it alone. */
+export function removeBar(target, { runner = spawnSync } = {}) {
+  const roles = paneRoles(target, { runner });
+  if (!roles.bar || !roles.content) return false;
+  return tmux(["kill-pane", "-t", roles.bar.paneId], { runner }).ok;
+}
+
+/**
+ * Take the bar back out of every session nobody is looking at.
+ *
+ * A bar left behind is not cosmetic: `kill` ends a member by killing its pane,
+ * so a session holding a leftover bar outlives the member it was named for and
+ * keeps showing up on the roster. Detaching cleans up after itself, but a
+ * crashed client cannot, so this also runs on the way in.
+ *
+ * Sessions with a client attached are skipped — someone else is using that bar.
+ */
+export function sweepBars({ runner = spawnSync, except = null } = {}) {
+  const r = tmux(["list-panes", "-a", "-F",
+    "#{session_name}\t#{window_index}\t#{pane_title}\t#{session_attached}"], { runner });
+  if (!r.ok) return 0;
+  const windows = new Map();
+  for (const line of r.stdout.split("\n")) {
+    const [session, window, title, attached] = line.split("\t");
+    if (!session || session === except || attached !== "0") continue;
+    const key = `${session}:${window}`;
+    const seen = windows.get(key) || { bars: 0, others: 0 };
+    if (title === BAR_TITLE) seen.bars += 1; else seen.others += 1;
+    windows.set(key, seen);
+  }
+  let removed = 0;
+  for (const [target, seen] of windows) {
+    if (seen.bars && seen.others && removeBar(target, { runner })) removed += 1;
+  }
+  return removed;
+}
+
 /* --------------------------------------------------------------- line editing */
 
 /**
@@ -118,10 +202,14 @@ export async function herdBar({
   stdin = process.stdin,
   stdout = process.stdout,
   runner = spawnSync,
-  target = "herd:ui",
+  target = null,
   run = null,
 } = {}) {
   const me = process.env.TMUX_PANE;
+  // The bar runs in the workspace AND under a plain attach, so it asks where it
+  // is rather than assuming. Everything below keys off that one answer.
+  const here = target || ownTarget({ runner, me }) || "herd:ui";
+  const inWorkspace = () => !!paneRoles(here, { runner }).sidebar;
   const herdCommand = run || (async (argv, options) => (await import("./herd-cli.mjs")).herdCommand(argv, options));
 
   let line = "";
@@ -146,8 +234,24 @@ export async function herdBar({
   };
   /** Give the keyboard back to whatever is on screen. */
   const toContent = () => {
-    const roles = paneRoles(target, { runner });
+    const roles = paneRoles(here, { runner });
     if (roles.content) tmux(["select-pane", "-t", roles.content.paneId], { runner });
+  };
+
+  /**
+   * `show` means two different things and both are right.
+   *
+   * In the workspace it swaps the content pane. Under a plain attach there is
+   * no content pane to swap, so it switches the client to that member — and
+   * gives that member a bar first, or you would arrive somewhere with no way
+   * back out, which is the bug this whole thing exists to fix.
+   */
+  const showElsewhere = async (name) => {
+    const { paneIndex } = await import("./herd.mjs");
+    const found = paneIndex({ runner }).get(name);
+    if (!found) return false;
+    ensureBar(`${found.session}:${found.windowId}`, { runner, command: barCommand() });
+    return tmux(["switch-client", "-t", found.session], { runner }).ok;
   };
 
   const submit = async () => {
@@ -160,8 +264,13 @@ export async function herdBar({
     if (command.kind === "detach") { tmux(["detach-client"], { runner }); return false; }
     if (command.kind === "show") {
       const [name] = command.argv;
-      const { showMember } = await import("./herd-workspace.mjs");
-      const okShown = name && showMember(name, { runner, me });
+      let okShown = false;
+      if (name && inWorkspace()) {
+        const { showMember } = await import("./herd-workspace.mjs");
+        okShown = showMember(name, { runner, me });
+      } else if (name) {
+        okShown = await showElsewhere(name);
+      }
       if (!okShown) { show([ash(`no session named ${JSON.stringify(name || "")} — try ps`)]); return true; }
       collapse(); draw(); toContent();
       return true;
@@ -173,8 +282,24 @@ export async function herdBar({
     return true;
   };
 
+  /**
+   * Keep the bar one row.
+   *
+   * tmux scales panes proportionally when the window resizes, so a bar built
+   * before a client attached came back three rows tall once one did — the pane
+   * was created against an 80x24 window and stretched to fit 100x30. Nothing
+   * outside can predict when that happens, but the bar gets a resize event for
+   * it, so the bar is the thing that fixes it.
+   */
+  const keepThin = () => {
+    if (open) return;
+    tmux(["resize-pane", "-t", me, "-y", String(BAR_HEIGHT)], { runner });
+  };
+
   try { stdin.setRawMode?.(true); } catch { /* not a tty */ }
   stdin.resume();
+  stdout.on?.("resize", () => { keepThin(); draw(); });
+  keepThin();
   draw();
 
   await new Promise((resolve) => {

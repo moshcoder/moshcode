@@ -10,7 +10,7 @@ import path from "node:path";
 
 import {
   attachSession, capture, defaultName, detectSubstrate, forgetSession, HERD_SOCKET,
-  herdDir, killSession, listSessions, readManifest, rememberSession, sendKeys, sendPrompt,
+  herdDir, killSession, listSessions, paneIndex, readManifest, rememberSession, sendKeys, sendPrompt,
   slugifyName, startSession, stopRuntime, substrateNote, validName, NAME_RE,
 } from "./herd.mjs";
 import { clearReport, reportState, STATES, withState } from "./herd-state.mjs";
@@ -328,9 +328,32 @@ export async function herdAttach(argv, { write = console.log } = {}) {
   // this whole feature is someone quitting a session they meant to leave
   // running, and the only defence is telling them the key first.
   const substrate = detectSubstrate();
-  write(info(substrate === "tmux" ? "detach with Ctrl-b d — the session keeps running." : "detach with Ctrl-] — the session keeps running."));
+
+  // Give the session a mosh bar, so the way out is on screen the whole time
+  // rather than in a line that the agent's first repaint scrolls away. Only a
+  // member sitting in its own session: a tiled one shares a window with its
+  // neighbours and would be handing them a footer they did not ask for.
+  const bar = await import("./herd-bar.mjs");
+  let barTarget = null;
+  if (substrate === "tmux") {
+    bar.sweepBars({ runner: undefined, except: "herd" });
+    const found = paneIndex().get(name);
+    if (found && found.session === name) {
+      barTarget = `${found.session}:${found.windowId}`;
+      bar.ensureBar(barTarget, { command: bar.barCommand() });
+      bar.bindJumpKey({});
+    }
+  }
+
+  write(info(substrate === "tmux"
+    ? `detach with Ctrl-b d — the session keeps running.${barTarget ? ` ${bar.BAR_KEY} for the mosh bar.` : ""}`
+    : "detach with Ctrl-] — the session keeps running."));
 
   const result = await attachSession(name, { substrate });
+  // Take it back out on the way through, so a member is a member again: `kill`
+  // ends one by killing its pane, and a session still holding a bar would
+  // outlive the member and keep its name on the roster.
+  if (barTarget) bar.removeBar(barTarget, {});
   if (!result.ok) { write(err(String(result.error?.message || result.error))); return EXIT.usage; }
 
   const after = findSession(name);

@@ -21,7 +21,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { HERD_SOCKET, detectSubstrate, paneIndex, readManifest, tmux } from "./herd.mjs";
 import { roster } from "./herd-cli.mjs";
 import { groupByHerd, parseInput } from "./herd-ui.mjs";
-import { BAR_HEIGHT, BAR_KEY, BAR_TITLE, SIDEBAR_TITLE, paneRoles } from "./herd-bar.mjs";
+import { BAR_KEY, BAR_TITLE, SIDEBAR_TITLE, barCommand, bindJumpKey, ensureBar, paneRoles } from "./herd-bar.mjs";
 import { acid, amber, ash, bone, danger, dim, err, info, ok } from "./ui.mjs";
 
 export const WORKSPACE = "herd";
@@ -82,34 +82,11 @@ export async function herdUi(argv = [], { write = console.log, spawner = spawn, 
 
 /* ------------------------------------------------------------------ the bar */
 
-/** How the bar pane starts itself. Separated so tests can run a stand-in. */
-export function barCommand(self = process.argv[1]) {
-  return `${process.execPath} ${self} herd bar`;
-}
-
-/**
- * Add the one-line mosh prompt under the content, and the key that reaches it.
- *
- * The binding goes in tmux's root table, so it is claimed before the pane's
- * application ever sees it — that is what makes it work from inside an agent
- * that has taken the keyboard, which is the case the bar exists for. It also
- * switches the client first, so it is a way out of a member you attached to
- * directly and not only of the workspace.
- */
+/** Add the one-line mosh prompt under the content, and the key that reaches it. */
 export function buildBar({ runner = spawnSync, command = barCommand() } = {}) {
-  const made = tmux(
-    ["split-window", "-t", TARGET, "-f", "-v", "-l", String(BAR_HEIGHT), "-P", "-F", "#{pane_id}", command],
-    { runner },
-  );
-  if (!made.ok) return null;
-  const paneId = made.stdout.trim().split("\n")[0];
+  const { paneId } = ensureBar(TARGET, { runner, command });
   if (!paneId) return null;
-  tmux(["select-pane", "-t", paneId, "-T", BAR_TITLE], { runner });
-  // One string, not separate arguments: a bare ";" argument ends the bind-key
-  // command itself, so tmux binds the first command and runs the second once,
-  // now. That silently produced a key that switched sessions and did nothing
-  // else — the binding has to arrive as a single command sequence.
-  tmux(["bind-key", "-n", BAR_KEY, `switch-client -t ${WORKSPACE} ; select-pane -t ${paneId}`], { runner });
+  bindJumpKey({ runner });
   tmux(["select-pane", "-t", `${TARGET}.0`], { runner });
   return paneId;
 }
