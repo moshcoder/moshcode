@@ -449,8 +449,21 @@ export function renderPitCommand(name) {
     }
   }
   const out = [`/${entry.name} — ${entry.description}`];
-  if (entry.args) out.push("", "usage:", row(`/${entry.name} ${entry.args}`, "", 44));
+  // A pit-only verb may write its own synopsis/examples/note, the same shapes
+  // renderCommand reads. Without them the args string is the whole usage, which
+  // is enough for `/quit` and not enough for anything with sub-verbs.
+  const synopsis = entry.synopsis || (entry.args ? [[`/${entry.name} ${entry.args}`, ""]] : []);
+  if (synopsis.length) {
+    out.push("", "usage:");
+    for (const [line, note] of synopsis) out.push(row(line, note, 44));
+  }
   if (entry.aliases?.length) out.push("", `aliases: ${entry.aliases.map((a) => `/${a}`).join(", ")}`);
+  const examples = entry.examples || [];
+  if (examples.length) {
+    out.push("", "examples:");
+    for (const [line, note] of examples) out.push(row(line, note ? `# ${note}` : "", 44));
+  }
+  if (entry.note) out.push("", wrap(entry.note, 0));
   return out.join("\n");
 }
 

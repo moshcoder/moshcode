@@ -27,6 +27,7 @@ import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion 
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
 import { openNewTab } from "./tabs.mjs";
+import { MAX_EXPANSIONS, expandAlias, getAlias, loadAliases, removeAlias, setAlias } from "./aliases.mjs";
 import { herdCommand, herdStart, renderRoster, roster, splitDetachArgs } from "./herd-cli.mjs";
 import { detectSubstrate, substrateNote } from "./herd.mjs";
 
@@ -128,9 +129,32 @@ export function splitCommandLine(line) {
 // hands this straight to `$SHELL -c`, the same way `!cmd` does: the shell does
 // its own parsing, so re-joining the tokenized parts would strip the user's
 // quotes and escapes and silently split `-m "two words"` into two arguments.
-function commandRemainder(line) {
-  const firstWord = /^\s*\S+\s*/.exec(String(line));
-  return firstWord ? String(line).slice(firstWord[0].length).trim() : "";
+function commandRemainder(line, words = 1) {
+  let out = String(line);
+  for (let i = 0; i < words; i++) {
+    const firstWord = /^\s*\S+\s*/.exec(out);
+    out = firstWord ? out.slice(firstWord[0].length) : "";
+  }
+  return out.trim();
+}
+
+/**
+ * The value half of `/alias set <name> <value…>`, as the user meant it.
+ *
+ * `/alias set gs "git status"` quotes the value because that is the obvious way
+ * to write it, and `/alias set gc git commit -m "wip"` does not because the
+ * quotes there belong to the shell. Tokenizing tells the two apart: exactly one
+ * token means the whole value was quoted, so use it with the quotes stripped;
+ * anything else is a bare command line, and it goes through verbatim so the
+ * user's own quoting survives into `$SHELL -c`.
+ */
+export function aliasValue(line) {
+  const raw = commandRemainder(line, 3); // past "/alias", "set", "<name>"
+  if (!raw) return "";
+  let parts;
+  try { parts = splitCommandLine(raw); }
+  catch { return raw; }
+  return parts.length === 1 ? parts[0] : raw;
 }
 
 function printEngines(json = false) {
@@ -207,6 +231,94 @@ function printSocials() {
     console.log(`   ${acid("●")} ${bone(social.name.padEnd(9))} ${ash(social.description + aliases)}`);
   }
   console.log(ash("   the browser always asks you to confirm before anything is published"));
+}
+
+/**
+ * Is this name the pit's own?
+ *
+ * Asked by resolving it the way the dispatcher does, rather than by consulting
+ * a list: the dispatcher checks pit verbs, then engines, then tools, and only
+ * then aliases, so anything that resolves earlier would shadow an alias of the
+ * same name into silence.
+ */
+function isReservedName(name) {
+  const key = String(name).toLowerCase();
+  return Boolean(findPitCommand(key) || resolveEngine(key) || resolveTool(key) || RENAMED_COMMANDS[key]);
+}
+
+function printAliases({ json = false } = {}) {
+  const aliases = loadAliases();
+  const names = Object.keys(aliases).sort();
+  if (json) { console.log(JSON.stringify(aliases, null, 2)); return; }
+  if (!names.length) {
+    console.log(info(`no aliases yet — ${acid('/alias set gs "git status"')} then ${acid("/gs")}.`));
+    return;
+  }
+  console.log(bone("  aliases") + ash("  — run one with ") + acid("/<name>") + ash(" · ") + acid("/alias rm <name>") + ash(" to forget"));
+  const width = Math.max(...names.map((n) => n.length));
+  for (const name of names) {
+    // A leading slash marks the ones that are pit commands rather than shell,
+    // which is the only thing about a value that is not already visible.
+    const value = aliases[name];
+    const kind = value.startsWith("/") ? ash("pit  ") : ash("shell");
+    console.log(`   ${acid(`/${name}`.padEnd(width + 1))} ${kind} ${bone(value)}`);
+  }
+}
+
+/**
+ * `/alias` — define, list, and forget the shortcuts (src/aliases.mjs).
+ *
+ * `line` comes in alongside the tokenized `rest` because the value is a command
+ * line, not an argument list: re-joining tokens would drop the quoting that the
+ * shell still has to read.
+ */
+function aliasCommand(rest, line) {
+  const json = rest.includes("--json");
+  // `--json` is the listing's flag wherever it appears, so `/alias --json` is a
+  // listing rather than a verb nobody recognises. The value in `set` is read
+  // from the raw line, not from here, so an aliased command that itself passes
+  // --json is untouched by this.
+  const [verb, ...args] = rest.filter((a) => a !== "--json");
+  const sub = String(verb ?? "").toLowerCase();
+
+  if (!verb || sub === "list" || sub === "ls") {
+    printAliases({ json });
+    return;
+  }
+  if (sub === "set" || sub === "add") {
+    const name = args[0];
+    const value = aliasValue(line);
+    if (!name || !value) {
+      console.log(err('usage: /alias set <name> "<command>"'));
+      console.log(ash("   the command runs in $SHELL unless it starts with / — then it's a pit command"));
+      return;
+    }
+    const result = setAlias(name, value, { isReserved: isReservedName });
+    if (!result.ok) { console.log(err(result.error)); return; }
+    console.log(ok(`${acid(`/${result.name}`)} → ${bone(result.value)}`));
+    if (result.previous) console.log(ash(`   replaced: ${result.previous}`));
+    return;
+  }
+  if (sub === "rm" || sub === "remove" || sub === "unset" || sub === "delete" || sub === "del") {
+    if (!args[0]) { console.log(err("usage: /alias rm <name>")); return; }
+    const result = removeAlias(args[0]);
+    console.log(result.ok ? ok(`forgot ${acid(`/${result.name}`)} ${ash(`(was: ${result.value})`)}`) : err(result.error));
+    return;
+  }
+  if (sub === "get" || sub === "show") {
+    if (!args[0]) { console.log(err("usage: /alias get <name>")); return; }
+    const value = getAlias(args[0]);
+    console.log(value == null
+      ? err(`no alias named "${String(args[0]).replace(/^\//, "")}"`)
+      : `  ${acid(`/${String(args[0]).toLowerCase().replace(/^\//, "")}`)} ${ash("→")} ${bone(value)}`);
+    return;
+  }
+  // A bare `/alias gs "git status"` is what people type once they know the
+  // command exists, so treat an unknown verb as the name in `set` — but only
+  // when there is a value after it, or `/alias gs` would silently define
+  // nothing.
+  if (args.length) { aliasCommand(["set", ...rest], `/alias set ${commandRemainder(line)}`); return; }
+  console.log(err(`unknown /alias verb "${verb}" — set, list, get, rm`));
 }
 
 /**
@@ -526,19 +638,31 @@ export async function tui() {
   const { restoreTee, drainRemote, atPrompt } = await startMirror();
 
   let rl = mkrl();
+  // An alias expands into a line that is dispatched exactly as if it had been
+  // typed, so it goes back through the top of this loop instead of through a
+  // second copy of the dispatcher. `expansions` bounds a chain of aliases that
+  // name each other; it resets whenever a real line is read.
+  let pending = null;
+  let expansions = 0;
   for (;;) {
     let line;
-    // Arm the prompt first, THEN release any command waiting from the web:
-    // rl.write() only lands as input once readline is actually asking.
-    const answer = ask(rl);
-    atPrompt(rl);
-    drainRemote();
-    try { line = await answer; } catch { break; }
-    finally { atPrompt(null); }
-    if (line == null) break; // Ctrl-D
-    line = line.trim();
-    if (!line) continue;
-    saveHistory(); // readline just recorded this line into the shared history
+    if (pending != null) {
+      line = pending;
+      pending = null;
+    } else {
+      // Arm the prompt first, THEN release any command waiting from the web:
+      // rl.write() only lands as input once readline is actually asking.
+      const answer = ask(rl);
+      atPrompt(rl);
+      drainRemote();
+      try { line = await answer; } catch { break; }
+      finally { atPrompt(null); }
+      if (line == null) break; // Ctrl-D
+      expansions = 0;
+      line = line.trim();
+      if (!line) continue;
+      saveHistory(); // readline just recorded this line into the shared history
+    }
 
     // vim-style shell escape: `!` drops into $SHELL, `!<cmd>` runs one-off. We
     // take the raw remainder (not the tokenized parts) so quoting is preserved.
@@ -586,6 +710,7 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
+    if (cmd === "alias" || cmd === "aliases") { aliasCommand(rest, line); continue; }
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "login") {
       const device = rest.includes("--device") || rest.includes("device") || rest.includes("-d");
@@ -783,6 +908,23 @@ export async function tui() {
       rl.close();
       await openWorkflowTool(key, { ...tool, installed: toolStatus().find((entry) => entry.key === key)?.installed }, rest);
       rl = mkrl();
+      continue;
+    }
+    // A user-defined alias (src/aliases.mjs) — last, so it can never shadow a
+    // built-in, and so an alias that names one is dead rather than surprising.
+    // /alias set refuses those names for exactly this reason.
+    const aliased = getAlias(cmd);
+    if (aliased) {
+      if (expansions >= MAX_EXPANSIONS) {
+        console.log(err(`/${cmd} keeps expanding — ${MAX_EXPANSIONS} rounds and still not a command. check /alias list for a loop.`));
+        continue;
+      }
+      expansions += 1;
+      pending = expandAlias(aliased, commandRemainder(line));
+      // Echoed because the line that runs is not the line that was typed, and a
+      // shell command that fails is a lot easier to read when what actually ran
+      // is on the screen above it.
+      console.log(ash(`  ▸ ${pending}`));
       continue;
     }
     // A renamed verb gets pointed at its replacement; `/ticker` was a pit
