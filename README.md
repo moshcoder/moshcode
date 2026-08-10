@@ -543,6 +543,24 @@ an equity's score, and each response ships the `caveats` that say so. Prices are
 Alpaca's US venue alone and can differ materially from other exchanges. Research
 aid, not advice — and like `stocks`, nothing under `crypto` can place an order.
 
+### Aliases (`/alias`)
+
+The pit is a prompt you sit at all day, so it lets you name the lines you keep
+retyping. An alias runs in `$SHELL` unless it starts with `/`, in which case it
+is a pit command:
+
+```text
+/alias set gs "git status"        # then /gs — and /gs -sb appends to it
+/alias set cx "/agents codex"     # a pit command, not a shell one
+/alias                            # what is defined
+/alias rm gs
+```
+
+They live in `~/.moshcode/aliases.json` (owner-only, like the history file) and
+survive between sessions. A name that is already a pit command, an engine, or a
+tool is refused rather than shadowed — built-ins are dispatched first, so such
+an alias would never run.
+
 ### Social posting from the pit
 
 The pit can hand a prepared post to Bluesky or Nostr without storing either
