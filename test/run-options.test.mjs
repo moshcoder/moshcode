@@ -3,7 +3,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "n
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
@@ -72,6 +72,17 @@ test("run - reads the script from stdin", async () => {
   const result = await runWithStdin(["-"], 'say("from stdin");\n');
 
   assert.equal(result.status, 0);
+  assert.match(result.stdout, /from stdin/);
+});
+
+test("run accepts - before --dry-run", () => {
+  const result = spawnSync(process.execPath, [BIN, "run", "-", "--dry-run"], {
+    encoding: "utf8",
+    input: 'say("from stdin");\n',
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
   assert.match(result.stdout, /from stdin/);
 });
 
