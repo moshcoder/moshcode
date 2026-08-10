@@ -274,7 +274,8 @@ export function requiredPort(platform, preferred = 5354) {
 /* ------------------------------------------------------- running the plan */
 
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import dgram from "node:dgram";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -367,17 +368,132 @@ export async function daemonStatus(path = pidfilePath()) {
 }
 
 /**
- * Start the bridge detached, so the shell that launched it can exit.
+ * Where a daemon that died on startup left its reason.
  *
- * Not a systemd unit / launchd job / Windows service yet, which means it does
+ * Next to the pidfile, because the two answer halves of the same question and
+ * a person debugging one wants the other in the same directory.
+ */
+export function daemonLogPath(path = pidfilePath()) {
+  return join(dirname(path), "moshpit-dns.log");
+}
+
+/**
+ * How long to wait for the bridge to answer before reporting it unproven.
+ *
+ * Generous on purpose, and it costs nothing in the case that matters: a daemon
+ * that dies resolves the race on its `exit` event immediately, so this bounds
+ * only the "alive but has not answered yet" case. The bridge binds *after* it
+ * fetches the ending list, which against the live registry is ~3s on a fast
+ * link — a tighter deadline would print a warning about healthy bridges on
+ * every slow connection.
+ */
+export const READY_TIMEOUT_MS = 8000;
+const POLL_MS = 150;
+const LOG_TAIL_LINES = 20;
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A minimal A query. Only the reply matters here, never what it says. */
+function encodeQuery(name, id) {
+  const labels = String(name).split(".").filter(Boolean);
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(id, 0);
+  head.writeUInt16BE(0x0100, 2); // standard query, recursion desired
+  head.writeUInt16BE(1, 4); // one question
+  const tail = Buffer.alloc(4);
+  tail.writeUInt16BE(1, 0); // A
+  tail.writeUInt16BE(1, 2); // IN
+  return Buffer.concat([
+    head,
+    ...labels.map((label) => {
+      const bytes = Buffer.from(label, "ascii");
+      return Buffer.concat([Buffer.from([bytes.length]), bytes]);
+    }),
+    Buffer.from([0]),
+    tail,
+  ]);
+}
+
+/**
+ * Is something serving DNS on this port?
+ *
+ * Any well-formed reply counts, including NXDOMAIN and SERVFAIL. The question
+ * is whether the resolver is up, and a bridge whose upstreams are unreachable
+ * is still a bridge that started — conflating the two would turn a bad network
+ * into a failed start.
+ */
+export function probeResolver({ host = "127.0.0.1", port, name = "a.eggs", timeoutMs = 500 } = {}) {
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket("udp4");
+    const id = Math.floor(Math.random() * 65536);
+    let done = false;
+    const finish = (answered) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        // Already closed by the error that brought us here.
+      }
+      resolve(answered);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once("error", () => finish(false));
+    socket.on("message", (msg) => finish(msg.length >= 2 && msg.readUInt16BE(0) === id));
+    socket.send(encodeQuery(name, id), port, host, (err) => {
+      if (err) finish(false);
+    });
+  });
+}
+
+async function readLogTail(path, lines = LOG_TAIL_LINES) {
+  const text = await readFile(path, "utf8").catch(() => "");
+  const trimmed = text.trimEnd();
+  return trimmed ? trimmed.split("\n").slice(-lines).join("\n") : "";
+}
+
+/**
+ * Start the bridge detached, so the shell that launched it can exit — and do
+ * not claim it started until it has proved it is there.
+ *
+ * The old version spawned with `stdio: "ignore"`, wrote the pidfile from
+ * `child.pid`, and returned `started: true` in the same tick. Both halves of
+ * that were wrong on any machine where the daemon dies on startup. `enable`
+ * printed `ok bridge started (pid N)` for a process that was already gone, then
+ * installed catch-all routing — `Domains=~.` — pointing every lookup on the box
+ * at a port with nothing behind it. The failure took the machine's whole
+ * resolver down and left no way to find out why, because the one stream the
+ * daemon wrote its reason to had been routed to /dev/null. A node that is not
+ * on root's PATH, a port it cannot bind, a half-written install: all of them
+ * arrived as the same confident success line.
+ *
+ * So: stdout and stderr go to a file, an early exit is a failed start that
+ * reports what the daemon said, and the pidfile is written only once the
+ * process is still there — never for one that is not, which is what made
+ * `daemonStatus` report a stale pid as a crash that had never happened.
+ *
+ * Still not a systemd unit / launchd job / Windows service, which means it does
  * not survive a reboot. `moshcode dns status` says so plainly rather than
  * letting someone discover it when their names stop resolving.
  */
-export async function startDaemon({ port, registryBase, path = pidfilePath(), entry, proxy = null }) {
+export async function startDaemon({
+  port,
+  registryBase,
+  path = pidfilePath(),
+  entry,
+  proxy = null,
+  host = "127.0.0.1",
+  logPath = null,
+  readyTimeoutMs = READY_TIMEOUT_MS,
+  probe = probeResolver,
+  sleep = defaultSleep,
+}) {
   const existing = await daemonStatus(path);
   if (existing.running) return { started: false, pid: existing.pid, alreadyRunning: true };
 
   await mkdir(dirname(path), { recursive: true });
+  const log = logPath || daemonLogPath(path);
   const args = [entry, "dns", "start", "--port", String(port)];
   if (registryBase) args.push("--registry", registryBase);
   // Passed at spawn time because it is what the resolver answers with, not
@@ -385,10 +501,64 @@ export async function startDaemon({ port, registryBase, path = pidfilePath(), en
   // short of restarting it, which is why `enable` decides this before starting.
   if (proxy) args.push("--proxy", proxy);
 
-  const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
+  // Truncated rather than appended: the only question this file ever answers is
+  // "why did the run I just did fail", and a previous crash above this run's
+  // output is how that question gets answered wrong.
+  await writeFile(log, "");
+  const handle = await open(log, "a");
+  let child;
+  try {
+    child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", handle.fd, handle.fd] });
+  } finally {
+    // The child holds its own duplicate of the descriptor from spawn onward.
+    await handle.close();
+  }
+
+  // `error` covers the spawn itself failing — execPath gone, not executable —
+  // which never reaches `exit` at all.
+  const died = new Promise((resolve) => {
+    child.once("error", (error) => resolve({ reason: error.message }));
+    child.once("exit", (code, signal) => resolve({
+      reason: signal ? `killed by ${signal}` : `exited ${code} before it could serve`,
+      code,
+      signal,
+    }));
+  });
+
+  let gone = null;
+  let verified = false;
+  const deadline = Date.now() + readyTimeoutMs;
+  while (Date.now() < deadline) {
+    gone = await Promise.race([died, sleep(POLL_MS).then(() => null)]);
+    if (gone) break;
+    if (await probe({ host, port })) {
+      verified = true;
+      break;
+    }
+  }
+
   child.unref();
+
+  if (gone) {
+    // No pidfile for a process that is not there. Writing one anyway is what
+    // made the next `enable` believe a bridge was running and skip starting one.
+    await rm(path, { force: true });
+    return {
+      started: false,
+      alreadyRunning: false,
+      pid: null,
+      error: gone.reason,
+      log: await readLogTail(log),
+      logPath: log,
+    };
+  }
+
   await writeFile(path, `${child.pid}\n`);
-  return { started: true, pid: child.pid, alreadyRunning: false };
+  // `verified: false` is a process that is alive but had not answered by the
+  // deadline — a slow registry fetch on a slow link, most often. Reported as
+  // what it is rather than rounded up to success or down to failure: killing a
+  // bridge that was merely still waking up would be the worse mistake.
+  return { started: true, pid: child.pid, alreadyRunning: false, verified, logPath: log };
 }
 
 export async function stopDaemon(path = pidfilePath()) {

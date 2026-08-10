@@ -2892,11 +2892,43 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         // too rather than pinning the answer to one family.
         proxy: proxyAddress ? (proxyAddress.v4 || proxyAddress.v6) : null,
       });
+    // The routing this is about to install is catch-all — every lookup on the
+    // machine, not just Moshpit ones — so a bridge that did not come up is not
+    // a degraded feature, it is the machine's resolver pointed at nothing.
+    // Refused here, before the drop-in is written, because the alternative was
+    // discovering it from a box that could no longer resolve its own package
+    // mirror. Nothing has been changed at this point except the restore point,
+    // which is removed on the way out.
+    if (!started.reused && !started.alreadyRunning && !started.started) {
+      out(`  FAIL bridge did not start on ${DEFAULT_HOST}:${wanted} — ${started.error}`);
+      if (started.log) {
+        out("");
+        for (const line of started.log.split("\n")) out(`       ${line}`);
+      }
+      out("");
+      out("Refusing to route this machine's DNS at a bridge that is not running.");
+      out("Nothing has been changed.");
+      if (started.logPath) out(`  the daemon's output is at ${started.logPath}`);
+      out(`  to watch it start in the foreground:  moshcode dns start --port ${wanted}`);
+      if (recorded2.ok) await applyPlan({ steps: [{ kind: "remove", path: manifestFile, why: "the switch never happened" }] });
+      return 1;
+    }
     out(started.reused
       ? `  ok   using the bridge already on ${DEFAULT_HOST}:${wanted} (pid ${reusing.pid || "?"}) — not starting a second one`
       : started.alreadyRunning
         ? `  ok   bridge already running (pid ${started.pid})`
-        : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
+        : started.verified === true
+          ? `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid}) — answering`
+          : `  ok   bridge started on ${DEFAULT_HOST}:${wanted} (pid ${started.pid})`);
+    // Alive, but it had not answered a query by the deadline. Said out loud
+    // rather than swallowed: if the routing below fails to verify, this line is
+    // the reason, and it is cheaper to read it here than to derive it later.
+    // Strictly `false`, never merely absent: a starter that does not report on
+    // verification has not failed it, and rounding the two together would print
+    // a warning about every bridge that was started by something else.
+    if (started.started && started.verified === false) {
+      out(`  --   it has not answered a query yet — still starting, or it will not serve`);
+    }
 
     const outcome = await applyWith(plan, {
       verify: () => verify({ moshpit: moshpitProbe }),
