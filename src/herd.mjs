@@ -629,7 +629,19 @@ export function killSession(name, { substrate = detectSubstrate(), runner = spaw
   if (substrate === "tmux") {
     // kill-pane, not kill-session: a tiled member shares its session with
     // every other tiled member, and killing that would take the lot.
+    const found = paneIndex({ runner }).get(name);
     const r = tmux(["kill-pane", "-t", target(name, { runner })], { runner });
+    // A member being attached to has a mosh bar under it, and the bar would
+    // hold the session open after its member is gone — an empty room still
+    // answering to the dead member's name on the roster. If that is all that is
+    // left, take the room too.
+    if (r.ok && found) {
+      const left = tmux(["list-panes", "-t", found.session, "-F", "#{pane_title}"], { runner });
+      const titles = left.ok ? left.stdout.split("\n").filter(Boolean) : [];
+      if (titles.length && titles.every((t) => t === "mosh-bar")) {
+        tmux(["kill-session", "-t", found.session], { runner });
+      }
+    }
     forgetSession(name);
     return r.ok ? { ok: true } : { ok: false, error: new Error(r.stderr.trim() || "no such session") };
   }
