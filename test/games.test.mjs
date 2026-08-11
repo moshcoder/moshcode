@@ -49,6 +49,14 @@ import {
 import {
   FROGGER, BANK, HOMES, HOME_ROW, RIVER, ROAD, homeAt, thingAt, WIDTH as F_WIDTH,
 } from "../src/games-frogger.mjs";
+import {
+  DIGDUG, SKY, fallRocks, isDug, pump, walkMonster,
+  WIDTH as DD_WIDTH, HEIGHT as DD_HEIGHT,
+} from "../src/games-digdug.mjs";
+import {
+  KONG, GIRDERS, LADDERS, TOP as TOP_K, FLOOR as FLOOR_K, newBarrel, rollBarrel, throwEvery,
+  WIDTH as WIDTH_K, HEIGHT as HEIGHT_K,
+} from "../src/games-kong.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
 import {
   BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
@@ -783,6 +791,219 @@ test("centipede can be cleared by shooting, and not by standing there", () => {
     const idle = drive(CENTIPEDE, CENTIPEDE.create({ rng: seeded(seed) }), 3000);
     assert.ok(idle.over, `seed ${seed} survived without firing`);
   }
+});
+
+/* ----------------------------------------------------------------- digdug */
+
+test("moving is digging, and the tunnel is wherever you have been", () => {
+  const state = DIGDUG.create({ rng: seeded(1) });
+  const { x, y } = state.player;
+  assert.equal(isDug(state.ground, x, y), true, "you start in a hole of your own");
+  assert.equal(isDug(state.ground, x, y + 1), false, "and everything under you is solid");
+  DIGDUG.onKey(state, "down");
+  assert.equal(isDug(state.ground, x, y + 1), true, "one step down is one cell dug");
+  assert.equal(state.player.dir, "down", "and you are facing the way you dug");
+});
+
+test("the harpoon only travels down a tunnel", () => {
+  const state = DIGDUG.create({ rng: seeded(2) });
+  state.monsters = [{ x: state.player.x + 3, y: state.player.y, dir: "left", pumped: 0, ghost: 0 }];
+  state.player.dir = "right";
+  pump(state);
+  assert.equal(state.harpoon, null, "three cells of solid ground stops it");
+
+  for (let i = 1; i <= 3; i++) state.ground.delete(`${state.player.x + i},${state.player.y}`);
+  pump(state);
+  assert.ok(state.harpoon, "dug out, it reaches");
+  assert.equal(state.monsters[0].pumped, 1);
+});
+
+test("three pumps pops a monster, and moving lets it go", () => {
+  const state = DIGDUG.create({ rng: seeded(3) });
+  const monster = { x: state.player.x + 1, y: state.player.y, dir: "left", pumped: 0, ghost: 0 };
+  state.monsters = [monster];
+  state.ground.delete(`${monster.x},${monster.y}`);
+  state.player.dir = "right";
+  pump(state);
+  assert.equal(monster.pumped, 1);
+  pump(state);
+  pump(state);
+  assert.equal(state.monsters.length, 0, "the third pump is the last one");
+  assert.ok(state.score >= 300);
+
+  const let_go = DIGDUG.create({ rng: seeded(4) });
+  const other = { x: let_go.player.x + 1, y: let_go.player.y, dir: "left", pumped: 0, ghost: 0 };
+  let_go.monsters = [other];
+  let_go.ground.delete(`${other.x},${other.y}`);
+  let_go.player.dir = "right";
+  pump(let_go);
+  DIGDUG.onKey(let_go, "left");
+  assert.equal(let_go.harpoon, null, "walking away drops the harpoon");
+});
+
+test("a hooked monster stops moving", () => {
+  const state = DIGDUG.create({ rng: seeded(5) });
+  const monster = { x: state.player.x + 1, y: state.player.y, dir: "left", pumped: 2, ghost: 0 };
+  state.monsters = [monster];
+  const at = { x: monster.x, y: monster.y };
+  for (let i = 0; i < 30; i++) walkMonster(state, monster);
+  assert.deepEqual({ x: monster.x, y: monster.y }, at, "being pumped is being pinned");
+});
+
+test("a rock with nothing under it falls, and lands on what is below", () => {
+  const state = DIGDUG.create({ rng: seeded(6) });
+  state.monsters = [];
+  const rock = { x: 10, y: SKY + 2, falling: false };
+  state.rocks = [rock];
+  state.ground.delete(`10,${SKY + 3}`);
+  state.monsters = [{ x: 10, y: SKY + 3, dir: "left", pumped: 0, ghost: 0 }];
+  fallRocks(state);
+  assert.equal(rock.y, SKY + 3, "it came down a row");
+  assert.equal(state.monsters.length, 0, "onto the monster underneath");
+  assert.ok(state.score >= 200);
+});
+
+test("the digdug board is drawn to size", () => {
+  const state = drive(DIGDUG, DIGDUG.create({ rng: seeded(7) }), 100);
+  const rows = DIGDUG.render(state);
+  assert.equal(rows.length, DD_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), DD_WIDTH);
+});
+
+test("a level can be dug out, and standing still is not a plan", () => {
+  const hunting = (state) => {
+    const near = state.monsters.slice().sort((a, b) => (
+      Math.abs(a.x - state.player.x) + Math.abs(a.y - state.player.y)
+      - Math.abs(b.x - state.player.x) - Math.abs(b.y - state.player.y)))[0];
+    if (!near) return;
+    const dx = near.x - state.player.x;
+    const dy = near.y - state.player.y;
+    const facing = { left: dx < 0 && dy === 0, right: dx > 0 && dy === 0, up: dy < 0 && dx === 0, down: dy > 0 && dx === 0 };
+    const lined = (dx === 0 || dy === 0) && Math.abs(dx) + Math.abs(dy) <= 5;
+    if (state.harpoon || (lined && facing[state.player.dir])) DIGDUG.onKey(state, "space");
+    else if (Math.abs(dx) > Math.abs(dy)) DIGDUG.onKey(state, dx > 0 ? "right" : "left");
+    else DIGDUG.onKey(state, dy > 0 ? "down" : "up");
+  };
+  let cleared = 0;
+  for (let seed = 1; seed <= 6; seed++) {
+    const state = drive(DIGDUG, DIGDUG.create({ rng: seeded(seed) }), 4000, hunting);
+    if (state.level > 1) cleared++;
+  }
+  assert.ok(cleared >= 3, `only ${cleared} of 6 levels were dug out`);
+  for (let seed = 1; seed <= 6; seed++) {
+    const idle = drive(DIGDUG, DIGDUG.create({ rng: seeded(seed) }), 3000);
+    assert.ok(idle.over, `seed ${seed} survived standing in its hole`);
+  }
+});
+
+/* ------------------------------------------------------------------- kong */
+
+test("every girder has a way off it, and the ladders line up with the girders", () => {
+  for (const [i, girder] of GIRDERS.entries()) {
+    if (i === GIRDERS.length - 1) {
+      assert.equal(girder.ladder, null, "the floor has nowhere further down");
+      continue;
+    }
+    const down = LADDERS.filter((l) => l.top === girder.y);
+    assert.equal(down.length, 2, `girder ${girder.y} should have a barrel ladder and one of yours`);
+    for (const ladder of down) assert.equal(ladder.bottom, GIRDERS[i + 1].y, "a ladder must reach the next girder");
+    assert.equal(down.filter((l) => l.barrels).length, 1, "and only one of them is the barrel chute");
+  }
+  // The two directions alternate, which is what makes you walk into the barrels
+  // rather than after them.
+  for (let i = 1; i < GIRDERS.length; i++) {
+    assert.notEqual(GIRDERS[i].dir, GIRDERS[i - 1].dir, "girders should alternate");
+  }
+});
+
+test("a barrel crosses a girder and takes the chute down", () => {
+  const state = KONG.create({ rng: () => 0 }); // always takes the ladder
+  const barrel = newBarrel();
+  state.barrels = [barrel];
+  const top = GIRDERS[0];
+  // Roll until it has both crossed the girder and finished coming down.
+  for (let i = 0; i < WIDTH_K * 3 && (barrel.y === top.y || barrel.falling !== null); i++) {
+    rollBarrel(state, barrel);
+  }
+  assert.equal(barrel.y, GIRDERS[1].y, "it should have come down to the next girder");
+  assert.equal(barrel.x, top.ladder, "down the chute, not off the end");
+});
+
+test("a barrel that misses the chute rolls off the world", () => {
+  const state = KONG.create({ rng: () => 0.99 }); // never takes the ladder
+  const barrel = newBarrel();
+  state.barrels = [barrel];
+  for (let i = 0; i < WIDTH_K * 2 && !barrel.done; i++) rollBarrel(state, barrel);
+  assert.equal(barrel.done, true);
+});
+
+test("ladders are the only way up, and only from on one", () => {
+  const state = KONG.create({ rng: seeded(1) });
+  const start = state.player.y;
+  KONG.onKey(state, "up");
+  assert.equal(state.player.y, start, "you cannot climb thin air");
+  const ladder = LADDERS.find((l) => l.bottom === start);
+  state.player.x = ladder.x;
+  KONG.onKey(state, "up");
+  assert.equal(state.player.y, start - 1, "on a ladder you can");
+  for (let i = 0; i < 10; i++) KONG.onKey(state, "up");
+  assert.equal(state.player.y, ladder.top, "and it stops at the girder above");
+});
+
+test("a barrel flattens you unless you are over it", () => {
+  const flat = KONG.create({ rng: seeded(2) });
+  flat.barrels = [{ x: flat.player.x, y: flat.player.y, falling: null }];
+  KONG.tick(flat);
+  assert.equal(flat.lives, 2);
+
+  const jumped = KONG.create({ rng: seeded(2) });
+  jumped.barrels = [{ x: jumped.player.x, y: jumped.player.y, falling: null }];
+  KONG.onKey(jumped, "space");
+  KONG.tick(jumped);
+  assert.equal(jumped.lives, 3, "in the air it goes under you");
+  assert.equal(jumped.score, 100, "and it is worth something");
+});
+
+test("reaching the top is the next level, and faster", () => {
+  const state = KONG.create({ rng: seeded(3) });
+  const slow = throwEvery(state);
+  state.player = { x: WIDTH_K - 6, y: TOP_K, jump: 0 };
+  KONG.tick(state);
+  assert.equal(state.level, 2);
+  assert.ok(state.score >= 1000);
+  assert.equal(state.player.y, FLOOR_K, "and you start again at the bottom");
+  assert.ok(throwEvery(state) < slow, "with barrels coming quicker");
+});
+
+test("the climb can be made, and cannot be made by standing at the bottom", () => {
+  const climbing = (state, i) => {
+    if (i % 2) return;
+    const p = state.player;
+    const near = state.barrels.find((b) => b.y === p.y && Math.abs(b.x - p.x) <= 2);
+    if (near && !p.jump) { KONG.onKey(state, "space"); return; }
+    if (p.y === TOP_K) { KONG.onKey(state, "right"); return; }
+    if (!GIRDERS.some((g) => g.y === p.y)) { KONG.onKey(state, "up"); return; }
+    // Climb the ladder the barrels do not come down.
+    const up = LADDERS.filter((l) => l.bottom === p.y).sort((a, b) => a.barrels - b.barrels)[0];
+    if (!up) return;
+    if (p.x === up.x) KONG.onKey(state, "up");
+    else KONG.onKey(state, up.x > p.x ? "right" : "left");
+  };
+  const climbed = drive(KONG, KONG.create({ rng: seeded(1) }), 4000, climbing);
+  assert.ok(climbed.level > 3, `only got to level ${climbed.level}`);
+  for (let seed = 1; seed <= 5; seed++) {
+    // A barrel has to cross four girders to reach the floor, so this takes a
+    // while — but it always arrives.
+    const idle = drive(KONG, KONG.create({ rng: seeded(seed) }), 3000);
+    assert.ok(idle.over, `seed ${seed} survived at the bottom of the board`);
+  }
+});
+
+test("the kong board is drawn to size", () => {
+  const state = drive(KONG, KONG.create({ rng: seeded(4) }), 200);
+  const rows = KONG.render(state);
+  assert.equal(rows.length, HEIGHT_K);
+  for (const row of rows) assert.equal(visible(row), WIDTH_K);
 });
 
 /* ---------------------------------------------------------------- frogger */
