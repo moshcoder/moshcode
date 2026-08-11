@@ -16,7 +16,13 @@ import {
 } from "../src/games-tetris.mjs";
 import { SNAKE, WIDTH as S_WIDTH, HEIGHT as S_HEIGHT, step } from "../src/games-snake.mjs";
 import { PACMAN, MAZE, isWall, pellets, WIDTH as P_WIDTH, HEIGHT as P_HEIGHT } from "../src/games-pacman.mjs";
+import {
+  ASTEROIDS, ROCKS, rock, spawnWave, span, star, WIDTH as A_WIDTH, HEIGHT as A_HEIGHT,
+} from "../src/games-asteroids.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
+import {
+  BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
+} from "../src/games-blackjack.mjs";
 import { HANGMAN, MISSES_ALLOWED, WORDS, guess, mask } from "../src/games-hangman.mjs";
 import {
   CHESS, allMoves, apply, chooseMove, inCheck, legalMoves, name, outcome, parseBoard,
@@ -129,6 +135,21 @@ test("raw bytes become key names", () => {
   assert.deepEqual(decodeKeys("\x1b[Ax\x1b[A"), ["up", "x", "up"]);
   // An unknown escape sequence is swallowed, not misread as three keys.
   assert.deepEqual(decodeKeys("\x1b[Z"), []);
+});
+
+test("a game that reads letters gets its letters back", () => {
+  assert.deepEqual(decodeKeys("hjkl", { vim: false }), ["h", "j", "k", "l"]);
+  // Only the letters are given up — the arrows arrive as escape sequences and
+  // are unaffected, which is what lets blackjack use them for the bet.
+  assert.deepEqual(decodeKeys("\x1b[C\x1b[D", { vim: false }), ["right", "left"]);
+  assert.deepEqual(decodeKeys("\r ", { vim: false }), ["enter", "space"]);
+});
+
+test("the games that read letters have opted out of both intercepts", () => {
+  for (const game of GAMES.filter((g) => /a–z|hit/.test(g.keys))) {
+    assert.equal(game.vim, false, `${game.key} cannot see the letters h j k l`);
+    assert.equal(game.restartable, false, `${game.key} loses the letter r to the restart`);
+  }
 });
 
 /* ------------------------------------------------------------------ tetris */
@@ -338,6 +359,122 @@ test("a ghost never steps into a wall", () => {
   }
 });
 
+/* --------------------------------------------------------------- asteroids */
+
+test("a wave arrives at full size, and never on top of the ship", () => {
+  const ship = { x: A_WIDTH / 2, y: A_HEIGHT / 2 };
+  for (let seed = 1; seed <= 25; seed++) {
+    const wave = spawnWave(3, ship, seeded(seed));
+    assert.equal(wave.length, 6, "3 + wave rocks");
+    for (const r of wave) {
+      assert.equal(r.size, 3, "a wave opens with whole rocks");
+      assert.ok(span(r, ship) >= 14, `a rock spawned ${span(r, ship).toFixed(1)} from the ship`);
+    }
+  }
+});
+
+test("the screen has no edges — everything wraps", () => {
+  const state = ASTEROIDS.create({ rng: seeded(3) });
+  state.rocks = [];
+  state.ship = { x: A_WIDTH - 0.5, y: 0.2, vx: 1, vy: -0.4, angle: 0 };
+  ASTEROIDS.tick(state);
+  assert.ok(state.ship.x < 2, "off the right edge and back on the left");
+  assert.ok(state.ship.y > A_HEIGHT - 2, "off the top and back on the bottom");
+  // And the short way round is the short way round: two things either side of
+  // the seam are close, not a screen apart.
+  assert.ok(span({ x: 0.5, y: 5 }, { x: A_WIDTH - 0.5, y: 5 }) < 2);
+});
+
+test("a shot rock becomes two smaller ones, and scores", () => {
+  const state = ASTEROIDS.create({ rng: seeded(5) });
+  state.rocks = [rock(3, 20, 9, seeded(2))];
+  state.rocks[0].vx = 0;
+  state.rocks[0].vy = 0;
+  state.bullets = [{ x: 20, y: 9, vx: 0, vy: 0, life: 5 }];
+  state.invuln = 999; // the ship is not what this test is about
+  ASTEROIDS.tick(state);
+  assert.equal(state.rocks.length, 2, "a big rock breaks in two");
+  assert.deepEqual(state.rocks.map((r) => r.size), [2, 2]);
+  assert.equal(state.score, ROCKS[3].points);
+  assert.equal(state.bullets.length, 0, "and the bullet is spent");
+
+  // Down to the smallest, which leaves nothing behind.
+  state.rocks = [{ ...rock(1, 20, 9, seeded(2)), vx: 0, vy: 0 }];
+  state.bullets = [{ x: 20, y: 9, vx: 0, vy: 0, life: 5 }];
+  ASTEROIDS.tick(state);
+  assert.equal(state.score, ROCKS[3].points + ROCKS[1].points, "small rocks pay most");
+});
+
+test("clearing the rocks brings the next wave", () => {
+  const state = ASTEROIDS.create({ rng: seeded(9) });
+  state.rocks = [];
+  ASTEROIDS.tick(state);
+  assert.equal(state.wave, 2);
+  assert.equal(state.rocks.length, 5, "a wave bigger than the last one");
+});
+
+test("a rock takes a life, and the last one ends the game", () => {
+  const state = ASTEROIDS.create({ rng: seeded(7) });
+  const sit = () => {
+    state.rocks = [{ ...rock(3, state.ship.x, state.ship.y, seeded(1)), vx: 0, vy: 0 }];
+    state.invuln = 0;
+  };
+  sit();
+  ASTEROIDS.tick(state);
+  assert.equal(state.lives, 2);
+  assert.ok(state.invuln > 0, "you get a moment to get out of the way");
+  assert.deepEqual([state.ship.x, state.ship.y], [A_WIDTH / 2, A_HEIGHT / 2], "and a fresh ship");
+
+  state.lives = 1;
+  sit();
+  ASTEROIDS.tick(state);
+  assert.match(state.over, /wrecked/);
+});
+
+test("the ship cannot be hit while it is blinking", () => {
+  const state = ASTEROIDS.create({ rng: seeded(11) });
+  state.rocks = [{ ...rock(3, state.ship.x, state.ship.y, seeded(1)), vx: 0, vy: 0 }];
+  ASTEROIDS.tick(state); // create() starts you invulnerable
+  assert.equal(state.lives, 3);
+});
+
+test("only four bullets are ever in the air", () => {
+  const state = ASTEROIDS.create({ rng: seeded(13) });
+  for (let i = 0; i < 20; i++) {
+    ASTEROIDS.onKey(state, "space");
+    state.cooldown = 0; // hammering the key, which is what everybody does
+  }
+  assert.equal(state.bullets.length, 4);
+  // And they do not fly forever, or the screen fills up with old shots.
+  for (let i = 0; i < 30; i++) ASTEROIDS.tick(state);
+  assert.equal(state.bullets.length, 0);
+});
+
+test("thrust moves the ship the way it is pointing", () => {
+  const state = ASTEROIDS.create({ rng: seeded(17) });
+  state.rocks = [];
+  state.ship.angle = 0; // due east
+  ASTEROIDS.onKey(state, "up");
+  assert.ok(state.ship.vx > 0 && Math.abs(state.ship.vy) < 1e-9);
+  const flatOut = state.ship.vx;
+  ASTEROIDS.onKey(state, "down");
+  assert.ok(state.ship.vx < flatOut, "retro slows you down");
+});
+
+test("the asteroids board is drawn to size", () => {
+  const state = ASTEROIDS.create({ rng: seeded(19) });
+  const rows = ASTEROIDS.render(state);
+  assert.equal(rows.length, A_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), A_WIDTH, "a ragged row would tear the frame");
+  // The sky is scattered rather than striped — a diagonal is what you get from
+  // a linear function of x and y, and it reads as a bug on screen.
+  const byRow = new Set();
+  for (let y = 0; y < A_HEIGHT; y++) {
+    for (let x = 0; x < A_WIDTH; x++) if (star(x, y)) byRow.add(`${y}:${x}`);
+  }
+  assert.ok(byRow.size >= 8, "a sky with no stars in it");
+});
+
 /* -------------------------------------------------------------- tictactoe */
 
 test("three in a row is spotted in every direction", () => {
@@ -392,6 +529,183 @@ test("the cursor wraps rather than sticking to an edge", () => {
   assert.equal(state.cursor, 8);
 });
 
+/* -------------------------------------------------------------- blackjack */
+
+/** A hand, spelled the way a table would say it: "AS 8H" is an ace and an eight. */
+const cards = (spec) => spec.split(" ").map((c) => ({ rank: c.slice(0, -1), suit: c.slice(-1) }));
+
+/**
+ * A game holding exactly the cards this test wants. The deck is drawn from the
+ * end, so it is stacked back to front.
+ */
+function table(player, dealer, upcoming = "", chips = 100, bet = 10) {
+  const state = BLACKJACK.create({ rng: seeded(1) });
+  state.chips = chips - bet;
+  state.bet = bet;
+  state.hands = [{ cards: cards(player), bet, done: false, doubled: false, result: null, payout: 0 }];
+  state.dealer = cards(dealer);
+  state.deck = upcoming ? cards(upcoming).reverse() : freshDeck(seeded(2));
+  state.hole = true;
+  state.active = 0;
+  state.phase = "player";
+  state.message = "";
+  state.over = null;
+  return state;
+}
+
+test("aces count eleven until they cannot", () => {
+  assert.deepEqual(handValue(cards("A♠ 8♥")), { total: 19, soft: true });
+  assert.deepEqual(handValue(cards("A♠ 8♥ 5♣")), { total: 14, soft: false });
+  assert.deepEqual(handValue(cards("A♠ A♥ 9♣")), { total: 21, soft: true });
+  assert.deepEqual(handValue(cards("K♠ Q♥ J♣")), { total: 30, soft: false });
+  assert.equal(isBlackjack(cards("A♠ K♥")), true);
+  assert.equal(isBlackjack(cards("7♠ 7♥ 7♣")), false, "21 on three cards is not blackjack");
+});
+
+test("a deck is 52 different cards, however it is shuffled", () => {
+  const deck = freshDeck(seeded(5));
+  assert.equal(deck.length, 52);
+  assert.equal(new Set(deck.map((c) => `${c.rank}${c.suit}`)).size, 52);
+  assert.notDeepEqual(deck, freshDeck(seeded(9)), "two shuffles are not the same shuffle");
+});
+
+test("blackjack pays 3:2, and a pushed blackjack pays nothing", () => {
+  const state = table("A♠ K♥", "9♦ 8♣");
+  settle(state);
+  assert.match(state.hands[0].result, /blackjack/);
+  assert.equal(state.chips, 115, "the 10 back, plus 15");
+
+  const tie = table("A♠ K♥", "A♦ K♣");
+  settle(tie);
+  assert.equal(tie.hands[0].result, "push");
+  assert.equal(tie.chips, 100, "nothing won, nothing lost");
+});
+
+test("the dealer draws to 17 and stands on it, soft or not", () => {
+  const hard = table("K♠ 7♥", "9♦ 3♣", "4♥ 2♠");
+  settle(hard);
+  assert.equal(handValue(hard.dealer).total, 18, "12 → 16 → 18, and stop");
+  assert.equal(hard.hands[0].result, "dealer wins", "17 loses to 18");
+
+  const soft = table("K♠ 8♥", "A♦ 6♣");
+  settle(soft);
+  assert.equal(hard.hole, false, "the hole card is turned over either way");
+  assert.equal(soft.dealer.length, 2, "a soft 17 stands, house rules");
+  assert.equal(soft.hands[0].result, "you win");
+  assert.equal(soft.chips, 110);
+});
+
+test("a bust loses the bet, and the dealer does not bother drawing", () => {
+  const state = table("K♠ 8♥", "9♦ 3♣", "5♣");
+  BLACKJACK.onKey(state, "h");
+  assert.equal(handValue(state.hands[0].cards).total, 23);
+  assert.equal(state.hands[0].result, "bust");
+  assert.equal(state.dealer.length, 2, "nothing left to beat");
+  assert.equal(state.chips, 90, "the wager is gone");
+  assert.equal(state.phase, "settled");
+});
+
+test("twenty-one stands itself rather than waiting to be busted", () => {
+  const state = table("7♠ 6♥", "K♦ 9♣", "8♣");
+  BLACKJACK.onKey(state, "h");
+  assert.equal(state.phase, "settled", "21 does not get asked twice");
+  assert.equal(state.hands[0].result, "you win");
+});
+
+test("double takes one card, doubles the stake, and ends the hand", () => {
+  const state = table("6♠ 5♥", "K♦ 7♣", "9♥");
+  BLACKJACK.onKey(state, "d");
+  assert.equal(state.hands[0].cards.length, 3);
+  assert.equal(state.hands[0].bet, 20);
+  assert.equal(state.phase, "settled");
+  assert.equal(state.chips, 120, "20 up on a 20 wager");
+
+  // Three cards in, there is nothing to double.
+  const late = table("6♠ 5♥ 2♦", "K♦ 7♣");
+  const chips = late.chips;
+  BLACKJACK.onKey(late, "d");
+  assert.equal(late.hands[0].cards.length, 3);
+  assert.equal(late.chips, chips, "and nothing was staked on it");
+});
+
+test("a pair splits into two hands, each with its own bet", () => {
+  const state = table("8♠ 8♥", "K♦ 7♣", "3♥ 2♠");
+  assert.equal(canSplit(state), true);
+  BLACKJACK.onKey(state, "p");
+  assert.equal(state.hands.length, 2);
+  assert.deepEqual(state.hands.map((h) => h.cards.length), [2, 2]);
+  assert.deepEqual(state.hands.map((h) => h.bet), [10, 10]);
+  assert.equal(state.chips, 80, "two wagers on the table");
+  assert.equal(state.active, 0);
+
+  // Standing on the first hand moves to the second rather than to the dealer.
+  BLACKJACK.onKey(state, "s");
+  assert.equal(state.active, 1);
+  assert.equal(state.phase, "player");
+  BLACKJACK.onKey(state, "s");
+  assert.equal(state.phase, "settled");
+  assert.equal(state.hands.filter((h) => h.result).length, 2, "both hands are paid");
+});
+
+test("split aces get one card each, and 21 on them is not blackjack", () => {
+  const state = table("A♠ A♥", "K♦ 7♣", "K♥ Q♠");
+  BLACKJACK.onKey(state, "p");
+  assert.equal(state.phase, "settled", "no decisions on split aces");
+  assert.deepEqual(state.hands.map((h) => handValue(h.cards).total), [21, 21]);
+  assert.deepEqual(state.hands.map((h) => h.result), ["you win", "you win"]);
+  assert.equal(state.chips, 120, "paid 1:1 twice — not 3:2");
+});
+
+test("only a real pair splits, and only with the chips to back it", () => {
+  assert.equal(canSplit(table("8♠ 9♥", "K♦ 7♣")), false);
+  assert.equal(canSplit(table("K♠ Q♥", "K♦ 7♣")), true, "two tens is a pair at the table");
+  assert.equal(canSplit(table("8♠ 8♥", "K♦ 7♣", "", 10, 10)), false, "nothing left to stake");
+});
+
+test("between hands the arrows are the chips", () => {
+  const state = table("K♠ K♥", "9♦ 8♣", "2♣ 3♦ 4♥ 5♠");
+  settle(state);
+  assert.equal(state.phase, "settled");
+  BLACKJACK.onKey(state, "right");
+  assert.equal(state.bet, 15);
+  for (let i = 0; i < 10; i++) BLACKJACK.onKey(state, "left");
+  assert.equal(state.bet, MIN_BET, "and it does not go below the table minimum");
+  BLACKJACK.onKey(state, "enter");
+  assert.equal(state.phase, "player");
+  assert.equal(state.hands[0].cards.length, 2, "and the next hand is dealt");
+});
+
+test("the last of the stack ends it, and a bet is never more than you have", () => {
+  const broke = table("K♠ 5♥", "9♦ 8♣", "", 30, 30);
+  settle(broke); // 15 against a dealer 17 — the whole stack was on it
+  assert.equal(broke.chips, 0);
+  assert.match(broke.over, /broke/);
+
+  const short = table("K♠ K♥", "9♦ 8♣", "2♣ 3♦ 4♥ 5♠", 20, 20);
+  settle(short); // everything staked, and 40 back on the win
+  assert.equal(short.chips, 40);
+  short.bet = 500;
+  BLACKJACK.onKey(short, "enter");
+  assert.equal(short.hands[0].bet, 40, "you can only bet what you have");
+  assert.equal(short.chips, 0);
+});
+
+test("the table is dealt before the frame lands, and stays one size", () => {
+  const fresh = BLACKJACK.create({ rng: seeded(21) });
+  assert.equal(fresh.hands[0].cards.length, 2, "a hand is already out");
+  assert.equal(fresh.dealer.length, 2, "and so is the dealer's");
+
+  const width = (s) => Math.max(...BLACKJACK.render(s).map(visible));
+  const playing = table("K♠ 7♥", "9♦ 8♣");
+  const dealt = width(playing);
+  settle(playing);
+  assert.equal(width(playing), dealt, "the box must not breathe between hands");
+
+  // The hole card stays a hole card until the dealer plays.
+  assert.ok(strip(BLACKJACK.render(table("K♠ 7♥", "9♦ 8♣")).join("\n")).includes("▚▚▚"));
+  assert.ok(!strip(BLACKJACK.render(playing).join("\n")).includes("▚▚▚"), "and is turned over after");
+});
+
 /* ---------------------------------------------------------------- hangman */
 
 test("a right letter is revealed and a wrong one costs a limb", () => {
@@ -422,6 +736,16 @@ test("hangman is winnable and losable", () => {
 test("every hangman word is guessable with the keys the game offers", () => {
   for (const word of WORDS) {
     assert.match(word, /^[a-z]+$/, `"${word}" has a character nobody can type at it`);
+  }
+  // And "typeable" means all the way through the decoder and the driver's own
+  // keys: `h` used to arrive as a left arrow and `r` as a restart, which made
+  // `refactor` a word nobody could spell at the gallows.
+  for (const letter of "hjklr") {
+    const [key] = decodeKeys(letter, { vim: HANGMAN.vim !== false });
+    assert.equal(key, letter, `${letter} never reaches hangman`);
+    const state = { word: "hjklr", guessed: new Set(), missed: [], over: null };
+    HANGMAN.onKey(state, key);
+    assert.ok(state.guessed.has(letter), `${letter} was not taken as a guess`);
   }
 });
 
@@ -599,6 +923,35 @@ test("an identical frame is not repainted", async () => {
   const before = written.length;
   input.emit("data", "\t"); // a key hangman does nothing with
   assert.equal(written.length, before, "nothing changed, so nothing was drawn");
+  input.emit("data", "q");
+  await done;
+});
+
+test("letters reach the games that read letters, all the way from the wire", async () => {
+  const { input, output } = fakeIO();
+  let state = null;
+  // The driver owns the decoder, so this is the only place the opt-out can be
+  // proved: `h` has to arrive as a hit rather than as a left arrow.
+  const spy = { ...BLACKJACK, onKey: (s, key, ctx) => { state = BLACKJACK.onKey(s, key, ctx); return state; } };
+  const done = runGame(spy, { input, output, rng: seeded(4) });
+  await new Promise((r) => setImmediate(r));
+  input.emit("data", "h");
+  assert.ok(state, "the keypress never arrived");
+  assert.ok(state.hands[0].cards.length >= 3 || state.phase === "settled", "h dealt no card");
+  input.emit("data", "q");
+  await done;
+});
+
+test("r is not a restart in a game where r is a letter", async () => {
+  const { input, output } = fakeIO();
+  let state = null;
+  const spy = { ...HANGMAN, onKey: (s, key, ctx) => { state = HANGMAN.onKey(s, key, ctx); return state; } };
+  const done = runGame(spy, { input, output, rng: seeded(3) });
+  await new Promise((r) => setImmediate(r));
+  input.emit("data", "r");
+  assert.ok(state, "r was eaten by the restart before hangman saw it");
+  // In the word or not, it was played as a guess.
+  assert.ok(state.guessed.has("r") || state.missed.includes("r"));
   input.emit("data", "q");
   await done;
 });

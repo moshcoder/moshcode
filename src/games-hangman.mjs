@@ -54,7 +54,12 @@ export const HANGMAN = {
   aliases: ["hang", "gallows"],
   title: "HANGMAN",
   blurb: "six wrong letters and you are done for",
-  keys: "a–z guess · r new word · q quit",
+  keys: "a–z guess · r new word once it is over · q quit",
+  // Every letter has to reach the game: `h` is a guess, not the vim left it is
+  // in the games that read arrows, and `r` only restarts once the word is done.
+  // Without both, `refactor` was a word you could not spell at it.
+  vim: false,
+  restartable: false,
 
   create({ rng = Math.random } = {}) {
     return {

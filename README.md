@@ -50,7 +50,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
 | `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
 | `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |
-| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — six games, no menus |
+| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — eight games, no menus |
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
@@ -584,7 +584,7 @@ the composer URL instead.
 
 ## The arcade (`/games`)
 
-Six games, in the pit or straight from a shell. There are no menus, no options
+Eight games, in the pit or straight from a shell. There are no menus, no options
 screens and no difficulty prompts — `/games tetris` is already playing.
 
 ```sh
@@ -611,7 +611,9 @@ moshcode games --json         # the roster, for a machine
 | `tetris` | stack the bricks, clear the lines, outrun gravity |
 | `snake` | eat, grow, and try not to eat yourself |
 | `pacman` | eat the dots, dodge the ghosts, `✳` makes them edible |
+| `asteroids` | turn, thrust, shoot — every rock you break becomes two |
 | `tictactoe` | three in a row against an opponent that cannot be beaten |
+| `blackjack` | hit, stand, double, split — dealer stands on 17, and pays 3:2 |
 | `chess` | full rules — castling, en passant, promotion — and it plays back |
 | `hangman` | six wrong letters and you are done for |
 
@@ -619,6 +621,10 @@ Every one of them works the same way: arrows move, `q` quits, `r` starts
 another, and the controls are written along the bottom of the game itself. Each
 draws in place rather than on the alternate screen, so the board you finished on
 stays in your scrollback.
+
+The two games that read letters — `blackjack`, where `h` is hit, and `hangman`,
+where it is a guess — keep their letters: `h j k l` are not arrows there, and `r`
+only starts another once the game is over.
 
 Playing needs a real terminal, because they read single keypresses — `moshcode
 games` on its own lists them anywhere, including a pipe.
