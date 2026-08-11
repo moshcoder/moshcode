@@ -396,7 +396,7 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "games",
     group: "arcade",
-    description: "the moshcode arcade — eighteen games, no menus",
+    description: "the moshcode arcade — twenty games, no menus",
     synopsis: [
       ["moshcode games", "the cabinet, and what each one is"],
       ["moshcode games <game>", "play it, right here in the terminal"],
