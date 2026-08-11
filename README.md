@@ -43,6 +43,8 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode login` | account | authenticate with app.moshcode.sh |
 | `moshcode whoami` | account | show the logged-in account |
 | `moshcode logout` | account | clear the logged-in account |
+| `moshcode save` | account | save this machine's pit settings to your account |
+| `moshcode load` | account | bring your saved pit settings onto this machine |
 | `moshcode console` | account | serve or connect to the browser terminal |
 | `moshcode dns` | hosting | resolve Moshpit names on this machine |
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
@@ -578,6 +580,52 @@ connects to a NIP-07 browser signer (or a NIP-46 bunker through
 event, and publishes it to the displayed relays. Both flows leave the final
 confirmation in the browser. If the pit is remote or headless, `/post` prints
 the composer URL instead.
+
+## Settings sync (`/save` and `/load`)
+
+Your pit becomes yours by accretion — a dozen aliases, herd rules you tuned until
+the roster stopped lying to you. All of it lives in `~/.moshcode` on one machine,
+which is why every new laptop, container and droplet used to feel like someone
+else's prompt.
+
+`/save` pushes that configuration to your `app.moshcode.sh` account. `/load`
+brings it down onto any machine you have run `/login` on.
+
+```sh
+moshcode save                 # push this machine's settings (pit: /save)
+moshcode save --dry-run       # what would go up, and stop
+
+# on the new box
+moshcode login
+moshcode load                 # pull them down (pit: /load)
+moshcode load --dry-run       # the per-file plan, changing nothing
+```
+
+What syncs is an allowlist, not a directory walk:
+
+| file | what it is |
+|---|---|
+| `~/.moshcode/aliases.json` | your pit aliases (`/alias`) |
+| `~/.moshcode/herd/rules.json` | herd state-detection overrides |
+
+What never syncs, by name: `credentials.json` (the account token this very
+feature authenticates with), `herd/sessions.json` (live state pinned to one tmux
+server), `sync.json`, and the `pkg/` binary cache. Engine configuration
+(`~/.claude.json` and friends) is deliberately left alone — those files carry
+provider API keys.
+
+Nothing is overwritten quietly:
+
+- Each save is a numbered **revision**. `/save` sends the revision it last agreed
+  on, and the app refuses the write if another machine has saved since — you get
+  told, with `/load` and `/save --force` as the two ways out.
+- `/load` refuses to replace a settings file you edited since this machine last
+  synced, and names it. `--force` overrides.
+- The last ten revisions are kept. See them, and which machine each came from, at
+  [app.moshcode.sh/settings/sync](https://app.moshcode.sh/settings/sync) — where
+  you can also promote an older revision or delete the lot.
+
+Both verbs take `--json`, so a provisioning script can act on the result.
 
 ## Browser terminal (`moshcode console`)
 

@@ -15,6 +15,7 @@ import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
+import { loadCommand, saveCommand } from "./settings-sync.mjs";
 import { createMirror, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
@@ -728,6 +729,10 @@ export async function tui() {
       continue;
     }
     if (cmd === "logout") { logout(); continue; }
+    // Settings sync. Never closes readline: both are one request and some
+    // printing, and the prompt is where you were about to type `/load` again.
+    if (cmd === "save") { await saveCommand(rest, { write: (l) => console.log(`  ${l}`) }); continue; }
+    if (cmd === "load") { await loadCommand(rest, { write: (l) => console.log(`  ${l}`) }); continue; }
     if (cmd === "run") {
       await runFile(rest);
       continue;
