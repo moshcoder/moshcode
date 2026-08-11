@@ -50,7 +50,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
 | `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
 | `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |
-| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — eight games, no menus |
+| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — twenty-two games, no menus |
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
@@ -584,7 +584,7 @@ the composer URL instead.
 
 ## The arcade (`/games`)
 
-Eight games, in the pit or straight from a shell. There are no menus, no options
+Twenty-two games, in the pit or straight from a shell. There are no menus, no options
 screens and no difficulty prompts — `/games tetris` is already playing.
 
 ```sh
@@ -611,7 +611,21 @@ moshcode games --json         # the roster, for a machine
 | `tetris` | stack the bricks, clear the lines, outrun gravity |
 | `snake` | eat, grow, and try not to eat yourself |
 | `pacman` | eat the dots, dodge the ghosts, `✳` makes them edible |
+| `invaders` | forty of them, and the last one moves fastest |
+| `centipede` | shoot it in the middle and now there are two of them |
 | `asteroids` | turn, thrust, shoot — every rock you break becomes two |
+| `breakout` | dig a channel up the side and let the ball do the rest |
+| `pong` | first to seven, and the angle is all in where you hit it |
+| `tank` | two tanks, one yard, five hits — line it up and let go |
+| `digdug` | dig the tunnels, pump the monsters, drop rocks on the rest |
+| `frogger` | the road kills what it touches, the river kills what it doesn't |
+| `kong` | five girders, four ladders, and a barrel with your name on it |
+| `pitfall` | jump the logs, swing the pits, and get the gold before dark |
+| `choplifter` | fly out, land, fill the back, and get them home |
+| `spyhunter` | keep it on the tarmac, shoot the ones shooting back |
+| `outrun` | a road that bends, traffic that doesn't, and a clock that always wins |
+| `excitebike` | turbo until it cooks, and land the way you took off |
+| `stagedive` | run the barricade, hop the gear, duck the crowd, take the picks |
 | `tictactoe` | three in a row against an opponent that cannot be beaten |
 | `blackjack` | hit, stand, double, split — dealer stands on 17, and pays 3:2 |
 | `chess` | full rules — castling, en passant, promotion — and it plays back |
