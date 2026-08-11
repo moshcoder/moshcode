@@ -396,7 +396,7 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "games",
     group: "arcade",
-    description: "the moshcode arcade — twenty games, no menus",
+    description: "the moshcode arcade — twenty-two games, no menus",
     synopsis: [
       ["moshcode games", "the cabinet, and what each one is"],
       ["moshcode games <game>", "play it, right here in the terminal"],
@@ -934,7 +934,7 @@ export const PIT_COMMANDS = [
   { name: "plugin", aliases: ["plugins"], args: "<verb> [name]", cli: "plugin",
     description: "install moshcode's slash commands into Claude Code" },
   { name: "games", aliases: ["game", "arcade", "play"], args: "[game]", cli: "games",
-    description: "the arcade — tetris, invaders, pac-man, breakout, pong, tank, chess and more" },
+    description: "the arcade — tetris, invaders, pac-man, frogger, kong, outrun, chess and more" },
   { name: "socials", aliases: ["social"], pitOnly: true,
     description: "list social networks available for posting" },
   { name: "post", args: '<social> "message"', pitOnly: true,
