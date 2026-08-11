@@ -57,6 +57,14 @@ import {
   KONG, GIRDERS, LADDERS, TOP as TOP_K, FLOOR as FLOOR_K, newBarrel, rollBarrel, throwEvery,
   WIDTH as WIDTH_K, HEIGHT as HEIGHT_K,
 } from "../src/games-kong.mjs";
+import {
+  PITFALL, RUNNER as PF_RUNNER, grab, span as pfSpan, spawn as spawnPitfall,
+  WIDTH as PF_WIDTH, HEIGHT as PF_HEIGHT,
+} from "../src/games-pitfall.mjs";
+import {
+  CHOPLIFTER, BASE, SEATS, WORLD, GROUND as GROUND_CH, onPad,
+  WIDTH as CH_WIDTH, HEIGHT as CH_HEIGHT,
+} from "../src/games-choplifter.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
 import {
   BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
@@ -1469,6 +1477,219 @@ test("the road is drawn to size", () => {
   const rows = SPYHUNTER.render(state);
   assert.equal(rows.length, SH_HEIGHT);
   for (const row of rows) assert.equal(visible(row), SH_WIDTH);
+});
+
+/* ---------------------------------------------------------------- pitfall */
+
+test("a jump clears a log and a pit needs the vine", () => {
+  const jumped = PITFALL.create({ rng: seeded(1) });
+  jumped.next = 1e9;
+  jumped.things = [{ kind: "log", x: PF_RUNNER + 2 }];
+  PITFALL.onKey(jumped, "space");
+  const overLog = drive(PITFALL, jumped, 12);
+  assert.equal(overLog.over, null, "a jump should cover a two-wide log");
+
+  // A pit is five wide, which is more than a jump covers. That is on purpose.
+  const short = PITFALL.create({ rng: seeded(2) });
+  short.next = 1e9;
+  short.things = [{ kind: "pit", x: PF_RUNNER + 2 }];
+  PITFALL.onKey(short, "space");
+  const fell = drive(PITFALL, short, 20);
+  assert.equal(fell.lives, 2, "jumping a pit is how you find out how deep it is");
+});
+
+test("a vine is only there to be caught, and only from the ground", () => {
+  const state = PITFALL.create({ rng: seeded(3) });
+  state.next = 1e9;
+  state.things = [{ kind: "vine", x: PF_RUNNER }];
+  PITFALL.tick(state);
+  assert.equal(state.lives, 3, "walking under one costs nothing");
+
+  grab(state);
+  assert.equal(state.swinging, true);
+  assert.ok(state.air > 0);
+
+  const airborne = PITFALL.create({ rng: seeded(4) });
+  airborne.next = 1e9;
+  airborne.things = [{ kind: "vine", x: PF_RUNNER }];
+  PITFALL.onKey(airborne, "space");
+  grab(airborne);
+  assert.equal(airborne.swinging, false, "you cannot catch one mid-jump");
+});
+
+test("a swing carries you over a whole pit", () => {
+  const state = PITFALL.create({ rng: seeded(5) });
+  state.next = 1e9;
+  // The spawner always hangs the vine three columns ahead of the pit it covers.
+  state.things = [{ kind: "vine", x: PF_RUNNER }, { kind: "pit", x: PF_RUNNER + 3 }];
+  grab(state);
+  const crossed = drive(PITFALL, state, 30);
+  assert.equal(crossed.lives, 3, "the swing should have carried you the whole way");
+});
+
+test("every pit the jungle throws has a vine over it", () => {
+  const state = PITFALL.create({ rng: seeded(6) });
+  for (let i = 0; i < 400; i++) spawnPitfall(state);
+  const pits = state.things.filter((t) => t.kind === "pit");
+  const vines = state.things.filter((t) => t.kind === "vine");
+  assert.ok(pits.length > 0, "the spawner never made a pit");
+  assert.equal(vines.length, pits.length, "a pit with no vine is a pit nobody gets past");
+});
+
+test("gold is picked up on foot, and a fall costs you daylight", () => {
+  const state = PITFALL.create({ rng: seeded(7) });
+  state.next = 1e9;
+  // A tick scrolls the jungle first, so put it one column further out.
+  state.things = [{ kind: "treasure", x: PF_RUNNER + 1 }];
+  PITFALL.tick(state);
+  assert.equal(state.treasure, 1);
+  assert.ok(state.score >= 500);
+
+  const fell = PITFALL.create({ rng: seeded(8) });
+  fell.next = 1e9;
+  fell.clock = 500;
+  fell.things = [{ kind: "scorpion", x: PF_RUNNER + 1 }];
+  PITFALL.tick(fell);
+  assert.equal(fell.lives, 2);
+  assert.ok(fell.clock < 500, "and it puts the sun down faster");
+});
+
+test("the jungle can be run, and cannot be run standing up", () => {
+  const running = (state) => {
+    const vine = state.things.find((t) => t.kind === "vine" && Math.abs(Math.round(t.x) - PF_RUNNER) <= 1);
+    const soon = state.things.find((t) => {
+      if (t.kind === "vine" || t.kind === "treasure" || t.kind === "pit") return false;
+      const lead = pfSpan(t)[0] - PF_RUNNER;
+      return lead >= 1 && lead <= 3;
+    });
+    if (vine) PITFALL.onKey(state, "up");
+    else if (soon) PITFALL.onKey(state, "space");
+  };
+  for (let seed = 1; seed <= 6; seed++) {
+    const state = drive(PITFALL, PITFALL.create({ rng: seeded(seed) }), 3000, running);
+    // Somebody who jumps and swings at the right moments is only ever beaten by
+    // the clock, never by the jungle.
+    assert.match(state.over ?? "", /out of daylight/, `seed ${seed} ended: ${state.over}`);
+    assert.ok(state.treasure > 3, `seed ${seed} only found ${state.treasure} gold`);
+  }
+  for (let seed = 1; seed <= 6; seed++) {
+    const idle = drive(PITFALL, PITFALL.create({ rng: seeded(seed) }), 800);
+    assert.ok(idle.over, `seed ${seed} walked the jungle without jumping once`);
+  }
+});
+
+test("the pitfall board is drawn to size", () => {
+  const state = drive(PITFALL, PITFALL.create({ rng: seeded(9) }), 150);
+  const rows = PITFALL.render(state);
+  assert.equal(rows.length, PF_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), PF_WIDTH);
+});
+
+/* ------------------------------------------------------------- choplifter */
+
+test("the world is wider than the window, and the camera follows you", () => {
+  const state = CHOPLIFTER.create({ rng: seeded(1) });
+  assert.ok(WORLD > CH_WIDTH * 2, "a rescue you can see all of is not a rescue");
+  const home = strip(CHOPLIFTER.render(state).join("\n"));
+  state.chopper.x = WORLD - 10;
+  const away = strip(CHOPLIFTER.render(state).join("\n"));
+  assert.notEqual(home, away, "flying to the far end should show a different place");
+});
+
+test("landing in the desert fills the back, four at a time", () => {
+  const state = CHOPLIFTER.create({ rng: seeded(2) });
+  state.tanks = [];
+  state.people = Array.from({ length: 6 }, (_, i) => ({ x: 60 + i * 0.4 }));
+  state.chopper = { x: 60, y: GROUND_CH, vy: 0 };
+  CHOPLIFTER.tick(state);
+  assert.equal(state.aboard, SEATS, "it holds four and no more");
+  assert.equal(state.people.length, 2, "and leaves the rest waving");
+});
+
+test("the pad is the only place they get out", () => {
+  const desert = CHOPLIFTER.create({ rng: seeded(3) });
+  desert.tanks = [];
+  desert.people = [];
+  desert.aboard = 3;
+  desert.chopper = { x: 80, y: GROUND_CH, vy: 0 };
+  CHOPLIFTER.tick(desert);
+  assert.equal(desert.home, 0, "putting them down in the desert is not a rescue");
+
+  const pad = CHOPLIFTER.create({ rng: seeded(3) });
+  pad.tanks = [];
+  pad.aboard = 3;
+  pad.chopper = { x: BASE + 2, y: GROUND_CH, vy: 0 };
+  CHOPLIFTER.tick(pad);
+  assert.equal(pad.home, 3);
+  assert.equal(pad.aboard, 0);
+  assert.ok(onPad(BASE + 2) && !onPad(80));
+});
+
+test("a hit costs everybody in the back", () => {
+  const state = CHOPLIFTER.create({ rng: seeded(4) });
+  state.tanks = [];
+  state.aboard = 4;
+  state.chopper = { x: 60, y: 5, vy: 0 };
+  state.shells = [{ x: 60, y: 5, vy: -0.55 }];
+  CHOPLIFTER.tick(state);
+  assert.equal(state.lives, 2);
+  assert.equal(state.aboard, 0, "they were in the back");
+  assert.equal(state.home, 0);
+});
+
+test("a tank only shoots at what is overhead", () => {
+  const far = CHOPLIFTER.create({ rng: seeded(5) });
+  far.people = [];
+  far.tanks = [{ x: 100, dir: 1 }];
+  far.chopper = { x: 10, y: 4, vy: 0 };
+  drive(CHOPLIFTER, far, 200);
+  assert.equal(far.shells.length, 0, "it should not shell the far end of the map");
+
+  const over = CHOPLIFTER.create({ rng: seeded(6) });
+  over.people = [{ x: 100 }];
+  over.tanks = [{ x: 100, dir: 1 }];
+  over.chopper = { x: 100, y: 3, vy: 0 };
+  let seen = 0;
+  drive(CHOPLIFTER, over, 200, (s) => { seen = Math.max(seen, s.shells.length); s.chopper.y = 3; });
+  assert.ok(seen > 0, "and it should very much shell what is above it");
+});
+
+test("everyone out is the end of it", () => {
+  const state = CHOPLIFTER.create({ rng: seeded(7) });
+  state.tanks = [];
+  state.people = [];
+  state.aboard = 0;
+  CHOPLIFTER.tick(state);
+  assert.match(state.over, /everyone out/);
+});
+
+test("a pilot can fly the rescue, and a parked one rescues nobody", () => {
+  const flying = (state) => {
+    const chop = state.chopper;
+    const full = state.aboard >= SEATS || (!state.people.length && state.aboard);
+    const target = full ? BASE + 2 : (state.people[0]?.x ?? BASE + 2);
+    const dx = target - chop.x;
+    if (Math.abs(dx) > 1.5) {
+      CHOPLIFTER.onKey(state, dx > 0 ? "right" : "left");
+      if (chop.y > GROUND_CH - 4) CHOPLIFTER.onKey(state, "up");
+    } else if (chop.y < GROUND_CH) CHOPLIFTER.onKey(state, "down");
+  };
+  let rescued = 0;
+  for (let seed = 1; seed <= 6; seed++) {
+    rescued += drive(CHOPLIFTER, CHOPLIFTER.create({ rng: seeded(seed) }), 6000, flying).home;
+  }
+  assert.ok(rescued >= 20, `only ${rescued} people came home across six runs`);
+  for (let seed = 1; seed <= 6; seed++) {
+    const parked = drive(CHOPLIFTER, CHOPLIFTER.create({ rng: seeded(seed) }), 2000);
+    assert.equal(parked.home, 0, "nobody walks home on their own");
+  }
+});
+
+test("the choplifter board is drawn to size", () => {
+  const state = drive(CHOPLIFTER, CHOPLIFTER.create({ rng: seeded(8) }), 200);
+  const rows = CHOPLIFTER.render(state);
+  assert.equal(rows.length, CH_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), CH_WIDTH);
 });
 
 /* -------------------------------------------------------------- stagedive */
