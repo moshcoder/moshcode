@@ -22,6 +22,7 @@ import { describeUninstall, uninstallPlan } from "../src/uninstall.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "../src/integrations.mjs";
 import { stocksCommand } from "../src/advisor.mjs";
 import { cryptoCommand } from "../src/crypto.mjs";
+import { gamesCommand } from "../src/games.mjs";
 import { canOpenBrowser, openBrowser } from "../src/open-url.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
@@ -395,6 +396,11 @@ async function main() {
   }
   if (cmd === "plugin" || cmd === "plugins") {
     const code = await pluginCommand(rest);
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === "games" || cmd === "game" || cmd === "arcade") {
+    const code = await gamesCommand(rest);
     if (code) process.exitCode = code;
     return;
   }

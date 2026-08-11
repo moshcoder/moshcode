@@ -50,6 +50,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
 | `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
 | `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |
+| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — six games, no menus |
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
@@ -580,6 +581,47 @@ connects to a NIP-07 browser signer (or a NIP-46 bunker through
 event, and publishes it to the displayed relays. Both flows leave the final
 confirmation in the browser. If the pit is remote or headless, `/post` prints
 the composer URL instead.
+
+## The arcade (`/games`)
+
+Six games, in the pit or straight from a shell. There are no menus, no options
+screens and no difficulty prompts — `/games tetris` is already playing.
+
+```sh
+moshcode games                # the cabinet (pit: /games)
+moshcode games tetris         # play one   (pit: /games tetris)
+moshcode games --json         # the roster, for a machine
+```
+
+```
+  TETRIS       score 1200 · lines 12
+  ┌────────────────────────────────┐
+  │ · · · · ████· · · ·   NEXT     │
+  │ · · · · ████· · · ·            │
+  │ · · · · · · · · · ·   ████████ │
+  │ · · · · · · · · · ·            │
+  │ · · · ████· · · · ·   LVL 2    │
+  │ ████████████· ██████           │
+  └────────────────────────────────┘
+  ← → move · ↑ rotate · ↓ drop one · space slam · q quit
+```
+
+| game | |
+|---|---|
+| `tetris` | stack the bricks, clear the lines, outrun gravity |
+| `snake` | eat, grow, and try not to eat yourself |
+| `pacman` | eat the dots, dodge the ghosts, `✳` makes them edible |
+| `tictactoe` | three in a row against an opponent that cannot be beaten |
+| `chess` | full rules — castling, en passant, promotion — and it plays back |
+| `hangman` | six wrong letters and you are done for |
+
+Every one of them works the same way: arrows move, `q` quits, `r` starts
+another, and the controls are written along the bottom of the game itself. Each
+draws in place rather than on the alternate screen, so the board you finished on
+stays in your scrollback.
+
+Playing needs a real terminal, because they read single keypresses — `moshcode
+games` on its own lists them anywhere, including a pipe.
 
 ## Settings sync (`/save` and `/load`)
 
