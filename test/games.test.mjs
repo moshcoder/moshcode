@@ -42,6 +42,13 @@ import {
   SPYHUNTER, CAR_ROW, CAR_W, TRAFFIC, nextRow, onRoad, openRoad, overlaps,
   WIDTH as SH_WIDTH, HEIGHT as SH_HEIGHT,
 } from "../src/games-spyhunter.mjs";
+import {
+  CENTIPEDE, ZONE_TOP, bite, cadence as centCadence, newCentipede, spiderStep, walk,
+  WIDTH as C_WIDTH, HEIGHT as C_HEIGHT,
+} from "../src/games-centipede.mjs";
+import {
+  FROGGER, BANK, HOMES, HOME_ROW, RIVER, ROAD, homeAt, thingAt, WIDTH as F_WIDTH,
+} from "../src/games-frogger.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
 import {
   BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
@@ -652,6 +659,242 @@ test("the invaders board is drawn to size", () => {
   const rows = INVADERS.render(state);
   assert.equal(rows.length, I_HEIGHT);
   for (const row of rows) assert.equal(visible(row), I_WIDTH);
+});
+
+/* -------------------------------------------------------------- centipede */
+
+test("a shot to the middle leaves a mushroom and two centipedes", () => {
+  const state = CENTIPEDE.create({ rng: seeded(1) });
+  state.field = new Map();
+  state.centipede = newCentipede(6);
+  const middle = state.centipede[3];
+  state.shots = [{ x: middle.x, y: middle.y + 1 }];
+  CENTIPEDE.tick(state);
+  assert.equal(state.centipede.length, 5, "the segment is gone");
+  assert.equal(state.centipede.includes(middle), false);
+  assert.ok(state.field.size >= 1, "and it left a mushroom where it fell");
+  assert.equal(state.score >= 10, true);
+  // The pieces either side carry on independently, which is what splitting is.
+  const before = state.centipede.map((s) => s.x);
+  for (let i = 0; i < 20; i++) CENTIPEDE.tick(state);
+  assert.notDeepEqual(state.centipede.map((s) => s.x), before, "both halves should still be walking");
+});
+
+test("a mushroom takes four hits", () => {
+  const field = new Map();
+  field.set("5,5", 4);
+  assert.equal(bite(field, 5, 5), 1);
+  assert.equal(bite(field, 5, 5), 1);
+  assert.equal(bite(field, 5, 5), 1);
+  assert.equal(bite(field, 5, 5), 5, "the last hit is the one worth points");
+  assert.equal(field.has("5,5"), false);
+  assert.equal(bite(field, 5, 5), 0, "and nothing is left to shoot");
+});
+
+test("it turns and drops at a wall, at a mushroom, and off the floor", () => {
+  const state = CENTIPEDE.create({ rng: seeded(2) });
+  state.field = new Map();
+  const seg = { x: C_WIDTH - 1, y: 3, dir: 1, down: 1 };
+  walk(state, seg);
+  assert.deepEqual([seg.x, seg.y, seg.dir], [C_WIDTH - 1, 4, -1], "the wall turns it and drops it");
+
+  state.field.set(`${seg.x - 1},${seg.y}`, 4);
+  walk(state, seg);
+  assert.equal(seg.y, 5, "a mushroom does the same thing a wall does");
+
+  const floor = { x: 5, y: C_HEIGHT - 1, dir: 1, down: 1 };
+  state.field = new Map([[`6,${C_HEIGHT - 1}`, 4]]);
+  walk(state, floor);
+  assert.equal(floor.down, -1, "off the floor it starts climbing back up");
+});
+
+test("you are confined to the bottom strip", () => {
+  const state = CENTIPEDE.create({ rng: seeded(3) });
+  state.field = new Map();
+  for (let i = 0; i < 20; i++) CENTIPEDE.onKey(state, "up");
+  assert.equal(state.player.y, ZONE_TOP, "the strip is as far up as you go");
+  for (let i = 0; i < 60; i++) CENTIPEDE.onKey(state, "left");
+  assert.equal(state.player.x, 0);
+});
+
+test("a segment that reaches you costs a life, and the last one ends it", () => {
+  const state = CENTIPEDE.create({ rng: seeded(4) });
+  state.field = new Map();
+  state.lives = 1;
+  state.centipede = [{ x: state.player.x - 1, y: state.player.y, dir: 1, down: 1 }];
+  state.clock = 99;
+  CENTIPEDE.tick(state);
+  assert.match(state.over, /eaten/);
+});
+
+test("clearing it brings a faster wave", () => {
+  const state = CENTIPEDE.create({ rng: seeded(5) });
+  const slow = centCadence(state);
+  state.centipede = [];
+  CENTIPEDE.tick(state);
+  assert.equal(state.wave, 2);
+  assert.equal(state.centipede.length, 10, "a whole new one");
+  assert.ok(centCadence(state) < slow, "and it comes down quicker");
+});
+
+test("the spider crosses your strip, eats what it walks over, and leaves", () => {
+  const state = CENTIPEDE.create({ rng: seeded(7) });
+  state.spider = { x: 0, y: C_HEIGHT - 2, dx: 1, dy: 1 };
+  state.field.set(`1,${C_HEIGHT - 1}`, 4);
+  spiderStep(state);
+  assert.equal(state.field.has(`1,${C_HEIGHT - 1}`), false, "a mushroom it walks over is gone whole");
+  for (let i = 0; i < C_WIDTH + 2; i++) spiderStep(state);
+  assert.equal(state.spider, null, "and it walks out the far side rather than living there");
+
+  const shot = CENTIPEDE.create({ rng: seeded(8) });
+  shot.field = new Map();
+  shot.spider = { x: 10, y: C_HEIGHT - 2, dx: 1, dy: 1 };
+  shot.shots = [{ x: 10, y: C_HEIGHT - 1 }];
+  CENTIPEDE.tick(shot);
+  assert.equal(shot.spider, null);
+  assert.equal(shot.score, 300, "and it is the best thing on the board to shoot");
+});
+
+test("the centipede board is drawn to size", () => {
+  const state = CENTIPEDE.create({ rng: seeded(6) });
+  for (let i = 0; i < 80; i++) CENTIPEDE.tick(state);
+  const rows = CENTIPEDE.render(state);
+  assert.equal(rows.length, C_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), C_WIDTH);
+});
+
+test("centipede can be cleared by shooting, and not by standing there", () => {
+  // Chase the nearest segment's column and keep firing.
+  const shooting = (state) => {
+    const near = state.centipede.slice().sort((a, b) => (
+      Math.abs(a.x - state.player.x) - Math.abs(b.x - state.player.x)))[0];
+    if (!near) return;
+    if (state.player.x < near.x) CENTIPEDE.onKey(state, "right");
+    else if (state.player.x > near.x) CENTIPEDE.onKey(state, "left");
+    CENTIPEDE.onKey(state, "space");
+  };
+  let cleared = 0;
+  for (let seed = 1; seed <= 6; seed++) {
+    const state = drive(CENTIPEDE, CENTIPEDE.create({ rng: seeded(seed) }), 2000, shooting);
+    if (state.wave > 1) cleared++;
+  }
+  assert.ok(cleared >= 5, `only ${cleared} of 6 waves fell to somebody shooting`);
+  for (let seed = 1; seed <= 6; seed++) {
+    const idle = drive(CENTIPEDE, CENTIPEDE.create({ rng: seeded(seed) }), 3000);
+    assert.ok(idle.over, `seed ${seed} survived without firing`);
+  }
+});
+
+/* ---------------------------------------------------------------- frogger */
+
+test("the road kills what it touches and the river kills what it does not", () => {
+  const flat = FROGGER.create();
+  flat.frog = { x: 0, row: ROAD[0], drift: null };
+  flat.traffic = [{ row: ROAD[0], x: 0, len: 2, kind: "car" }];
+  FROGGER.tick(flat);
+  assert.equal(flat.lives, 2, "a car you are standing on is a car that got you");
+
+  const wet = FROGGER.create();
+  wet.frog = { x: 0, row: RIVER[0], drift: 0 };
+  wet.traffic = [];
+  FROGGER.tick(wet);
+  assert.equal(wet.lives, 2, "and empty water is just as fatal");
+
+  const dry = FROGGER.create();
+  dry.frog = { x: 2, row: RIVER[0], drift: 2 };
+  dry.traffic = [{ row: RIVER[0], x: 0, len: 6, kind: "log" }];
+  FROGGER.tick(dry);
+  assert.equal(dry.lives, 3, "a log is dry land");
+});
+
+test("a log carries you, including off the end of the world", () => {
+  const state = FROGGER.create();
+  state.traffic = [{ row: RIVER[0], x: 10, len: 6, kind: "log" }];
+  state.frog = { x: 12, row: RIVER[0], drift: 12 };
+  const before = state.frog.x;
+  for (let i = 0; i < 20; i++) FROGGER.tick(state);
+  assert.notEqual(state.frog.x, before, "the river should have moved you");
+
+  const edge = FROGGER.create();
+  edge.traffic = [{ row: RIVER[0], x: F_WIDTH - 4, len: 6, kind: "log" }];
+  edge.frog = { x: F_WIDTH - 1, row: RIVER[0], drift: F_WIDTH - 1 };
+  for (let i = 0; i < 40 && edge.lives === 3; i++) FROGGER.tick(edge);
+  assert.equal(edge.lives, 2, "riding it off the edge still loses the frog");
+});
+
+test("a home is a home, and the bank between them is not", () => {
+  const state = FROGGER.create();
+  state.frog = { x: HOMES[0], row: HOME_ROW + 1, drift: null };
+  state.traffic = [];
+  FROGGER.onKey(state, "up");
+  assert.equal(state.homes[0], true);
+  assert.ok(state.score >= 100);
+  assert.equal(state.frog.row, BANK, "and you start again from the bank");
+
+  const missed = FROGGER.create();
+  missed.frog = { x: HOMES[0] + HOMES.length, row: HOME_ROW + 1, drift: null };
+  missed.traffic = [];
+  FROGGER.onKey(missed, "up");
+  assert.equal(missed.lives, 2, "landing between the homes is a loss");
+
+  const taken = FROGGER.create();
+  taken.homes[1] = true;
+  taken.frog = { x: HOMES[1], row: HOME_ROW + 1, drift: null };
+  taken.traffic = [];
+  FROGGER.onKey(taken, "up");
+  assert.equal(taken.lives, 2, "and so is one you have already filled");
+});
+
+test("five frogs home is the next level", () => {
+  const state = FROGGER.create();
+  state.traffic = [];
+  for (const home of HOMES) {
+    state.frog = { x: home, row: HOME_ROW + 1, drift: null };
+    FROGGER.onKey(state, "up");
+  }
+  assert.equal(state.level, 2);
+  assert.deepEqual(state.homes, HOMES.map(() => false), "and five empty homes again");
+});
+
+test("the lanes run on for ever", () => {
+  const state = FROGGER.create();
+  state.frog = { x: 0, row: BANK, drift: null }; // out of the way on the bank
+  for (let i = 0; i < 2000; i++) FROGGER.tick(state);
+  for (const thing of state.traffic) {
+    assert.ok(thing.x > -thing.len - 3 && thing.x < F_WIDTH + 3, `a ${thing.kind} escaped to ${thing.x}`);
+  }
+});
+
+test("hopping forwards pays, hopping back and forth does not", () => {
+  const state = FROGGER.create();
+  state.traffic = [];
+  FROGGER.onKey(state, "up");
+  const forward = state.score;
+  assert.ok(forward > 0);
+  FROGGER.onKey(state, "down");
+  FROGGER.onKey(state, "left");
+  assert.equal(state.score, forward, "only forwards is progress");
+});
+
+test("a frog can be got home, and not by hopping blind", () => {
+  // Wait for a gap in the lane ahead, then hop. That is the entire game.
+  const patient = (state) => {
+    const next = state.frog.row - 1;
+    if (next === HOME_ROW) {
+      if (homeAt(state.frog.x) >= 0 && !state.homes[homeAt(state.frog.x)]) FROGGER.onKey(state, "up");
+      else FROGGER.onKey(state, state.frog.x < HOMES[0] ? "right" : "left");
+      return;
+    }
+    const blocked = ROAD.includes(next) && thingAt(state.traffic, next, state.frog.x);
+    const wet = RIVER.includes(next) && !thingAt(state.traffic, next, state.frog.x);
+    if (!blocked && !wet) FROGGER.onKey(state, "up");
+  };
+  const state = drive(FROGGER, FROGGER.create(), 4000, patient);
+  assert.ok(state.homes.filter(Boolean).length > 0 || state.level > 1, "nobody got home at all");
+  assert.ok(state.score >= 100, `only scored ${state.score}`);
+
+  const blind = drive(FROGGER, FROGGER.create(), 400, (s) => FROGGER.onKey(s, "up"));
+  assert.ok(blind.over, "hopping without looking should not survive");
 });
 
 /* --------------------------------------------------------------- breakout */
