@@ -279,6 +279,43 @@ export const CORE_CLI_COMMANDS = [
     seeAlso: ["login"],
   },
   {
+    name: "save",
+    group: "account",
+    description: "save this machine's pit settings to your account",
+    synopsis: [["moshcode save [--dry-run] [--force] [--json]", ""]],
+    flags: [
+      ["--dry-run", "list what would be saved and stop", ""],
+      ["--force", "save even if another machine saved after this one last synced", ""],
+      ["--json", "machine-readable result", ""],
+    ],
+    examples: [
+      ["moshcode save", "push aliases + herd rules to app.moshcode.sh"],
+      ["moshcode save --dry-run", "what would go up"],
+    ],
+    seeAlso: ["load", "login", "alias"],
+    note: "aliases (~/.moshcode/aliases.json) and herd rules (~/.moshcode/herd/rules.json). "
+      + "credentials, live herd state and the package cache are never included. "
+      + "each save is a numbered revision; the last ten are kept at app.moshcode.sh/settings/sync.",
+  },
+  {
+    name: "load",
+    group: "account",
+    description: "bring your saved pit settings onto this machine",
+    synopsis: [["moshcode load [--dry-run] [--force] [--json]", ""]],
+    flags: [
+      ["--dry-run", "show the per-file plan and change nothing", ""],
+      ["--force", "overwrite local settings that changed since the last sync", ""],
+      ["--json", "machine-readable result", ""],
+    ],
+    examples: [
+      ["moshcode load", "on a new machine, right after moshcode login"],
+      ["moshcode load --dry-run", "which files would change"],
+    ],
+    seeAlso: ["save", "login", "alias"],
+    note: "refuses rather than overwriting a local file you edited since the last sync — "
+      + "`moshcode save` to keep it, or --force to replace it.",
+  },
+  {
     name: "console",
     group: "account",
     description: "serve or connect to the browser terminal",
@@ -891,6 +928,10 @@ export const PIT_COMMANDS = [
   { name: "whoami", cli: "whoami", description: "who this machine is logged in as" },
   // Dispatched since forever and missing from /help until now.
   { name: "logout", cli: "logout", description: "clear the logged-in account" },
+  { name: "save", args: "[--dry-run] [--force]", cli: "save",
+    description: "save this pit's settings to your moshcode.sh account" },
+  { name: "load", args: "[--dry-run] [--force]", cli: "load",
+    description: "bring your saved settings onto this machine" },
   { name: "pwd", aliases: ["where"], cli: "pwd",
     description: "show the current dir + git repo/branch/origin" },
   { name: "shell", aliases: ["sh"], args: "[cmd]", pitOnly: true,

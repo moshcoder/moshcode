@@ -7,6 +7,7 @@ import { requireAuth, csrfInput, setCeremony, getCeremony, clearCeremony } from 
 import { balance, ledger, CHANNEL_COST } from "../lib/credits.mjs";
 import { createApiKey, listApiKeys, revokeApiKey } from "../lib/apikey.mjs";
 import { PACKS } from "./credits.mjs";
+import { latestSnapshotMeta } from "./settings-sync.mjs";
 import { config } from "../config.mjs";
 
 export const pagesRouter = Router();
@@ -105,10 +106,11 @@ const CHANNEL_KINDS = ["push", "email", "slack", "telegram", "sms", "webhook"];
 
 pagesRouter.get("/settings", requireAuth, async (req, res) => {
   const uid = req.user.id;
-  const [bal, chans, keys] = await Promise.all([
+  const [bal, chans, keys, synced] = await Promise.all([
     balance(uid),
     all(`SELECT * FROM channels WHERE user_id = ?`, [uid]),
     listApiKeys(uid),
+    latestSnapshotMeta(uid),
   ]);
   const byKind = Object.fromEntries(chans.map((c) => [c.kind, c]));
   const newKey = getCeremony(req, "newkey") || "";
@@ -202,6 +204,21 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
           <input name="name" placeholder="key name (e.g. laptop)" style="flex:1">
           <button class="btn">Create key</button>
         </form>
+      </div>
+    </div>
+
+    <div class="card"><div class="card-head"><span class="h">Settings sync · your pit's config</span><a class="pill" href="/settings/sync">revisions</a></div>
+      <div class="card-body">
+        <p class="dim mono" style="font-size:.78rem;margin-top:0">
+          ${synced
+            ? `Currently holding <b>revision ${synced.revision}</b>, saved from ${esc(synced.host || "an unknown machine")} ${timeago(synced.savedAt)}.`
+            : `Nothing saved yet. In the pit: <span class="acid">/save</span>.`}
+        </p>
+        <p class="faint mono" style="font-size:.74rem;margin-bottom:0">
+          <span class="acid">/save</span> pushes your aliases and herd rules here;
+          <span class="acid">/load</span> brings them onto any machine you have run
+          <span class="acid">/login</span> on. Credentials are never included.
+        </p>
       </div>
     </div>
   </main>${footer}`;

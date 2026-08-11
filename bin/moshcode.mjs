@@ -26,6 +26,7 @@ import { canOpenBrowser, openBrowser } from "../src/open-url.mjs";
 import { locate, tilde } from "../src/pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "../src/prd.mjs";
 import { loginAuto, whoami, logout } from "../src/auth.mjs";
+import { loadCommand, saveCommand } from "../src/settings-sync.mjs";
 import { tui } from "../src/tui.mjs";
 import { consoleCommand } from "../src/console.mjs";
 import { herdCommand, herdStart, splitDetachArgs } from "../src/herd-cli.mjs";
@@ -609,6 +610,8 @@ async function main() {
     return;
   }
   if (cmd === "logout") { logout(); return; }
+  if (cmd === "save") { process.exitCode = await saveCommand(rest); return; }
+  if (cmd === "load") { process.exitCode = await loadCommand(rest); return; }
   if (cmd === "run") {
     let max = 3, dryRun = false;
     let optionsEnded = false;

@@ -13,6 +13,7 @@ import { creditsRouter } from "./routes/credits.mjs";
 import { cliRouter } from "./routes/cli.mjs";
 import { sessionsRouter } from "./routes/sessions.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
+import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
 import { socialsRouter } from "./routes/socials.mjs";
 
@@ -55,6 +56,7 @@ app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
 app.use(pagesRouter);     // /app, /settings
+app.use(settingsSyncRouter); // /api/settings (+ /settings/sync) — the pit's /save and /load
 app.use(socialsRouter);   // public browser composers used by /post
 app.use(moshpitRouter);  // /pit + /api/moshpit/* — the namespace
 
