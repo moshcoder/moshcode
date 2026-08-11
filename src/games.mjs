@@ -1,8 +1,8 @@
 // The moshcode arcade — `/games` in the pit, `moshcode games` from a shell.
 //
-// Eight games, one frame. Every game here is the same shape (see GAME_SHAPE
+// Nine games, one frame. Every game here is the same shape (see GAME_SHAPE
 // below) and is drawn by the same `frame()`, so they look like one arcade
-// rather than eight weekend projects: a title, a status line, a boxed board, and
+// rather than nine weekend projects: a title, a status line, a boxed board, and
 // one line of keys along the bottom. There is no menu, no options screen and no
 // difficulty prompt — `/games tetris` is already playing by the time the frame
 // lands, and `q` is always the way out.
@@ -20,6 +20,7 @@ import { HANGMAN } from "./games-hangman.mjs";
 import { CHESS } from "./games-chess.mjs";
 import { ASTEROIDS } from "./games-asteroids.mjs";
 import { BLACKJACK } from "./games-blackjack.mjs";
+import { STAGEDIVE } from "./games-stagedive.mjs";
 
 /**
  * @typedef {object} Game  — the whole contract, so a seventh game is an import.
@@ -39,7 +40,7 @@ import { BLACKJACK } from "./games-blackjack.mjs";
  */
 
 /** The cabinet. Order is the order `/games` lists them. */
-export const GAMES = [TETRIS, SNAKE, PACMAN, ASTEROIDS, TICTACTOE, BLACKJACK, CHESS, HANGMAN];
+export const GAMES = [TETRIS, SNAKE, PACMAN, ASTEROIDS, STAGEDIVE, TICTACTOE, BLACKJACK, CHESS, HANGMAN];
 
 /** Games by name, following aliases. Case- and slash-insensitive. */
 export function resolveGame(name) {

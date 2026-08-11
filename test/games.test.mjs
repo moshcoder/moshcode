@@ -19,6 +19,10 @@ import { PACMAN, MAZE, isWall, pellets, WIDTH as P_WIDTH, HEIGHT as P_HEIGHT } f
 import {
   ASTEROIDS, ROCKS, rock, spawnWave, span, star, WIDTH as A_WIDTH, HEIGHT as A_HEIGHT,
 } from "../src/games-asteroids.mjs";
+import {
+  STAGEDIVE, HAZARDS, GROUND, RUNNER, cells, meters, runnerRows, spawn,
+  WIDTH as D_WIDTH, HEIGHT as D_HEIGHT,
+} from "../src/games-stagedive.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
 import {
   BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
@@ -473,6 +477,153 @@ test("the asteroids board is drawn to size", () => {
     for (let x = 0; x < A_WIDTH; x++) if (star(x, y)) byRow.add(`${y}:${x}`);
   }
   assert.ok(byRow.size >= 8, "a sky with no stars in it");
+});
+
+/* -------------------------------------------------------------- stagedive */
+
+/** A stage holding exactly the things a test puts on it, and nothing else. */
+const stage = (things = []) => ({
+  ...STAGEDIVE.create({ rng: seeded(1) }),
+  things,
+  next: Number.MAX_SAFE_INTEGER, // no spawner — this test is about one obstacle
+});
+
+/** Run the stage, calling `act(state, tick)` before each tick. */
+function run(state, ticks, act = () => {}) {
+  for (let i = 0; i < ticks && !state.over; i++) {
+    act(state, i);
+    state = STAGEDIVE.tick(state);
+  }
+  return state;
+}
+
+/** How far in front of the runner something is, in columns. */
+const lead = (thing) => (thing ? cells(thing).cols[0] - RUNNER : Infinity);
+
+/** A player with reflexes: jump the gear, duck the crowd. */
+const reflexes = (state) => {
+  for (const thing of state.things) {
+    if (thing.kind === "pick") continue;
+    const gap = lead(thing);
+    if (thing.kind === "surfer") { if (gap >= 1 && gap <= 5) STAGEDIVE.onKey(state, "down"); }
+    else if (gap >= 4 && gap <= 8) STAGEDIVE.onKey(state, "up");
+  }
+};
+
+test("every hazard hits exactly as wide as it is drawn", () => {
+  for (const [kind, hazard] of Object.entries(HAZARDS)) {
+    const { cols } = cells({ kind, x: 20 });
+    assert.equal(cols[1] - cols[0] + 1, [...hazard.art].length, `${kind} lies about its width`);
+    assert.ok(hazard.rows.every((r) => r <= GROUND), `${kind} floats above the stage`);
+    assert.ok(hazard.death.length, `${kind} kills you without saying so`);
+  }
+});
+
+test("the runner never moves — the stage does", () => {
+  const state = run(stage([{ kind: "wedge", x: 40 }]), 12);
+  assert.equal(state.things[0].x < 40, true, "the wedge should have come closer");
+  assert.ok(state.dist > 0, "and the distance run should have gone up");
+  const drawn = STAGEDIVE.render(state).map(strip);
+  assert.ok(drawn.some((row) => row[RUNNER] && row[RUNNER] !== " "), "the runner is always in its column");
+});
+
+test("a wedge you do not jump is a wedge you trip over", () => {
+  const tripped = run(stage([{ kind: "wedge", x: RUNNER + 8 }]), 20);
+  assert.match(tripped.over, /monitor wedge/);
+
+  const cleared = run(stage([{ kind: "wedge", x: RUNNER + 8 }]), 20, (s) => {
+    if (lead(s.things[0]) === 6) STAGEDIVE.onKey(s, "up");
+  });
+  assert.equal(cleared.over, null, "a jump at six columns should clear it");
+});
+
+test("an amp stack takes the height of the jump, not the start of it", () => {
+  // Jumped in time: the runner is two rows up before the stack arrives.
+  const cleared = run(stage([{ kind: "stack", x: RUNNER + 20 }]), 40, (s) => {
+    if (lead(s.things[0]) === 6) STAGEDIVE.onKey(s, "up");
+  });
+  assert.equal(cleared.over, null);
+
+  // Jumped one column late is still a jump, and still a wreck.
+  const late = run(stage([{ kind: "stack", x: RUNNER + 20 }]), 40, (s) => {
+    if (lead(s.things[0]) === 0) STAGEDIVE.onKey(s, "up");
+  });
+  assert.match(late.over, /amp stack/);
+});
+
+test("a crowdsurfer is ducked, not jumped into", () => {
+  const worn = run(stage([{ kind: "surfer", x: RUNNER + 8 }]), 20);
+  assert.match(worn.over, /crowdsurfer/);
+
+  const ducked = run(stage([{ kind: "surfer", x: RUNNER + 8 }]), 20, (s) => {
+    if (lead(s.things[0]) === 3) STAGEDIVE.onKey(s, "down");
+  });
+  assert.equal(ducked.over, null, "crouching should pass under it");
+  // Crouched is one row; standing is two, and the second row is the one that
+  // wears a crowdsurfer.
+  assert.deepEqual(runnerRows({ y: GROUND, duck: 4, airborne: false }), [GROUND]);
+  assert.deepEqual(runnerRows({ y: GROUND, duck: 0, airborne: false }), [GROUND - 1, GROUND]);
+});
+
+test("there is no second jump, and ↓ in the air is a slam", () => {
+  const state = stage();
+  STAGEDIVE.onKey(state, "up");
+  const climbing = state.vy;
+  STAGEDIVE.onKey(state, "up");
+  assert.equal(state.vy, climbing, "a second jump would be a different game");
+  STAGEDIVE.onKey(state, "down");
+  assert.ok(state.vy > 0, "↓ in the air should send you down");
+  assert.equal(state.duck, 0, "and it is not a crouch until you land");
+});
+
+test("picks are collected rather than crashed into", () => {
+  const state = run(stage([{ kind: "pick", x: RUNNER + 6, row: GROUND }]), 20);
+  assert.equal(state.picks, 1);
+  assert.equal(state.over, null, "a pick is not a hazard");
+  assert.equal(state.things.length, 0, "and it is off the stage once taken");
+  assert.match(STAGEDIVE.status(state), /1 picks/);
+});
+
+test("the stage speeds up, and the gaps grow with it", () => {
+  const state = STAGEDIVE.create({ rng: seeded(2) });
+  const opening = state.speed;
+  const far = run(state, 3000, reflexes);
+  assert.ok(far.speed > opening, "the stage should get faster");
+
+  // The gap is set in columns but a jump is fixed in ticks, so the gap has to
+  // scale with speed or the game stops being playable at the far end.
+  const slow = { ...STAGEDIVE.create({ rng: seeded(3) }), things: [] };
+  const fast = { ...STAGEDIVE.create({ rng: seeded(3) }), things: [], speed: 1.75 };
+  spawn(slow);
+  spawn(fast);
+  assert.ok(fast.next > slow.next * 1.9, "a faster stage should leave more room");
+});
+
+test("a player with reflexes can run the whole set", () => {
+  for (let seed = 1; seed <= 25; seed++) {
+    const state = run(STAGEDIVE.create({ rng: seeded(seed) }), 3000, reflexes);
+    assert.equal(state.over, null, `seed ${seed} died at ${meters(state)} m: ${state.over}`);
+    assert.ok(state.picks > 10, `seed ${seed} only found ${state.picks} picks in 3000 ticks`);
+  }
+});
+
+test("a player with none cannot", () => {
+  for (let seed = 1; seed <= 15; seed++) {
+    // Standing still, and holding the jump key down — the two ways nobody
+    // should be able to play a runner.
+    const idle = run(STAGEDIVE.create({ rng: seeded(seed) }), 600);
+    assert.ok(idle.over, `seed ${seed} survived doing nothing`);
+    const masher = run(STAGEDIVE.create({ rng: seeded(seed) }), 1500, (s) => STAGEDIVE.onKey(s, "up"));
+    assert.ok(masher.over, `seed ${seed} survived on jump alone`);
+  }
+});
+
+test("the stagedive board is drawn to size, with the stage under it", () => {
+  const state = run(STAGEDIVE.create({ rng: seeded(9) }), 200, reflexes);
+  const rows = STAGEDIVE.render(state);
+  assert.equal(rows.length, D_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), D_WIDTH, "a ragged row would tear the frame");
+  assert.match(strip(rows[GROUND + 1]), /^[═╪]+$/, "the stage edge runs the whole width");
 });
 
 /* -------------------------------------------------------------- tictactoe */
