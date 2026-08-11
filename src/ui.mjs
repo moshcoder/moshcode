@@ -12,7 +12,9 @@ export function moshcodeVersion() {
 }
 
 const useColor = process.env.NO_COLOR == null && process.stdout.isTTY === true;
-const rgb = (r, g, b) => (s) => (useColor ? `\x1b[38;2;${r};${g};${b}m${s}\x1b[39m` : String(s));
+// Exported so a module with its own hues (the arcade's seven tetrominoes) mixes
+// them the same way, and honours NO_COLOR without knowing it exists.
+export const rgb = (r, g, b) => (s) => (useColor ? `\x1b[38;2;${r};${g};${b}m${s}\x1b[39m` : String(s));
 const wrap = (o, c) => (s) => (useColor ? `\x1b[${o}m${s}\x1b[${c}m` : String(s));
 
 export const acid = rgb(158, 240, 26);

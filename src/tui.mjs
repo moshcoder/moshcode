@@ -23,6 +23,7 @@ import { moshVocabulary } from "./commands.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "./integrations.mjs";
 import { stocksCommand } from "./advisor.mjs";
 import { cryptoCommand } from "./crypto.mjs";
+import { gamesCommand } from "./games.mjs";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
@@ -880,6 +881,18 @@ export async function tui() {
     }
     if (cmd === "plugin" || cmd === "plugins") {
       await pluginCommand(rest);
+      continue;
+    }
+    // The arcade (src/games.mjs). Takes the terminal the way an engine session
+    // does, because every game reads single keypresses and readline cannot hand
+    // those over while it owns stdin. Listing is just printing, so it keeps the
+    // prompt.
+    if (cmd === "games" || cmd === "game" || cmd === "arcade" || cmd === "play") {
+      const listing = !rest.length || rest[0] === "list" || rest[0] === "ls" || rest[0] === "--json";
+      if (listing) { await gamesCommand(rest, { prefix: "/games" }); continue; }
+      rl.close();
+      await gamesCommand(rest, { prefix: "/games" });
+      rl = mkrl();
       continue;
     }
     if (cmd === "socials" || cmd === "social") {
