@@ -1,8 +1,8 @@
 // The moshcode arcade — `/games` in the pit, `moshcode games` from a shell.
 //
-// Six games, one frame. Every game here is the same shape (see GAME_SHAPE
+// Eight games, one frame. Every game here is the same shape (see GAME_SHAPE
 // below) and is drawn by the same `frame()`, so they look like one arcade
-// rather than six weekend projects: a title, a status line, a boxed board, and
+// rather than eight weekend projects: a title, a status line, a boxed board, and
 // one line of keys along the bottom. There is no menu, no options screen and no
 // difficulty prompt — `/games tetris` is already playing by the time the frame
 // lands, and `q` is always the way out.
@@ -18,6 +18,8 @@ import { PACMAN } from "./games-pacman.mjs";
 import { TICTACTOE } from "./games-tictactoe.mjs";
 import { HANGMAN } from "./games-hangman.mjs";
 import { CHESS } from "./games-chess.mjs";
+import { ASTEROIDS } from "./games-asteroids.mjs";
+import { BLACKJACK } from "./games-blackjack.mjs";
 
 /**
  * @typedef {object} Game  — the whole contract, so a seventh game is an import.
@@ -27,6 +29,8 @@ import { CHESS } from "./games-chess.mjs";
  * @property {string} blurb      one line, for /games list
  * @property {string} keys       the footer; the only place controls are ever explained
  * @property {number|Function} [tickMs]  real-time games only — a number, or (state) => number
+ * @property {boolean} [vim]     false when a game wants h/j/k/l as letters, not arrows
+ * @property {boolean} [restartable]  false when `r` is only a restart once the game is over
  * @property {Function} create   ({ rng }) => state
  * @property {Function} onKey    (state, key, { rng }) => state
  * @property {Function} [tick]   (state, { rng }) => state
@@ -35,7 +39,7 @@ import { CHESS } from "./games-chess.mjs";
  */
 
 /** The cabinet. Order is the order `/games` lists them. */
-export const GAMES = [TETRIS, SNAKE, PACMAN, TICTACTOE, CHESS, HANGMAN];
+export const GAMES = [TETRIS, SNAKE, PACMAN, ASTEROIDS, TICTACTOE, BLACKJACK, CHESS, HANGMAN];
 
 /** Games by name, following aliases. Case- and slash-insensitive. */
 export function resolveGame(name) {
@@ -98,8 +102,12 @@ export function frame({ title = "", status = "", rows = [], keys = "" } = {}) {
  * Games never see an escape sequence; they see "up", "enter", "a". A chunk can
  * hold several keypresses (hold an arrow key down and they arrive in batches),
  * which is why this returns a list.
+ *
+ * `vim: false` is for the games that read letters — hangman cannot ask for a
+ * word with an `h` in it while `h` means left, and blackjack wants `h` to be
+ * hit. Arrows are unaffected either way; they arrive as escape sequences.
  */
-export function decodeKeys(chunk) {
+export function decodeKeys(chunk, { vim = true } = {}) {
   const input = String(chunk);
   const keys = [];
   for (let i = 0; i < input.length; i++) {
@@ -119,10 +127,10 @@ export function decodeKeys(chunk) {
     if (c === "\x03" || c === "\x04") { keys.push("quit"); continue; }
     if (c === "\x7f" || c === "\b") { keys.push("backspace"); continue; }
     if (c === "\t") { keys.push("tab"); continue; }
-    // vim keys, everywhere, for free — every game reads arrows, so mapping
-    // hjkl here means no game has to know about them.
-    const vim = { h: "left", j: "down", k: "up", l: "right" }[c];
-    if (vim) { keys.push(vim); continue; }
+    // vim keys, everywhere, for free — every game that reads arrows gets them
+    // without knowing about them. A game that reads letters opts out.
+    const vimKey = vim ? { h: "left", j: "down", k: "up", l: "right" }[c] : null;
+    if (vimKey) { keys.push(vimKey); continue; }
     if (c >= " " && c <= "~") keys.push(c.toLowerCase());
   }
   return keys;
@@ -241,7 +249,7 @@ export async function runGame(game, deps = {}) {
   const onSignal = () => { restore(); process.exit(130); };
 
   function onData(chunk) {
-    for (const key of decodeKeys(chunk)) {
+    for (const key of decodeKeys(chunk, { vim: game.vim !== false })) {
       if (key === "quit" || key === "q" || key === "escape") { restore(); resolve(); return; }
       if (key === "r" && (state.over || game.restartable !== false)) {
         state = game.create(ctx);
