@@ -23,6 +23,25 @@ import {
   STAGEDIVE, HAZARDS, GROUND, RUNNER, cells, meters, runnerRows, spawn,
   WIDTH as D_WIDTH, HEIGHT as D_HEIGHT,
 } from "../src/games-stagedive.mjs";
+import {
+  INVADERS, KINDS, ROWS, COLS, BUNKER_ROW, CANNON_ROW, alienAt, aliveCount, cadence, chip, frontLine,
+  WIDTH as I_WIDTH, HEIGHT as I_HEIGHT,
+} from "../src/games-invaders.mjs";
+import {
+  BREAKOUT, BRICK_ROWS, BRICK_COLS, BRICK_TOP, BRICK_W, PADDLE_W, PADDLE_ROW, ROW_POINTS,
+  brickAt, bricksLeft, buildWall, WIDTH as WIDTH_B, HEIGHT as HEIGHT_B,
+} from "../src/games-breakout.mjs";
+import {
+  PONG, PADDLE, YOU_COL, TARGET as PONG_TARGET, WIDTH as WIDTH_P, HEIGHT as HEIGHT_P,
+} from "../src/games-pong.mjs";
+import {
+  TANK, TARGET as TANK_TARGET, drive as driveTank, isWall as isYardWall, lineOfSight, quarterTurn, stepToward,
+  WIDTH as WIDTH_T, HEIGHT as HEIGHT_T,
+} from "../src/games-tank.mjs";
+import {
+  SPYHUNTER, CAR_ROW, CAR_W, TRAFFIC, nextRow, onRoad, openRoad, overlaps,
+  WIDTH as SH_WIDTH, HEIGHT as SH_HEIGHT,
+} from "../src/games-spyhunter.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
 import {
   BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
@@ -477,6 +496,515 @@ test("the asteroids board is drawn to size", () => {
     for (let x = 0; x < A_WIDTH; x++) if (star(x, y)) byRow.add(`${y}:${x}`);
   }
   assert.ok(byRow.size >= 8, "a sky with no stars in it");
+});
+
+/* --------------------------------------------------------------- invaders */
+
+/** Run a game's own tick, calling `act(state, i)` first. Used by all five below. */
+function drive(game, state, ticks, act = () => {}) {
+  for (let i = 0; i < ticks && !state.over; i++) {
+    act(state, i);
+    state = game.tick(state);
+  }
+  return state;
+}
+
+test("the fleet has room to come down before it lands", () => {
+  // The bug this replaces: five ranks two rows apart made the fleet nine rows
+  // tall on a board with eleven above the bunkers, so it "landed" after two
+  // drops and no wave was ever survivable.
+  const state = INVADERS.create({ rng: seeded(1) });
+  const bottom = alienAt(state.fleet, ROWS - 1, 0).y;
+  assert.ok(BUNKER_ROW - bottom >= 6, `only ${BUNKER_ROW - bottom} drops before the fleet lands`);
+  assert.ok(bottom < BUNKER_ROW, "the fleet starts on top of the bunkers");
+});
+
+test("a shot takes the alien it reaches, and is worth that rank", () => {
+  const state = INVADERS.create({ rng: seeded(2) });
+  state.bunkers = new Map(); // your own cover eats your own shots; not this test
+  const target = alienAt(state.fleet, ROWS - 1, 3);
+  state.cannon = target.x;
+  INVADERS.onKey(state, "space");
+  const after = drive(INVADERS, state, 12, (s) => { s.bombs = []; });
+  assert.equal(after.fleet.alive[ROWS - 1][3], false, "the alien should be gone");
+  assert.equal(after.score, KINDS[ROWS - 1].points);
+  assert.equal(after.shot, null, "and the shot is spent");
+});
+
+test("a shot moving two rows a tick cannot skip the rank it passes", () => {
+  const state = INVADERS.create({ rng: seeded(3) });
+  const alien = alienAt(state.fleet, ROWS - 1, 2);
+  // Start the shot an odd number of rows below, so a naive two-row step lands
+  // above the alien without ever standing on it.
+  state.shot = { x: alien.x, y: alien.y + 3 };
+  state.bombs = [];
+  INVADERS.tick(state);
+  INVADERS.tick(state);
+  assert.equal(state.fleet.alive[ROWS - 1][2], false, "the shot went straight through it");
+});
+
+test("the fewer are left, the faster they come", () => {
+  const state = INVADERS.create({ rng: seeded(4) });
+  const full = cadence(state.fleet);
+  for (let col = 0; col < COLS; col++) for (let row = 0; row < ROWS - 1; row++) state.fleet.alive[row][col] = false;
+  for (let col = 1; col < COLS; col++) state.fleet.alive[ROWS - 1][col] = false;
+  assert.equal(aliveCount(state.fleet), 1);
+  assert.ok(cadence(state.fleet) < full, "the last one should be the fastest");
+  assert.ok(cadence(state.fleet) >= 2, "but never faster than the clock");
+});
+
+test("the fleet turns round at the wall and drops a row", () => {
+  const state = INVADERS.create({ rng: seeded(5) });
+  state.bombs = [];
+  const startY = state.fleet.y;
+  const startDir = state.fleet.dir;
+  let turns = 0;
+  let was = startDir;
+  drive(INVADERS, state, 600, (s) => { if (s.fleet.dir !== was) { turns++; was = s.fleet.dir; } });
+  assert.ok(state.fleet.y > startY, "it should have come down a row");
+  assert.ok(turns > 0, "and turned round to do it");
+  assert.equal(state.fleet.y - startY, turns, "one row down per turn, no more");
+});
+
+test("a bunker takes two hits from either side, then it is gone", () => {
+  const state = INVADERS.create({ rng: seeded(6) });
+  const [x] = [...state.bunkers.keys()];
+  assert.equal(chip(state.bunkers, x, BUNKER_ROW), true);
+  assert.equal(state.bunkers.get(x), 1, "chipped, not gone");
+  assert.equal(chip(state.bunkers, x, BUNKER_ROW), true);
+  assert.equal(state.bunkers.has(x), false, "gone");
+  assert.equal(chip(state.bunkers, x, BUNKER_ROW), false, "and nothing left to chip");
+  assert.equal(chip(state.bunkers, x, BUNKER_ROW - 1), false, "bunkers are only on their own row");
+});
+
+test("a bomb takes a life, and the last one ends it", () => {
+  const state = INVADERS.create({ rng: seeded(7) });
+  state.bunkers = new Map();
+  state.lives = 2;
+  state.bombs = [{ x: state.cannon, y: CANNON_ROW - 1 }];
+  drive(INVADERS, state, 6, (s) => { if (!s.bombs.length && !s.over) s.bombs = [{ x: s.cannon, y: CANNON_ROW - 1 }]; });
+  assert.ok(state.lives < 2, "a bomb on your head should cost you");
+  const last = drive(INVADERS, state, 40, (s) => { if (!s.bombs.length && !s.over) s.bombs = [{ x: s.cannon, y: CANNON_ROW - 1 }]; });
+  assert.match(last.over, /out of cannons/);
+});
+
+test("clearing the fleet brings a new one, lower down", () => {
+  const state = INVADERS.create({ rng: seeded(8) });
+  for (let row = 0; row < ROWS; row++) for (let col = 0; col < COLS; col++) state.fleet.alive[row][col] = false;
+  state.fleet.alive[0][0] = true;
+  const at = alienAt(state.fleet, 0, 0);
+  const startY = state.fleet.y;
+  state.shot = { x: at.x, y: at.y + 2 };
+  INVADERS.tick(state);
+  assert.equal(state.wave, 2);
+  assert.equal(aliveCount(state.fleet), ROWS * COLS, "a whole new fleet");
+  assert.ok(state.fleet.y > startY, "and it starts closer to you");
+});
+
+test("one shot in the air at a time", () => {
+  const state = INVADERS.create({ rng: seeded(9) });
+  INVADERS.onKey(state, "space");
+  const first = state.shot;
+  INVADERS.onKey(state, "space");
+  assert.equal(state.shot, first, "the second press should do nothing");
+});
+
+test("the fleet cannot out-march somebody aiming at it", () => {
+  // A player who picks the nearest alien on the front line and stays on it
+  // until it is dead. It does not dodge a single bomb, which is exactly why the
+  // interesting result below is *how* it dies.
+  const aiming = (state) => {
+    const front = frontLine(state.fleet);
+    if (!front.length) return;
+    if (!state.aim || !state.fleet.alive[state.aim.row]?.[state.aim.col]) {
+      state.aim = front.slice().sort((a, b) => (
+        Math.abs(alienAt(state.fleet, a.row, a.col).x - state.cannon)
+        - Math.abs(alienAt(state.fleet, b.row, b.col).x - state.cannon)
+      ))[0];
+    }
+    const want = alienAt(state.fleet, state.aim.row, state.aim.col).x;
+    if (state.cannon < want) INVADERS.onKey(state, "right");
+    else if (state.cannon > want) INVADERS.onKey(state, "left");
+    else INVADERS.onKey(state, "space");
+  };
+
+  let cleared = 0;
+  for (let seed = 1; seed <= 8; seed++) {
+    const state = drive(INVADERS, INVADERS.create({ rng: seeded(seed) }), 3000, aiming);
+    // The regression that matters: every one of these runs ends with the bombs
+    // getting you, never with the fleet walking over you. When the ranks were
+    // spaced two rows apart the fleet landed on every seed instead, and no
+    // amount of shooting could stop it.
+    assert.match(state.over ?? "", /out of cannons/, `seed ${seed} ended: ${state.over}`);
+    assert.ok(state.score >= 500, `seed ${seed} only managed ${state.score} of a 720-point wave`);
+    if (state.wave > 1) cleared++;
+  }
+  assert.ok(cleared >= 4, `only ${cleared} of 8 waves fell to somebody aiming`);
+
+  for (let seed = 1; seed <= 8; seed++) {
+    const idle = drive(INVADERS, INVADERS.create({ rng: seeded(seed) }), 2500);
+    assert.ok(idle.over, `seed ${seed} survived without firing a shot`);
+  }
+});
+
+test("the invaders board is drawn to size", () => {
+  const state = drive(INVADERS, INVADERS.create({ rng: seeded(10) }), 120);
+  const rows = INVADERS.render(state);
+  assert.equal(rows.length, I_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), I_WIDTH);
+});
+
+/* --------------------------------------------------------------- breakout */
+
+test("a brick is hit exactly where it is drawn", () => {
+  const wall = buildWall();
+  assert.equal(bricksLeft(wall), BRICK_ROWS * BRICK_COLS);
+  for (let i = 0; i < BRICK_W; i++) {
+    assert.deepEqual(brickAt(wall, i, BRICK_TOP), { row: 0, col: 0 }, "the whole width of a brick is that brick");
+  }
+  assert.deepEqual(brickAt(wall, BRICK_W, BRICK_TOP), { row: 0, col: 1 });
+  assert.equal(brickAt(wall, 0, BRICK_TOP - 1), null, "nothing above the wall");
+  assert.equal(brickAt(wall, 0, BRICK_TOP + BRICK_ROWS), null, "nothing below it");
+});
+
+test("a brick breaks, pays its row, and turns the ball around", () => {
+  const state = BREAKOUT.create({ rng: seeded(1) });
+  state.stuck = false;
+  state.ball = { x: 2, y: BRICK_TOP + BRICK_ROWS - 0.4, vx: 0.1, vy: -0.4 };
+  BREAKOUT.tick(state);
+  assert.equal(bricksLeft(state.wall), BRICK_ROWS * BRICK_COLS - 1);
+  assert.equal(state.score, ROW_POINTS[BRICK_ROWS - 1], "the bottom row is the cheap one");
+  assert.ok(state.ball.vy > 0, "and the ball comes back down");
+});
+
+test("the last brick starts the next level with a fresh wall", () => {
+  const state = BREAKOUT.create({ rng: seeded(2) });
+  state.wall = state.wall.map((row) => row.map(() => false));
+  state.wall[0][0] = true;
+  state.stuck = false;
+  state.ball = { x: 1, y: BRICK_TOP + 0.6, vx: 0, vy: -0.5 };
+  BREAKOUT.tick(state);
+  assert.equal(state.level, 2);
+  assert.equal(bricksLeft(state.wall), BRICK_ROWS * BRICK_COLS, "a whole new wall");
+  assert.equal(state.stuck, true, "and the ball is back on the paddle");
+  assert.ok(state.pace > 1, "faster than the last one");
+});
+
+test("the paddle is a steering wheel, not a wall", () => {
+  const middle = (vx) => {
+    const state = BREAKOUT.create({ rng: seeded(3) });
+    state.stuck = false;
+    state.paddle = 10;
+    state.ball = { x: 10 + (PADDLE_W - 1) / 2, y: PADDLE_ROW - 1.2, vx, vy: 0.4 };
+    BREAKOUT.tick(state);
+    return state.ball.vx;
+  };
+  const edge = () => {
+    const state = BREAKOUT.create({ rng: seeded(3) });
+    state.stuck = false;
+    state.paddle = 10;
+    state.ball = { x: 10 + PADDLE_W - 1, y: PADDLE_ROW - 1.2, vx: 0.3, vy: 0.4 };
+    BREAKOUT.tick(state);
+    return state.ball.vx;
+  };
+  assert.ok(edge() > middle(0.3), "taking it off the end should send it wider");
+});
+
+test("missing the ball costs a life, and the third ends it", () => {
+  const state = BREAKOUT.create({ rng: seeded(4) });
+  state.stuck = false;
+  state.paddle = 0;
+  state.ball = { x: WIDTH_B - 1, y: PADDLE_ROW, vx: 0, vy: 0.5 };
+  BREAKOUT.tick(state);
+  assert.equal(state.lives, 2);
+  assert.equal(state.stuck, true, "and the next ball waits on the paddle");
+
+  state.lives = 1;
+  state.stuck = false;
+  state.ball = { x: WIDTH_B - 1, y: PADDLE_ROW, vx: 0, vy: 0.5 };
+  BREAKOUT.tick(state);
+  assert.match(state.over, /out of balls/);
+});
+
+test("the ball rides the paddle until it is launched", () => {
+  const state = BREAKOUT.create({ rng: seeded(5) });
+  BREAKOUT.onKey(state, "left");
+  BREAKOUT.tick(state);
+  assert.equal(state.ball.x, state.paddle + PADDLE_W / 2, "aiming the serve is done with the paddle");
+  BREAKOUT.onKey(state, "space");
+  assert.equal(state.stuck, false);
+  assert.ok(state.ball.vy < 0, "and it goes up");
+});
+
+test("a wall can be cleared, and cannot be cleared by leaving the paddle alone", () => {
+  const tracking = (state) => {
+    if (state.stuck) BREAKOUT.onKey(state, "space");
+    const want = Math.round(state.ball.x) - Math.floor(PADDLE_W / 2);
+    if (want < state.paddle) BREAKOUT.onKey(state, "left");
+    else if (want > state.paddle) BREAKOUT.onKey(state, "right");
+  };
+  for (let seed = 1; seed <= 5; seed++) {
+    const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(seed) }), 6000, tracking);
+    assert.ok(state.level > 1, `seed ${seed} never cleared a wall`);
+  }
+  for (let seed = 1; seed <= 5; seed++) {
+    const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(seed) }), 3000, (s) => {
+      if (s.stuck) BREAKOUT.onKey(s, "space");
+    });
+    assert.ok(state.over, `seed ${seed} survived without touching the paddle`);
+  }
+});
+
+test("the breakout board is drawn to size", () => {
+  const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(6) }), 60, (s) => {
+    if (s.stuck) BREAKOUT.onKey(s, "space");
+  });
+  const rows = BREAKOUT.render(state);
+  assert.equal(rows.length, HEIGHT_B);
+  for (const row of rows) assert.equal(visible(row), WIDTH_B);
+});
+
+/* ------------------------------------------------------------------- pong */
+
+test("a serve is never dead flat", () => {
+  for (let seed = 1; seed <= 20; seed++) {
+    const state = PONG.create({ rng: seeded(seed) });
+    assert.ok(Math.abs(state.ball.vy) > 0.1, "a flat serve is a rally nobody can lose");
+    assert.ok(Math.abs(state.ball.vx) > 0);
+  }
+});
+
+test("the ball stays on the table", () => {
+  const state = PONG.create({ rng: seeded(2) });
+  const seen = drive(PONG, state, 4000, (s) => {
+    assert.ok(s.ball.y >= -0.5 && s.ball.y <= HEIGHT_P - 0.5, `ball left the table at ${s.ball.y}`);
+  });
+  assert.ok(seen.yours + seen.theirs > 0, "somebody should have scored by now");
+});
+
+test("where it hits the paddle is where it goes", () => {
+  const bounce = (at) => {
+    const state = PONG.create({ rng: seeded(3) });
+    state.you = 5;
+    state.ball = { x: YOU_COL + 0.4, y: at, vx: -0.9, vy: 0 };
+    PONG.tick(state);
+    return state.ball.vy;
+  };
+  assert.ok(bounce(5) < 0, "off the top of the paddle sends it up");
+  assert.ok(bounce(8) > 0, "off the bottom sends it down");
+  assert.ok(Math.abs(bounce(6.5)) > 0, "and never dead flat, even off the middle");
+});
+
+test("a ball past the paddle is a point, and seven of them is the match", () => {
+  const state = PONG.create({ rng: seeded(4) });
+  state.you = 0;
+  state.ball = { x: 0.5, y: HEIGHT_P - 1, vx: -1, vy: 0 };
+  PONG.tick(state);
+  assert.equal(state.theirs, 1, "missing it should cost a point");
+
+  state.theirs = PONG_TARGET - 1;
+  state.you = 0;
+  state.ball = { x: 0.5, y: HEIGHT_P - 1, vx: -1, vy: 0 };
+  PONG.tick(state);
+  assert.match(state.over, /the machine takes it/);
+});
+
+test("the machine can be beaten, but not by doing nothing", () => {
+  const tracking = (state) => {
+    const want = state.ball.y - (PADDLE - 1) / 2;
+    if (want < state.you - 0.5) PONG.onKey(state, "up");
+    else if (want > state.you + 0.5) PONG.onKey(state, "down");
+  };
+  for (let seed = 1; seed <= 6; seed++) {
+    const won = drive(PONG, PONG.create({ rng: seeded(seed) }), 30000, tracking);
+    assert.match(won.over ?? "", /you take it/, `seed ${seed}: ${won.yours}–${won.theirs}`);
+    const lost = drive(PONG, PONG.create({ rng: seeded(seed) }), 30000);
+    assert.match(lost.over ?? "", /machine takes it/, "a still paddle should lose");
+  }
+});
+
+test("the pong table is drawn to size", () => {
+  const rows = PONG.render(drive(PONG, PONG.create({ rng: seeded(7) }), 50));
+  assert.equal(rows.length, HEIGHT_P);
+  for (const row of rows) assert.equal(visible(row), WIDTH_P);
+});
+
+/* ------------------------------------------------------------------- tank */
+
+test("the yard is closed on every side", () => {
+  for (let x = 0; x < WIDTH_T; x++) {
+    assert.ok(isYardWall(x, 0) && isYardWall(x, HEIGHT_T - 1), `the yard leaks at column ${x}`);
+  }
+  for (let y = 0; y < HEIGHT_T; y++) {
+    assert.ok(isYardWall(0, y) && isYardWall(WIDTH_T - 1, y), `the yard leaks at row ${y}`);
+  }
+  assert.equal(isYardWall(-1, 5), true, "and anything off the board is wall");
+});
+
+test("a tank cannot drive through a wall", () => {
+  const tank = { x: 1, y: 1, dir: 0, cool: 0 };  // pointed at the top wall
+  assert.equal(driveTank(tank, 1), false);
+  assert.deepEqual([tank.x, tank.y], [1, 1], "and it does not move a bit");
+  tank.dir = 1;
+  assert.equal(driveTank(tank, 1), true);
+  assert.equal(tank.x, 2);
+});
+
+test("a shell only carries down an open lane", () => {
+  const state = TANK.create();
+  // Both tanks start on the same row with the yard's furniture between them.
+  assert.equal(lineOfSight({ x: 1, y: 1, dir: 1 }, { x: 20, y: 1 }), true, "the top lane is open");
+  assert.equal(lineOfSight(state.you, state.them), false, "and the middle is not");
+  assert.equal(lineOfSight({ x: 1, y: 1, dir: 2 }, { x: 20, y: 1 }), false, "nor is a target you are not facing");
+});
+
+test("the machine finds its way round a block rather than into it", () => {
+  // The bug this replaces: "turn towards the enemy, then drive" grinds into the
+  // same wall for ever, and the two tanks never met at all.
+  const first = stepToward({ x: 2, y: 6 }, { x: 39, y: 6 });
+  assert.ok(first, "there should be a way across the yard");
+  assert.notEqual(first.dir, 1, "and it is not straight through the block in front");
+
+  const state = drive(TANK, TANK.create(), 4000);
+  assert.ok(state.theirs > 0 || state.over, "the machine should have come and found you");
+});
+
+test("a hit scores, resets both tanks, and five of them is the match", () => {
+  const state = TANK.create();
+  state.shells = [{ x: state.them.x - 1, y: state.them.y, dir: 1, owner: "you" }];
+  TANK.tick(state);
+  assert.equal(state.yours, 1);
+  assert.equal(state.shells.length, 0, "the shell is spent");
+  assert.deepEqual([state.you.x, state.you.y], [2, 6], "and both tanks go back to their corners");
+
+  state.yours = TANK_TARGET - 1;
+  state.shells = [{ x: state.them.x - 1, y: state.them.y, dir: 1, owner: "you" }];
+  TANK.tick(state);
+  assert.match(state.over, /you take it/);
+});
+
+test("one shell each in the air", () => {
+  const state = TANK.create();
+  state.you.dir = 0; // up the open lane, so the shell survives the first tick
+  TANK.onKey(state, "space");
+  assert.equal(state.shells.length, 1);
+  TANK.onKey(state, "space");
+  assert.equal(state.shells.length, 1, "the second press should do nothing");
+});
+
+test("the machine takes a sitting duck, and loses to somebody playing", () => {
+  const hunting = (state, i) => {
+    if (i % 3) return;
+    if (lineOfSight(state.you, state.them)) { TANK.onKey(state, "space"); return; }
+    const next = stepToward(state.you, state.them);
+    if (!next) return;
+    if (state.you.dir !== next.dir) {
+      TANK.onKey(state, quarterTurn(state.you.dir, next.dir) === (state.you.dir + 1) % 4 ? "right" : "left");
+    } else TANK.onKey(state, "up");
+  };
+  assert.match(drive(TANK, TANK.create(), 30000, hunting).over ?? "", /you take it/);
+  assert.match(drive(TANK, TANK.create(), 30000).over ?? "", /machine takes it/);
+});
+
+test("the yard is drawn to size", () => {
+  const rows = TANK.render(drive(TANK, TANK.create(), 100));
+  assert.equal(rows.length, HEIGHT_T);
+  for (const row of rows) assert.equal(visible(row), WIDTH_T);
+});
+
+/* -------------------------------------------------------------- spyhunter */
+
+test("the road always has a verge on both sides, and a width you can drive", () => {
+  let row = openRoad()[0];
+  const rng = seeded(3);
+  const centres = [];
+  for (let i = 0; i < 4000; i++) {
+    row = nextRow(row, rng);
+    assert.ok(row.left >= 1, `the road ran off the left at ${row.left}`);
+    assert.ok(row.right <= SH_WIDTH - 2, `the road ran off the right at ${row.right}`);
+    const width = row.right - row.left;
+    assert.ok(width >= 12 && width <= 25, `a road ${width} wide is not a road`);
+    centres.push((row.left + row.right) / 2);
+  }
+  // Pulled back towards the middle rather than parked against an edge — a plain
+  // random walk fails this every time.
+  const mean = centres.reduce((a, b) => a + b, 0) / centres.length;
+  assert.ok(Math.abs(mean - SH_WIDTH / 2) < 3, `the road lives at ${mean.toFixed(1)}, not the middle`);
+});
+
+test("the verge costs a life, and so does the traffic", () => {
+  const off = SPYHUNTER.create({ rng: seeded(1) });
+  off.car = 0;                       // hard against the left edge, off the tarmac
+  off.road = off.road.map(() => ({ left: 10, right: 28 }));
+  SPYHUNTER.tick(off);
+  assert.equal(off.lives, 2, "the verge should have cost a life");
+  assert.equal(off.grace > 0, true, "and the road ahead is cleared for a moment");
+
+  const ram = SPYHUNTER.create({ rng: seeded(2) });
+  ram.traffic = [{ kind: "civilian", x: ram.car, y: CAR_ROW, speed: 0.2 }];
+  SPYHUNTER.tick(ram);
+  assert.equal(ram.lives, 2);
+  assert.match(SPYHUNTER.status(ram), /▲▲/);
+});
+
+test("shooting the wrong car costs more than not shooting at all", () => {
+  const shoot = (kind) => {
+    const state = SPYHUNTER.create({ rng: seeded(4) });
+    state.score = 500;
+    state.grace = 999; // this test is about the gun, not the bumper
+    state.traffic = [{ kind, x: state.car, y: CAR_ROW - 4, speed: 0.2 }];
+    // A tick moves the shot up 1.6 rows, so it starts below where they meet.
+    state.shots = [{ x: state.car + 0.5, y: CAR_ROW - 2.5 }];
+    SPYHUNTER.tick(state);
+    assert.equal(state.traffic.length, 0, `the ${kind} should have been hit`);
+    return state.score - 500;
+  };
+  assert.equal(shoot("enemy"), TRAFFIC.enemy.points);
+  assert.equal(shoot("civilian"), TRAFFIC.civilian.points);
+});
+
+test("a wreck does not drop you back onto the car that got you", () => {
+  const state = SPYHUNTER.create({ rng: seeded(5) });
+  state.traffic = [
+    { kind: "enemy", x: state.car, y: CAR_ROW, speed: 0.2 },
+    { kind: "enemy", x: state.car, y: CAR_ROW - 2, speed: 0.2 },
+  ];
+  SPYHUNTER.tick(state);
+  assert.equal(state.traffic.length, 0, "the road is cleared");
+  assert.ok(onRoad(state.road[CAR_ROW], state.car), "and you are put back on the tarmac");
+});
+
+test("the road can be driven, and cannot be driven hands-off", () => {
+  const steering = (state) => {
+    const ahead = state.traffic.filter((c) => c.y > CAR_ROW - 7 && c.y <= CAR_ROW);
+    // Hold the dodge until the car is properly past, rather than steering back
+    // to the middle the moment the bumpers no longer touch — recentring early
+    // just drives you back into it.
+    const blocking = ahead.find((c) => Math.abs(c.x - state.car) <= 3);
+    const row = state.road[CAR_ROW];
+    let want = Math.round((row.left + row.right) / 2) - 1;
+    if (blocking) want = blocking.x > state.car ? state.car - 4 : state.car + 4;
+    want = Math.max(row.left, Math.min(row.right - CAR_W + 1, want));
+    if (state.car < want) SPYHUNTER.onKey(state, "right");
+    else if (state.car > want) SPYHUNTER.onKey(state, "left");
+    const enemy = ahead.find((c) => c.kind === "enemy" && overlaps(c.x, state.car));
+    const civil = ahead.find((c) => c.kind === "civilian" && overlaps(c.x, state.car) && c.y > (enemy?.y ?? -99));
+    if (enemy && !civil) SPYHUNTER.onKey(state, "space");
+  };
+  for (let seed = 1; seed <= 6; seed++) {
+    const driven = drive(SPYHUNTER, SPYHUNTER.create({ rng: seeded(seed) }), 700, steering);
+    assert.equal(driven.over, null, `seed ${seed} could not be driven 700 ticks: ${driven.over}`);
+    assert.ok(driven.miles > 10, `seed ${seed} only covered ${driven.miles} miles`);
+    const drifted = drive(SPYHUNTER, SPYHUNTER.create({ rng: seeded(seed) }), 1500);
+    assert.ok(drifted.over, `seed ${seed} survived with nobody steering`);
+  }
+});
+
+test("the road is drawn to size", () => {
+  const state = drive(SPYHUNTER, SPYHUNTER.create({ rng: seeded(8) }), 200);
+  const rows = SPYHUNTER.render(state);
+  assert.equal(rows.length, SH_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), SH_WIDTH);
 });
 
 /* -------------------------------------------------------------- stagedive */

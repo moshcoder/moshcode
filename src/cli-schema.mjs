@@ -396,7 +396,7 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "games",
     group: "arcade",
-    description: "the moshcode arcade — nine games, no menus",
+    description: "the moshcode arcade — fourteen games, no menus",
     synopsis: [
       ["moshcode games", "the cabinet, and what each one is"],
       ["moshcode games <game>", "play it, right here in the terminal"],
@@ -409,6 +409,7 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode games pacman", "dots, ghosts, three lives"],
       ["moshcode games asteroids", "turn, thrust, shoot"],
       ["moshcode games 21", "blackjack, 100 chips, 3:2"],
+      ["moshcode games invaders", "forty of them, coming down"],
       ["moshcode games stagedive", "jump the gear, take the picks"],
     ],
     seeAlso: ["help"],
@@ -933,7 +934,7 @@ export const PIT_COMMANDS = [
   { name: "plugin", aliases: ["plugins"], args: "<verb> [name]", cli: "plugin",
     description: "install moshcode's slash commands into Claude Code" },
   { name: "games", aliases: ["game", "arcade", "play"], args: "[game]", cli: "games",
-    description: "the arcade — tetris, snake, pac-man, asteroids, stagedive, blackjack and more" },
+    description: "the arcade — tetris, invaders, pac-man, breakout, pong, tank, chess and more" },
   { name: "socials", aliases: ["social"], pitOnly: true,
     description: "list social networks available for posting" },
   { name: "post", args: '<social> "message"', pitOnly: true,
