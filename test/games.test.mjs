@@ -65,6 +65,13 @@ import {
   CHOPLIFTER, BASE, SEATS, WORLD, GROUND as GROUND_CH, onPad,
   WIDTH as CH_WIDTH, HEIGHT as CH_HEIGHT,
 } from "../src/games-choplifter.mjs";
+import {
+  EXCITEBIKE, LAND_OK, RIDER, speedOf, WIDTH as EB_WIDTH, HEIGHT as EB_HEIGHT,
+} from "../src/games-excitebike.mjs";
+import {
+  OUTRUN, PLAYER_ROW, centreAt, onRoad as onTarmac, roadHalf,
+  WIDTH as OR_WIDTH, HEIGHT as OR_HEIGHT,
+} from "../src/games-outrun.mjs";
 import { TICTACTOE, bestMove, emptyBoard as emptyGrid, winner } from "../src/games-tictactoe.mjs";
 import {
   BLACKJACK, MIN_BET, canSplit, freshDeck, handValue, isBlackjack, settle,
@@ -1690,6 +1697,172 @@ test("the choplifter board is drawn to size", () => {
   const rows = CHOPLIFTER.render(state);
   assert.equal(rows.length, CH_HEIGHT);
   for (const row of rows) assert.equal(visible(row), CH_WIDTH);
+});
+
+/* ------------------------------------------------------------- excitebike */
+
+test("turbo is a loan, and the gauge is where it is called in", () => {
+  const state = EXCITEBIKE.create({ rng: seeded(1) });
+  EXCITEBIKE.onKey(state, "space");
+  assert.equal(state.turbo, true);
+  // Long enough to cook it, short enough to still be sitting in the seizure —
+  // it clears itself once it has cost you the time.
+  const hot = drive(EXCITEBIKE, state, 80);
+  assert.ok(hot.seized > 0, "holding it should cook the engine");
+  assert.equal(hot.turbo, false, "and take it away from you");
+  assert.ok(speedOf(hot) < 0.3, "a seized engine barely moves");
+
+  const cooling = EXCITEBIKE.create({ rng: seeded(2) });
+  const cool = drive(EXCITEBIKE, cooling, 60);
+  assert.equal(cool.heat, 0, "off the turbo it cools back down");
+});
+
+test("a ramp puts you in the air, and the nose drops all the way down", () => {
+  const state = EXCITEBIKE.create({ rng: seeded(3) });
+  state.next = 1e9;
+  state.things = [{ kind: "ramp", x: RIDER }];
+  EXCITEBIKE.tick(state);
+  assert.ok(state.air > 0, "you should be off the ground");
+  const launch = state.pitch;
+  EXCITEBIKE.tick(state);
+  assert.ok(state.pitch > launch, "and the front wheel drops on its own");
+});
+
+test("a landing is level or it is a tumble", () => {
+  const flown = (correct) => {
+    const state = EXCITEBIKE.create({ rng: seeded(4) });
+    state.next = 1e9;
+    state.things = [{ kind: "ramp", x: RIDER }];
+    return drive(EXCITEBIKE, state, 60, (s) => {
+      if (correct && s.air && s.pitch > 0.2) EXCITEBIKE.onKey(s, "up");
+    });
+  };
+  assert.equal(flown(true).spills, 0, "held level, it lands");
+  assert.equal(flown(false).spills, 1, "left alone, it lands on its face");
+  assert.ok(Math.abs(LAND_OK) > 0);
+});
+
+test("pitching on the ground does nothing at all", () => {
+  const state = EXCITEBIKE.create({ rng: seeded(5) });
+  EXCITEBIKE.onKey(state, "up");
+  EXCITEBIKE.onKey(state, "down");
+  assert.equal(state.pitch, 0, "there is nothing to pitch against");
+});
+
+test("the race can be won by riding it well, and not by holding turbo down", () => {
+  const good = (state, i) => {
+    if (state.air && state.pitch > 0.2) EXCITEBIKE.onKey(state, "up");
+    else if (state.air && state.pitch < -0.2) EXCITEBIKE.onKey(state, "down");
+    if (state.heat > 70 && state.turbo) EXCITEBIKE.onKey(state, "space");
+    if (state.heat < 25 && !state.turbo) EXCITEBIKE.onKey(state, "space");
+    if (i % 5 === 0) EXCITEBIKE.onKey(state, "right");
+  };
+  const greedy = (state, i) => {
+    if (!state.turbo) EXCITEBIKE.onKey(state, "space");
+    if (i % 5 === 0) EXCITEBIKE.onKey(state, "right");
+  };
+  let ridden = 0;
+  let mashed = 0;
+  for (let seed = 1; seed <= 5; seed++) {
+    const clean = drive(EXCITEBIKE, EXCITEBIKE.create({ rng: seeded(seed) }), 3000, good);
+    ridden += clean.race - 1;
+    assert.equal(clean.spills, 0, `seed ${seed} spilled while being ridden properly`);
+    mashed += drive(EXCITEBIKE, EXCITEBIKE.create({ rng: seeded(seed) }), 3000, greedy).race - 1;
+  }
+  assert.ok(ridden > mashed, `riding it (${ridden}) should beat mashing it (${mashed})`);
+  assert.ok(ridden >= 10, `only ${ridden} races finished in five runs`);
+});
+
+test("the excitebike board is drawn to size", () => {
+  const state = drive(EXCITEBIKE, EXCITEBIKE.create({ rng: seeded(6) }), 200);
+  const rows = EXCITEBIKE.render(state);
+  assert.equal(rows.length, EB_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), EB_WIDTH);
+});
+
+/* ----------------------------------------------------------------- outrun */
+
+test("the road is narrow far away and wide under the bumper", () => {
+  assert.ok(roadHalf(0) < roadHalf(PLAYER_ROW), "perspective runs the wrong way");
+  for (let row = 1; row < OR_HEIGHT; row++) {
+    assert.ok(roadHalf(row) > roadHalf(row - 1), `row ${row} is not wider than the one above it`);
+  }
+});
+
+test("a corner bends the far end and leaves your bumper where it is", () => {
+  const straight = centreAt(PLAYER_ROW, 0);
+  assert.equal(centreAt(PLAYER_ROW, 1), straight, "the bottom row never moves");
+  assert.equal(centreAt(PLAYER_ROW, -1), straight);
+  assert.ok(centreAt(0, 1) > centreAt(0, 0), "a right-hander throws the horizon right");
+  assert.ok(centreAt(0, -1) < centreAt(0, 0), "and a left-hander throws it left");
+  // And it opens up gradually rather than kinking.
+  const offsets = Array.from({ length: OR_HEIGHT }, (_, y) => centreAt(y, 1) - centreAt(y, 0));
+  for (let y = 1; y < offsets.length; y++) assert.ok(offsets[y] <= offsets[y - 1] + 1e-9);
+});
+
+test("the grass is slow, and the tarmac is not", () => {
+  const state = OUTRUN.create({ rng: seeded(1) });
+  state.speed = 1.8;
+  state.car = 1;                      // hard onto the verge
+  assert.equal(onTarmac(state.car, state.curve), false);
+  OUTRUN.tick(state);
+  assert.ok(state.speed <= 0.6, "two wheels on the grass should cost you everything");
+
+  const tarmac = OUTRUN.create({ rng: seeded(1) });
+  tarmac.speed = 1.8;
+  OUTRUN.tick(tarmac);
+  assert.ok(tarmac.speed > 1.7, "and staying on it should cost you nothing");
+});
+
+test("a corner throws you at the outside of it", () => {
+  const state = OUTRUN.create({ rng: seeded(2) });
+  state.speed = 1.5;
+  state.curve = 0.8;
+  state.segment = { left: 1e9, curve: 0.8 };
+  const before = state.car;
+  OUTRUN.tick(state);
+  assert.ok(state.car > before, "a right-hander should push you left-to-right across the road");
+});
+
+test("traffic spins you, and a checkpoint buys the clock back", () => {
+  const state = OUTRUN.create({ rng: seeded(3) });
+  state.speed = 1.6;
+  state.traffic = [{ z: 0.02, lane: 0, speed: 0.4 }];
+  state.car = centreAt(PLAYER_ROW, state.curve);
+  OUTRUN.tick(state);
+  assert.equal(state.spins, 1);
+  assert.equal(state.speed, 0, "a spin costs you all of it");
+
+  const check = OUTRUN.create({ rng: seeded(4) });
+  check.dist = check.nextCheck - 0.5;
+  check.speed = 1;
+  const clock = check.clock;
+  OUTRUN.tick(check);
+  assert.equal(check.checks, 1);
+  assert.ok(check.clock > clock, "and a checkpoint hands some of the clock back");
+});
+
+test("the stage can be driven, and the clock takes anybody who doesn't", () => {
+  const driving = (state) => {
+    OUTRUN.onKey(state, "up");
+    const want = centreAt(PLAYER_ROW, state.curve);
+    if (state.car < want - 0.6) OUTRUN.onKey(state, "right");
+    else if (state.car > want + 0.6) OUTRUN.onKey(state, "left");
+  };
+  for (let seed = 1; seed <= 5; seed++) {
+    const driven = drive(OUTRUN, OUTRUN.create({ rng: seeded(seed) }), 3000, driving);
+    assert.equal(driven.over, null, `seed ${seed} ran out of road: ${driven.over}`);
+    assert.ok(driven.checks >= 8, `seed ${seed} only made ${driven.checks} checkpoints`);
+    const parked = drive(OUTRUN, OUTRUN.create({ rng: seeded(seed) }), 2000);
+    assert.match(parked.over ?? "", /time up/, "sitting still should run the clock out");
+  }
+});
+
+test("the outrun road is drawn to size", () => {
+  const state = drive(OUTRUN, OUTRUN.create({ rng: seeded(5) }), 200, (s) => OUTRUN.onKey(s, "up"));
+  const rows = OUTRUN.render(state);
+  assert.equal(rows.length, OR_HEIGHT);
+  for (const row of rows) assert.equal(visible(row), OR_WIDTH);
 });
 
 /* -------------------------------------------------------------- stagedive */
