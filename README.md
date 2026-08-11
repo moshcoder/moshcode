@@ -50,7 +50,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
 | `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
 | `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |
-| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — eight games, no menus |
+| `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — nine games, no menus |
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |
 | `moshcode tools` | tools | list workflow tools and installation status |
@@ -584,7 +584,7 @@ the composer URL instead.
 
 ## The arcade (`/games`)
 
-Eight games, in the pit or straight from a shell. There are no menus, no options
+Nine games, in the pit or straight from a shell. There are no menus, no options
 screens and no difficulty prompts — `/games tetris` is already playing.
 
 ```sh
@@ -612,6 +612,7 @@ moshcode games --json         # the roster, for a machine
 | `snake` | eat, grow, and try not to eat yourself |
 | `pacman` | eat the dots, dodge the ghosts, `✳` makes them edible |
 | `asteroids` | turn, thrust, shoot — every rock you break becomes two |
+| `stagedive` | run the barricade, hop the gear, duck the crowd, take the picks |
 | `tictactoe` | three in a row against an opponent that cannot be beaten |
 | `blackjack` | hit, stand, double, split — dealer stands on 17, and pays 3:2 |
 | `chess` | full rules — castling, en passant, promotion — and it plays back |
