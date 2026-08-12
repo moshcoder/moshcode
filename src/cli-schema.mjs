@@ -516,6 +516,50 @@ export const CORE_CLI_COMMANDS = [
   },
   { name: "coins", aliasOf: "crypto", description: "alias for crypto" },
   {
+    name: "news",
+    group: "tools",
+    description: "headlines from your feeds, or a search",
+    synopsis: [
+      ["moshcode news", "latest headlines across every subscribed feed"],
+      ["moshcode news <keyword…>", "search the news"],
+      ["moshcode news <verb> [args…]", ""],
+    ],
+    verbs: "NEWS_VERBS",
+    flags: [
+      ["--json", "structured output instead of headlines", ""],
+      ["--limit <n>", "how many headlines to show", "20"],
+      ["--feed <name>", "only this feed", "all of them"],
+      ["--timeout <sec>", "per-feed fetch timeout", "10"],
+    ],
+    examples: [
+      ["moshcode news", "everything you subscribe to, newest first"],
+      ["moshcode news openai earnings", "search Google News and Bing News"],
+      ["moshcode news https://example.com/feed.xml", "read one feed without subscribing"],
+      ["moshcode news add journalists", "pull in a public OPML bundle"],
+      ["moshcode news export > feeds.opml", "take the list to another reader"],
+    ],
+    seeAlso: ["rss", "stocks", "crypto"],
+    note: "subscriptions live in ~/.moshcode/news.opml (override with MOSHCODE_NEWS_OPML). "
+      + "With none, a default set is read instead — `moshcode news sources` lists it. "
+      + "The defaults and the search are the same sources brisk.news and advis0r.com use.",
+  },
+  {
+    name: "rss",
+    group: "tools",
+    description: "read the same headlines in a full-screen reader",
+    synopsis: [
+      ["moshcode rss", "open the reader on your feeds"],
+      ["moshcode rss <keyword…>", "open it on a search"],
+    ],
+    examples: [
+      ["moshcode rss", "feeds on the left, headlines in the middle"],
+      ["moshcode rss tariffs", "open straight into a search"],
+    ],
+    seeAlso: ["news"],
+    note: "needs an interactive terminal. ↑↓/jk move · ⏎ read · o open in a browser · "
+      + "tab the feed list · / search · r refresh · q quit.",
+  },
+  {
     name: "plugin",
     group: "extend",
     description: "install moshcode's slash commands into Claude Code",
@@ -741,6 +785,31 @@ export const STOCKS_VERBS = [
 ];
 
 /**
+ * `news`'s verbs.
+ *
+ * `latest` earns its place the way crypto's `report` does: a bare argument is
+ * the shortcut — `moshcode news tariffs` searches — so the plain listing needs
+ * a spelling that a keyword cannot be mistaken for. src/news.mjs owns the
+ * parser and test/news.test.mjs fails when the two lists disagree.
+ */
+export const NEWS_VERBS = [
+  { name: "latest", description: "headlines across every subscribed feed", synopsis: [["moshcode news latest", "same as `moshcode news`"]] },
+  {
+    name: "search", description: "search the news for a word or phrase",
+    synopsis: [["moshcode news search <keyword…>", "same as `moshcode news <keyword…>`"]],
+  },
+  { name: "list", description: "the feeds you are subscribed to", synopsis: [["moshcode news list [--json]", ""]] },
+  {
+    name: "add", description: "subscribe to a feed, an OPML list, or a bundle",
+    synopsis: [["moshcode news add <url|file|bundle>", "an RSS/Atom link, an OPML list, or journalists|web3|blockchain"]],
+  },
+  { name: "rm", description: "unsubscribe", synopsis: [["moshcode news rm <name|url>", ""]] },
+  { name: "open", description: "open a headline from the last listing", synopsis: [["moshcode news open <n>", ""]] },
+  { name: "sources", description: "the default feeds and the bundles on offer", synopsis: [["moshcode news sources", ""]] },
+  { name: "export", description: "print the subscription list as OPML", synopsis: [["moshcode news export > feeds.opml", ""]] },
+];
+
+/**
  * `crypto`'s verbs.
  *
  * `report` earns its place for the same reason stocks's does — a bare pair is
@@ -888,6 +957,7 @@ export const VERB_TABLES = {
   TRADE_VERBS,
   STOCKS_VERBS,
   CRYPTO_VERBS,
+  NEWS_VERBS,
   PLUGIN_VERBS,
 };
 
@@ -931,6 +1001,10 @@ export const PIT_COMMANDS = [
     description: "equity research from advis0r.com" },
   { name: "crypto", aliases: ["coins"], args: "<pair|verb> [args…]", cli: "crypto",
     description: "crypto market data from advis0r.com" },
+  { name: "news", args: "[keyword…|verb] [args…]", cli: "news",
+    description: "headlines from your feeds, or a search" },
+  { name: "rss", aliases: ["reader"], cli: "rss",
+    description: "read the same headlines in a full-screen reader" },
   { name: "plugin", aliases: ["plugins"], args: "<verb> [name]", cli: "plugin",
     description: "install moshcode's slash commands into Claude Code" },
   { name: "games", aliases: ["game", "arcade", "play"], args: "[game]", cli: "games",
