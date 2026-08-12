@@ -16,13 +16,31 @@ export const BRICK_TOP = 1;
 
 export const PADDLE_W = 7;
 export const PADDLE_ROW = HEIGHT - 1;
-const PADDLE_STEP = 2;
+const PADDLE_STEP = 2;  // a keypress, not a tick — unchanged by the tick rate
+
+/**
+ * How often the wall is stepped. See the note in games-pong.mjs: the ball can
+ * only be drawn on whole cells, so smoothness comes from ticking often enough
+ * that the frames where it has not crossed into the next one go by too fast to
+ * read as a stall. Those frames are identical, and `runGame` does not write
+ * identical frames, so the extra ticks cost nothing on the wire.
+ *
+ * Ticking finer buys this game a second thing: at 0.34 rows a tick the ball
+ * used to cross a whole brick row between two samples, so which side it bounced
+ * off was a guess. It now samples inside every row it enters.
+ */
+export const TICK_MS = 16;
+
+/** The speeds below are still written per 50ms, the rate this was tuned at. */
+const SCALE = TICK_MS / 50;
 
 const LIVES = 3;
-const BASE_VX = 0.62;
-const BASE_VY = 0.34;   // rows per tick — half of vx, because a row is two columns
-const SPIN = 0.5;
-const LEVEL_UP = 1.12;
+const BASE_VX = 0.62 * SCALE;
+const BASE_VY = 0.34 * SCALE;   // half of vx, because a row is two columns
+const SPIN = 0.5 * SCALE;
+const MAX_VX = 1.4 * SCALE;
+const MIN_VX = 0.15 * SCALE;    // never let it go vertical and unsteerable
+const LEVEL_UP = 1.12;          // a multiplier on pace, so it does not scale
 
 /** Top rows are worth more, which is what makes the ball worth risking. */
 export const ROW_POINTS = [50, 40, 30, 20, 10];
@@ -98,8 +116,8 @@ export function step(state) {
       ball.y = PADDLE_ROW - 1;
       ball.vy = -Math.abs(ball.vy);
       // The steering wheel: the further out you take it, the flatter it leaves.
-      ball.vx = clamp(ball.vx + (off / (PADDLE_W / 2)) * SPIN * 0.5, -1.4, 1.4);
-      if (Math.abs(ball.vx) < 0.15) ball.vx = ball.vx < 0 ? -0.15 : 0.15;
+      ball.vx = clamp(ball.vx + (off / (PADDLE_W / 2)) * SPIN * 0.5, -MAX_VX, MAX_VX);
+      if (Math.abs(ball.vx) < MIN_VX) ball.vx = ball.vx < 0 ? -MIN_VX : MIN_VX;
     }
   }
 
@@ -129,7 +147,7 @@ export const BREAKOUT = {
   title: "BREAKOUT",
   blurb: "dig a channel up the side and let the ball do the rest",
   keys: "← → paddle · space launch · q quit",
-  tickMs: 50,
+  tickMs: TICK_MS,
 
   create({ rng = Math.random } = {}) {
     const state = {

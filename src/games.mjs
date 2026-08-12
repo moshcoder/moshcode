@@ -194,8 +194,19 @@ const ESC = {
   hideCursor: "\x1b[?25l",
   showCursor: "\x1b[?25h",
   up: (n) => (n > 0 ? `\x1b[${n}A` : ""),
+  down: (n) => (n > 0 ? `\x1b[${n}B` : ""),
   eraseDown: "\x1b[0J",
+  eraseLine: "\x1b[K",
 };
+
+/**
+ * How many ticks a late clock is allowed to make up in one go.
+ *
+ * Enough to ride out a garbage collection or a busy event loop without the game
+ * quietly running slow; small enough that a laptop coming back from sleep
+ * resumes the game rather than fast-forwarding the ball across the board.
+ */
+const CATCH_UP = 4;
 
 /**
  * Play one game until `q`.
@@ -214,45 +225,114 @@ export async function runGame(game, deps = {}) {
     // turn, deterministically, with no timers left running after the assertion.
     setTimer = (fn, ms) => setTimeout(fn, ms),
     clearTimer = (t) => clearTimeout(t),
+    // The clock the tick deadline is measured against. Injectable for the same
+    // reason the timer is: a test should be able to say what time it is.
+    now = () => Date.now(),
   } = deps;
 
   const ctx = { rng };
   let state = game.create(ctx);
-  let height = 0;
   let timer = null;
   let closed = false;
 
+  /** The lines currently on the screen, so a redraw can write only the changes. */
   let painted = null;
   const draw = () => {
     if (closed) return;
-    const text = frame({
+    const lines = frame({
       title: game.title,
       status: game.status(state),
       rows: game.render(state),
       keys: state.over ? `${game.keys}  ·  ${bone("r")} again` : game.keys,
-    });
+    }).split("\n");
+
     // A frame identical to the one already on the screen is not written at all.
     // Chess idles on its clock while it is your move, and repainting the same
     // board twice a second is exactly the flicker that would make it feel busy.
-    if (text === painted) return;
-    output.write(`${ESC.up(height)}${ESC.eraseDown}${text}\n`);
-    painted = text;
-    height = text.split("\n").length;
+    // It is also what lets the fast games tick at 60Hz for free: a ball that has
+    // not crossed into a new cell yet produces the same frame, and the same
+    // frame costs nothing.
+    const same = painted?.length === lines.length && lines.every((l, i) => l === painted[i]);
+    if (same) return;
+
+    if (!painted || painted.length !== lines.length) {
+      // First frame, or one that changed height: there is nothing to diff
+      // against, so clear what was there and lay the whole thing down.
+      output.write(`${ESC.up(painted?.length ?? 0)}${ESC.eraseDown}${lines.join("\n")}\n`);
+    } else {
+      // Only the rows that actually changed are written. A pong ball crossing a
+      // cell touches two rows out of twenty-one, and repainting the other
+      // nineteen is both the blink you can see — a full repaint has to erase
+      // first, and for that instant the board is not there — and, over the
+      // pit's socket, twenty times the bytes standing between a tick and a
+      // moved ball. Rows are skipped with a cursor-down rather than a newline
+      // so that a frame sitting at the bottom of the screen cannot scroll it.
+      let out = ESC.up(lines.length);
+      let row = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === painted[i]) continue;
+        out += `${ESC.down(i - row)}\r${lines[i]}${ESC.eraseLine}`;
+        row = i;
+      }
+      output.write(`${out}${ESC.down(lines.length - row)}\r`);
+    }
+    painted = lines;
   };
 
+  const tickMs = () => (typeof game.tickMs === "function" ? game.tickMs(state) : game.tickMs);
   const stop = () => { if (timer !== null) { clearTimer(timer); timer = null; } };
-  const schedule = () => {
+
+  /** When the next tick is due. Null means the clock is not running. */
+  let dueAt = null;
+
+  /**
+   * Arm the clock for the next tick, on its own deadline.
+   *
+   * Sleeping a full period from the moment the last tick *finished* is how a
+   * game ends up running slower than the rate it asked for: the work and the
+   * timer's own overshoot are added to every period, and the error accumulates.
+   * Counting from a deadline instead keeps the ball on real time.
+   */
+  const arm = () => {
     stop();
-    if (!game.tickMs || state.over) return;
-    const ms = typeof game.tickMs === "function" ? game.tickMs(state) : game.tickMs;
-    timer = setTimer(() => {
-      timer = null;
-      if (closed || state.over) return;
-      state = game.tick(state, ctx) || state;
-      draw();
-      schedule();
-    }, ms);
+    if (!game.tickMs || state.over || closed) return;
+    if (dueAt === null) dueAt = now() + tickMs();
+    timer = setTimer(onTick, Math.max(0, dueAt - now()));
   };
+
+  /**
+   * What a keypress is allowed to do to the clock: bring the next tick nearer,
+   * never push it away.
+   *
+   * Both halves matter. Chess runs its clock slowly while it is your move and
+   * quickly once it is the engine's, so the move you just made has to be able to
+   * pull the next tick forward or the reply arrives a beat late. But a key that
+   * could push the tick back is how the ball used to stall: a held arrow arrives
+   * as a burst of repeats, and re-arming on each one kept the next tick
+   * permanently a full period away, for as long as you held the key down.
+   */
+  const nudge = () => {
+    if (!game.tickMs || state.over || closed) return;
+    const soonest = now() + tickMs();
+    if (timer !== null && dueAt !== null && dueAt <= soonest) return;
+    dueAt = soonest;
+    arm();
+  };
+
+  function onTick() {
+    timer = null;
+    if (closed || state.over) return;
+    const ms = tickMs();
+    // One step for the tick that just came due, plus any whole ticks the event
+    // loop was too busy to deliver, so a stall shows up as a jump rather than
+    // as the whole game quietly slowing down and speeding back up.
+    const late = Math.max(0, now() - dueAt);
+    const steps = Math.min(CATCH_UP, 1 + Math.floor(late / ms));
+    dueAt += steps * ms;
+    for (let i = 0; i < steps && !state.over; i++) state = game.tick(state, ctx) || state;
+    draw();
+    arm();
+  }
 
   const wasRaw = Boolean(input.isRaw);
   const restore = () => {
@@ -271,16 +351,20 @@ export async function runGame(game, deps = {}) {
       if (key === "quit" || key === "q" || key === "escape") { restore(); resolve(); return; }
       if (key === "r" && (state.over || game.restartable !== false)) {
         state = game.create(ctx);
+        dueAt = null; // a new game starts its clock from now, not from the old one
         draw();
-        schedule();
+        arm();
         continue;
       }
       if (state.over) continue; // a finished board takes r and q, nothing else
       state = game.onKey(state, key, ctx) || state;
       draw();
-      // A key can end a real-time game (a hard drop into the ceiling) or start
-      // one moving again, so the clock is re-armed off every keypress.
-      if (game.tickMs) schedule();
+      // A key can end a real-time game — a hard drop into the ceiling — so the
+      // clock is stopped when that happens. Otherwise see `nudge`.
+      if (game.tickMs) {
+        if (state.over) stop();
+        else nudge();
+      }
     }
   }
 
@@ -296,7 +380,7 @@ export async function runGame(game, deps = {}) {
   process.on("SIGTERM", onSignal);
 
   draw();
-  schedule();
+  arm();
   await done;
   restore();
   process.off("SIGINT", onSignal);

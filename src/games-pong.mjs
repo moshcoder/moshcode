@@ -20,11 +20,38 @@ export const YOU_COL = 2;
 export const THEM_COL = WIDTH - 3;
 export const TARGET = 7;          // first to this many
 
-const SERVE_SPEED = 0.85;
-const MAX_SPEED = 1.7;
-const SPIN = 0.55;                // how much the edge of the paddle bends the ball
-const THEM_SPEED = 0.3;           // slow enough that a ball into the corner beats it
-const YOU_STEP = 1;
+/**
+ * How often the table is stepped.
+ *
+ * The board is a grid of characters, so wherever the ball really is it can only
+ * ever be drawn on a whole cell — and what reads as smooth is not the size of
+ * that step but the evenness of it. At 55ms a ball crossing fifteen columns a
+ * second advances a cell on six ticks out of seven and stands still on the
+ * seventh, and that one stalled frame, arriving three times a second, is the
+ * jiggle. Ticking at 16ms does not move the ball anywhere different at any
+ * given moment; it shrinks the stall from 55ms to 16ms, which is under what the
+ * eye reads as a stop. It is close to free, too: a tick that leaves the ball in
+ * the same cell renders an identical frame, and `runGame` never writes one of
+ * those to the terminal.
+ */
+export const TICK_MS = 16;
+
+/**
+ * The speeds below are still written per 55ms — the rate this game was tuned
+ * at — and scaled to the tick. Keeping the tuned numbers legible matters more
+ * than saving a multiply: they are what makes the machine beatable off the end
+ * of the paddle and not from the middle, and that balance is the game.
+ */
+const SCALE = TICK_MS / 55;
+
+const SERVE_SPEED = 0.85 * SCALE;
+const MAX_SPEED = 1.7 * SCALE;
+const SPIN = 0.55 * SCALE;        // how much the edge of the paddle bends the ball
+const THEM_SPEED = 0.3 * SCALE;   // slow enough that a ball into the corner beats it
+const FLAT = 0.08 * SCALE;        // below this a rally has gone flat
+const NUDGE = 0.12 * SCALE;       // and this is the angle it is put back at
+const MAX_VY = 0.5 * SCALE;
+const YOU_STEP = 1;               // a keypress, not a tick — the same either way
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -35,7 +62,7 @@ export function serve(state, toward) {
     y: HEIGHT / 2,
     vx: toward * SERVE_SPEED,
     // Never dead flat: a ball with no angle is a rally nobody can lose.
-    vy: (state.rng() < 0.5 ? -1 : 1) * (0.15 + state.rng() * 0.2),
+    vy: (state.rng() < 0.5 ? -1 : 1) * (0.15 + state.rng() * 0.2) * SCALE,
   };
   return state;
 }
@@ -52,10 +79,10 @@ const catches = (top, y) => y >= top - 0.5 && y <= top + PADDLE - 0.5;
 function returned(ball, top, dir) {
   const offset = (ball.y - (top + (PADDLE - 1) / 2)) / (PADDLE / 2);
   ball.vx = dir * Math.min(MAX_SPEED, Math.abs(ball.vx) * 1.06);
-  ball.vy = clamp(offset * SPIN * ASPECT + ball.vy * 0.3, -0.5, 0.5);
+  ball.vy = clamp(offset * SPIN * ASPECT + ball.vy * 0.3, -MAX_VY, MAX_VY);
   // Never let a rally go flat. A ball with no angle is one the machine can park
   // in front of forever, and a rally that cannot end is not a game.
-  if (Math.abs(ball.vy) < 0.08) ball.vy = (ball.vy < 0 ? -1 : 1) * 0.12;
+  if (Math.abs(ball.vy) < FLAT) ball.vy = (ball.vy < 0 ? -1 : 1) * NUDGE;
   return ball;
 }
 
@@ -102,7 +129,7 @@ export const PONG = {
   title: "PONG",
   blurb: "first to seven, and the angle is all in where you hit it",
   keys: "↑ ↓ move · q quit",
-  tickMs: 55,
+  tickMs: TICK_MS,
 
   create({ rng = Math.random } = {}) {
     const state = {
