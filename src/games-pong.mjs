@@ -7,6 +7,7 @@
 // A flat return it will always get; one taken off the end of your paddle it will
 // not. That is the whole game, and it is why the angle off the paddle depends on
 // where the ball hit it.
+import { ballCell } from "./games-draw.mjs";
 import { acid, bone, danger, dim } from "./ui.mjs";
 
 export const WIDTH = 44;
@@ -164,7 +165,10 @@ export const PONG = {
 
     for (const row of paddleRows(state.you)) put(YOU_COL, row, acid("█"));
     for (const row of paddleRows(state.them)) put(THEM_COL, row, danger("█"));
-    put(Math.round(state.ball.x), Math.round(state.ball.y), bone("●"));
+    // Drawn on half-rows, so the ball steps the same distance up the table as
+    // it does across it. See games-draw.mjs.
+    const ball = ballCell(state.ball.x, state.ball.y);
+    put(ball.col, ball.row, bone(ball.glyph));
 
     return grid.map((row, y) => row.map((cell, x) => (
       // The net, which is only there so the middle of the table has a middle.

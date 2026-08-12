@@ -4,6 +4,7 @@
 // decides the angle it leaves at, so the paddle is a steering wheel rather than
 // a wall. Without that you cannot dig a channel up the side of the wall, and
 // digging a channel is the entire reason anybody still plays this.
+import { ballCell } from "./games-draw.mjs";
 import { acid, amber, bone, danger, rgb } from "./ui.mjs";
 
 export const WIDTH = 40;
@@ -197,7 +198,10 @@ export const BREAKOUT = {
     }
 
     for (let i = 0; i < PADDLE_W; i++) put(state.paddle + i, PADDLE_ROW, bone("▀"));
-    put(Math.round(state.ball.x), Math.round(state.ball.y), state.stuck ? amber("●") : bone("●"));
+    // Drawn on half-rows, so the ball steps the same distance down the wall as
+    // it does across it. See games-draw.mjs.
+    const ball = ballCell(state.ball.x, state.ball.y);
+    put(ball.col, ball.row, (state.stuck ? amber : bone)(ball.glyph));
 
     return grid.map((row) => row.map((cell) => cell ?? " ").join(""));
   },

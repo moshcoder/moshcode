@@ -35,6 +35,7 @@ import {
   PONG, PADDLE, YOU_COL, TARGET as PONG_TARGET, WIDTH as WIDTH_P, HEIGHT as HEIGHT_P,
   TICK_MS as PONG_TICK_MS,
 } from "../src/games-pong.mjs";
+import { ballCell, halfRow } from "../src/games-draw.mjs";
 import {
   TANK, TARGET as TANK_TARGET, drive as driveTank, isWall as isYardWall, lineOfSight, quarterTurn, stepToward,
   WIDTH as WIDTH_T, HEIGHT as HEIGHT_T,
@@ -1244,6 +1245,57 @@ test("the breakout board is drawn to size", () => {
   const rows = BREAKOUT.render(state);
   assert.equal(rows.length, HEIGHT_B);
   for (const row of rows) assert.equal(visible(row), WIDTH_B);
+});
+
+/* --------------------------------------------------------------- the ball */
+
+test("a ball above the middle of its row is drawn in the top half of it", () => {
+  assert.deepEqual(ballCell(4, 8), { col: 4, row: 8, glyph: "▄" });
+  assert.deepEqual(ballCell(4, 7.7), { col: 4, row: 8, glyph: "▀" });
+  assert.deepEqual(ballCell(4, 8.3), { col: 4, row: 8, glyph: "▄" });
+  // The halves meet at the row centre and the cell at its edges, with no gap
+  // and no row that two different heights round into the wrong way.
+  assert.equal(halfRow(7.6) + 1, halfRow(8.0), "the two halves of a row are adjacent");
+  assert.equal(halfRow(8.4) + 1, halfRow(8.6), "and so are the halves either side of the seam");
+});
+
+test("the ball is drawn on a grid with the same pitch both ways", () => {
+  // A terminal cell is about twice as tall as it is wide, so a ball drawn one
+  // per cell steps twice as far down the board as it does across it — the same
+  // trajectory drawn at the wrong angle, in jumps that alternate long and
+  // short. Measured in half-rows, a step down is the same size as a step
+  // across, which is the whole point of the half blocks.
+  const state = PONG.create({ rng: seeded(9) });
+  state.ball = { x: 4, y: 8, vx: 0.85 * PONG_TICK_MS / 55, vy: 0.3 * PONG_TICK_MS / 55 };
+
+  let moves = 0;
+  let worst = 0;
+  let previous = null;
+  drive(PONG, state, 300, (s) => {
+    const at = { col: Math.round(s.ball.x), half: halfRow(s.ball.y) };
+    if (previous && (at.col !== previous.col || at.half !== previous.half)) {
+      // Serves teleport the ball back to the middle; a rally step never does.
+      const jump = Math.hypot(at.col - previous.col, at.half - previous.half);
+      if (jump < 4) { moves++; worst = Math.max(worst, jump); }
+    }
+    previous = at;
+  });
+
+  assert.ok(moves > 40, `not enough of a rally to measure (${moves} moves)`);
+  // One column, one half-row, or one of each — never the two-high jump a whole
+  // cell forced, and never two cells at once.
+  assert.ok(worst <= Math.SQRT2 + 1e-9, `the ball jumped ${worst.toFixed(2)} cells at once`);
+});
+
+test("a ball crossing a row is drawn twice on the way", () => {
+  // The vertical resolution is what was actually wrong, so this pins it: a ball
+  // falling one whole row passes through two drawn positions, not one.
+  const seen = new Set();
+  for (let y = 7.5; y < 8.5; y += 0.05) {
+    const { row, glyph } = ballCell(3, y);
+    seen.add(`${row}${glyph}`);
+  }
+  assert.equal(seen.size, 2, "a row is two steps tall, not one");
 });
 
 /* ------------------------------------------------------------------- pong */
