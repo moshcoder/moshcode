@@ -30,12 +30,13 @@ import {
 import {
   BREAKOUT, BRICK_ROWS, BRICK_COLS, BRICK_TOP, BRICK_W, PADDLE_W, PADDLE_ROW, ROW_POINTS,
   brickAt, bricksLeft, buildWall, WIDTH as WIDTH_B, HEIGHT as HEIGHT_B,
+  TICK_MS as BREAKOUT_TICK_MS,
 } from "../src/games-breakout.mjs";
 import {
   PONG, PADDLE, YOU_COL, TARGET as PONG_TARGET, WIDTH as WIDTH_P, HEIGHT as HEIGHT_P,
   TICK_MS as PONG_TICK_MS,
 } from "../src/games-pong.mjs";
-import { ballCell, halfRow } from "../src/games-draw.mjs";
+import { drawnBall, drawnCell, halfRow } from "../src/games-draw.mjs";
 import {
   TANK, TARGET as TANK_TARGET, drive as driveTank, isWall as isYardWall, lineOfSight, quarterTurn, stepToward,
   WIDTH as WIDTH_T, HEIGHT as HEIGHT_T,
@@ -1249,10 +1250,12 @@ test("the breakout board is drawn to size", () => {
 
 /* --------------------------------------------------------------- the ball */
 
+const cellAt = (x, y) => drawnCell(drawnBall(x, y));
+
 test("a ball above the middle of its row is drawn in the top half of it", () => {
-  assert.deepEqual(ballCell(4, 8), { col: 4, row: 8, glyph: "▄" });
-  assert.deepEqual(ballCell(4, 7.7), { col: 4, row: 8, glyph: "▀" });
-  assert.deepEqual(ballCell(4, 8.3), { col: 4, row: 8, glyph: "▄" });
+  assert.deepEqual(cellAt(4, 8), { col: 4, row: 8, glyph: "▄" });
+  assert.deepEqual(cellAt(4, 7.7), { col: 4, row: 8, glyph: "▀" });
+  assert.deepEqual(cellAt(4, 8.3), { col: 4, row: 8, glyph: "▄" });
   // The halves meet at the row centre and the cell at its edges, with no gap
   // and no row that two different heights round into the wrong way.
   assert.equal(halfRow(7.6) + 1, halfRow(8.0), "the two halves of a row are adjacent");
@@ -1292,10 +1295,68 @@ test("a ball crossing a row is drawn twice on the way", () => {
   // falling one whole row passes through two drawn positions, not one.
   const seen = new Set();
   for (let y = 7.5; y < 8.5; y += 0.05) {
-    const { row, glyph } = ballCell(3, y);
+    const { row, glyph } = cellAt(3, y);
     seen.add(`${row}${glyph}`);
   }
   assert.equal(seen.size, 2, "a row is two steps tall, not one");
+});
+
+/**
+ * Play a game and report every move the *drawn* ball made: how far it went, and
+ * how many ticks it had stood still first.
+ */
+function drawnMoves(game, state, ticks, act = () => {}) {
+  const moves = [];
+  let previous = null;
+  let last = 0;
+  for (let t = 0; t < ticks && !state.over; t++) {
+    act(state);
+    state = game.tick(state) || state;
+    if (state.over) break;
+    const at = { col: state.drawn.col, half: state.drawn.half };
+    if (previous && (at.col !== previous.col || at.half !== previous.half)) {
+      const jump = Math.hypot(at.col - previous.col, at.half - previous.half);
+      // A serve puts the ball back in the middle; that is not a step.
+      if (jump < 4) moves.push({ jump, waited: t - last });
+      last = t;
+    }
+    previous = at;
+  }
+  return moves;
+}
+
+test("the drawn ball moves at a rate, not whenever it happens to cross a line", () => {
+  // The two fixes before this one got the ball's steps to the right size and
+  // still left it looking like it was struggling, because the steps were not
+  // evenly spaced: rounding the true position moves the ball when it crosses a
+  // column edge or a half-row edge, and those are on unrelated schedules. Pong
+  // stepped after 16ms, then 64ms; breakout ran 16, 80, 48, five times a
+  // second. What is pinned here is the cadence, which is the thing that was
+  // actually wrong — see `drawnBall` in games-draw.mjs.
+  const cases = [
+    ["pong", PONG, PONG_TICK_MS, () => PONG.create({ rng: seeded(9) }), () => {}],
+    ["breakout", BREAKOUT, BREAKOUT_TICK_MS, () => BREAKOUT.create({ rng: seeded(4) }), (s) => { if (s.stuck) BREAKOUT.onKey(s, "space"); }],
+  ];
+
+  for (const [name, game, tickMs, create, act] of cases) {
+    const moves = drawnMoves(game, create(), 6000, act);
+    assert.ok(moves.length > 100, `${name}: not enough of a rally to measure (${moves.length})`);
+
+    // One lattice unit at a time. A diagonal taken in a single frame is the
+    // lurch the old sampler produced whenever both crossings landed together.
+    const worst = Math.max(...moves.map((m) => m.jump));
+    assert.equal(worst, 1, `${name}: the ball jumped ${worst.toFixed(2)} units at once`);
+
+    // Nothing the eye can read as a stop. Three ticks is 48ms; the old sampler
+    // sat still for four and five.
+    const stalled = Math.max(...moves.map((m) => m.waited));
+    assert.ok(stalled <= 3, `${name}: the ball stood still for ${stalled * tickMs}ms`);
+
+    // And it has to be moving. Twenty steps a second — where both games were —
+    // is a ball being carried rather than hit.
+    const perSecond = 1000 / ((moves.reduce((n, m) => n + m.waited, 0) / moves.length) * tickMs);
+    assert.ok(perSecond > 35, `${name}: only ${perSecond.toFixed(1)} steps a second`);
+  }
 });
 
 /* ------------------------------------------------------------------- pong */

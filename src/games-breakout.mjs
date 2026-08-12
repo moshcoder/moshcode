@@ -4,7 +4,7 @@
 // decides the angle it leaves at, so the paddle is a steering wheel rather than
 // a wall. Without that you cannot dig a channel up the side of the wall, and
 // digging a channel is the entire reason anybody still plays this.
-import { ballCell } from "./games-draw.mjs";
+import { advanceBall, drawnBall, drawnCell, snapBall } from "./games-draw.mjs";
 import { acid, amber, bone, danger, rgb } from "./ui.mjs";
 
 export const WIDTH = 40;
@@ -17,7 +17,11 @@ export const BRICK_TOP = 1;
 
 export const PADDLE_W = 7;
 export const PADDLE_ROW = HEIGHT - 1;
-const PADDLE_STEP = 2;  // a keypress, not a tick — unchanged by the tick rate
+// A keypress, not a tick, so this is unchanged by the tick rate — but it does
+// have to keep up with the ball, and a ball taken off the end of the paddle now
+// crosses a column in under two ticks. Three columns a press stays ahead of it
+// at a terminal's key-repeat rate; two only just did.
+const PADDLE_STEP = 3;
 
 /**
  * How often the wall is stepped. See the note in games-pong.mjs: the ball can
@@ -32,8 +36,20 @@ const PADDLE_STEP = 2;  // a keypress, not a tick — unchanged by the tick rate
  */
 export const TICK_MS = 16;
 
+/**
+ * How hard the wall is played, against the pace it was first tuned at.
+ *
+ * Launched, the old ball took three seconds to cross the board and two and a
+ * half to fall the height of it, which is a slow enough ball that you can put
+ * the paddle under it and go and make a cup of tea. It also meant the drawn
+ * ball moved twenty times a second, and twenty steps a second does not read as
+ * travel however even they are. Everything below scales together, so a ball off
+ * the end of the paddle leaves at the angle it always did.
+ */
+const PACE = 1.9;
+
 /** The speeds below are still written per 50ms, the rate this was tuned at. */
-const SCALE = TICK_MS / 50;
+const SCALE = (TICK_MS / 50) * PACE;
 
 const LIVES = 3;
 const BASE_VX = 0.62 * SCALE;
@@ -67,6 +83,7 @@ export function brickAt(wall, x, y) {
 function rest(state) {
   state.ball = { x: state.paddle + PADDLE_W / 2, y: PADDLE_ROW - 1, vx: 0, vy: 0 };
   state.stuck = true;
+  state.drawn = drawnBall(state.ball.x, state.ball.y);
   return state;
 }
 
@@ -82,8 +99,12 @@ export function launch(state) {
 export function step(state) {
   if (state.stuck) {
     // A ball that has not been launched rides the paddle, so moving before you
-    // serve aims the serve.
+    // serve aims the serve. It is carried rather than travelling, so it is put
+    // where the paddle is rather than paced there — a stationary ball earns no
+    // steps, and would otherwise sit still while the paddle slid out from under
+    // it.
     state.ball.x = state.paddle + PADDLE_W / 2;
+    snapBall(state.drawn, state.ball.x, state.ball.y);
     return state;
   }
 
@@ -122,11 +143,16 @@ export function step(state) {
     }
   }
 
+  advanceBall(state.drawn, ball);
+
   if (ball.y > PADDLE_ROW) {
     state.lives--;
     if (state.lives <= 0) {
       state.lives = 0;
       state.over = `out of balls · ${state.score} points`;
+      // The last ball is left where it went, below the board and so off it,
+      // rather than resting on the row it fell past.
+      snapBall(state.drawn, ball.x, ball.y);
       return state;
     }
     rest(state);
@@ -198,9 +224,9 @@ export const BREAKOUT = {
     }
 
     for (let i = 0; i < PADDLE_W; i++) put(state.paddle + i, PADDLE_ROW, bone("▀"));
-    // Drawn on half-rows, so the ball steps the same distance down the wall as
-    // it does across it. See games-draw.mjs.
-    const ball = ballCell(state.ball.x, state.ball.y);
+    // Drawn on half-rows and on its own even clock, so the ball steps the same
+    // distance down the wall as across it, and at a rate. See games-draw.mjs.
+    const ball = drawnCell(state.drawn);
     put(ball.col, ball.row, (state.stuck ? amber : bone)(ball.glyph));
 
     return grid.map((row) => row.map((cell) => cell ?? " ").join(""));
