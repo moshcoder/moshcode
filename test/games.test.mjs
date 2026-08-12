@@ -33,6 +33,7 @@ import {
 } from "../src/games-breakout.mjs";
 import {
   PONG, PADDLE, YOU_COL, TARGET as PONG_TARGET, WIDTH as WIDTH_P, HEIGHT as HEIGHT_P,
+  TICK_MS as PONG_TICK_MS,
 } from "../src/games-pong.mjs";
 import {
   TANK, TARGET as TANK_TARGET, drive as driveTank, isWall as isYardWall, lineOfSight, quarterTurn, stepToward,
@@ -1222,12 +1223,14 @@ test("a wall can be cleared, and cannot be cleared by leaving the paddle alone",
     if (want < state.paddle) BREAKOUT.onKey(state, "left");
     else if (want > state.paddle) BREAKOUT.onKey(state, "right");
   };
+  // Budgets are in ticks and a tick is 16ms, so these are about five minutes of
+  // play with a paddle that never misses, and about two and a half without one.
   for (let seed = 1; seed <= 5; seed++) {
-    const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(seed) }), 6000, tracking);
+    const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(seed) }), 20000, tracking);
     assert.ok(state.level > 1, `seed ${seed} never cleared a wall`);
   }
   for (let seed = 1; seed <= 5; seed++) {
-    const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(seed) }), 3000, (s) => {
+    const state = drive(BREAKOUT, BREAKOUT.create({ rng: seeded(seed) }), 10000, (s) => {
       if (s.stuck) BREAKOUT.onKey(s, "space");
     });
     assert.ok(state.over, `seed ${seed} survived without touching the paddle`);
@@ -1248,7 +1251,10 @@ test("the breakout board is drawn to size", () => {
 test("a serve is never dead flat", () => {
   for (let seed = 1; seed <= 20; seed++) {
     const state = PONG.create({ rng: seeded(seed) });
-    assert.ok(Math.abs(state.ball.vy) > 0.1, "a flat serve is a rally nobody can lose");
+    // Measured in rows per second rather than rows per tick, so that this says
+    // something about the game rather than about the rate it happens to run at.
+    const rowsPerSecond = (Math.abs(state.ball.vy) * 1000) / PONG_TICK_MS;
+    assert.ok(rowsPerSecond > 2, `a flat serve is a rally nobody can lose (${rowsPerSecond})`);
     assert.ok(Math.abs(state.ball.vx) > 0);
   }
 });
@@ -2524,4 +2530,113 @@ test("r starts another game once the last one is over", async () => {
   input.emit("data", "r");
   input.emit("data", "\x03");
   assert.equal(await done, 0);
+});
+
+/** A clock and a timer a test can hold still, plus a count of the arming. */
+function fakeClock(start = 1000) {
+  const c = { at: start, fire: null, armed: 0, cleared: 0 };
+  c.now = () => c.at;
+  c.setTimer = (fn) => { c.armed++; c.fire = fn; return c.armed; };
+  c.clearTimer = () => { c.cleared++; c.fire = null; };
+  /** Let `ms` of wall clock go by and then let the timer go off. */
+  c.tick = (ms) => { c.at += ms; const go = c.fire; c.fire = null; go?.(); };
+  return c;
+}
+
+test("a keypress does not postpone the next tick", async () => {
+  // The bug this replaces: the clock was re-armed off every keypress, and a held
+  // arrow key arrives as a burst of repeats rather than as one key. Each repeat
+  // pushed the next tick a full period into the future, so the ball stalled for
+  // exactly as long as you held the paddle down and then lurched. It read as the
+  // ball jiggling; it was the ball being stopped.
+  const { input, output } = fakeIO();
+  const clock = fakeClock();
+  const done = runGame(PONG, { input, output, rng: seeded(5), ...clock });
+  await new Promise((r) => setImmediate(r));
+
+  const armed = clock.armed;
+  for (let i = 0; i < 20; i++) input.emit("data", "\x1b[B"); // hold the down arrow
+  assert.equal(clock.armed, armed, "a keypress re-armed a clock that was already running");
+  assert.equal(clock.cleared, 0, "and cancelled the tick that was already pending");
+
+  input.emit("data", "q");
+  await done;
+});
+
+test("a keypress may still bring the clock forward", async () => {
+  // The other side of the rule above. A game whose tick rate depends on its
+  // state — chess thinks in 80ms once it is the engine's move and idles at 400ms
+  // while it is yours — has to be able to pull the next tick nearer when a key
+  // changes which of those it is, or the reply lands a beat late.
+  const { input, output } = fakeIO();
+  const clock = fakeClock();
+  const slow = { ...HANGMAN, tickMs: (s) => (s.hurry ? 20 : 5000), tick: (s) => s };
+  const done = runGame(slow, { input, output, rng: seeded(9), ...clock });
+  await new Promise((r) => setImmediate(r));
+
+  const armed = clock.armed;
+  input.emit("data", "a"); // hangman takes the letter; nothing about the clock changes
+  assert.equal(clock.armed, armed, "a key that did not change the rate re-armed anyway");
+
+  slow.tickMs = () => 20; // now the same key means a much shorter period
+  input.emit("data", "b");
+  assert.equal(clock.armed, armed + 1, "a key that shortened the period did not pull the tick in");
+
+  input.emit("data", "q");
+  await done;
+});
+
+test("a tick that arrives late makes up the ticks it missed", async () => {
+  const { input, output } = fakeIO();
+  const clock = fakeClock();
+  let ticks = 0;
+  const spy = { ...PONG, tick: (s, ctx) => { ticks++; return PONG.tick(s, ctx); } };
+  const done = runGame(spy, { input, output, rng: seeded(3), ...clock });
+  await new Promise((r) => setImmediate(r));
+
+  ticks = 0;
+  clock.tick(PONG_TICK_MS * 3); // the event loop was busy for three periods
+  assert.equal(ticks, 3, "a late clock should keep real time, not quietly run slow");
+
+  // But only up to a point: a laptop coming back from sleep should resume the
+  // game rather than fast-forward the ball the length of the table.
+  ticks = 0;
+  clock.tick(PONG_TICK_MS * 500);
+  assert.ok(ticks > 0 && ticks <= 8, `a long stall fast-forwarded ${ticks} ticks`);
+
+  input.emit("data", "q");
+  await done;
+});
+
+test("a redraw writes only the rows that changed, and lands back where it started", async () => {
+  const { input, output, written } = fakeIO();
+  const clock = fakeClock();
+  const done = runGame(PONG, { input, output, rng: seeded(2), ...clock });
+  await new Promise((r) => setImmediate(r));
+  const whole = written.join("");
+
+  // Tick until the ball crosses into a new cell, and weigh what that cost.
+  let update = "";
+  for (let i = 0; i < 60 && !update; i++) {
+    written.length = 0;
+    clock.tick(PONG_TICK_MS);
+    update = written.join("");
+  }
+  assert.ok(update, "the ball never moved");
+  assert.ok(!update.includes("\x1b[0J"), "erasing the board before redrawing it is the blink");
+  assert.ok(
+    update.length * 3 < whole.length,
+    `a moved ball rewrote ${update.length} bytes of a ${whole.length}-byte board`,
+  );
+
+  // The frame is redrawn in place by walking up over it and back down, so the
+  // rows have to add up exactly. If they ever do not, the board walks off up the
+  // screen a line at a time — slowly enough that only a long game would show it.
+  let net = 0;
+  for (const [, n, dir] of update.matchAll(/\x1b\[(\d+)([AB])/g)) net += (dir === "A" ? -1 : 1) * Number(n);
+  net += (update.match(/\n/g) ?? []).length;
+  assert.equal(net, 0, "a redraw moved the cursor off the frame it started on");
+
+  input.emit("data", "q");
+  await done;
 });
