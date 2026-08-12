@@ -394,6 +394,22 @@ async function main() {
     if (code) process.exitCode = code;
     return;
   }
+  if (cmd === "news") {
+    const { newsCommand } = await import("../src/news.mjs");
+    const code = await newsCommand(rest, {
+      openUrl: (url) => canOpenBrowser() && openBrowser(url),
+    });
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === "rss") {
+    const { rssUi } = await import("../src/rss-ui.mjs");
+    const code = await rssUi(rest, {
+      openUrl: (url) => canOpenBrowser() && openBrowser(url),
+    });
+    if (code) process.exitCode = code;
+    return;
+  }
   if (cmd === "plugin" || cmd === "plugins") {
     const code = await pluginCommand(rest);
     if (code) process.exitCode = code;

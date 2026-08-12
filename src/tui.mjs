@@ -879,6 +879,26 @@ export async function tui() {
       await cryptoCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
       continue;
     }
+    // `/news` renders in the pit rather than handing the terminal over: it is a
+    // list and a prompt to come back to, the same as `/stocks`.
+    if (cmd === "news") {
+      const { newsCommand } = await import("./news.mjs");
+      await newsCommand(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
+      continue;
+    }
+    // `/rss` is the exception `/attach` is: it takes the whole terminal, so
+    // readline has to let go of stdin first or the two fight over every key.
+    if (cmd === "rss" || cmd === "reader") {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(err("/rss needs an interactive terminal — try /news"));
+        continue;
+      }
+      const { rssUi } = await import("./rss-ui.mjs");
+      rl.close();
+      await rssUi(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
+      rl = mkrl();
+      continue;
+    }
     if (cmd === "plugin" || cmd === "plugins") {
       await pluginCommand(rest);
       continue;

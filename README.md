@@ -57,6 +57,8 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode trade` | tools | look up markets and trade through Alpaca |
 | `moshcode stocks` <br>`advisor` | tools | equity research from advis0r.com |
 | `moshcode crypto` <br>`coins` | tools | crypto market data from advis0r.com |
+| `moshcode news` | tools | headlines from your feeds, or a search |
+| `moshcode rss` | tools | read the same headlines in a full-screen reader |
 | `moshcode plugin` <br>`plugins` | extend | install moshcode's slash commands into Claude Code |
 | `moshcode commands` | script | list built-in moshscript commands |
 | `moshcode completion` | extend | print a shell completion script |
