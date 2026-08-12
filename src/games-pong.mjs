@@ -7,7 +7,7 @@
 // A flat return it will always get; one taken off the end of your paddle it will
 // not. That is the whole game, and it is why the angle off the paddle depends on
 // where the ball hit it.
-import { ballCell } from "./games-draw.mjs";
+import { advanceBall, drawnBall, drawnCell, snapBall } from "./games-draw.mjs";
 import { acid, bone, danger, dim } from "./ui.mjs";
 
 export const WIDTH = 44;
@@ -38,12 +38,24 @@ export const TARGET = 7;          // first to this many
 export const TICK_MS = 16;
 
 /**
+ * How hard the table is played, against the pace it was first tuned at.
+ *
+ * The old pace put the ball across the table in just under three seconds. That
+ * is not a ball being hit, it is a ball being carried, and it was also why the
+ * drawn ball only moved twenty times a second — too few steps for any of them
+ * to be smooth. Everything below is scaled by this, the machine along with the
+ * ball, so the balance is exactly the one that was tuned; only the clock it is
+ * played against changes.
+ */
+const PACE = 1.9;
+
+/**
  * The speeds below are still written per 55ms — the rate this game was tuned
  * at — and scaled to the tick. Keeping the tuned numbers legible matters more
  * than saving a multiply: they are what makes the machine beatable off the end
  * of the paddle and not from the middle, and that balance is the game.
  */
-const SCALE = TICK_MS / 55;
+const SCALE = (TICK_MS / 55) * PACE;
 
 const SERVE_SPEED = 0.85 * SCALE;
 const MAX_SPEED = 1.7 * SCALE;
@@ -65,6 +77,8 @@ export function serve(state, toward) {
     // Never dead flat: a ball with no angle is a rally nobody can lose.
     vy: (state.rng() < 0.5 ? -1 : 1) * (0.15 + state.rng() * 0.2) * SCALE,
   };
+  // A serve is a ball put on the table, not a ball that travelled there.
+  state.drawn = drawnBall(state.ball.x, state.ball.y);
   return state;
 }
 
@@ -106,6 +120,12 @@ export function step(state) {
 
   if (ball.x < 0) { state.theirs++; point(state, 1); }
   else if (ball.x > WIDTH - 1) { state.yours++; point(state, -1); }
+  // Anything else is the ball travelling, which is the only thing the drawn
+  // ball is asked to follow — a serve puts it back itself.
+  else advanceBall(state.drawn, ball);
+  // A match ends with the ball where it went out, off the table and so off the
+  // board, rather than parked on the edge it left by.
+  if (state.over) snapBall(state.drawn, ball.x, ball.y);
 
   // The machine: idle in the middle until the ball is on its half, then chase
   // the ball's row. Perfect tracking here would make the game unloseable for it,
@@ -165,9 +185,9 @@ export const PONG = {
 
     for (const row of paddleRows(state.you)) put(YOU_COL, row, acid("█"));
     for (const row of paddleRows(state.them)) put(THEM_COL, row, danger("█"));
-    // Drawn on half-rows, so the ball steps the same distance up the table as
-    // it does across it. See games-draw.mjs.
-    const ball = ballCell(state.ball.x, state.ball.y);
+    // Drawn on half-rows and on its own even clock, so the ball steps the same
+    // distance up the table as across it, and at a rate. See games-draw.mjs.
+    const ball = drawnCell(state.drawn);
     put(ball.col, ball.row, bone(ball.glyph));
 
     return grid.map((row, y) => row.map((cell, x) => (
