@@ -79,7 +79,12 @@ moshcode install codex      # npm i -g @openai/codex
 moshcode install kimi       # curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
 moshcode install qwen       # npm i -g @qwen-code/qwen-code
 moshcode install deepseek   # npm i -g @serjm/deepseek-code
+moshcode install openagents # curl -fsSL https://openagents.org/install.sh | bash
 ```
+
+`openagents` is the odd one out: a launcher that supervises the engines above
+rather than a coding agent itself. Its installer ends by offering to pair the
+machine with a workspace — press Enter to skip that.
 
 ### Autonomous agents versus raw starts
 
@@ -98,6 +103,7 @@ moshcode agents kimi        # kimi --yolo                                       
 moshcode agents qwen        # qwen --approval-mode=yolo                         (autonomous)
 moshcode agents deepseek    # deepseek-code --turbo                             (autonomous)
 moshcode agents aider       # aider --yes-always                                (autonomous)
+moshcode agents openagents  # openagents                                        (dashboard)
 ```
 
 `start` is the explicit raw path. It injects nothing, so the native engine keeps

@@ -27,6 +27,7 @@ const EXPECTED_AGENT_ARGS = {
   kimi: ["--yolo"],
   qwen: ["--approval-mode=yolo"],
   deepseek: ["--turbo"],
+  openagents: [], // a launcher, not an agent: nothing of its own to auto-approve
   aider: ["--yes-always"],
 };
 
@@ -43,6 +44,7 @@ const EXPECTED_LAUNCH_ARGS = {
   kimi: ["--yolo"], // no agents view — kimi has no agent list to land on
   qwen: ["--approval-mode=yolo"],
   deepseek: ["--turbo"],
+  openagents: [], // bare launch opens the dashboard, which is its agent list
   aider: ["--yes-always"],
 };
 
