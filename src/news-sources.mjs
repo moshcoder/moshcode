@@ -20,45 +20,13 @@
 // holds feeds with stable well-known URLs and defers everything else to the
 // published lists, where the list is somebody else's to maintain.
 
-/** Google News locale. One place, because every builder below needs it. */
-const GOOGLE_LOCALE = "hl=en-US&gl=US&ceid=US:en";
-
 /**
- * Google News category feeds, keyed the way brisk.news keys them.
+ * Bing News query feed — the only search feed left.
  *
- * `general` is null there and means "top stories", which is a different URL
- * rather than a search for the word "general" — the same distinction is kept.
+ * The Google News builders that used to sit here were removed rather than left
+ * unused: keeping them would imply a Google News feed is still a thing this can
+ * read, and isDeadEndLink() explains at length why it is not.
  */
-export const GOOGLE_NEWS_CATEGORIES = {
-  general: null,
-  science: "science",
-  sports: "sports",
-  business: "business",
-  health: "health",
-  entertainment: "entertainment",
-  tech: "technology",
-  politics: "politics",
-  food: "food",
-  travel: "travel",
-};
-
-/** Google News top stories, or one category from the map above. */
-export function googleNewsFeed(category = null) {
-  const mapped = category ? GOOGLE_NEWS_CATEGORIES[category] ?? null : null;
-  if (!mapped) return `https://news.google.com/rss?${GOOGLE_LOCALE}`;
-  return `https://news.google.com/rss/search?q=${encodeURIComponent(mapped)}&${GOOGLE_LOCALE}`;
-}
-
-/**
- * Google News query feed. `when:7d` style windows keep results recent —
- * advis0r's googleNewsFeed() does the same, for the same reason.
- */
-export function googleNewsSearch(query, { window = "7d" } = {}) {
-  const q = window ? `${query} when:${window}` : String(query);
-  return `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&${GOOGLE_LOCALE}`;
-}
-
-/** Bing News query feed — the half of a search whose links are real articles. */
 export function bingNewsSearch(query) {
   return `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`;
 }
@@ -127,6 +95,9 @@ export function isDeadEndLink(url) {
  * isDeadEndLink() documents: its items cannot be opened and carry no summary,
  * so a default list built on it is a list of rows that do nothing. The desks it
  * covered (world, science, politics) are named publishers now instead.
+ *
+ * The profullstack blogs are here too, so `profullstack.com/feeds.opml` is read
+ * out of the box rather than only after `/news add profullstack`.
  */
 export const DEFAULT_FEEDS = [
   { name: "ars-technica", title: "Ars Technica", url: "https://feeds.arstechnica.com/arstechnica/index", site: "https://arstechnica.com", category: "tech" },
@@ -148,6 +119,26 @@ export const DEFAULT_FEEDS = [
   { name: "phys-org", title: "Phys.org", url: "https://phys.org/rss-feed/", site: "https://phys.org", category: "science" },
 
   { name: "npr-politics", title: "NPR — Politics", url: "https://feeds.npr.org/1014/rss.xml", site: "https://www.npr.org", category: "politics" },
+
+  // The profullstack blogs, read out of the box. This is the one published list
+  // small enough to be a default: profullstack.com/feeds.opml is 14 feeds, where
+  // smallweb is 33,000 and could only ever be searched. Kept in step with that
+  // file by hand rather than fetched, because defaultFeeds() is synchronous and
+  // a fresh install must not wait on a network call to show anything at all.
+  { name: "bittorrented-blog", title: "BitTorrented Blog", url: "https://bittorrented.com/blog/rss.xml", site: "https://bittorrented.com/blog", category: "profullstack" },
+  { name: "bl0ggers-blog", title: "bl0ggers Blog", url: "https://bl0ggers.com/blog/rss.xml", site: "https://bl0ggers.com/blog", category: "profullstack" },
+  { name: "c0mpute-blog", title: "c0mpute Blog", url: "https://c0mpute.com/blog/rss.xml", site: "https://c0mpute.com/blog", category: "profullstack" },
+  { name: "c0upons-blog", title: "c0upons Blog", url: "https://c0upons.com/blog/rss.xml", site: "https://c0upons.com/blog", category: "profullstack" },
+  { name: "coinpay-blog", title: "CoinPay Blog", url: "https://coinpayportal.com/blog/rss.xml", site: "https://coinpayportal.com/blog", category: "profullstack" },
+  { name: "crawlproof-blog", title: "CrawlProof Blog", url: "https://crawlproof.com/blog/rss.xml", site: "https://crawlproof.com/blog", category: "profullstack" },
+  { name: "d0rz-blog", title: "d0rz Blog", url: "https://d0rz.com/blog/rss.xml", site: "https://d0rz.com/blog", category: "profullstack" },
+  { name: "logicsrc-blog", title: "LogicSRC Blog", url: "https://logicsrc.com/blog/rss.xml", site: "https://logicsrc.com/blog", category: "profullstack" },
+  { name: "pairux-blog", title: "PairUX Blog", url: "https://pairux.com/blog/rss.xml", site: "https://pairux.com/blog", category: "profullstack" },
+  { name: "qryptchat-blog", title: "QryptChat Blog", url: "https://qrypt.chat/blog/rss.xml", site: "https://qrypt.chat/blog", category: "profullstack" },
+  { name: "saasrow-blog", title: "SaaSRow Blog", url: "https://www.saasrow.com/blog/rss.xml", site: "https://www.saasrow.com/blog", category: "profullstack" },
+  { name: "sh1pt-blog", title: "sh1pt Blog", url: "https://sh1pt.com/blog/rss.xml", site: "https://sh1pt.com/blog", category: "profullstack" },
+  { name: "threatcrush-blog", title: "ThreatCrush Blog", url: "https://threatcrush.com/blog/rss.xml", site: "https://threatcrush.com/blog", category: "profullstack" },
+  { name: "ugig-blog", title: "ugig Blog", url: "https://ugig.net/blog/rss.xml", site: "https://ugig.net/blog", category: "profullstack" },
 ];
 
 /**
@@ -197,7 +188,14 @@ export const FEED_LISTS = [
   },
   {
     name: "smallweb",
-    description: "Kagi Small Web — 32k personal blogs, search it rather than subscribe",
+    description: "Kagi Small Web — 33k personal blogs, with titles",
+    url: "https://kagi.com/smallweb/opml",
+    format: "opml",
+    searchOnly: true,
+  },
+  {
+    name: "smallweb-txt",
+    description: "Kagi Small Web, profullstack's fork — the plain-text list",
     url: "https://raw.githubusercontent.com/ralyodio/smallweb/refs/heads/main/smallweb.txt",
     format: "text",
     searchOnly: true,

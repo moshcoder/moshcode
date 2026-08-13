@@ -712,9 +712,10 @@ test("a feed matches when any keyword is in its title, url or folder", () => {
   assert.deepEqual(matchFeeds(feeds, []), []);
 });
 
-test("a keyword matches the start of a word, so `rust` is not `trust`", () => {
+test("`rust` ranks the Rust blogs above Trust Machines", () => {
   // Searching 32k feeds for `rust` used to return Trust Machines, Trustnodes,
-  // frustrat.com and popthruster.com ahead of anything about Rust.
+  // frustrat.com and popthruster.com ahead of anything about Rust. They are
+  // still matches — just not the first ones.
   const feeds = [
     { title: "Trust Machines", url: "https://www.trustmachines.co/blog", category: "" },
     { title: "frustrat.com", url: "https://frustrat.com/rss/", category: "" },
@@ -722,12 +723,20 @@ test("a keyword matches the start of a word, so `rust` is not `trust`", () => {
     { title: "rustgeek.me", url: "https://rustgeek.me/feed/", category: "" },
     { title: "rust.christina-quast.de", url: "https://rust.christina-quast.de/index.xml", category: "" },
   ];
-  assert.deepEqual(
-    matchFeeds(feeds, ["rust"]).map((f) => f.title),
-    ["rustgeek.me", "rust.christina-quast.de"],
-  );
-  // A multi-word keyword cannot be a token, so it still matches as a substring.
-  assert.deepEqual(matchFeeds([{ title: "Hacker News", url: "https://hnrss.org/frontpage", category: "" }],
+  const ranked = matchFeeds(feeds, ["rust"]).map((f) => f.title);
+  assert.deepEqual(ranked.slice(0, 2), ["rust.christina-quast.de", "rustgeek.me"]);
+  assert.equal(ranked.length, 5);
+});
+
+test("a keyword buried inside a word still matches, or `homelab` finds nothing", () => {
+  // The lists carry hostnames and little else, so requiring the keyword to
+  // start a word means myhomelab.net is unfindable. It ranks last, not never.
+  const feeds = [{ title: "myhomelab.net", url: "https://myhomelab.net/rss", category: "" }];
+  assert.equal(matchFeeds(feeds, ["homelab"]).length, 1);
+});
+
+test("a multi-word keyword still matches as a substring", () => {
+  assert.equal(matchFeeds([{ title: "Hacker News", url: "https://hnrss.org/frontpage", category: "" }],
     ["hacker news"]).length, 1);
 });
 
@@ -863,4 +872,23 @@ test("a stale cache is served when the list cannot be fetched", async () => {
   assert.equal(offline.ok, true);
   assert.equal(offline.stale, true);
   assert.deepEqual(offline.feeds.map((f) => f.url), ["https://a.example/rss"]);
+});
+
+test("find ranks across every list, not within each one", async () => {
+  // web3 is fetched before smallweb. Sorting per list and concatenating put
+  // "Trust Machines" above "rust.example" purely because of fetch order.
+  const { env } = sandbox();
+  const io = sink();
+  await newsCommand(["find", "rust"], {
+    ...io, env, json: true,
+    fetchImpl: fakeFetch({
+      "https://raw.githubusercontent.com/chainfeeds/RSSAggregatorforWeb3/main/RAW.opml":
+        `<opml><body><outline text="Trust Machines" xmlUrl="https://trustmachines.example/rss"/></body></opml>`,
+      "https://kagi.com/smallweb/opml":
+        `<opml><body><outline text="rust" xmlUrl="https://rust.example/rss"/></body></opml>`,
+    }),
+  });
+  const shown = io.text();
+  assert.ok(shown.indexOf("rust.example") < shown.indexOf("trustmachines.example"),
+    `exact match should rank first:\n${shown}`);
 });

@@ -507,29 +507,41 @@ export function parseKeywords(raw) {
 }
 
 /**
- * Feeds whose title, URL or folder matches any of the keywords.
+ * Feeds matching any keyword, best match first.
  *
- * A keyword matches the *start of a word*, not any position in the string.
- * Plain substring matching looks fine until you search a 32,000-feed list for
- * `rust` and get Trust Machines, Trustnodes, frustrat.com and popthruster.com
- * ahead of the Rust blogs. Splitting on non-alphanumerics and matching the head
- * of a token keeps rustgeek.me and rust.christina-quast.de while dropping every
- * word that merely contains the letters.
+ * Ranked rather than filtered, because filtering cannot win both halves of this:
  *
- * A keyword that is not a single alphanumeric word cannot be a token, so it
- * falls back to a substring match. That covers both `hacker news` and
- * `example.com` — a dot is a separator here, so a domain would otherwise match
- * nothing at all.
+ *   · Plain substring matching searches 32,000 feeds for `rust` and returns
+ *     Trust Machines, Trustnodes, frustrat.com and popthruster.com.
+ *   · Requiring the keyword to start a word fixes that and then finds nothing
+ *     at all for `homelab`, because the list's only metadata is the hostname
+ *     and the blog is called myhomelab.net.
+ *
+ * So everything containing the keyword is kept, and a whole-word match sorts
+ * above a word that starts with it, which sorts above a match buried anywhere.
+ * With the results capped for display, the good ones are the ones you see.
+ * Sorting is stable, so the list's own order survives within a rank.
  */
+export function scoreFeed(feed, keywords) {
+  const hay = `${feed.title || ""} ${feed.url} ${feed.category || ""}`.toLowerCase();
+  let best = 0;
+  for (const k of keywords) {
+    if (!hay.includes(k)) continue;
+    const tokens = hay.split(/[^a-z0-9]+/).filter(Boolean);
+    if (tokens.some((t) => t === k)) { best = Math.max(best, 3); continue; }
+    if (tokens.some((t) => t.startsWith(k))) { best = Math.max(best, 2); continue; }
+    best = Math.max(best, 1);
+  }
+  return best;
+}
+
 export function matchFeeds(feeds, keywords) {
   if (!keywords.length) return [];
-  return feeds.filter((feed) => {
-    const hay = `${feed.title || ""} ${feed.url} ${feed.category || ""}`.toLowerCase();
-    const tokens = hay.split(/[^a-z0-9]+/).filter(Boolean);
-    return keywords.some((k) => (/^[a-z0-9]+$/.test(k)
-      ? tokens.some((token) => token.startsWith(k))
-      : hay.includes(k)));
-  });
+  return feeds
+    .map((feed, i) => ({ feed, rank: scoreFeed(feed, keywords), i }))
+    .filter((row) => row.rank > 0)
+    .sort((a, b) => (b.rank - a.rank) || (a.i - b.i))
+    .map((row) => row.feed);
 }
 
 /**
@@ -1256,6 +1268,11 @@ async function findCommand(request, { out, fail, fetchImpl, env }) {
       hits.push({ ...feed, list: list.name });
     }
   }
+
+  // Ranked across every list, not within each one. Sorting per list and then
+  // concatenating puts all of web3's weak matches above smallweb's exact ones
+  // purely because web3 is fetched first.
+  hits.sort((a, b) => scoreFeed(b, request.keywords) - scoreFeed(a, request.keywords));
 
   if (!hits.length && failures.length === FEED_LISTS.length) {
     fail(danger("✗ could not read any of the published lists"));
