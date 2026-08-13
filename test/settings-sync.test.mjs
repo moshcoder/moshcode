@@ -41,7 +41,7 @@ const DIGEST_FIXTURE = {
   "herd/rules.json": { content: "{}" },
 };
 
-function home({ aliases = null, rules = null, credentials = true, marker = null, feeds = null } = {}) {
+function home({ aliases = null, rules = null, credentials = true, marker = null, feeds = null, news = null } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "moshcode-sync-"));
   const moshcode = path.join(dir, ".moshcode");
   fs.mkdirSync(moshcode, { recursive: true });
@@ -51,6 +51,7 @@ function home({ aliases = null, rules = null, credentials = true, marker = null,
   }
   if (aliases) fs.writeFileSync(path.join(moshcode, "aliases.json"), aliases);
   if (feeds) fs.writeFileSync(path.join(moshcode, "feeds.opml"), feeds);
+  if (news) fs.writeFileSync(path.join(moshcode, "news.opml"), news);
   if (rules) {
     fs.mkdirSync(path.join(moshcode, "herd"), { recursive: true });
     fs.writeFileSync(path.join(moshcode, "herd", "rules.json"), rules);
@@ -273,6 +274,27 @@ test("/save carries the feed list, and does not try to parse it", async () => {
   assert.equal(code, 0);
   const sent = fetchImpl.calls[0].body.snapshot.files;
   assert.equal(sent["feeds.opml"].content, OPML, "OPML travels byte for byte");
+});
+
+test("/save carries the news subscriptions too, not only tcfeed's list", async () => {
+  // These two files sat one line apart in SYNCED_FILES with nearly the same
+  // name, and only tcfeed's was in it. `/news` and `/rss` keep their
+  // subscriptions in news.opml, so the feeds you actually chose were the one
+  // thing `/save` left behind.
+  const dir = home({ aliases: "{}", feeds: OPML, news: OPML });
+  const fetchImpl = stubFetch([[200, { revision: 1 }]]);
+
+  const code = await saveCommand([], { home: dir, creds: CREDS, fetchImpl, write: lines(), installed: INSTALLED });
+  assert.equal(code, 0);
+  const sent = fetchImpl.calls[0].body.snapshot.files;
+  assert.equal(sent["news.opml"].content, OPML, "the subscription list did not travel");
+  assert.ok(sent["feeds.opml"], "tcfeed's list still travels");
+});
+
+test("news.opml is in the allowlist and is not parsed", () => {
+  const entry = SYNCED_FILES.find((f) => f.path === "news.opml");
+  assert.ok(entry, "news.opml is not synced");
+  assert.equal(entry.json, false, "OPML must not be JSON-parsed");
 });
 
 test("a feed list that is not XML still syncs — nothing here reads it", async () => {
