@@ -88,6 +88,86 @@ export function isDeadEndLink(url) {
   }
 }
 
+/**
+ * Words a quote page's title is padded with, and the corporate suffixes that
+ * are part of a company's legal name rather than part of a headline.
+ *
+ * Stripped before counting words, because what is left after they go is the
+ * company name — and a title that is only a company name is a label on a page,
+ * not a report of something that happened.
+ */
+const LABEL_WORDS = new RegExp(
+  "\\b(common|preferred|ordinary|class [a-c]|stock|stocks|shares?|share|price|prices|"
+  + "quote|quotes|chart|charts|charting|financials?|fundamentals?|overview|profile|"
+  + "summary|statistics|historical|data|dividends?|earnings|holdings?|ratings?|"
+  + "forecast|analysis|news|nasdaq|nyse|amex|otc|inc|incorporated|corp|corporation|"
+  + "ltd|limited|plc|llc|lp|co|company|group|holdings|sa|ag|nv|the|and|of)\\b\\.?",
+  "gi",
+);
+
+/**
+ * The reference-page paths, host-agnostic.
+ *
+ * Every finance site builds the same page — one URL per ticker, showing the
+ * current price and never going stale — and they nearly all spell it with one
+ * of these segments. Matching the path shape rather than a list of hostnames
+ * means a site nobody thought of is still recognised, and a site that changes
+ * its domain does not need a code change.
+ */
+const QUOTE_PATH = new RegExp(
+  "(^|/)(quote|quotes|symbol|symbols|tickers?|market-activity|market-data|"
+  + "investing/stock|investing/stocks|markets/companies|data/equities|"
+  + "stocks/charts|stock-price|price-quote)(/|$)",
+  "i",
+);
+
+/**
+ * Is this a standing reference page rather than a story?
+ *
+ * A news search for a ticker does not come back with only news. Measured on
+ * `LTRN`, four of Bing's nine results were the same kind of thing: nasdaq.com's
+ * insider-activity and advanced-charting tabs, marketwatch.com's financials
+ * tab, and seekingalpha.com/symbol/LTRN. None of them is an article. They are
+ * the permanent page a site keeps for a ticker, and they are worse than merely
+ * useless in a dated list, because the date attached to them is whenever the
+ * crawler last looked:
+ *
+ *   · Two of the four carried a 2020 date and sorted to the bottom as "75mo
+ *     ago", which reads as an old story rather than as a page with no date.
+ *   · marketwatch.com/investing/stock/ltrn/financials carried *yesterday's*
+ *     date and sorted to the very top, so the freshest-looking headline in the
+ *     list was a page that has not changed in years.
+ *
+ * Both signals are required, because either alone is wrong often enough to
+ * matter. A quote-shaped URL is not proof — publishers file real stories under
+ * `/quote/` — and a short title is not proof either, since "Lantern Pharma
+ * Halts Trial" is four words and is news. Demanding both means a story has to
+ * be filed at a reference URL *and* be titled like a label before it is
+ * dropped, and on the LTRN sample that is exactly the four pages and none of
+ * the five stories.
+ *
+ * Dropped rather than merely deranked, but never silently: collectNews returns
+ * the count so the listing can say how many it set aside.
+ */
+export function isReferencePage(url, title) {
+  let path;
+  try { path = new URL(String(url)).pathname; }
+  catch { return false; }
+  if (!QUOTE_PATH.test(path)) return false;
+
+  // The ticker in parentheses, then a bare all-caps ticker anywhere, then the
+  // boilerplate. Order matters: "(LTRN)" has to go before the bare-ticker rule
+  // sees it, or the parentheses are left behind as a word of their own.
+  const bare = String(title ?? "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\b[A-Z]{1,5}(?:\.[A-Z]{1,2})?\b/g, " ")
+    .replace(LABEL_WORDS, " ")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim();
+  const words = bare ? bare.split(/\s+/).length : 0;
+  return words <= 3;
+}
+
 /** The vendored copy of what profullstack.com/feeds.opml serves. */
 const PROFULLSTACK_OPML = new URL("./profullstack-feeds.opml", import.meta.url);
 
