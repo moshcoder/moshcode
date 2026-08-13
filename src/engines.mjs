@@ -166,6 +166,38 @@ export const ENGINES = {
     agentArgs: ["--turbo"],
     install: { cmd: "npm", args: ["install", "-g", "@serjm/deepseek-code"] },
   },
+  openagents: {
+    desc: "OpenAgents — multi-agent launcher + dashboard (openagents.org)",
+    // The package installs three identical bins — `agn`, `openagents`, and
+    // `agent-connector`. Take the descriptive one: `agn` is short enough to
+    // collide with something else on a machine we don't control.
+    bin: "openagents",
+    // Not a coding agent of its own: it launches and supervises the engines
+    // above, so it has no approvals to bypass and no yolo flag to pass. A bare
+    // launch opens the interactive dashboard, which IS its agent list, so both
+    // `/agents openagents` and `moshcode start openagents` land in the same
+    // place. (No `agentsView` for the same reason — it would spell the same
+    // empty argv twice.)
+    agentArgs: [],
+    install: { cmd: "bash", args: ["-c", "curl -fsSL https://openagents.org/install.sh | bash"] },
+    // Its own updater ("upgrade launcher to the latest npm release"), which
+    // knows it was installed as an unpacked tarball under ~/.openagents rather
+    // than by npm -g. Re-running the installer would work too, but it re-does
+    // the Node bootstrap and ends on the pairing prompt below.
+    upgrade: { cmd: "openagents", args: ["update"] },
+    // The installer unpacks to ~/.openagents/nodejs and writes the bin shims
+    // there, appending that directory to a shell rc — so PATH will not see
+    // `openagents` until the next shell, including in the moshcode session that
+    // just installed it.
+    binDirs: [path.join(homedir(), ".openagents", "nodejs", "node_modules", ".bin")],
+    // No `state`: the dashboard is a blessed TUI with no wording of its own we
+    // have verified, and a guessed pattern is worse than the shared ones.
+    //
+    // The installer ends by offering to pair this device with a workspace, and
+    // waits on a real answer — but only when stderr is a terminal, and Enter
+    // skips it. `moshcode install` inherits the terminal, so that prompt is
+    // yours to answer; run it where you can reach a keyboard.
+  },
   aider: {
     desc: "Aider — pair-programming in your terminal",
     bin: "aider",
@@ -198,6 +230,9 @@ export const ENGINE_ALIASES = {
   // `dsc` and `deepseek-code` are the binary names the package installs; accept
   // both as engine names so whichever one someone has seen resolves.
   ds: "deepseek", dsc: "deepseek", "deepseek-code": "deepseek",
+  // Same idea for openagents: `agn` and `agent-connector` are the other two
+  // binary names its package installs, and the domain is how it's advertised.
+  oa: "openagents", agn: "openagents", "agent-connector": "openagents", "openagents.org": "openagents",
 };
 
 /** Resolve a name/alias to `[key, engine]`, or null. */
@@ -281,6 +316,8 @@ const AI_EXEC = {
   kimi: (p) => ["-p", p],                                    // kimi prompt mode (prints the response, text by default)
   qwen: (p) => ["-p", p],                                    // qwen prompt mode (gemini-derived)
   deepseek: (p) => ["--headless", "-p", p],                  // deepseek: -p runs one prompt and exits; --headless drops the TUI so stdout is pipe-clean
+  // openagents is absent on purpose: it answers no prompts itself, it starts
+  // the engines that do. ai() throws a named error rather than picking it.
 };
 
 /** argv that runs `prompt` headlessly on `engine` (throws if it has no headless mode). */
