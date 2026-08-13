@@ -28,6 +28,7 @@ import {
   defaultFeeds,
   FEED_LISTS,
   isDeadEndLink,
+  isReferencePage,
   resolveList,
   subscribableLists,
   unwrapRedirect,
@@ -644,7 +645,7 @@ export function parseFeed(xml, { url = "" } = {}) {
 
   const items = [];
   for (const block of blocks) {
-    const title = pick(block, "title");
+    const title = tidyTitle(pick(block, "title"));
     const link = linkOf(block, url);
     if (!title && !link) continue; // nothing to show and nothing to open
     items.push({
@@ -661,6 +662,22 @@ export function parseFeed(xml, { url = "" } = {}) {
 function clip(value, max) {
   const s = String(value ?? "");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * A title with someone else's truncation marker tidied up.
+ *
+ * Search engines cut long titles and mark the cut with a space and three dots.
+ * Left alone that trailing " ..." is a word like any other to a wrapper, so a
+ * headline that fills its last line exactly puts the dots on a line of their
+ * own — a row containing nothing but "...". Joining it to the word before it,
+ * as the single character it means, keeps it where the cut happened.
+ */
+export function tidyTitle(title) {
+  return String(title ?? "")
+    .replace(/\s*(\.\s*){3,}\s*$/, "…")
+    .replace(/\s+…$/, "…")
+    .trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +783,8 @@ export async function collectNews(feeds, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
   const items = [];
   const failures = [];
   const seen = new Set();
+  const titles = new Set();
+  let skipped = 0;
   for (const result of results) {
     if (result.error) { failures.push({ name: result.feed.name, url: result.feed.url, error: result.error }); continue; }
     for (const item of result.parsed.items) {
@@ -778,17 +797,57 @@ export async function collectNews(feeds, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
       // aggregator interstitials qualify; an item with no link at all is still
       // worth listing, because its title carries the news.
       if (link && isDeadEndLink(link)) continue;
+      // A ticker's standing quote page is not news, and its crawl date makes it
+      // sort as though it were. Counted rather than hidden — the listing says
+      // how many it set aside.
+      if (link && isReferencePage(link, item.title)) { skipped++; continue; }
       const key = link || `${result.feed.name}:${item.title}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      items.push({ ...item, link, feed: result.feed.name, feedTitle: result.parsed.title || result.feed.title });
+      // The same title twice is one story, whichever URL carried it. Search
+      // engines return a publisher's own page and two syndications of it, and
+      // subscribed feeds overlap the same way; the first copy wins, and because
+      // this runs before the sort that is the first feed to answer rather than
+      // the newest. Only titles that survive normalisation to something
+      // substantial are deduped, so a feed of one-word entries is left alone.
+      const fingerprint = fingerprintTitle(item.title);
+      if (fingerprint) {
+        if (titles.has(fingerprint)) continue;
+        titles.add(fingerprint);
+      }
+      items.push({
+        ...item,
+        link,
+        feed: result.feed.name,
+        feedTitle: result.parsed.title || result.feed.title,
+        // Who published it, which is what a searcher needs and what the feed
+        // name cannot say: every result of a `/news search` comes from the one
+        // search feed, so a column of "bing" nine times over is a column that
+        // tells you nothing. Empty for an item with no link.
+        host: link ? hostOf(link) : "",
+      });
     }
   }
   // Newest first, and undated entries last rather than pretending they are old:
   // plenty of feeds omit dates entirely, and sorting them to the bottom keeps
   // them reachable without letting them claim the top of the list.
   items.sort((a, b) => (b.date ?? -Infinity) - (a.date ?? -Infinity));
-  return { items, failures };
+  return { items, failures, skipped };
+}
+
+/**
+ * A title reduced to what two copies of the same story would share.
+ *
+ * Case, punctuation and whitespace go, because syndication reflows all three.
+ * Returns "" for anything too short to be worth deduping on, so the caller can
+ * tell "no fingerprint" from "a fingerprint that happens to be empty".
+ */
+export function fingerprintTitle(title) {
+  const key = String(title ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return key.length >= 12 ? key : "";
 }
 
 /**
@@ -959,37 +1018,124 @@ export function ago(ms, now = Date.now()) {
   if (days < 14) return `${days}d ago`;
   const weeks = Math.round(days / 7);
   if (weeks < 9) return `${weeks}w ago`;
-  return `${Math.round(days / 30)}mo ago`;
+  const months = Math.round(days / 30);
+  if (months < 24) return `${months}mo ago`;
+  // Past two years, months stop being a unit anyone reads. "75mo ago" is a
+  // number to divide before it means anything; "6y ago" is already the answer.
+  // Whole years only — at this distance the decimal is precision about
+  // something nobody is deciding anything on.
+  return `${Math.round(days / 365)}y ago`;
 }
 
-/** The headline list. */
-export function renderHeadlines(items, { failures = [], columns, limit = DEFAULT_LIMIT, now = Date.now(), source = "" } = {}) {
+/**
+ * Break `text` into lines of at most `width`, on word boundaries where it can.
+ *
+ * A word longer than the width — which in practice means a URL — is split
+ * across lines rather than truncated. It has to be split somehow: left whole it
+ * wraps the terminal itself and every line below it lands one row low, which is
+ * the one failure that tears a whole frame. Splitting rather than cutting
+ * because the over-long word is usually the link, and half a link is not a link.
+ *
+ * `max` caps how many lines come back, for a caller laying out a fixed number
+ * of rows. The last line kept is clipped rather than simply dropped, so the cut
+ * announces itself instead of looking like the text ended there.
+ *
+ * Lives here rather than in rss-ui.mjs, which is where it was written and which
+ * still exports it, because the plain listing needs the same wrapping and
+ * rss-ui.mjs already imports this module — taking it the other way is a cycle.
+ */
+export function wrap(text, width, max = Infinity) {
+  const columns = Math.max(1, Math.floor(width));
+  const words = String(text ?? "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  const flush = () => { if (line) { lines.push(line); line = ""; } };
+
+  for (const word of words) {
+    if (word.length > columns) {
+      flush();
+      for (let i = 0; i < word.length; i += columns) lines.push(word.slice(i, i + columns));
+      continue;
+    }
+    if (!line) { line = word; continue; }
+    if (line.length + 1 + word.length <= columns) { line += ` ${word}`; continue; }
+    flush();
+    line = word;
+  }
+  flush();
+  if (lines.length <= max) return lines;
+  // The dropped lines have to leave a mark, or the text simply appears to end
+  // where it was cut. Appended where there is room and cut into the last line
+  // where there is not, because a marker that pushes past `columns` is the one
+  // thing this function exists to prevent.
+  const kept = lines.slice(0, max);
+  const last = kept[max - 1];
+  kept[max - 1] = `${last.length < columns ? last : last.slice(0, Math.max(0, columns - 1))}…`;
+  return kept;
+}
+
+/** At most this many lines of one headline. Three is a very long headline. */
+const TITLE_LINES = 3;
+
+/**
+ * The headline list.
+ *
+ * Wrapped rather than clipped to one line, which is the change that makes this
+ * readable. A single-line row spends its width on a fixed column for the feed
+ * name and the age, and what gives is the headline — so the one thing on the
+ * row you actually needed is the one thing cut off, and a press release titled
+ * "Lantern Pharma Establishes Open-Medicine AI as a Separate Company to
+ * Commercialize and Expand…" reads as "Establishes Open-Medicine AI as a
+ * Separate Compa…". The title now takes the full width and as many lines as it
+ * needs, and the attribution moves under it where it costs the headline
+ * nothing.
+ *
+ * `byHost` picks what each headline is attributed to. A search sets it: every
+ * row arrives on the one search feed, so a column reading "bing" nine times is
+ * a column that says nothing, while "tmcnet.com" against "finance.yahoo.com" is
+ * most of what tells you whether a result is worth opening. The reading list
+ * leaves it off, because there the feed name is the one you chose, the one
+ * `--feed` takes, and — for an aggregator like Hacker News, where every item
+ * links to a different host — the only stable thing on the row.
+ */
+export function renderHeadlines(items, {
+  failures = [], columns, limit = DEFAULT_LIMIT, now = Date.now(), source = "",
+  skipped = 0, byHost = false,
+} = {}) {
   const width = Math.max(48, Math.min(Number(columns) || 88, 100));
   const shown = items.slice(0, limit);
   if (!shown.length) {
     const lines = ["", `  ${ash("nothing came back")}`];
+    if (skipped) lines.push(`  ${ash(`${skipped} quote page${skipped === 1 ? " was" : "s were"} skipped — they were not news`)}`);
     if (failures.length) lines.push("", ...failureLines(failures));
     else lines.push("", `  ${ash("subscribe with")} ${bone("/news add <url>")}`);
     return lines.join("\n");
   }
 
-  // The widest index, so "9." and "10." line their titles up.
+  // The widest index, so "9." and "10." line their titles up, and everything
+  // under a headline hangs off that same margin.
   const gutter = String(shown.length).length + 1;
-  const tails = shown.map((item) => {
-    const when = ago(item.date, now);
-    return `${item.feed || ""}${when ? ` · ${when}` : ""}`.trim();
-  });
-  // One column width for every tail, not one per row: the feed name and the age
-  // are what make a headline placeable, so they keep their room and the title
-  // is what gives — and they line up, which is the whole point of a column.
-  const tailWidth = Math.max(0, ...tails.map((t) => t.length));
-  const room = Math.max(24, width - gutter - tailWidth - 4);
+  const indent = `  ${" ".repeat(gutter)} `;
+  const room = width - indent.length;
 
-  const lines = ["", `  ${ash(source || `${items.length} headline${items.length === 1 ? "" : "s"}`)}`, ""];
+  const head = [source || `${items.length} headline${items.length === 1 ? "" : "s"}`];
+  if (skipped) head.push(`${skipped} quote page${skipped === 1 ? "" : "s"} skipped`);
+  const lines = ["", `  ${ash(head.join(" · "))}`, ""];
+
   for (const [i, item] of shown.entries()) {
     const n = `${i + 1}.`.padStart(gutter);
-    lines.push(`  ${acid(n)} ${bone(clip(item.title, room).padEnd(room))} ${ash(tails[i].padStart(tailWidth))}`);
+    // An item with no title at all still gets its number and its meta line —
+    // parseFeed only keeps a titleless entry when it has a link worth opening.
+    const [first = "", ...rest] = wrap(item.title, room, TITLE_LINES);
+    lines.push(`  ${acid(n)} ${bone(first)}`);
+    for (const line of rest) lines.push(`${indent}${bone(line)}`);
+    const when = ago(item.date, now);
+    const who = byHost ? item.host || item.feed : item.feed || item.host;
+    const meta = [who || "", when].filter(Boolean).join(" · ");
+    if (meta) lines.push(`${indent}${ash(meta)}`);
+    if (i < shown.length - 1) lines.push("");
   }
+
   lines.push("", `  ${ash("open one with")} ${bone("/news open <n>")}`);
   if (failures.length) lines.push("", ...failureLines(failures));
   return lines.join("\n");
@@ -1222,17 +1368,19 @@ export async function newsCommand(argv = [], deps = {}) {
     }
   }
 
-  const { items, failures } = await collectNews(feeds, { fetchImpl, timeoutMs: request.timeoutMs });
+  const { items, failures, skipped } = await collectNews(feeds, { fetchImpl, timeoutMs: request.timeoutMs });
   const shown = items.slice(0, request.limit);
 
   if (request.json) {
-    out(JSON.stringify({ items: shown, failures, feeds: feeds.length }, null, 2));
+    out(JSON.stringify({ items: shown, failures, skipped, feeds: feeds.length }, null, 2));
   } else {
     out(renderHeadlines(items, {
       failures,
       columns,
       limit: request.limit,
       now,
+      skipped,
+      byHost: request.verb === "search",
       source: source ? `${source} · ${items.length} headline${items.length === 1 ? "" : "s"}` : "",
     }));
   }

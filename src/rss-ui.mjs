@@ -22,7 +22,13 @@ import {
   readingList,
   resolveVerb,
   searchFeeds,
+  wrap,
 } from "./news.mjs";
+
+// Written here, and moved to news.mjs when the plain listing needed the same
+// wrapping — re-exported so the name this module published stays where callers
+// and tests already look for it.
+export { wrap };
 
 /**
  * Verbs `/rss` hands straight to `moshcode news`.
@@ -60,37 +66,6 @@ function pad(text, width) {
 function clip(text, width) {
   const s = String(text ?? "");
   return s.length > width ? `${s.slice(0, Math.max(0, width - 1))}…` : s;
-}
-
-/**
- * Break `text` into lines of at most `width`, on word boundaries where it can.
- *
- * A word longer than the pane — which in practice means a URL — is split across
- * lines rather than truncated. It has to be split somehow: left whole it wraps
- * the terminal itself and every line below it lands one row low, which is the
- * one failure that tears the whole frame. Splitting rather than cutting because
- * the over-long word is usually the link, and half a link is not a link.
- */
-export function wrap(text, width) {
-  const columns = Math.max(1, Math.floor(width));
-  const words = String(text ?? "").split(/\s+/).filter(Boolean);
-  const lines = [];
-  let line = "";
-  const flush = () => { if (line) { lines.push(line); line = ""; } };
-
-  for (const word of words) {
-    if (word.length > columns) {
-      flush();
-      for (let i = 0; i < word.length; i += columns) lines.push(word.slice(i, i + columns));
-      continue;
-    }
-    if (!line) { line = word; continue; }
-    if (line.length + 1 + word.length <= columns) { line += ` ${word}`; continue; }
-    flush();
-    line = word;
-  }
-  flush();
-  return lines;
 }
 
 /**
@@ -136,20 +111,48 @@ export function decodeKeys(buffer) {
   return events;
 }
 
+/**
+ * What a headline is grouped and filtered by.
+ *
+ * The feed it came from, except on a search — there every result arrives on the
+ * one search feed, so grouping by feed puts all of them in a single row called
+ * "bing" and the sidebar becomes a label rather than a filter. The publisher is
+ * the useful split instead.
+ *
+ * Only on a search, because the reverse is worse the rest of the time: a feed
+ * like Hacker News links out to a different host on nearly every item, so
+ * grouping subscribed feeds by publisher would replace thirteen feed names with
+ * several hundred one-item rows.
+ */
+export function groupOf(state, item) {
+  return (state.query ? item.host || item.feed : item.feed) || "";
+}
+
 /** Feeds down the left, with a count each and an "all" row on top. */
 export function sidebarRows(state) {
   const counts = new Map();
-  for (const item of state.items) counts.set(item.feed, (counts.get(item.feed) || 0) + 1);
+  for (const item of state.items) {
+    const key = groupOf(state, item);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
   const rows = [{ key: null, label: "all", count: state.items.length }];
+  if (state.query) {
+    // Publishers, busiest first — there is no subscription order to fall back
+    // on, and the site that carried five of the results is the one worth seeing.
+    for (const [key, count] of [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+      if (key) rows.push({ key, label: key, count });
+    }
+    return rows;
+  }
   for (const feed of state.feeds) {
     rows.push({ key: feed.name, label: feed.name, count: counts.get(feed.name) || 0 });
   }
   return rows;
 }
 
-/** The headlines currently on show — everything, or one feed's. */
+/** The headlines currently on show — everything, or one feed's (one publisher's, on a search). */
 export function visibleItems(state) {
-  return state.filter ? state.items.filter((i) => i.feed === state.filter) : state.items;
+  return state.filter ? state.items.filter((i) => groupOf(state, i) === state.filter) : state.items;
 }
 
 /**
@@ -170,7 +173,10 @@ export function renderReader(state, { rows = 24, cols = 80 } = {}) {
   const where = state.query ? `“${state.query}”`
     : state.filter ? state.filter
     : state.usingDefaults ? "default feeds" : "all feeds";
-  const title = `  ${bone("moshcode rss")}${ash(`   ${items.length} headline${items.length === 1 ? "" : "s"} · ${where}`)}`;
+  // The quote pages collectNews set aside are counted here too — a reader that
+  // hides results without saying so is a reader you cannot trust the count of.
+  const aside = state.skipped ? ` · ${state.skipped} quote page${state.skipped === 1 ? "" : "s"} skipped` : "";
+  const title = `  ${bone("moshcode rss")}${ash(`   ${items.length} headline${items.length === 1 ? "" : "s"} · ${where}${aside}`)}`;
   const status = state.loading ? acid("loading…")
     : state.failures.length ? amber(`${state.failures.length} feed${state.failures.length === 1 ? "" : "s"} down`)
     : "";
@@ -255,7 +261,7 @@ function listLines(state, items, { width, height }) {
   // above the available width is how a line ends up wider than the terminal.
   const tails = window.map((item) => {
     const when = ago(item.date, state.now);
-    return `${item.feed}${when ? ` · ${when}` : ""}`.trim();
+    return `${groupOf(state, item)}${when ? ` · ${when}` : ""}`.trim();
   });
   const tailWidth = Math.min(Math.max(0, ...tails.map((t) => t.length)), Math.floor(width / 2));
   const room = Math.max(1, width - tailWidth - 4);
@@ -355,6 +361,7 @@ export async function rssUi(argv = [], deps = {}) {
     query: query || null,
     items: [],
     failures: [],
+    skipped: 0,
     selected: 0,
     offset: 0,
     sideSelected: 0,
@@ -398,9 +405,10 @@ export async function rssUi(argv = [], deps = {}) {
   const load = async () => {
     state.loading = true;
     draw();
-    const { items, failures } = await collectNews(state.feeds, { fetchImpl });
+    const { items, failures, skipped } = await collectNews(state.feeds, { fetchImpl });
     state.items = items;
     state.failures = failures;
+    state.skipped = skipped || 0;
     state.now = Date.now();
     state.loading = false;
     state.selected = 0;

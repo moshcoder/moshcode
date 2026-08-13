@@ -14,9 +14,11 @@ import {
   newsCommand, newsUsage, opmlFile, parseFeed, parseFeedList, parseKeywords,
   parseListDocument, parseOpml, readingList, renderFeeds, renderHeadlines,
   resolveVerb, safeUrl, saveFeeds, searchFeeds, slugify, subscribedLists,
-  tagWithList, withFeed,
+  tagWithList, tidyTitle, withFeed, wrap,
 } from "../src/news.mjs";
-import { DEFAULT_FEEDS, isDeadEndLink, resolveBundle, unwrapRedirect } from "../src/news-sources.mjs";
+import {
+  DEFAULT_FEEDS, isDeadEndLink, isReferencePage, resolveBundle, unwrapRedirect,
+} from "../src/news-sources.mjs";
 import { NEWS_VERBS } from "../src/cli-schema.mjs";
 
 // --- fixtures ----------------------------------------------------------------
@@ -467,6 +469,89 @@ test("only the interstitial is a dead end, not google news itself", () => {
   assert.equal(isDeadEndLink("not a url"), false);
 });
 
+// --- reference pages ---------------------------------------------------------
+
+// Every row below is a real result Bing returned for `LTRN` on 2026-08-13. Four
+// of the nine were not articles, and the point of the pairing is that neither
+// signal alone would have told them apart from the five that were.
+test("a ticker's standing quote page is not a headline", () => {
+  const page = (url, title) => isReferencePage(url, title);
+
+  assert.equal(page("https://www.nasdaq.com/market-activity/stocks/ltrn/insider-activity",
+    "Lantern Pharma Inc. Common Stock (LTRN)"), true);
+  assert.equal(page("https://www.marketwatch.com/investing/stock/ltrn/financials",
+    "Lantern Pharma Inc."), true);
+  assert.equal(page("https://seekingalpha.com/symbol/LTRN", "LTRN Lantern Pharma Inc."), true);
+  assert.equal(page("https://www.tradingview.com/symbols/NASDAQ-LTRN/",
+    "Lantern Pharma Inc. Stock Price and Chart"), true);
+
+  // A real story is a sentence, wherever it is filed …
+  assert.equal(page("https://www.benzinga.com/quote/LTRN/news/26/08/1/halts",
+    "Lantern Pharma Halts Phase 2 Trial"), false);
+  // … and a label is only a label when the URL agrees it is a reference page.
+  assert.equal(page("https://www.reuters.com/business/healthcare/lantern-pharma-x",
+    "Lantern Pharma Inc."), false);
+  assert.equal(page("not a url", "Lantern Pharma Inc."), false);
+});
+
+test("quote pages are set aside and counted, never silently dropped", async () => {
+  const feed = `<?xml version="1.0"?><rss version="2.0"><channel><title>LTRN - BingNews</title>
+    <item><title>Lantern Pharma Appoints Dr. Schalop to Its Board of Directors</title>
+      <link>https://example.com/news/board</link>
+      <pubDate>Tue, 11 Aug 2026 12:00:00 GMT</pubDate></item>
+    <item><title>Lantern Pharma Inc. Common Stock (LTRN)</title>
+      <link>https://www.nasdaq.com/market-activity/stocks/ltrn/insider-activity</link>
+      <pubDate>Thu, 11 Jun 2020 01:07:00 GMT</pubDate></item>
+    <item><title>Lantern Pharma Inc.</title>
+      <link>https://www.marketwatch.com/investing/stock/ltrn/financials</link>
+      <pubDate>Wed, 12 Aug 2026 17:00:00 GMT</pubDate></item>
+  </channel></rss>`;
+
+  const { items, skipped } = await collectNews(
+    [{ name: "bing", title: "Bing", url: "https://bing.example/rss" }],
+    { fetchImpl: async () => ({ ok: true, text: async () => feed }) },
+  );
+  assert.deepEqual(items.map((i) => i.title),
+    ["Lantern Pharma Appoints Dr. Schalop to Its Board of Directors"]);
+  assert.equal(skipped, 2);
+  // The marketwatch page carried yesterday's date and would otherwise have
+  // sorted above the only real story in the list.
+  assert.equal(items.length, 1);
+});
+
+test("the publisher rides on the item, because on a search the feed name never varies", async () => {
+  const feed = `<?xml version="1.0"?><rss version="2.0"><channel><title>Bing</title>
+    <item><title>Something genuinely happened at the company today</title>
+      <link>https://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fwww.tmcnet.com%2Fx.htm</link>
+      <pubDate>Tue, 11 Aug 2026 12:00:00 GMT</pubDate></item>
+  </channel></rss>`;
+  const { items } = await collectNews(
+    [{ name: "bing", title: "Bing", url: "https://bing.example/rss" }],
+    { fetchImpl: async () => ({ ok: true, text: async () => feed }) },
+  );
+  assert.equal(items[0].host, "tmcnet.com");
+  assert.equal(items[0].feed, "bing");
+});
+
+test("the same headline twice is one story, whichever URL carried it", async () => {
+  const feed = `<?xml version="1.0"?><rss version="2.0"><channel><title>Wire</title>
+    <item><title>Lantern Pharma Appoints A Director</title><link>https://a.example/1</link>
+      <pubDate>Tue, 11 Aug 2026 12:00:00 GMT</pubDate></item>
+    <item><title>lantern pharma appoints a director</title><link>https://b.example/2</link>
+      <pubDate>Tue, 11 Aug 2026 11:00:00 GMT</pubDate></item>
+    <item><title>Ok</title><link>https://c.example/3</link></item>
+    <item><title>Ok</title><link>https://d.example/4</link></item>
+  </channel></rss>`;
+  const { items } = await collectNews(
+    [{ name: "wire", title: "Wire", url: "https://wire.example/rss" }],
+    { fetchImpl: async () => ({ ok: true, text: async () => feed }) },
+  );
+  // The syndicated copy goes; the two short titles stay, because a title too
+  // short to fingerprint is not evidence of anything.
+  assert.deepEqual(items.map((i) => i.title),
+    ["Lantern Pharma Appoints A Director", "Ok", "Ok"]);
+});
+
 // --- rendering ---------------------------------------------------------------
 
 test("relative times read the way a person says them", () => {
@@ -476,9 +561,68 @@ test("relative times read the way a person says them", () => {
   assert.equal(ago(now - 3 * 3_600_000, now), "3h ago");
   assert.equal(ago(now - 3 * 86_400_000, now), "3d ago");
   assert.equal(ago(now - 21 * 86_400_000, now), "3w ago");
+  assert.equal(ago(now - 300 * 86_400_000, now), "10mo ago");
+  // Past two years it is years — "75mo ago" is arithmetic, not an answer.
+  assert.equal(ago(now - 2200 * 86_400_000, now), "6y ago");
   assert.equal(ago(null, now), "");
   // A feed whose clock is ahead does not get to print "-2h ago".
   assert.equal(ago(now + 7_200_000, now), "just now");
+});
+
+test("a headline wraps instead of being cut off at the feed-name column", () => {
+  const now = Date.parse("2026-08-11T12:00:00Z");
+  const title = "Lantern Pharma Establishes Open-Medicine AI as a Separate Company "
+    + "to Commercialize and Expand Its Multi-Agent AI Co-Scientist Platform";
+  const frame = renderHeadlines(
+    [{ title, host: "tmcnet.com", feed: "bing", date: now - 3 * 3_600_000 }],
+    { columns: 80, limit: 20, now, byHost: true },
+  );
+  // Every word survives somewhere in the frame — that is what wrapping buys.
+  for (const word of title.split(" ")) assert.ok(frame.includes(word), `lost "${word}"`);
+  // And nothing overhangs the terminal, which is what would tear the layout.
+  for (const line of frame.split("\n")) {
+    assert.ok(line.replace(/\x1b\[[0-9;]*m/g, "").length <= 80, line);
+  }
+  // The publisher, not the search feed it happened to arrive on.
+  assert.match(frame, /tmcnet\.com · 3h ago/);
+  assert.ok(!frame.includes("bing"), "the search feed's name is not the attribution");
+});
+
+test("the reading list is attributed to the feed you subscribed to, not the link's host", () => {
+  const now = Date.parse("2026-08-11T12:00:00Z");
+  const item = { title: "A story", feed: "hacker-news", host: "github.com", date: now };
+  // Hacker News links out to a different host on nearly every item; the feed
+  // name is the only stable thing on the row, and the one `--feed` takes.
+  assert.match(renderHeadlines([item], { columns: 80, now }), /hacker-news · /);
+  assert.match(renderHeadlines([item], { columns: 80, now, byHost: true }), /github\.com · /);
+});
+
+test("the header says how many quote pages it set aside", () => {
+  const now = Date.parse("2026-08-11T12:00:00Z");
+  const frame = renderHeadlines([{ title: "A story", host: "x.example", date: now }],
+    { columns: 80, limit: 20, now, source: "“LTRN” · 1 headline", skipped: 4 });
+  assert.match(frame, /4 quote pages skipped/);
+  // Even when nothing at all survived the filter, the count still explains why.
+  assert.match(renderHeadlines([], { columns: 80, skipped: 3 }), /3 quote pages were skipped/);
+});
+
+test("a search engine's own truncation marker does not become a line of its own", () => {
+  assert.equal(tidyTitle("Lantern Pharma Expands Its Platform for the Transformation of ..."),
+    "Lantern Pharma Expands Its Platform for the Transformation of…");
+  assert.equal(tidyTitle("Nothing to tidy"), "Nothing to tidy");
+  // The parser applies it, so no renderer has to remember to.
+  const parsed = parseFeed(`<?xml version="1.0"?><rss version="2.0"><channel>
+    <item><title>A long headline that got cut ...</title><link>https://e.example/1</link></item>
+  </channel></rss>`);
+  assert.equal(parsed.items[0].title, "A long headline that got cut…");
+});
+
+test("wrap caps its output and marks the cut, so a title cannot take the screen", () => {
+  assert.deepEqual(wrap("one two three four", 9), ["one two", "three", "four"]);
+  assert.deepEqual(wrap("one two three four", 9, 2), ["one two", "three…"]);
+  // The marker never buys itself room it does not have.
+  assert.deepEqual(wrap("aaa bbb ccc ddd", 3, 2), ["aaa", "bb…"]);
+  assert.deepEqual(wrap("", 10), []);
 });
 
 test("headlines are numbered from one and say how to open one", () => {
