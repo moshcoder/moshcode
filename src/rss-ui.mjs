@@ -13,7 +13,7 @@
 // Rendering is a pure function of state (`renderReader`), so a frame can be
 // asserted in a test without a tty, a fetch, or a keystroke.
 import { parseMouse } from "./herd-ui.mjs";
-import { acid, amber, ash, bone, danger, dim } from "./ui.mjs";
+import { acid, amber, ash, bone, danger, dim, pad, visible } from "./ui.mjs";
 import {
   ago,
   collectNews,
@@ -45,16 +45,10 @@ const SIDEBAR = 20;
 const HEADER_LINES = 2; // title + rule
 const FOOTER_LINES = 2; // rule + keys
 
-/** Printable width, ignoring the SGR sequences ui.mjs wraps text in. */
-export function visibleWidth(text) {
-  return String(text ?? "").replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
-/** Pad to `width` printable columns, colour codes not counted. */
-function pad(text, width) {
-  const short = width - visibleWidth(text);
-  return short > 0 ? text + " ".repeat(short) : text;
-}
+// Printable width, ignoring the SGR sequences ui.mjs wraps text in. Named
+// `visibleWidth` on the way out because the reader's tests and callers already
+// use that name; `pad` comes from the same place now.
+export { visible as visibleWidth };
 
 /** Truncate to `width` printable columns. Only ever called on uncoloured text. */
 function clip(text, width) {
@@ -174,7 +168,7 @@ export function renderReader(state, { rows = 24, cols = 80 } = {}) {
   const status = state.loading ? acid("loading…")
     : state.failures.length ? amber(`${state.failures.length} feed${state.failures.length === 1 ? "" : "s"} down`)
     : "";
-  out.push(pad(title, width - visibleWidth(status) - 2) + status + "  ");
+  out.push(pad(title, width - visible(status) - 2) + status + "  ");
   out.push(`  ${dim("─".repeat(Math.max(10, width - 4)))}`);
 
   // Body --------------------------------------------------------------------
@@ -220,7 +214,7 @@ function keyHint(state, width) {
   if (state.mode === "search") {
     const prompt = `${ash("search:")} ${bone(state.input)}${acid("▏")}`;
     const help = dim("   ⏎ run · esc cancel");
-    return visibleWidth(prompt + help) <= width ? prompt + help : prompt;
+    return visible(prompt + help) <= width ? prompt + help : prompt;
   }
   const keys = state.pane === "article"
     ? [["⏎/esc", "back"], ["o", "open"], ["j/k", "next/prev"], ["q", "quit"]]
@@ -230,7 +224,7 @@ function keyHint(state, width) {
   let line = "";
   for (const [key, what] of keys) {
     const next = (line ? line + sep : "") + `${acid(key)} ${ash(what)}`;
-    if (visibleWidth(next) > width) break;
+    if (visible(next) > width) break;
     line = next;
   }
   return line;

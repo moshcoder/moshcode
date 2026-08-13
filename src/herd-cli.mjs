@@ -16,7 +16,7 @@ import {
 import { clearReport, reportState, STATES, withState } from "./herd-state.mjs";
 import { ENGINES, resolveEngine, resolveExecutable, agentLaunchArgs } from "./engines.mjs";
 import { ingestApproval, pollApproval } from "./notify.mjs";
-import { acid, amber, ash, bone, danger, dim, err, info, ok, warn } from "./ui.mjs";
+import { acid, amber, ash, bone, danger, dim, err, info, ok, table, warn } from "./ui.mjs";
 
 /** Distinct exit codes, because `wait` exists to be branched on (R10). */
 export const EXIT = { matched: 0, usage: 1, timeout: 2, gone: 3 };
@@ -78,21 +78,20 @@ export function paintState(state) {
  */
 export function renderRoster(rows, { indent = "  " } = {}) {
   if (!rows.length) return "";
-  const w = (key, min) => Math.max(min, ...rows.map((r) => String(r[key] ?? "").length));
-  const nameW = w("name", 4);
-  const engineW = w("engine", 6);
-  return rows.map((r) => [
-    indent,
-    bone(r.name.padEnd(nameW)),
-    "  ",
-    ash(String(r.engine).padEnd(engineW)),
-    "  ",
-    paintState(r.state).padEnd(9 + (paintState(r.state).length - r.state.length)),
-    "  ",
-    ash(tilde(r.cwd || "").padEnd(24)),
-    "  ",
-    dim(humanAge(r.age)),
-  ].join("")).join("\n");
+  // Cells go in painted and `table` measures what prints, which is what the
+  // state column needed: padding a coloured string to a fixed 9 used to mean
+  // hand-correcting the width by the length of its own escape codes, and the
+  // cwd column was pinned at 24 whether the paths were 8 columns or 60.
+  return table(
+    rows.map((r) => [
+      bone(r.name),
+      ash(String(r.engine)),
+      paintState(r.state),
+      ash(tilde(r.cwd || "")),
+      dim(humanAge(r.age)),
+    ]),
+    { columns: ["name", "engine", "state", "cwd", "age"], header: false, indent: indent.length },
+  );
 }
 
 /** Every session, with state attached. The one place that assembles both. */

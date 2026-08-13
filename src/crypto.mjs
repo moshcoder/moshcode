@@ -13,7 +13,12 @@
 // Rendering them through one code path would mean one set of labels lying about
 // one of them.
 import { advisorBase } from "./advisor.mjs";
-import { acid, ash, amber, bone, danger, dim } from "./ui.mjs";
+import { acid, ash, amber, bone, clip, danger, dim, sparkline } from "./ui.mjs";
+
+// `spark` is this module's own command, so the renderer keeps its name in the
+// public surface even though the drawing now lives in ui.mjs with the rest of
+// the layout primitives.
+export { sparkline };
 
 const USAGE = `usage: moshcode crypto <pair|verb> [args…]
 
@@ -384,11 +389,6 @@ function stamp(v) {
 
 const day = (v) => (v ? String(v).slice(0, 10) : "—");
 
-function clip(text, width) {
-  const s = String(text ?? "").replace(/\s+/g, " ").trim();
-  return s.length <= width ? s : `${s.slice(0, Math.max(1, width - 1))}…`;
-}
-
 function wrapText(text, width) {
   const words = String(text).replace(/\s+/g, " ").trim().split(" ");
   const lines = [];
@@ -414,22 +414,6 @@ function scoreTone(score) {
   if (n >= 60) return acid;
   if (n >= 40) return amber;
   return danger;
-}
-
-const SPARK_TICKS = "▁▂▃▄▅▆▇█";
-
-/** Render a close series as one line of block characters. */
-export function sparkline(points) {
-  const values = (Array.isArray(points) ? points : []).map(Number).filter(Number.isFinite);
-  if (!values.length) return "";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  // A flat series has no range to scale into; drawing it at the floor would
-  // imply a crash, so it sits mid-band instead.
-  if (max === min) return SPARK_TICKS[3].repeat(values.length);
-  return values
-    .map((v) => SPARK_TICKS[Math.min(SPARK_TICKS.length - 1, Math.floor(((v - min) / (max - min)) * SPARK_TICKS.length))])
-    .join("");
 }
 
 /**

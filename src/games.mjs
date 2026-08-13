@@ -11,7 +11,7 @@
 // a state, hand it a key, hand it a tick, ask it for rows — and everything that
 // touches a terminal lives in `runGame` down the bottom. That is what makes an
 // arcade testable: test/games.test.mjs plays entire games without a TTY.
-import { acid, amber, ash, bone, danger, dim, rgb } from "./ui.mjs";
+import { acid, amber, ash, bone, danger, dim, pad, rgb, strip, visible } from "./ui.mjs";
 import { TETRIS } from "./games-tetris.mjs";
 import { SNAKE } from "./games-snake.mjs";
 import { PACMAN } from "./games-pacman.mjs";
@@ -70,11 +70,9 @@ export function resolveGame(name) {
 
 // Colour codes are invisible but not zero-width to `.length`, so every pad in
 // here measures the stripped string. Getting this wrong is how a board's right
-// edge ends up ragged the moment someone wins.
-const ANSI = /\x1b\[[0-9;]*m/g;
-export const strip = (s) => String(s).replace(ANSI, "");
-export const visible = (s) => strip(s).length;
-const pad = (s, width) => s + " ".repeat(Math.max(0, width - visible(s)));
+// edge ends up ragged the moment someone wins. The games re-export these
+// because every one of them draws with them; the implementations are ui.mjs's.
+export { strip, visible };
 
 /**
  * The one frame every game is drawn in.

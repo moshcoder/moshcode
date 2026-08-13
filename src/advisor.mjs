@@ -8,7 +8,7 @@
 // The API is documented at https://advis0r.com/api and returns *stored*
 // snapshots: a report carries `reportGeneratedAt`, and every renderer prints it.
 // A stale price is fine; a stale price dressed up as a live one is not.
-import { acid, ash, amber, bone, danger, dim } from "./ui.mjs";
+import { acid, ash, amber, bone, clip, danger, dim } from "./ui.mjs";
 
 export const DEFAULT_ADVISOR_URL = "https://advis0r.com";
 
@@ -296,11 +296,6 @@ function compact(v) {
 }
 
 const day = (v) => (v ? String(v).slice(0, 10) : "—");
-
-function clip(text, width) {
-  const s = String(text ?? "").replace(/\s+/g, " ").trim();
-  return s.length <= width ? s : `${s.slice(0, Math.max(1, width - 1))}…`;
-}
 
 /** Direction → color, so a wall of signals is skimmable. */
 function tone(direction) {
