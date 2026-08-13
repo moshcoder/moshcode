@@ -5,13 +5,25 @@
 // as tall as the terminal either leaves the previous frame's tail on screen or
 // scrolls the terminal and tears every line below it.
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
-  decodeKeys, renderReader, sidebarRows, visibleItems, visibleWidth, wrap,
+  decodeKeys, renderReader, rssUi, sidebarRows, visibleItems, visibleWidth, wrap,
 } from "../src/rss-ui.mjs";
+import { loadFeeds } from "../src/news.mjs";
 
 const NOW = Date.parse("2026-08-11T12:00:00Z");
+
+/** A feed for the argument tests to subscribe to. */
+const FEED = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Example Wire</title>
+  <link>https://a.example</link>
+  <item><title>A story</title><link>https://a.example/1</link></item>
+</channel></rss>`;
 
 function state(overrides = {}) {
   return {
@@ -169,4 +181,78 @@ test("a mouse report is a mouse event, and never also a keystroke", () => {
   assert.deepEqual(decodeKeys("\x1b[<64;1;1M"), [{ kind: "wheel", direction: -1 }]);
   assert.deepEqual(decodeKeys("\x1b[<65;1;1M"), [{ kind: "wheel", direction: 1 }]);
   assert.deepEqual(decodeKeys("\x1b[<0;10;5m"), []); // release, not a second click
+});
+
+// --- the command line --------------------------------------------------------
+
+/** A non-TTY stdin/stdout, so only the paths that avoid the reader can run. */
+function pipes() {
+  return { stdin: { isTTY: false }, stdout: { isTTY: false } };
+}
+
+test("`rss add <url>` subscribes instead of searching for the words", async () => {
+  // The bug this exists to stop: every argument was read as a search phrase, so
+  // `/rss add https://…` opened a reader on the literal text "add https://…"
+  // and silently subscribed to nothing.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-rss-"));
+  const env = { MOSHCODE_NEWS_OPML: path.join(dir, "news.opml") };
+  const lines = [];
+
+  const code = await rssUi(["add", "https://a.example/rss"], {
+    ...pipes(),
+    env,
+    write: (s) => lines.push(String(s)),
+    fetchImpl: async () => ({ ok: true, status: 200, text: async () => FEED }),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(loadFeeds(env).map((f) => f.url), ["https://a.example/rss"]);
+  assert.match(lines.join("\n"), /subscribed/);
+});
+
+test("management verbs run without a terminal; reading still needs one", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-rss-"));
+  const env = { MOSHCODE_NEWS_OPML: path.join(dir, "news.opml") };
+  const lines = [];
+  const write = (s) => lines.push(String(s));
+
+  assert.equal(await rssUi(["list"], { ...pipes(), env, write }), 0);
+  // Nothing subscribed yet, so this is the defaults standing in — the point is
+  // that it printed the list at all rather than demanding a terminal.
+  assert.match(lines.join("\n"), /nothing subscribed yet/);
+
+  // The reader itself is still refused rather than rendered into a pipe.
+  const reading = [];
+  const code = await rssUi([], { ...pipes(), env, write: (s) => reading.push(String(s)) });
+  assert.equal(code, 1);
+  assert.match(reading.join("\n"), /needs an interactive terminal/);
+});
+
+test("`rss search` looks for feeds to add, not for headlines", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-rss-"));
+  const env = { MOSHCODE_NEWS_OPML: path.join(dir, "news.opml") };
+  const lines = [];
+  const fetched = [];
+
+  const code = await rssUi(["search", "example,rust"], {
+    ...pipes(),
+    env,
+    write: (s) => lines.push(String(s)),
+    fetchImpl: async (url) => {
+      fetched.push(url);
+      return { ok: true, status: 200, text: async () => "https://example.com/feed.xml\n" };
+    },
+  });
+
+  assert.equal(code, 0);
+  // It read the published lists, not a news search engine.
+  assert.equal(fetched.some((u) => u.includes("news.google.com")), false);
+  assert.match(lines.join("\n"), /example\.com\/feed\.xml/);
+});
+
+test("`rss search` with no keyword says how to use it", async () => {
+  const lines = [];
+  const code = await rssUi(["search"], { ...pipes(), write: (s) => lines.push(String(s)) });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /usage: moshcode rss search/);
 });

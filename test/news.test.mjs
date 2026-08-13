@@ -10,11 +10,13 @@ import test from "node:test";
 
 import {
   NEWS_VERB_NAMES, ago, buildOpml, collectNews, decodeEntities, findFeed,
-  loadFeeds, looksLikeOpml, newsArgs, newsCommand, newsUsage, opmlFile,
-  parseFeed, parseOpml, readingList, renderFeeds, renderHeadlines, resolveVerb,
-  safeUrl, saveFeeds, searchFeeds, slugify, withFeed,
+  listOf, loadFeeds, loadListFeeds, looksLikeOpml, matchFeeds, newsArgs,
+  newsCommand, newsUsage, opmlFile, parseFeed, parseFeedList, parseKeywords,
+  parseListDocument, parseOpml, readingList, renderFeeds, renderHeadlines,
+  resolveVerb, safeUrl, saveFeeds, searchFeeds, slugify, subscribedLists,
+  tagWithList, withFeed,
 } from "../src/news.mjs";
-import { DEFAULT_FEEDS, resolveBundle, unwrapRedirect } from "../src/news-sources.mjs";
+import { DEFAULT_FEEDS, isDeadEndLink, resolveBundle, unwrapRedirect } from "../src/news-sources.mjs";
 import { NEWS_VERBS } from "../src/cli-schema.mjs";
 
 // --- fixtures ----------------------------------------------------------------
@@ -169,7 +171,7 @@ test("open takes a headline number and nothing else", () => {
 test("add takes exactly one target", () => {
   assert.equal(newsArgs(["add", "journalists"]).target, "journalists");
   assert.match(newsArgs(["add"]).error, /usage: moshcode news add/);
-  assert.match(newsArgs(["add", "a", "b"]).error, /one URL or file at a time/);
+  assert.match(newsArgs(["add", "a", "b"]).error, /one URL, list, or number at a time/);
 });
 
 // --- URLs --------------------------------------------------------------------
@@ -434,11 +436,35 @@ test("undated entries sort last rather than claiming to be the newest", async ()
   assert.equal(items.at(-1).title, "No date");
 });
 
-test("a search reads two engines, so Google's coverage gets Bing's openable links", () => {
+test("a search reads Bing only — Google's results are not openable", () => {
+  // Google News was the other half of this pairing until its item links were
+  // measured: no publisher URL in any header, in the base64 token, or in the
+  // page, and its internal resolver 429s on the first call. Every result it
+  // returned was dropped by collectNews anyway, so it is no longer fetched.
   const feeds = searchFeeds("bitcoin etf");
-  assert.deepEqual(feeds.map((f) => f.name), ["google", "bing"]);
-  assert.match(feeds[0].url, /news\.google\.com\/rss\/search\?q=bitcoin%20etf%20when%3A7d/);
-  assert.match(feeds[1].url, /bing\.com\/news\/search\?q=bitcoin%20etf&format=RSS/);
+  assert.deepEqual(feeds.map((f) => f.name), ["bing"]);
+  assert.match(feeds[0].url, /bing\.com\/news\/search\?q=bitcoin%20etf&format=RSS/);
+  assert.equal(feeds.some((f) => f.url.includes("news.google.com")), false);
+});
+
+test("a headline whose only link is a Google interstitial is dropped", async () => {
+  const withDeadEnds = `<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Aggregated</title>
+  <item><title>Unopenable</title><link>https://news.google.com/rss/articles/CBMiabc?oc=5</link></item>
+  <item><title>Readable</title><link>https://publisher.example/story</link></item>
+</channel></rss>`;
+  const { items } = await collectNews(
+    [{ name: "agg", title: "Aggregated", url: "https://agg.example/rss" }],
+    { fetchImpl: fakeFetch({ "https://agg.example/rss": withDeadEnds }) },
+  );
+  assert.deepEqual(items.map((i) => i.title), ["Readable"]);
+});
+
+test("only the interstitial is a dead end, not google news itself", () => {
+  assert.equal(isDeadEndLink("https://news.google.com/rss/articles/CBMiabc?oc=5"), true);
+  assert.equal(isDeadEndLink("https://news.google.com/rss?hl=en-US"), false);
+  assert.equal(isDeadEndLink("https://publisher.example/story"), false);
+  assert.equal(isDeadEndLink("not a url"), false);
 });
 
 // --- rendering ---------------------------------------------------------------
@@ -631,7 +657,7 @@ test("`sources` names the defaults and the bundles without fetching anything", a
   });
   assert.equal(code, 0);
   assert.match(io.text(), /journalists/);
-  assert.match(io.text(), /top-stories/);
+  assert.match(io.text(), /ars-technica/);
 });
 
 test("a one-off URL is read without being subscribed to", async () => {
@@ -643,4 +669,226 @@ test("a one-off URL is read without being subscribed to", async () => {
   assert.equal(code, 0);
   assert.match(io.text(), /First story/);
   assert.deepEqual(loadFeeds(env), []);
+});
+
+// --- published lists ---------------------------------------------------------
+
+test("a plain-text list is one feed URL per line, comments and blanks ignored", () => {
+  const feeds = parseFeedList([
+    "# Kagi Small Web",
+    "",
+    "https://a.example/feed.xml",
+    "  https://b.example/rss  ",
+    "https://a.example/feed.xml",
+    "not-a-url",
+  ].join("\n"));
+  assert.deepEqual(feeds.map((f) => f.url), ["https://a.example/feed.xml", "https://b.example/rss"]);
+  assert.equal(feeds[0].title, "a.example");
+});
+
+test("a list document is parsed as whichever shape it is", () => {
+  assert.equal(parseListDocument(OPML, "opml").length, 2);
+  assert.equal(parseListDocument("https://a.example/rss", "text").length, 1);
+  // No format declared: OPML announces itself, everything else is a URL list.
+  assert.equal(parseListDocument(OPML).length, 2);
+  assert.equal(parseListDocument("https://a.example/rss").length, 1);
+});
+
+test("keywords are comma-separated, so a feed title with a space survives", () => {
+  assert.deepEqual(parseKeywords("ai, crypto ,Rust"), ["ai", "crypto", "rust"]);
+  assert.deepEqual(parseKeywords("hacker news"), ["hacker news"]);
+  assert.deepEqual(parseKeywords("  , ,"), []);
+});
+
+test("a feed matches when any keyword is in its title, url or folder", () => {
+  const feeds = [
+    { title: "Rust Blog", url: "https://blog.rust-lang.org/feed.xml", category: "" },
+    { title: "Cooking", url: "https://food.example/rss", category: "recipes" },
+    { title: "Nothing", url: "https://x.example/rss", category: "" },
+  ];
+  assert.deepEqual(matchFeeds(feeds, ["rust"]).map((f) => f.title), ["Rust Blog"]);
+  assert.deepEqual(matchFeeds(feeds, ["recipes"]).map((f) => f.title), ["Cooking"]);
+  assert.deepEqual(matchFeeds(feeds, ["rust", "recipes"]).length, 2);
+  assert.deepEqual(matchFeeds(feeds, []), []);
+});
+
+test("`rust` ranks the Rust blogs above Trust Machines", () => {
+  // Searching 32k feeds for `rust` used to return Trust Machines, Trustnodes,
+  // frustrat.com and popthruster.com ahead of anything about Rust. They are
+  // still matches — just not the first ones.
+  const feeds = [
+    { title: "Trust Machines", url: "https://www.trustmachines.co/blog", category: "" },
+    { title: "frustrat.com", url: "https://frustrat.com/rss/", category: "" },
+    { title: "popthruster.com", url: "https://popthruster.com/feed/", category: "" },
+    { title: "rustgeek.me", url: "https://rustgeek.me/feed/", category: "" },
+    { title: "rust.christina-quast.de", url: "https://rust.christina-quast.de/index.xml", category: "" },
+  ];
+  const ranked = matchFeeds(feeds, ["rust"]).map((f) => f.title);
+  assert.deepEqual(ranked.slice(0, 2), ["rust.christina-quast.de", "rustgeek.me"]);
+  assert.equal(ranked.length, 5);
+});
+
+test("a keyword buried inside a word still matches, or `homelab` finds nothing", () => {
+  // The lists carry hostnames and little else, so requiring the keyword to
+  // start a word means myhomelab.net is unfindable. It ranks last, not never.
+  const feeds = [{ title: "myhomelab.net", url: "https://myhomelab.net/rss", category: "" }];
+  assert.equal(matchFeeds(feeds, ["homelab"]).length, 1);
+});
+
+test("a multi-word keyword still matches as a substring", () => {
+  assert.equal(matchFeeds([{ title: "Hacker News", url: "https://hnrss.org/frontpage", category: "" }],
+    ["hacker news"]).length, 1);
+});
+
+test("provenance rides in the OPML folder and survives a round trip", () => {
+  const tagged = tagWithList([
+    { name: "a", title: "A", url: "https://a.example/rss", site: "", category: "" },
+    { name: "b", title: "B", url: "https://b.example/rss", site: "", category: "tech" },
+  ], "profullstack");
+  assert.deepEqual(tagged.map((f) => f.category), ["profullstack", "profullstack/tech"]);
+
+  // Through OPML and back, the list is still readable off the folder.
+  const reparsed = parseOpml(buildOpml(tagged));
+  assert.deepEqual(reparsed.map(listOf), ["profullstack", "profullstack"]);
+  assert.equal(subscribedLists(reparsed).get("profullstack"), 2);
+});
+
+test("a folder that merely shares a name with nothing in the catalogue is not a list", () => {
+  assert.equal(listOf({ category: "tech" }), "");
+  assert.equal(listOf({ category: "" }), "");
+  assert.equal(listOf({ category: "smallweb" }), "smallweb");
+});
+
+test("find and lists parse their arguments", () => {
+  assert.deepEqual(newsArgs(["find", "ai,crypto"]).keywords, ["ai", "crypto"]);
+  assert.deepEqual(newsArgs(["search", "ai"]).verb, "search"); // still headlines
+  assert.match(newsArgs(["find"]).error, /usage: moshcode news find/);
+  assert.equal(newsArgs(["lists"]).verb, "lists");
+  assert.equal(newsArgs(["bundles"]).verb, "lists");
+});
+
+test("add takes a result number from the last find", () => {
+  assert.equal(newsArgs(["add", "3"]).index, 3);
+  assert.equal(newsArgs(["add", "#3"]).index, 3);
+  assert.equal(newsArgs(["add", "https://a.example/rss"]).index, undefined);
+  assert.equal(newsArgs(["add", "https://a.example/rss"]).target, "https://a.example/rss");
+});
+
+test("find searches the published lists and numbers what it found", async () => {
+  const { env } = sandbox();
+  const io = sink();
+  const code = await newsCommand(["find", "example"], {
+    ...io, env,
+    fetchImpl: fakeFetch({
+      "https://profullstack.com/feeds.opml": OPML,
+      "https://raw.githubusercontent.com/ralyodio/smallweb/refs/heads/main/smallweb.txt":
+        "https://example.com/blog/rss.xml\nhttps://unrelated.test/rss\n",
+    }),
+  });
+  assert.equal(code, 0);
+  assert.match(io.text(), /example\.com\/blog\/rss\.xml/);
+  assert.doesNotMatch(io.text(), /unrelated\.test/);
+});
+
+test("add <n> subscribes to what find numbered, and only what it showed", async () => {
+  const { env } = sandbox();
+  const fetchImpl = fakeFetch({
+    "https://raw.githubusercontent.com/ralyodio/smallweb/refs/heads/main/smallweb.txt":
+      "https://example.com/feed.xml\n",
+    "https://example.com/feed.xml": RSS,
+  });
+  await newsCommand(["find", "example.com"], { ...sink(), env, fetchImpl });
+
+  const io = sink();
+  const code = await newsCommand(["add", "1"], { ...io, env, fetchImpl });
+  assert.equal(code, 0);
+  assert.deepEqual(loadFeeds(env).map((f) => f.url), ["https://example.com/feed.xml"]);
+
+  const missing = sink();
+  assert.equal(await newsCommand(["add", "9"], { ...missing, env, fetchImpl }), 1);
+  assert.match(missing.errorText(), /no result 9/);
+});
+
+test("a search-only list refuses to be subscribed to wholesale", async () => {
+  const io = sink();
+  const code = await newsCommand(["add", "smallweb"], {
+    ...io, env: sandbox().env,
+    fetchImpl: () => { throw new Error("must not fetch a list it is going to refuse"); },
+  });
+  assert.equal(code, 1);
+  assert.match(io.errorText(), /too large to subscribe to wholesale/);
+});
+
+test("a list is added and removed as one unit", async () => {
+  const { env } = sandbox();
+  const fetchImpl = fakeFetch({ "https://profullstack.com/feeds.opml": OPML });
+
+  const added = sink();
+  assert.equal(await newsCommand(["add", "profullstack"], { ...added, env, fetchImpl }), 0);
+  const feeds = loadFeeds(env);
+  assert.equal(feeds.length, 2);
+  assert.deepEqual([...new Set(feeds.map(listOf))], ["profullstack"]);
+
+  const listed = sink();
+  await newsCommand(["lists"], { ...listed, env, fetchImpl });
+  assert.match(listed.text(), /profullstack/);
+
+  const removed = sink();
+  assert.equal(await newsCommand(["rm", "profullstack"], { ...removed, env, fetchImpl }), 0);
+  assert.match(removed.text(), /2 feeds/);
+  assert.deepEqual(loadFeeds(env), []);
+});
+
+test("removing a list you have no feeds from is an error, not a silent success", async () => {
+  const io = sink();
+  const code = await newsCommand(["rm", "profullstack"], { ...io, env: sandbox().env });
+  assert.equal(code, 1);
+  assert.match(io.errorText(), /no feeds from/);
+});
+
+test("a cached list is not refetched", async () => {
+  const { env } = sandbox();
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    calls++;
+    return { ok: true, status: 200, text: async () => "https://a.example/rss\n" };
+  };
+  const list = { name: "smallweb", url: "https://x.test/list.txt", format: "text" };
+  const first = await loadListFeeds(list, { fetchImpl, env });
+  const second = await loadListFeeds(list, { fetchImpl, env });
+  assert.equal(first.cached, false);
+  assert.equal(second.cached, true);
+  assert.equal(calls, 1);
+  assert.deepEqual(second.feeds.map((f) => f.url), ["https://a.example/rss"]);
+});
+
+test("a stale cache is served when the list cannot be fetched", async () => {
+  const { env } = sandbox();
+  const list = { name: "smallweb", url: "https://x.test/list.txt", format: "text" };
+  await loadListFeeds(list, { fetchImpl: fakeFetch({ "https://x.test/list.txt": "https://a.example/rss\n" }), env });
+  const offline = await loadListFeeds(list, {
+    fetchImpl: fakeFetch({}), env, refresh: true,
+  });
+  assert.equal(offline.ok, true);
+  assert.equal(offline.stale, true);
+  assert.deepEqual(offline.feeds.map((f) => f.url), ["https://a.example/rss"]);
+});
+
+test("find ranks across every list, not within each one", async () => {
+  // web3 is fetched before smallweb. Sorting per list and concatenating put
+  // "Trust Machines" above "rust.example" purely because of fetch order.
+  const { env } = sandbox();
+  const io = sink();
+  await newsCommand(["find", "rust"], {
+    ...io, env, json: true,
+    fetchImpl: fakeFetch({
+      "https://raw.githubusercontent.com/chainfeeds/RSSAggregatorforWeb3/main/RAW.opml":
+        `<opml><body><outline text="Trust Machines" xmlUrl="https://trustmachines.example/rss"/></body></opml>`,
+      "https://kagi.com/smallweb/opml":
+        `<opml><body><outline text="rust" xmlUrl="https://rust.example/rss"/></body></opml>`,
+    }),
+  });
+  const shown = io.text();
+  assert.ok(shown.indexOf("rust.example") < shown.indexOf("trustmachines.example"),
+    `exact match should rank first:\n${shown}`);
 });

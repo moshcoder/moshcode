@@ -26,9 +26,10 @@ import { acid, ash, amber, bone, danger } from "./ui.mjs";
 import {
   bingNewsSearch,
   defaultFeeds,
-  googleNewsSearch,
-  OPML_BUNDLES,
-  resolveBundle,
+  FEED_LISTS,
+  isDeadEndLink,
+  resolveList,
+  subscribableLists,
   unwrapRedirect,
 } from "./news-sources.mjs";
 
@@ -39,11 +40,14 @@ const USAGE = `usage: moshcode news [verb|keyword…] [args…]
   <keyword…>                     search the news for a word or phrase
   <url>                          read one feed without subscribing to it
   list                           the feeds you are subscribed to
-  add <url|file|bundle>          subscribe — an RSS/Atom link, an OPML list, or
-                                 a bundle: ${OPML_BUNDLES.map((b) => b.name).join(", ")}
-  rm <name|url>                  unsubscribe
+  find <keyword[,keyword…]>      search every published list for feeds to add
+  add <url|file|list|#n>         subscribe — an RSS/Atom link, an OPML file, a
+                                 list by name (${subscribableLists().map((b) => b.name).join(", ")}),
+                                 or #n from the last find
+  rm <name|url|list>             unsubscribe — one feed, or a whole list at once
   open <n>                       open headline <n> from the last listing
-  sources                        the default feeds and the bundles on offer
+  lists                          the published lists, and which you have added
+  sources                        the default feeds and the lists on offer
   export                         print the subscription list as OPML
 
   --json                         print structured data instead of headlines
@@ -63,7 +67,7 @@ export function newsUsage() {
 }
 
 /** Verb names, in help order. cli-schema's NEWS_VERBS must match (drift test). */
-export const NEWS_VERB_NAMES = ["latest", "search", "list", "add", "rm", "open", "sources", "export"];
+export const NEWS_VERB_NAMES = ["latest", "search", "list", "find", "add", "rm", "open", "lists", "sources", "export"];
 
 // The same reasoning as crypto's alias table: the obvious synonym should not be
 // an error. `import` is the word an OPML file invites, and it is the same verb
@@ -75,7 +79,9 @@ const VERB_ALIASES = {
   sub: "add", subscribe: "add", import: "add", follow: "add",
   remove: "rm", unsub: "rm", unsubscribe: "rm", del: "rm", delete: "rm",
   read: "open", browse: "open", www: "open",
-  bundles: "sources", defaults: "sources",
+  discover: "find", catalog: "find", catalogue: "find",
+  bundles: "lists",
+  defaults: "sources",
   opml: "export", dump: "export",
 };
 
@@ -400,6 +406,176 @@ export function findFeed(feeds, needle) {
 }
 
 // ---------------------------------------------------------------------------
+// Published lists — a catalogue to search, and a unit to subscribe to
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a newline-delimited feed list: one URL per line, `#` comments ignored.
+ *
+ * The other shape a published list comes in. Kagi's smallweb list is a plain
+ * text file of 32,000 URLs and there is no OPML of it, so a reader that only
+ * speaks OPML cannot read the largest list there is. No titles are invented
+ * beyond the hostname — naming 32,000 feeds properly would mean fetching
+ * 32,000 feeds, and the host is what the URL already tells us for free.
+ */
+export function parseFeedList(text) {
+  const feeds = [];
+  const seen = new Set();
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const url = safeUrl(trimmed);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    feeds.push({ name: hostSlug(url), title: hostOf(url), url, site: "", category: "" });
+  }
+  return feeds;
+}
+
+/** Parse a list document as whichever of the two shapes it is. */
+export function parseListDocument(body, format = "") {
+  if (format === "text") return parseFeedList(body);
+  if (format === "opml") return parseOpml(body);
+  return looksLikeOpml(body) ? parseOpml(body) : parseFeedList(body);
+}
+
+/** Where a fetched list is cached, so searching does not refetch 32k feeds. */
+export function listCacheFile(name, env = process.env) {
+  return path.join(path.dirname(opmlFile(env)), "lists", `${slugify(name) || "list"}.json`);
+}
+
+/** Where the last `find` results are remembered, so `add 3` knows what 3 was. */
+export function findCacheFile(env = process.env) {
+  return path.join(path.dirname(opmlFile(env)), "news-found.json");
+}
+
+/** A day. These lists change on the order of weeks; a search must not wait on the network. */
+const LIST_CACHE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The feeds in a published list, from cache when it is fresh.
+ *
+ * A stale cache is preferred to an error when the fetch fails: the list was
+ * good yesterday and a search that works offline beats one that does not.
+ */
+export async function loadListFeeds(list, {
+  fetchImpl, env = process.env, timeoutMs = DEFAULT_TIMEOUT_MS, now = Date.now(), refresh = false,
+} = {}) {
+  const file = listCacheFile(list.name, env);
+  const cached = () => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+      return Array.isArray(parsed?.feeds) ? parsed : null;
+    } catch { return null; }
+  };
+
+  if (!refresh) {
+    const hit = cached();
+    if (hit && now - Number(hit.at || 0) < LIST_CACHE_MS) {
+      return { ok: true, feeds: hit.feeds, cached: true };
+    }
+  }
+
+  const res = await readSource(list.url, { fetchImpl, timeoutMs });
+  if (!res.ok) {
+    const hit = cached();
+    if (hit) return { ok: true, feeds: hit.feeds, cached: true, stale: true };
+    return { ok: false, error: res.error, feeds: [] };
+  }
+
+  const feeds = parseListDocument(res.body, list.format);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `${JSON.stringify({ at: now, url: list.url, feeds })}\n`, { mode: FILE_MODE });
+    try { fs.chmodSync(file, FILE_MODE); } catch { /* best effort */ }
+  } catch { /* a cache that cannot be written must not fail the search */ }
+  return { ok: true, feeds, cached: false };
+}
+
+/**
+ * Split `ai,crypto` into keywords.
+ *
+ * Comma-separated rather than space-separated because feed titles have spaces
+ * in them: `/rss search hacker news` means one thing to a person and two to a
+ * tokenizer, and the comma settles it. Spaces around a comma are trimmed.
+ */
+export function parseKeywords(raw) {
+  return String(raw ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Feeds matching any keyword, best match first.
+ *
+ * Ranked rather than filtered, because filtering cannot win both halves of this:
+ *
+ *   · Plain substring matching searches 32,000 feeds for `rust` and returns
+ *     Trust Machines, Trustnodes, frustrat.com and popthruster.com.
+ *   · Requiring the keyword to start a word fixes that and then finds nothing
+ *     at all for `homelab`, because the list's only metadata is the hostname
+ *     and the blog is called myhomelab.net.
+ *
+ * So everything containing the keyword is kept, and a whole-word match sorts
+ * above a word that starts with it, which sorts above a match buried anywhere.
+ * With the results capped for display, the good ones are the ones you see.
+ * Sorting is stable, so the list's own order survives within a rank.
+ */
+export function scoreFeed(feed, keywords) {
+  const hay = `${feed.title || ""} ${feed.url} ${feed.category || ""}`.toLowerCase();
+  let best = 0;
+  for (const k of keywords) {
+    if (!hay.includes(k)) continue;
+    const tokens = hay.split(/[^a-z0-9]+/).filter(Boolean);
+    if (tokens.some((t) => t === k)) { best = Math.max(best, 3); continue; }
+    if (tokens.some((t) => t.startsWith(k))) { best = Math.max(best, 2); continue; }
+    best = Math.max(best, 1);
+  }
+  return best;
+}
+
+export function matchFeeds(feeds, keywords) {
+  if (!keywords.length) return [];
+  return feeds
+    .map((feed, i) => ({ feed, rank: scoreFeed(feed, keywords), i }))
+    .filter((row) => row.rank > 0)
+    .sort((a, b) => (b.rank - a.rank) || (a.i - b.i))
+    .map((row) => row.feed);
+}
+
+/**
+ * The list a subscribed feed came from, or "".
+ *
+ * Provenance rides in the OPML folder — the first path segment of `category` —
+ * rather than in a sidecar file, so it survives a round trip through any other
+ * reader and needs no format of our own. Only catalogue names count, so a
+ * folder someone happens to call "tech" is not mistaken for a list.
+ */
+export function listOf(feed) {
+  const head = String(feed?.category || "").split("/")[0];
+  return resolveList(head) ? head : "";
+}
+
+/** How many subscribed feeds came from each published list. */
+export function subscribedLists(feeds = []) {
+  const counts = new Map();
+  for (const feed of feeds) {
+    const name = listOf(feed);
+    if (name) counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return counts;
+}
+
+/** Tag a list's feeds with where they came from, keeping any folder they had. */
+export function tagWithList(feeds, listName) {
+  return feeds.map((feed) => ({
+    ...feed,
+    category: feed.category ? `${listName}/${feed.category}` : listName,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Feeds — RSS 2.0, Atom, and RSS 1.0/RDF
 // ---------------------------------------------------------------------------
 
@@ -597,6 +773,11 @@ export async function collectNews(feeds, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
       // before deduping, so the same story arriving via Google News and via the
       // publisher's own feed is recognised as one story rather than two.
       const link = item.link ? unwrapRedirect(item.link) : null;
+      // A link that unwrapping cannot rescue is a row that would do nothing
+      // when opened, so the headline is dropped rather than shown. Only
+      // aggregator interstitials qualify; an item with no link at all is still
+      // worth listing, because its title carries the news.
+      if (link && isDeadEndLink(link)) continue;
       const key = link || `${result.feed.name}:${item.title}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -621,8 +802,11 @@ export async function collectNews(feeds, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
  * openable links wherever the two overlap.
  */
 export function searchFeeds(query) {
+  // Bing only. The Google half of advis0r's pairing returned headlines whose
+  // links go nowhere and whose descriptions are lists of more Google links, so
+  // every one of its results was dropped downstream anyway — see
+  // isDeadEndLink(). Bing carries the publisher URL and a real summary.
   return [
-    { name: "google", title: `Google News — ${query}`, url: googleNewsSearch(query), site: "", category: "" },
     { name: "bing", title: `Bing News — ${query}`, url: bingNewsSearch(query), site: "", category: "" },
   ];
 }
@@ -723,13 +907,28 @@ export function newsArgs(argv = []) {
     if (!query) return { error: "usage: moshcode news search <keyword…>" };
     return { ...base, verb, query };
   }
+  if (verb === "find") {
+    const query = tail.join(" ").trim();
+    if (!query) return { error: "usage: moshcode news find <keyword[,keyword…]>" };
+    const keywords = parseKeywords(query);
+    if (!keywords.length) return { error: "find needs a keyword" };
+    return { ...base, verb, keywords };
+  }
   if (verb === "add") {
-    if (!tail.length) return { error: "usage: moshcode news add <url|file>" };
-    if (tail.length > 1) return { error: "add takes one URL or file at a time" };
+    if (!tail.length) return { error: "usage: moshcode news add <url|file|list|#n>" };
+    if (tail.length > 1) return { error: "add takes one URL, list, or number at a time" };
+    // `add 3` and `add #3` take the third result of the last find. A feed URL
+    // is never a bare number, so this cannot shadow one.
+    const asIndex = /^#?(\d+)$/.exec(String(tail[0]).trim());
+    if (asIndex) {
+      const n = Number(asIndex[1]);
+      if (n < 1) return { error: `add takes a result number from 1, got ${JSON.stringify(tail[0])}` };
+      return { ...base, verb, target: null, index: n };
+    }
     return { ...base, verb, target: tail[0] };
   }
   if (verb === "rm") {
-    if (!tail.length) return { error: "usage: moshcode news rm <name|url>" };
+    if (!tail.length) return { error: "usage: moshcode news rm <name|url|list>" };
     return { ...base, verb, target: tail.join(" ") };
   }
   if (verb === "open") {
@@ -808,8 +1007,9 @@ export function renderFeeds(feeds, { file = "", usingDefaults = false } = {}) {
   if (!feeds.length) {
     return ["", `  ${ash("no feeds yet")}`, "",
       `  ${ash("add one:")}    ${bone("/news add https://example.com/feed.xml")}`,
-      `  ${ash("or a list:")}  ${bone("/news add ~/subscriptions.opml")}`,
-      `  ${ash("or a bundle:")}${bone(" /news add journalists")}`].join("\n");
+      `  ${ash("or a file:")}  ${bone("/news add ~/subscriptions.opml")}`,
+      `  ${ash("or a list:")}  ${bone("/news add journalists")}`,
+      `  ${ash("or search:")}  ${bone("/rss search ai,crypto")}`].join("\n");
   }
   const width = Math.max(...feeds.map((f) => f.name.length));
   const header = usingDefaults
@@ -825,7 +1025,7 @@ export function renderFeeds(feeds, { file = "", usingDefaults = false } = {}) {
     lines.push(`  ${acid(feed.name.padEnd(width))}  ${bone(clip(feed.title || "", 34).padEnd(36))}${ash(feed.url)}`);
   }
   lines.push("", usingDefaults
-    ? `  ${ash("subscribe to your own with")} ${bone("/news add <url|bundle>")} ${ash("· see them with")} ${bone("/news sources")}`
+    ? `  ${ash("subscribe to your own with")} ${bone("/news add <url|list>")} ${ash("· see them with")} ${bone("/news lists")}`
     : `  ${ash("read them with")} ${bone("/news")} ${ash("· one of them with")} ${bone("/news --feed <name>")}`);
   return lines.join("\n");
 }
@@ -843,12 +1043,60 @@ export function renderSources() {
     }
     lines.push(`  ${acid(feed.name.padEnd(width))}  ${ash(clip(feed.title || "", 44))}`);
   }
-  lines.push("", `  ${bone("bundles")} ${ash("— public OPML lists, pull one in by name")}`, "");
-  const bw = Math.max(...OPML_BUNDLES.map((b) => b.name.length));
-  for (const bundle of OPML_BUNDLES) {
-    lines.push(`  ${acid(bundle.name.padEnd(bw))}  ${ash(bundle.description)}`);
+  lines.push("", `  ${bone("lists")} ${ash("— published feed lists, pull one in by name")}`, "");
+  const bw = Math.max(...FEED_LISTS.map((b) => b.name.length));
+  for (const list of FEED_LISTS) {
+    const note = list.searchOnly ? ash(" (search only)") : "";
+    lines.push(`  ${acid(list.name.padEnd(bw))}  ${ash(clip(list.description, 52))}${note}`);
   }
-  lines.push("", `  ${ash("pull one in with")} ${bone(`/news add ${OPML_BUNDLES[0].name}`)}`);
+  lines.push("", `  ${ash("pull one in with")} ${bone(`/news add ${subscribableLists()[0].name}`)} ${ash("· search them all with")} ${bone("/rss search <keyword>")}`);
+  return lines.join("\n");
+}
+
+/**
+ * The published lists, and how many feeds you have from each.
+ *
+ * `subscribed` is counted from the subscription file rather than remembered
+ * separately, so a list stays "added" exactly as long as its feeds are there —
+ * removing them by hand cannot leave a phantom membership behind.
+ */
+export function renderLists(feeds = []) {
+  const mine = subscribedLists(feeds);
+  const width = Math.max(...FEED_LISTS.map((b) => b.name.length));
+  const lines = ["", `  ${ash("published lists")}`, ""];
+  for (const list of FEED_LISTS) {
+    const count = mine.get(list.name) || 0;
+    const state = count
+      ? acid(`✓ ${count} feed${count === 1 ? "" : "s"}`)
+      : (list.searchOnly ? ash("search only") : ash("—"));
+    lines.push(`  ${acid(list.name.padEnd(width))}  ${bone(clip(list.description, 46).padEnd(48))}${state}`);
+  }
+  lines.push("",
+    `  ${ash("add one:")}     ${bone("/news add profullstack")}`,
+    `  ${ash("drop one:")}    ${bone("/news rm profullstack")} ${ash("— removes every feed it brought in")}`,
+    `  ${ash("search them:")} ${bone("/rss search ai,crypto")}`);
+  return lines.join("\n");
+}
+
+/** Feeds found in the published lists, numbered so `add #n` can take one. */
+export function renderFindHits(hits, { keywords = [], total = 0, subscribed = [] } = {}) {
+  if (!hits.length) {
+    return ["", `  ${ash(`nothing in the published lists matches ${keywords.join(", ")}`)}`, "",
+      `  ${ash("the lists searched:")} ${bone(FEED_LISTS.map((l) => l.name).join(", "))}`,
+      `  ${ash("or subscribe by URL:")} ${bone("/rss add https://example.com/feed.xml")}`].join("\n");
+  }
+  const have = new Set(subscribed.map((f) => f.url));
+  const width = String(hits.length).length;
+  const lines = ["",
+    `  ${ash(`${total} feed${total === 1 ? "" : "s"} match ${keywords.join(", ")}${total > hits.length ? ` · showing ${hits.length}` : ""}`)}`,
+    ""];
+  hits.forEach((feed, i) => {
+    const n = String(i + 1).padStart(width);
+    const mark = have.has(feed.url) ? acid(" ✓") : "  ";
+    lines.push(`  ${bone(n)}.${mark} ${acid(clip(feed.title || hostOf(feed.url), 30).padEnd(32))}${ash(clip(feed.url, 58))}`);
+    if (feed.list) lines.push(`      ${ash(`from ${feed.list}`)}`);
+  });
+  lines.push("", `  ${ash("subscribe with")} ${bone("/rss add 1")} ${ash("· or the URL ·")} ${acid("✓")} ${ash("means already subscribed")}`);
   return lines.join("\n");
 }
 
@@ -903,10 +1151,27 @@ export async function newsCommand(argv = [], deps = {}) {
   }
 
   if (request.verb === "sources") {
-    if (request.json) { out(JSON.stringify({ defaults: defaultFeeds(), bundles: OPML_BUNDLES }, null, 2)); return 0; }
+    // `bundles` is the old key for the same array; kept so a caller reading it
+    // does not break on the rename.
+    if (request.json) { out(JSON.stringify({ defaults: defaultFeeds(), lists: FEED_LISTS, bundles: FEED_LISTS }, null, 2)); return 0; }
     out(renderSources());
     return 0;
   }
+
+  if (request.verb === "lists") {
+    const feeds = loadFeeds(env);
+    if (request.json) {
+      const mine = subscribedLists(feeds);
+      out(JSON.stringify({
+        lists: FEED_LISTS.map((list) => ({ ...list, subscribed: mine.get(list.name) || 0 })),
+      }, null, 2));
+      return 0;
+    }
+    out(renderLists(feeds));
+    return 0;
+  }
+
+  if (request.verb === "find") return findCommand(request, { out, fail, fetchImpl, env });
 
   if (request.verb === "export") {
     // The defaults deliberately: exporting an empty file to hand to a reader is
@@ -979,11 +1244,86 @@ export async function newsCommand(argv = [], deps = {}) {
   return items.length === 0 && failures.length === feeds.length ? 1 : 0;
 }
 
-/** `news add <url|file|bundle>` — one feed, or every feed in an OPML list. */
+/** How many matches a find prints. The rest are counted, not listed. */
+const FIND_LIMIT = 25;
+
+/**
+ * `news find <keyword,…>` — search every published list for feeds to subscribe to.
+ *
+ * This is the way into the big lists. smallweb alone is 32,000 feeds, which is
+ * a fine thing to search and an impossible thing to subscribe to, so the
+ * catalogue is read here and only the matches become candidates for `add`.
+ */
+async function findCommand(request, { out, fail, fetchImpl, env }) {
+  const hits = [];
+  const seen = new Set();
+  const failures = [];
+
+  for (const list of FEED_LISTS) {
+    const loaded = await loadListFeeds(list, { fetchImpl, env, timeoutMs: request.timeoutMs });
+    if (!loaded.ok) { failures.push(`${list.name}: ${loaded.error}`); continue; }
+    for (const feed of matchFeeds(loaded.feeds, request.keywords)) {
+      if (seen.has(feed.url)) continue;
+      seen.add(feed.url);
+      hits.push({ ...feed, list: list.name });
+    }
+  }
+
+  // Ranked across every list, not within each one. Sorting per list and then
+  // concatenating puts all of web3's weak matches above smallweb's exact ones
+  // purely because web3 is fetched first.
+  hits.sort((a, b) => scoreFeed(b, request.keywords) - scoreFeed(a, request.keywords));
+
+  if (!hits.length && failures.length === FEED_LISTS.length) {
+    fail(danger("✗ could not read any of the published lists"));
+    for (const line of failures) fail(`  ${ash(line)}`);
+    return 1;
+  }
+
+  const shown = hits.slice(0, FIND_LIMIT);
+  // Remembered so `add 3` resolves, and only the shown ones — a number the
+  // operator never saw is not a number they can have meant.
+  try {
+    const file = findCacheFile(env);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `${JSON.stringify({ at: Date.now(), keywords: request.keywords, hits: shown }, null, 2)}\n`, { mode: FILE_MODE });
+    try { fs.chmodSync(file, FILE_MODE); } catch { /* best effort */ }
+  } catch { /* a cache that cannot be written must not fail the search */ }
+
+  if (request.json) { out(JSON.stringify({ keywords: request.keywords, total: hits.length, hits: shown, failures }, null, 2)); return 0; }
+  out(renderFindHits(shown, { keywords: request.keywords, total: hits.length, subscribed: loadFeeds(env) }));
+  for (const line of failures) fail(`  ${ash(`· ${line}`)}`);
+  return 0;
+}
+
+/** The feed a previous `find` numbered `n`, or null. */
+function foundAt(index, env) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(findCacheFile(env), "utf8"));
+    return Array.isArray(parsed?.hits) ? parsed.hits[index - 1] ?? null : null;
+  } catch { return null; }
+}
+
+/** `news add <url|file|list|#n>` — one feed, or every feed in a list. */
 async function addCommand(request, { out, fail, fetchImpl, env }) {
-  // A bundle name resolves to somebody else's OPML list. Checked before the URL
-  // and the path so `journalists` is a name rather than a missing file.
-  const bundle = resolveBundle(request.target);
+  // `add 3` — the third result of the last find, subscribed by its URL.
+  if (request.index != null) {
+    const found = foundAt(request.index, env);
+    if (!found) {
+      fail(danger(`✗ there is no result ${request.index} — run \`/rss search <keyword>\` first`));
+      return 1;
+    }
+    request = { ...request, target: found.url, index: null };
+  }
+
+  // A list name resolves to somebody else's published list. Checked before the
+  // URL and the path so `journalists` is a name rather than a missing file.
+  const bundle = resolveList(request.target);
+  if (bundle?.searchOnly) {
+    fail(danger(`✗ ${bundle.name} is ${bundle.description}`));
+    fail(`  ${ash("too large to subscribe to wholesale — search it instead:")} ${bone(`/rss search <keyword>`)}`);
+    return 1;
+  }
   const target = bundle ? bundle.url : request.target;
   if (bundle) out(`${ash("· ")}fetching ${bone(bundle.name)} ${ash(`— ${bundle.description}`)}`);
 
@@ -996,9 +1336,13 @@ async function addCommand(request, { out, fail, fetchImpl, env }) {
   const existing = loadFeeds(env);
   const asUrl = safeUrl(target);
 
-  if (looksLikeOpml(res.body)) {
-    const incoming = parseOpml(res.body);
-    if (!incoming.length) { fail(danger("✗ that OPML file lists no feeds")); return 1; }
+  // A named list is whichever shape it says it is; anything else is a list only
+  // if it announces itself as OPML, so a plain feed is never read as one.
+  if (bundle || looksLikeOpml(res.body)) {
+    const parsedList = parseListDocument(res.body, bundle?.format);
+    // Tagged with the list it came from, so `rm <list>` can take it back out.
+    const incoming = bundle ? tagWithList(parsedList, bundle.name) : parsedList;
+    if (!incoming.length) { fail(danger(`✗ that ${bundle?.format === "text" ? "list" : "OPML file"} lists no feeds`)); return 1; }
     let feeds = existing;
     const added = [];
     let skipped = 0;
@@ -1054,9 +1398,27 @@ async function addCommand(request, { out, fail, fetchImpl, env }) {
   return 0;
 }
 
-/** `news rm <name|url>` — unsubscribe. */
+/** `news rm <name|url|list>` — unsubscribe from one feed, or a whole list. */
 function removeCommand(request, { out, fail, env }) {
   const feeds = loadFeeds(env);
+
+  // A list name takes the whole list back out. Checked first: subscribing to a
+  // list is one action and unsubscribing from it should be one action too,
+  // rather than the operator deleting forty feeds by hand.
+  const asList = resolveList(request.target);
+  if (asList) {
+    const mine = feeds.filter((f) => listOf(f) === asList.name);
+    if (!mine.length) {
+      fail(danger(`✗ you have no feeds from "${asList.name}"`));
+      return 1;
+    }
+    try { saveFeeds(feeds.filter((f) => listOf(f) !== asList.name), env); }
+    catch (e) { fail(danger(`✗ can't write ${opmlFile(env)}: ${e.message}`)); return 1; }
+    if (request.json) { out(JSON.stringify({ removed: mine, list: asList.name }, null, 2)); return 0; }
+    out(`${acid("✓ ")}unsubscribed from ${bone(asList.name)} ${ash(`— ${mine.length} feed${mine.length === 1 ? "" : "s"}`)}`);
+    return 0;
+  }
+
   const feed = findFeed(feeds, request.target);
   if (!feed) {
     fail(danger(`✗ no feed named "${request.target}"`));

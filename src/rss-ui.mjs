@@ -18,9 +18,20 @@ import {
   ago,
   collectNews,
   findFeed,
+  newsCommand,
   readingList,
+  resolveVerb,
   searchFeeds,
 } from "./news.mjs";
+
+/**
+ * Verbs `/rss` hands straight to `moshcode news`.
+ *
+ * Everything that manages the subscription list rather than reading it. They
+ * print and exit, so they work with no TTY — which is why this runs before the
+ * interactive-terminal check.
+ */
+const MANAGEMENT_VERBS = new Set(["add", "rm", "list", "lists", "find", "sources", "export", "open"]);
 
 const ESC = {
   altOn: "\x1b[?1049h", altOff: "\x1b[?1049l",
@@ -305,14 +316,37 @@ export async function rssUi(argv = [], deps = {}) {
     write = (s) => process.stdout.write(`${s}\n`),
   } = deps;
 
+  const args = (Array.isArray(argv) ? argv : []).map(String);
+  const words = args.filter((a) => !a.startsWith("-"));
+  const verb = resolveVerb(words[0]);
+
+  // Managing subscriptions is the same work under either name, and `/rss add
+  // <url>` is what people type — the reader is where you are when you decide to
+  // subscribe to something. Handing these to newsCommand rather than reading
+  // them as a search is the whole difference between `/rss add <url>` working
+  // and it silently opening a reader on the literal phrase "add <url>".
+  //
+  // `search` is deliberately not among them. On `/news` it searches headlines;
+  // here it searches the published lists for feeds to add, because a reader
+  // already has `/` for searching what it is showing.
+  if (verb && MANAGEMENT_VERBS.has(verb)) {
+    return newsCommand(args, { fetchImpl, openUrl, env, out: write, fail: write });
+  }
+  if (verb === "search") {
+    const keywords = words.slice(1).join(" ").trim();
+    if (!keywords) { write("usage: moshcode rss search <keyword[,keyword…]>"); return 1; }
+    return newsCommand(["find", ...words.slice(1)], { fetchImpl, openUrl, env, out: write, fail: write });
+  }
+
   if (!stdin.isTTY || !stdout.isTTY) {
     write("moshcode rss needs an interactive terminal — try `moshcode news`");
     return 1;
   }
 
   // A query on the command line (`moshcode rss tariffs`) opens straight into
-  // the search, which is the same shape `/news <keyword>` has.
-  const query = argv.filter((a) => !String(a).startsWith("-")).join(" ").trim();
+  // the search, which is the same shape `/news <keyword>` has. `latest` is the
+  // verb for "no query", so it is dropped rather than searched for.
+  const query = (verb === "latest" ? "" : words.join(" ")).trim();
   const list = readingList(env);
 
   const state = {
