@@ -64,6 +64,16 @@ export const SYNCED_FILES = [
   // and read by nothing here — moshcode's interest in it begins and ends with
   // moving it, and a file this does not parse cannot be broken by this.
   { path: "feeds.opml", json: false, label: "rss feeds" },
+  // `/news` and `/rss` keep their subscriptions here — see opmlFile() in
+  // news.mjs. A near-identical name sat in this list above it for a while and
+  // the two were easy to mistake for each other, so: feeds.opml belongs to
+  // tcfeed, news.opml belongs to this. Carrying only the first meant the feeds
+  // you actually subscribed to were the one thing `/save` left behind.
+  //
+  // Deliberately no cap change. A subscription list past MAX_FILE_BYTES is
+  // reported as skipped rather than failing the snapshot, which is the right
+  // answer for a list that got big by importing somebody else's.
+  { path: "news.opml", json: false, label: "news subscriptions" },
 ];
 
 /**

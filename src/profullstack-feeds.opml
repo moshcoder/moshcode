@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>Profullstack Blogs</title>
+    <ownerName>Profullstack</ownerName>
+    <ownerId>https://profullstack.com</ownerId>
+    <dateCreated>Thu, 13 Aug 2026 00:00:00 +0000</dateCreated>
+  </head>
+  <body>
+    <outline text="BitTorrented Blog" title="BitTorrented Blog" type="rss" xmlUrl="https://bittorrented.com/blog/rss.xml" htmlUrl="https://bittorrented.com/blog" />
+    <outline text="bl0ggers Blog" title="bl0ggers Blog" type="rss" xmlUrl="https://bl0ggers.com/blog/rss.xml" htmlUrl="https://bl0ggers.com/blog" />
+    <outline text="c0mpute Blog" title="c0mpute Blog" type="rss" xmlUrl="https://c0mpute.com/blog/rss.xml" htmlUrl="https://c0mpute.com/blog" />
+    <outline text="c0upons Blog" title="c0upons Blog" type="rss" xmlUrl="https://c0upons.com/blog/rss.xml" htmlUrl="https://c0upons.com/blog" />
+    <outline text="CoinPay Blog" title="CoinPay Blog" type="rss" xmlUrl="https://coinpayportal.com/blog/rss.xml" htmlUrl="https://coinpayportal.com/blog" />
+    <outline text="CrawlProof Blog" title="CrawlProof Blog" type="rss" xmlUrl="https://crawlproof.com/blog/rss.xml" htmlUrl="https://crawlproof.com/blog" />
+    <outline text="d0rz Blog" title="d0rz Blog" type="rss" xmlUrl="https://d0rz.com/blog/rss.xml" htmlUrl="https://d0rz.com/blog" />
+    <outline text="LogicSRC Blog" title="LogicSRC Blog" type="rss" xmlUrl="https://logicsrc.com/blog/rss.xml" htmlUrl="https://logicsrc.com/blog" />
+    <outline text="PairUX Blog" title="PairUX Blog" type="rss" xmlUrl="https://pairux.com/blog/rss.xml" htmlUrl="https://pairux.com/blog" />
+    <outline text="QryptChat Blog" title="QryptChat Blog" type="rss" xmlUrl="https://qrypt.chat/blog/rss.xml" htmlUrl="https://qrypt.chat/blog" />
+    <outline text="SaaSRow Blog" title="SaaSRow Blog" type="rss" xmlUrl="https://www.saasrow.com/blog/rss.xml" htmlUrl="https://www.saasrow.com/blog" />
+    <outline text="sh1pt Blog" title="sh1pt Blog" type="rss" xmlUrl="https://sh1pt.com/blog/rss.xml" htmlUrl="https://sh1pt.com/blog" />
+    <outline text="ThreatCrush Blog" title="ThreatCrush Blog" type="rss" xmlUrl="https://threatcrush.com/blog/rss.xml" htmlUrl="https://threatcrush.com/blog" />
+    <outline text="ugig Blog" title="ugig Blog" type="rss" xmlUrl="https://ugig.net/blog/rss.xml" htmlUrl="https://ugig.net/blog" />
+  </body>
+</opml>
