@@ -41,7 +41,7 @@ const DIGEST_FIXTURE = {
   "herd/rules.json": { content: "{}" },
 };
 
-function home({ aliases = null, rules = null, credentials = true, marker = null } = {}) {
+function home({ aliases = null, rules = null, credentials = true, marker = null, feeds = null } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "moshcode-sync-"));
   const moshcode = path.join(dir, ".moshcode");
   fs.mkdirSync(moshcode, { recursive: true });
@@ -50,6 +50,7 @@ function home({ aliases = null, rules = null, credentials = true, marker = null 
       JSON.stringify({ token: "mck_super_secret", email: "a@b.c" }));
   }
   if (aliases) fs.writeFileSync(path.join(moshcode, "aliases.json"), aliases);
+  if (feeds) fs.writeFileSync(path.join(moshcode, "feeds.opml"), feeds);
   if (rules) {
     fs.mkdirSync(path.join(moshcode, "herd"), { recursive: true });
     fs.writeFileSync(path.join(moshcode, "herd", "rules.json"), rules);
@@ -258,6 +259,66 @@ test("/save sends the revision it last saw, and reports a conflict rather than w
   assert.match(write.text(), /\/load/);
   assert.match(write.text(), /--force/);
   assert.equal(loadMarker(dir).revision, 7, "a refused save must not move the marker");
+});
+
+const OPML = '<?xml version="1.0"?>\n<opml version="2.0"><body>' +
+  '<outline type="rss" text="leaddev.com" xmlUrl="https://leaddev.com/feed"/>' +
+  "</body></opml>\n";
+
+test("/save carries the feed list, and does not try to parse it", async () => {
+  const dir = home({ aliases: "{}", feeds: OPML });
+  const fetchImpl = stubFetch([[200, { revision: 1 }]]);
+
+  const code = await saveCommand([], { home: dir, creds: CREDS, fetchImpl, write: lines(), installed: INSTALLED });
+  assert.equal(code, 0);
+  const sent = fetchImpl.calls[0].body.snapshot.files;
+  assert.equal(sent["feeds.opml"].content, OPML, "OPML travels byte for byte");
+});
+
+test("a feed list that is not XML still syncs — nothing here reads it", async () => {
+  // The contrast with aliases.json is the point: that one is `json: true` and
+  // a broken one is held back rather than copied to every machine. OPML is
+  // moved, never parsed, so there is no such thing as a broken one here.
+  const dir = home({ aliases: "{}", feeds: "this is not xml at all" });
+  const fetchImpl = stubFetch([[200, { revision: 1 }]]);
+
+  await saveCommand([], { home: dir, creds: CREDS, fetchImpl, write: lines(), installed: INSTALLED });
+  assert.ok(fetchImpl.calls[0].body.snapshot.files["feeds.opml"], "it went anyway");
+});
+
+test("a 502 is the app not answering, so it is retried rather than reported", async () => {
+  const dir = home({ aliases: "{}" });
+  const fetchImpl = stubFetch([[502, { message: "Application failed to respond" }], [200, { revision: 3 }]]);
+  const write = lines();
+
+  const code = await saveCommand([], { home: dir, creds: CREDS, fetchImpl, write, installed: INSTALLED });
+  assert.equal(code, 0, "the second attempt is the answer");
+  assert.equal(fetchImpl.calls.length, 2);
+  assert.equal(loadMarker(dir).revision, 3);
+  assert.doesNotMatch(write.text(), /502/, "a blip that was ridden out is not worth a line");
+});
+
+test("a 409 is an answer and is never retried", async () => {
+  // The distinction the retry turns on: 5xx means the app did not see the
+  // request, everything else means it did. Retrying a conflict would only
+  // ask the same question again and lose the same race.
+  const dir = home({ aliases: "{}", marker: { revision: 2, digest: "d", at: 1, files: {} } });
+  const fetchImpl = stubFetch([[409, { error: "moved on", revision: 5 }]]);
+
+  const code = await saveCommand([], { home: dir, creds: CREDS, fetchImpl, write: lines(), installed: INSTALLED });
+  assert.equal(code, 1);
+  assert.equal(fetchImpl.calls.length, 1, "asked once");
+});
+
+test("a 502 that never clears is still reported rather than retried forever", async () => {
+  const dir = home({ aliases: "{}" });
+  const fetchImpl = stubFetch([[502, {}], [502, {}], [502, {}], [502, {}]]);
+  const write = lines();
+
+  const code = await saveCommand([], { home: dir, creds: CREDS, fetchImpl, write, installed: INSTALLED });
+  assert.equal(code, 1);
+  assert.equal(fetchImpl.calls.length, 3, "the first try and two retries, then it is news");
+  assert.match(write.text(), /could not save/);
 });
 
 test("/save --force drops the precondition", async () => {

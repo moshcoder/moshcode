@@ -58,6 +58,12 @@ export const MAX_TOTAL_BYTES = 256 * 1024;
 export const SYNCED_FILES = [
   { path: "aliases.json", json: true, label: "pit aliases" },
   { path: "herd/rules.json", json: true, label: "herd state rules" },
+  // OPML rather than JSON, so `json: false`: it is the interchange format every
+  // feed reader already imports and exports, which is the whole reason a feed
+  // list is worth carrying between machines at all. Written by `tcfeed rss add`
+  // and read by nothing here — moshcode's interest in it begins and ends with
+  // moving it, and a file this does not parse cannot be broken by this.
+  { path: "feeds.opml", json: false, label: "rss feeds" },
 ];
 
 /**
@@ -349,7 +355,7 @@ function endpoint(creds) {
  * code; a thrown network error inside the pit's dispatch loop would take the
  * prompt down instead, which is a lost session over a dropped wifi connection.
  */
-async function request(method, route, { creds, body = null, fetchImpl = fetch, timeoutMs = 20_000 } = {}) {
+async function attempt(method, route, { creds, body, fetchImpl, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -371,6 +377,36 @@ async function request(method, route, { creds, body = null, fetchImpl = fetch, t
     return { ok: false, status: 0, body: null, error: aborted ? "the app did not answer in time" : "could not reach the app" };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Retried only where a retry can be right: the app not answering.
+ *
+ * 502, 503, 504 and a dead socket say nothing about the request — the platform
+ * returned them without the app seeing it, so the same bytes sent a second
+ * later are as likely to work as they were the first time. Every other status
+ * is an answer: 400 will be 400 again, 401 wants `/login`, and 409 is another
+ * machine having saved first, which retrying would only re-ask.
+ *
+ * Unretried, one blip is a visible failure — and it looked frequent because
+ * every one of them was. `/save` had no retry at all while the scan workflow
+ * this same repository ships retries `npm install` three times for precisely
+ * this reasoning.
+ *
+ * Safe to repeat a PUT because the write is conditional: `ifRevision` pins the
+ * revision the caller last agreed on, so a retry that lands after a first
+ * attempt secretly succeeded is refused with 409 rather than writing twice.
+ */
+const RETRY_STATUS = new Set([0, 502, 503, 504]);
+const RETRY_BACKOFF_MS = [400, 1200];
+
+async function request(method, route, { creds, body = null, fetchImpl = fetch, timeoutMs = 20_000, retries = RETRY_BACKOFF_MS.length } = {}) {
+  let last;
+  for (let i = 0; ; i++) {
+    last = await attempt(method, route, { creds, body, fetchImpl, timeoutMs });
+    if (!RETRY_STATUS.has(last.status) || i >= retries) return last;
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[i] ?? RETRY_BACKOFF_MS.at(-1)));
   }
 }
 
