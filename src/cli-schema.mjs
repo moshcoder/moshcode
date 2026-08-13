@@ -550,10 +550,14 @@ export const CORE_CLI_COMMANDS = [
     synopsis: [
       ["moshcode rss", "open the reader on your feeds"],
       ["moshcode rss <keyword…>", "open it on a search"],
+      ["moshcode rss search <keyword[,keyword…]>", "find feeds to subscribe to"],
+      ["moshcode rss add <url|list|#n>", "subscribe — same as `moshcode news add`"],
     ],
     examples: [
       ["moshcode rss", "feeds on the left, headlines in the middle"],
       ["moshcode rss tariffs", "open straight into a search"],
+      ["moshcode rss search rust,compilers", "search 32k published feeds for one to add"],
+      ["moshcode rss add 3", "subscribe to the third result"],
     ],
     seeAlso: ["news"],
     note: "needs an interactive terminal. ↑↓/jk move · ⏎ read · o open in a browser · "
@@ -800,12 +804,17 @@ export const NEWS_VERBS = [
   },
   { name: "list", description: "the feeds you are subscribed to", synopsis: [["moshcode news list [--json]", ""]] },
   {
-    name: "add", description: "subscribe to a feed, an OPML list, or a bundle",
-    synopsis: [["moshcode news add <url|file|bundle>", "an RSS/Atom link, an OPML list, or journalists|web3|blockchain"]],
+    name: "find", description: "search the published lists for feeds to subscribe to",
+    synopsis: [["moshcode news find <keyword[,keyword…]>", "same as `moshcode rss search <keyword…>`"]],
   },
-  { name: "rm", description: "unsubscribe", synopsis: [["moshcode news rm <name|url>", ""]] },
+  {
+    name: "add", description: "subscribe to a feed, a list, or a numbered result",
+    synopsis: [["moshcode news add <url|file|list|#n>", "an RSS/Atom link, an OPML file, a list by name, or #n from the last find"]],
+  },
+  { name: "rm", description: "unsubscribe from a feed, or a whole list", synopsis: [["moshcode news rm <name|url|list>", ""]] },
   { name: "open", description: "open a headline from the last listing", synopsis: [["moshcode news open <n>", ""]] },
-  { name: "sources", description: "the default feeds and the bundles on offer", synopsis: [["moshcode news sources", ""]] },
+  { name: "lists", description: "the published lists, and which you have added", synopsis: [["moshcode news lists [--json]", ""]] },
+  { name: "sources", description: "the default feeds and the lists on offer", synopsis: [["moshcode news sources", ""]] },
   { name: "export", description: "print the subscription list as OPML", synopsis: [["moshcode news export > feeds.opml", ""]] },
 ];
 
