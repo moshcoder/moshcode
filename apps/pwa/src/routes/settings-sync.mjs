@@ -125,9 +125,22 @@ async function insertRevision({ userId, body, digest, host, version, ifRevision 
        SELECT ?, ?, COALESCE(MAX(revision),0) + 1, ?, ?, ?, ?, ?, ?
        FROM settings_snapshots WHERE user_id = ?
        RETURNING revision`
+    // GROUP BY user_id is not decoration. A bare HAVING on an implicit
+    // single-group aggregate is accepted by the SQLite that backs a `file:`
+    // database and *rejected by Turso's parser*:
+    //
+    //   SQL string could not be parsed: near HAVING, "None": syntax error
+    //
+    // So this statement worked in every test and threw on every deployment,
+    // which is what `/save` returning 502 actually was. `--force` sends
+    // ifRevision: null and takes the branch above, which is why forcing was the
+    // only way to save. The rows always exist here — the caller sets ifRevision
+    // to null when the account has no current revision — so grouping by the
+    // user cannot lose the row the HAVING is meant to test.
     : `INSERT INTO settings_snapshots (id,user_id,revision,digest,host,version,size,body,created_at)
        SELECT ?, ?, COALESCE(MAX(revision),0) + 1, ?, ?, ?, ?, ?, ?
        FROM settings_snapshots WHERE user_id = ?
+       GROUP BY user_id
        HAVING COALESCE(MAX(revision),0) = ?
        RETURNING revision`;
   const args = [row.id, userId, digest, host, version, size, body, row.created_at, userId];
