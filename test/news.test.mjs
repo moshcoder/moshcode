@@ -428,6 +428,50 @@ test("one dead publisher is reported, not fatal", async () => {
   assert.match(failures[0].error, /404/);
 });
 
+/** A feed of `n` dated entries, newest first, each padded to `pad` bytes. */
+function firehose(n, pad = 0) {
+  const entries = Array.from({ length: n }, (_, i) => `<item>
+    <title>Post ${i + 1}</title>
+    <link>https://small.example/${i + 1}</link>
+    <pubDate>Tue, 11 Aug 2026 12:00:00 GMT</pubDate>
+    <description>${"x".repeat(pad)}</description>
+  </item>`);
+  return `<rss><channel><title>Firehose</title>${entries.join("")}</channel></rss>`;
+}
+
+test("an aggregated feed is truncated to its newest entries, not refused", async () => {
+  // Kagi's small-web firehose is 10MB of today's posts — over the cap that a
+  // catalogue fetch fails on. Failing here would leave the reader with nothing
+  // when the first two megabytes are exactly what it wanted.
+  const huge = firehose(4000, 600);
+  assert.ok(huge.length > 2 * 1024 * 1024, "fixture must exceed the feed cap");
+  const { items, failures } = await collectNews(
+    [{ name: "smallweb", url: "https://kagi.com/smallweb/feed" }],
+    { fetchImpl: fakeFetch({ "https://kagi.com/smallweb/feed": huge }) },
+  );
+  assert.deepEqual(failures, []);
+  assert.ok(items.length > 0, "a truncated feed still has headlines");
+  assert.equal(items[0].title, "Post 1");
+});
+
+test("one feed cannot take over a merged listing", async () => {
+  // Without a per-feed cap, subscribing to an aggregator is the same as
+  // unsubscribing from everything else: 4,000 posts from today sort above
+  // every other feed's headlines.
+  const { items } = await collectNews([
+    { name: "smallweb", url: "https://kagi.com/smallweb/feed" },
+    { name: "wire", url: "https://a.example/rss" },
+  ], {
+    fetchImpl: fakeFetch({
+      "https://kagi.com/smallweb/feed": firehose(500),
+      "https://a.example/rss": RSS,
+    }),
+  });
+  assert.equal(items.filter((i) => i.feed === "smallweb").length, 200);
+  assert.deepEqual(items.filter((i) => i.feed === "wire").map((i) => i.title),
+    ["First story", "Second story"]);
+});
+
 test("undated entries sort last rather than claiming to be the newest", async () => {
   const undated = `<rss><channel><title>U</title>
     <item><title>No date</title><link>https://u.example/1</link></item></channel></rss>`;
@@ -925,8 +969,11 @@ test("find searches the published lists and numbers what it found", async () => 
     ...io, env,
     fetchImpl: fakeFetch({
       "https://profullstack.com/feeds.opml": OPML,
-      "https://raw.githubusercontent.com/ralyodio/smallweb/refs/heads/main/smallweb.txt":
-        "https://example.com/blog/rss.xml\nhttps://unrelated.test/rss\n",
+      "https://raw.githubusercontent.com/CoinFabrik/resources/master/decentralized-and-blockchain-feeds.opml":
+        `<opml><body>
+           <outline text="Example Blog" xmlUrl="https://example.com/blog/rss.xml"/>
+           <outline text="Something Else" xmlUrl="https://unrelated.test/rss"/>
+         </body></opml>`,
     }),
   });
   assert.equal(code, 0);
@@ -937,8 +984,8 @@ test("find searches the published lists and numbers what it found", async () => 
 test("add <n> subscribes to what find numbered, and only what it showed", async () => {
   const { env } = sandbox();
   const fetchImpl = fakeFetch({
-    "https://raw.githubusercontent.com/ralyodio/smallweb/refs/heads/main/smallweb.txt":
-      "https://example.com/feed.xml\n",
+    "https://raw.githubusercontent.com/CoinFabrik/resources/master/decentralized-and-blockchain-feeds.opml":
+      `<opml><body><outline text="Example Wire" xmlUrl="https://example.com/feed.xml"/></body></opml>`,
     "https://example.com/feed.xml": RSS,
   });
   await newsCommand(["find", "example.com"], { ...sink(), env, fetchImpl });
@@ -953,14 +1000,36 @@ test("add <n> subscribes to what find numbered, and only what it showed", async 
   assert.match(missing.errorText(), /no result 9/);
 });
 
-test("a search-only list refuses to be subscribed to wholesale", async () => {
+test("smallweb subscribes as one feed, without downloading it first", async () => {
+  // The catalogue it used to be — 33,000 outlines — is what took `/rss` down.
+  // What replaced it is a single feed, and `add` must not fetch ten megabytes
+  // of headlines to find that out.
+  const { env } = sandbox();
   const io = sink();
   const code = await newsCommand(["add", "smallweb"], {
-    ...io, env: sandbox().env,
-    fetchImpl: () => { throw new Error("must not fetch a list it is going to refuse"); },
+    ...io, env,
+    fetchImpl: () => { throw new Error("must not fetch a feed it is only subscribing to"); },
   });
-  assert.equal(code, 1);
-  assert.match(io.errorText(), /too large to subscribe to wholesale/);
+  assert.equal(code, 0);
+  const feeds = loadFeeds(env);
+  assert.deepEqual(feeds.map((f) => f.url), ["https://kagi.com/smallweb/feed"]);
+  // Tagged with the list it came from, so `rm smallweb` takes it back out.
+  assert.deepEqual(feeds.map(listOf), ["smallweb"]);
+
+  const removed = sink();
+  assert.equal(await newsCommand(["rm", "smallweb"], { ...removed, env }), 0);
+  assert.deepEqual(loadFeeds(env), []);
+});
+
+test("a one-feed list is searchable without a catalogue fetch", async () => {
+  const list = resolveBundle("smallweb");
+  assert.equal(list.format, "feed");
+  const loaded = await loadListFeeds(list, {
+    fetchImpl: () => { throw new Error("must not fetch"); },
+    env: sandbox().env,
+  });
+  assert.equal(loaded.ok, true);
+  assert.deepEqual(loaded.feeds.map((f) => f.url), ["https://kagi.com/smallweb/feed"]);
 });
 
 test("a list is added and removed as one unit", async () => {
@@ -1019,7 +1088,7 @@ test("a stale cache is served when the list cannot be fetched", async () => {
 });
 
 test("find ranks across every list, not within each one", async () => {
-  // web3 is fetched before smallweb. Sorting per list and concatenating put
+  // web3 is fetched before blockchain. Sorting per list and concatenating put
   // "Trust Machines" above "rust.example" purely because of fetch order.
   const { env } = sandbox();
   const io = sink();
@@ -1028,7 +1097,7 @@ test("find ranks across every list, not within each one", async () => {
     fetchImpl: fakeFetch({
       "https://raw.githubusercontent.com/chainfeeds/RSSAggregatorforWeb3/main/RAW.opml":
         `<opml><body><outline text="Trust Machines" xmlUrl="https://trustmachines.example/rss"/></body></opml>`,
-      "https://kagi.com/smallweb/opml":
+      "https://raw.githubusercontent.com/CoinFabrik/resources/master/decentralized-and-blockchain-feeds.opml":
         `<opml><body><outline text="rust" xmlUrl="https://rust.example/rss"/></body></opml>`,
     }),
   });

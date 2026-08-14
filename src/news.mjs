@@ -99,6 +99,31 @@ const FILE_MODE = 0o600;
 /** Enough for a large feed, small enough that one bad URL cannot eat the pit. */
 const MAX_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Where a *feed* read stops, and — unlike MAX_BYTES — stopping is not failing.
+ *
+ * An aggregated feed has no natural size: smallweb's firehose is 10MB of
+ * today's posts, which the 8MB cap would refuse outright, leaving the reader
+ * with nothing rather than with the newest few hundred entries. Feeds are
+ * newest-first, so the first two megabytes are the part worth having; the rest
+ * of the transfer is cancelled mid-stream and what arrived is parsed. parseFeed
+ * matches whole `<item>`/`<entry>` blocks, so a cut tail simply is not an item.
+ *
+ * Ordinary feeds never reach this — the largest in the defaults is under 1MB.
+ */
+const FEED_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The most headlines one feed may put into a merged listing.
+ *
+ * Without it, subscribing to an aggregator is the same as unsubscribing from
+ * everything else: the merge sorts by date, and 4,000 small-web posts from
+ * today's firehose sit above every headline the other feeds have. Set at
+ * MAX_LIMIT so no listing can be starved by the cap — `--feed smallweb --limit
+ * 200` still fills, because a single feed can supply every row.
+ */
+const PER_FEED_ITEMS = 200;
+
 /** How many feeds are in flight at once. Politeness, not throughput. */
 const CONCURRENCY = 6;
 
@@ -413,11 +438,11 @@ export function findFeed(feeds, needle) {
 /**
  * Parse a newline-delimited feed list: one URL per line, `#` comments ignored.
  *
- * The other shape a published list comes in. Kagi's smallweb list is a plain
- * text file of 32,000 URLs and there is no OPML of it, so a reader that only
- * speaks OPML cannot read the largest list there is. No titles are invented
- * beyond the hostname — naming 32,000 feeds properly would mean fetching
- * 32,000 feeds, and the host is what the URL already tells us for free.
+ * The other shape a published list comes in: plenty of them are a text file of
+ * URLs and nothing else, so a reader that only speaks OPML cannot read them.
+ * No titles are invented beyond the hostname — naming a list's feeds properly
+ * would mean fetching every one of them, and the host is what the URL already
+ * tells us for free.
  */
 export function parseFeedList(text) {
   const feeds = [];
@@ -440,7 +465,7 @@ export function parseListDocument(body, format = "") {
   return looksLikeOpml(body) ? parseOpml(body) : parseFeedList(body);
 }
 
-/** Where a fetched list is cached, so searching does not refetch 32k feeds. */
+/** Where a fetched list is cached, so searching does not refetch every list. */
 export function listCacheFile(name, env = process.env) {
   return path.join(path.dirname(opmlFile(env)), "lists", `${slugify(name) || "list"}.json`);
 }
@@ -462,6 +487,24 @@ const LIST_CACHE_MS = 24 * 60 * 60 * 1000;
 export async function loadListFeeds(list, {
   fetchImpl, env = process.env, timeoutMs = DEFAULT_TIMEOUT_MS, now = Date.now(), refresh = false,
 } = {}) {
+  // A `format: "feed"` list is a single feed that has already done the
+  // aggregating — smallweb's firehose. There is no catalogue to fetch or cache:
+  // the entry itself is the one feed, so a search costs nothing and can never
+  // be the thing that makes `find` slow.
+  if (list.format === "feed") {
+    return {
+      ok: true,
+      cached: false,
+      feeds: [{
+        name: list.name,
+        title: list.title || list.name,
+        url: list.url,
+        site: list.site || "",
+        category: list.name,
+      }],
+    };
+  }
+
   const file = listCacheFile(list.name, env);
   const cached = () => {
     try {
@@ -512,7 +555,7 @@ export function parseKeywords(raw) {
  *
  * Ranked rather than filtered, because filtering cannot win both halves of this:
  *
- *   · Plain substring matching searches 32,000 feeds for `rust` and returns
+ *   · Plain substring matching searches every list for `rust` and returns
  *     Trust Machines, Trustnodes, frustrat.com and popthruster.com.
  *   · Requiring the keyword to start a word fixes that and then finds nothing
  *     at all for `homelab`, because the list's only metadata is the hostname
@@ -689,8 +732,15 @@ export function tidyTitle(title) {
  *
  * Size-capped while streaming rather than after: a feed that turns out to be a
  * disk image should cost a few megabytes of transfer, not all of it.
+ *
+ * What happens at the cap is the caller's to choose. A document read whole —
+ * an OPML catalogue — fails, because half a catalogue is a wrong answer rather
+ * than a partial one. A feed read for its newest entries truncates instead:
+ * see FEED_MAX_BYTES.
  */
-export async function fetchDocument(url, { fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function fetchDocument(url, {
+  fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = MAX_BYTES, truncate = false,
+} = {}) {
   const impl = fetchImpl || globalThis.fetch;
   if (typeof impl !== "function") return { ok: false, error: "no fetch available in this runtime" };
   const safe = safeUrl(url);
@@ -713,7 +763,10 @@ export async function fetchDocument(url, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
     // text() for any fetch implementation (tests included) that has no body.
     if (!res.body || typeof res.body.getReader !== "function") {
       const body = await res.text();
-      if (body.length > MAX_BYTES) return { ok: false, error: `feed is larger than ${MAX_BYTES} bytes` };
+      if (body.length > maxBytes) {
+        if (!truncate) return { ok: false, error: `feed is larger than ${maxBytes} bytes` };
+        return { ok: true, body: body.slice(0, maxBytes), truncated: true };
+      }
       return { ok: true, body };
     }
     const reader = res.body.getReader();
@@ -724,9 +777,11 @@ export async function fetchDocument(url, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > MAX_BYTES) {
+      if (bytes > maxBytes) {
         try { await reader.cancel(); } catch { /* already gone */ }
-        return { ok: false, error: `feed is larger than ${MAX_BYTES} bytes` };
+        if (!truncate) return { ok: false, error: `feed is larger than ${maxBytes} bytes` };
+        body += decoder.decode(value, { stream: true });
+        return { ok: true, body: body + decoder.decode(), truncated: true };
       }
       body += decoder.decode(value, { stream: true });
     }
@@ -772,7 +827,7 @@ async function mapLimit(items, limit, worker) {
  */
 export async function collectNews(feeds, { fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const results = await mapLimit(feeds, CONCURRENCY, async (feed) => {
-    const res = await fetchDocument(feed.url, { fetchImpl, timeoutMs });
+    const res = await fetchDocument(feed.url, { fetchImpl, timeoutMs, maxBytes: FEED_MAX_BYTES, truncate: true });
     if (!res.ok) return { feed, error: res.error };
     let parsed;
     try { parsed = parseFeed(res.body, { url: feed.url }); }
@@ -787,7 +842,8 @@ export async function collectNews(feeds, { fetchImpl, timeoutMs = DEFAULT_TIMEOU
   let skipped = 0;
   for (const result of results) {
     if (result.error) { failures.push({ name: result.feed.name, url: result.feed.url, error: result.error }); continue; }
-    for (const item of result.parsed.items) {
+    // Newest first inside a feed, so the cap keeps the entries worth keeping.
+    for (const item of result.parsed.items.slice(0, PER_FEED_ITEMS)) {
       // Aggregator feeds wrap the publisher's URL in one of their own. Unwrap
       // before deduping, so the same story arriving via Google News and via the
       // publisher's own feed is recognised as one story rather than two.
@@ -1398,9 +1454,13 @@ const FIND_LIMIT = 25;
 /**
  * `news find <keyword,…>` — search every published list for feeds to subscribe to.
  *
- * This is the way into the big lists. smallweb alone is 32,000 feeds, which is
- * a fine thing to search and an impossible thing to subscribe to, so the
- * catalogue is read here and only the matches become candidates for `add`.
+ * This is the way into the lists: they hold a few thousand feeds between them,
+ * which is a fine thing to search and a poor thing to read end to end, so the
+ * catalogues are read here and only the matches become candidates for `add`.
+ *
+ * Every list is loaded on every search, which is why none of them may be
+ * enormous — a 33,000-feed catalogue in here made this the slowest thing in the
+ * pit and took `/rss` down with it.
  */
 async function findCommand(request, { out, fail, fetchImpl, env }) {
   const hits = [];
@@ -1418,7 +1478,7 @@ async function findCommand(request, { out, fail, fetchImpl, env }) {
   }
 
   // Ranked across every list, not within each one. Sorting per list and then
-  // concatenating puts all of web3's weak matches above smallweb's exact ones
+  // concatenating puts all of web3's weak matches above journalists' exact ones
   // purely because web3 is fetched first.
   hits.sort((a, b) => scoreFeed(b, request.keywords) - scoreFeed(a, request.keywords));
 
@@ -1472,6 +1532,32 @@ async function addCommand(request, { out, fail, fetchImpl, env }) {
     fail(`  ${ash("too large to subscribe to wholesale — search it instead:")} ${bone(`/rss search <keyword>`)}`);
     return 1;
   }
+  // A `format: "feed"` list is one feed wearing a list's name. Subscribed
+  // without fetching it first: smallweb's firehose is ten megabytes of
+  // headlines and not one of them is needed to decide the feed exists. Tagged
+  // with the list name like any other list, so `rm smallweb` still takes it
+  // back out.
+  if (bundle?.format === "feed") {
+    const { feeds, added, existed } = withFeed(loadFeeds(env), {
+      name: bundle.name,
+      title: bundle.title || bundle.name,
+      url: bundle.url,
+      site: bundle.site || "",
+      category: bundle.name,
+    });
+    if (existed) { out(`${ash("· ")}already subscribed to ${bone(added.name)} ${ash(added.url)}`); return 0; }
+    try { saveFeeds(feeds, env); }
+    catch (e) { fail(danger(`✗ can't write ${opmlFile(env)}: ${e.message}`)); return 1; }
+    // Named from the OPML on the way back in, like every other feed, so the
+    // name printed here is the one `--feed` will answer to rather than the one
+    // that went in.
+    const saved = findFeed(loadFeeds(env), bundle.url) ?? added;
+    if (request.json) { out(JSON.stringify({ added: saved, skipped: 0 }, null, 2)); return 0; }
+    out(`${acid("✓ ")}subscribed to ${bone(saved.name)} ${ash(`— ${bundle.description}`)}`);
+    out(`  ${ash("read it on its own with")} ${bone(`/news --feed ${saved.name}`)}`);
+    return 0;
+  }
+
   const target = bundle ? bundle.url : request.target;
   if (bundle) out(`${ash("· ")}fetching ${bone(bundle.name)} ${ash(`— ${bundle.description}`)}`);
 
