@@ -2,7 +2,8 @@
 // These are deliberately separate from coding engines: UGig owns marketplace
 // workflows, CoinPay owns payment workflows, c0mpute owns the compute network,
 // c0upons owns community coupons and bounties, the cloud CLIs below own
-// deploys/secrets/infra, and moshcode only conducts their native command lines.
+// deploys/secrets/infra, Coral owns read-only data access across those systems,
+// and moshcode only conducts their native command lines.
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,6 +123,18 @@ export const TOOLS = {
     // App Store, so there it fails with tailscale's own message rather than
     // silently re-adding package repos.
     upgrade: { cmd: "tailscale", args: ["update"] },
+  },
+  coral: {
+    desc: "Coral — read-only SQL across your APIs, databases, and internal systems",
+    bin: "coral",
+    // The vendor script resolves the latest GitHub release, verifies its
+    // sha256, and drops the binary in $HOME/.local/bin (CORAL_INSTALL_DIR
+    // overrides) — the same dir gh/supabase/doctl land in, so no binDirs.
+    // The script is POSIX sh, but withcoral.com documents `| bash`, so that is
+    // the pipeline we run. Re-running it is Coral's own documented upgrade path
+    // for a direct install, and toolUpgradeSpec falls back to install, so there
+    // is deliberately no upgrade key here.
+    install: { cmd: "bash", args: ["-c", "curl -fsSL https://withcoral.com/install.sh | bash"] },
   },
   alpaca: {
     desc: "Alpaca — paper/live trading, market data, positions, and watchlists",
