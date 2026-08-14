@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { splitCommandLine } from "../src/tui.mjs";
+import { instantExitNote, splitCommandLine } from "../src/tui.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -232,4 +232,28 @@ test("TUI tightens a history file that was already world-readable", posixMode, a
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.match(readFileSync(file, "utf8"), /Bearer sk-live/); // history itself survives
+});
+
+test("an engine that exits instantly is called out, not reported as a clean session", () => {
+  // @serjm/deepseek-code 0.5.0 compares resolve(process.argv[1]) against
+  // import.meta.url to decide whether it is the entrypoint. npm installs every
+  // global bin as a symlink, so that comparison fails and the CLI runs nothing
+  // and exits 0 — which the pit printed as "exited (code 0). back in the pit."
+  const note = instantExitNote({ key: "deepseek", bin: "deepseek-code", code: 0, ms: 40 });
+  assert.match(note, /exited instantly/);
+  assert.match(note, /deepseek-code --version/);
+  assert.match(note, /\/install deepseek/);
+});
+
+test("a session someone actually used says nothing extra", () => {
+  assert.equal(instantExitNote({ key: "claude", bin: "claude", code: 0, ms: 90_000 }), null);
+  // Right at the line: only faster than the threshold counts.
+  assert.equal(instantExitNote({ key: "claude", bin: "claude", code: 0, ms: 1500 }), null);
+});
+
+test("a real failure is left to the exit code — this note is only for silent success", () => {
+  // A non-zero exit already says something went wrong, and the engine has
+  // usually printed why. Adding "that was fast" on top would be noise.
+  assert.equal(instantExitNote({ key: "codex", bin: "codex", code: 1, ms: 30 }), null);
+  assert.equal(instantExitNote({ key: "codex", bin: "codex", code: null, ms: 30 }), null);
 });
