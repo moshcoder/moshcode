@@ -8,25 +8,33 @@ import { NO_RC_ENV, shellInvocation, shellName, shellPath } from "../src/shell.m
 // `node --test` under CI has no tty and would otherwise flip every assertion.
 const zsh = { env: { SHELL: "/usr/bin/zsh" }, platform: "linux", tty: true };
 
-test("an interactive shell is what loads ~/.zshrc, so zsh gets -ic", () => {
-  const { shell, args, flags, interactive } = shellInvocation("gh-prs-all", zsh);
+test("an interactive shell is what loads ~/.zshrc, so zsh gets -ic — with job control off", () => {
+  const { shell, args, flags, interactive, jobControl } = shellInvocation("gh-prs-all", zsh);
   assert.equal(shell, "/usr/bin/zsh");
-  assert.deepEqual(args, ["-ic", "gh-prs-all"]);
-  assert.equal(flags, "-ic");
+  // `+m` is not decoration. Without it the interactive shell takes the
+  // terminal's process group and can fail to give it back, and the pit's next
+  // write dies of SIGTTOU: "suspended (tty output)".
+  assert.deepEqual(args, ["+m", "-ic", "gh-prs-all"]);
+  assert.equal(flags, "+m -ic");
   assert.equal(interactive, true);
+  assert.equal(jobControl, false);
 });
 
 test("bash gets it too — ~/.bashrc is skipped by a non-interactive shell the same way", () => {
-  const { args } = shellInvocation("ll", { ...zsh, env: { SHELL: "/bin/bash" } });
+  const { args, jobControl } = shellInvocation("ll", { ...zsh, env: { SHELL: "/bin/bash" } });
+  // No `+m`: an interactive bash turns job control back on regardless, so
+  // passing the flag would advertise a protection that is not there.
   assert.deepEqual(args, ["-ic", "ll"]);
+  assert.equal(jobControl, true);
 });
 
 test("the command is one argument, so the shell does its own parsing", () => {
   // Re-splitting would turn `-m "two words"` into two arguments; the whole
   // point of handing $SHELL a string is that quoting survives.
   const { args } = shellInvocation('git commit -m "two words"', zsh);
-  assert.equal(args.length, 2);
-  assert.equal(args[1], 'git commit -m "two words"');
+  // Whatever the flags are, the command is always the single last argument.
+  assert.equal(args.at(-1), 'git commit -m "two words"');
+  assert.equal(args.filter((a) => !a.startsWith("-") && !a.startsWith("+")).length, 1);
 });
 
 test("no command means a shell to sit in — no flags at all", () => {

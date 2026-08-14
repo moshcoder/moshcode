@@ -34,6 +34,32 @@
  */
 const RC_ON_INTERACTIVE = new Set(["bash", "zsh"]);
 
+/**
+ * Shells that will give up job control if asked, and why we ask.
+ *
+ * `-i` buys the rc file and, unasked, brings job control with it. An interactive
+ * shell with job control makes itself a process group leader and takes the
+ * terminal — and when it hands it back, it hands it back to what it thinks the
+ * shell before it was. The pit is not a shell and does not play that game, so
+ * the terminal can be left belonging to a process group that has exited. The
+ * pit's very next write then takes SIGTTOU and the whole pit stops:
+ *
+ *   · shell exited (code 0). back in the pit.
+ *   [1]  + 3034615 suspended (tty output)  moshcode
+ *
+ * `+m` unsets MONITOR, so zsh reads the rc file and never touches the terminal's
+ * process group. Nothing is lost: job control exists to manage several jobs at a
+ * prompt, and this shell runs one command and exits. It also restores exactly
+ * the signal behaviour of the plain `-c` this replaced, where the command shared
+ * the pit's process group.
+ *
+ * bash is not in this set because it will not honour it — an interactive bash
+ * turns job control back on regardless of `+m`, which is measurable: `bash +m
+ * -ic 'case $- in *m*)…'` still reports `m`. Passing a flag that is ignored
+ * would only suggest a protection that is not there.
+ */
+const NO_JOB_CONTROL = new Set(["zsh"]);
+
 /** Set this to opt a session out of rc loading and get plain `-c` back. */
 export const NO_RC_ENV = "MOSHCODE_SHELL_NO_RC";
 
@@ -91,6 +117,18 @@ export function shellInvocation(rawCmd, {
     return { shell, args: [...CMD_FLAGS, rawCmd], flags: CMD_FLAGS.join(" "), interactive: false, name };
   }
   const interactive = tty && RC_ON_INTERACTIVE.has(name) && !env[NO_RC_ENV];
-  const flags = interactive ? "-ic" : "-c";
-  return { shell, args: [flags, rawCmd], flags, interactive, name };
+  if (!interactive) return { shell, args: ["-c", rawCmd], flags: "-c", interactive, name, jobControl: false };
+  // `+m` before `-ic`: options have to precede the command string, and this one
+  // is what keeps an interactive shell from taking the terminal's process group
+  // away from the pit. See NO_JOB_CONTROL.
+  const argv = NO_JOB_CONTROL.has(name) ? ["+m", "-ic"] : ["-ic"];
+  return {
+    shell,
+    args: [...argv, rawCmd],
+    flags: argv.join(" "),
+    interactive,
+    name,
+    // True only where we could not turn it off — bash forces it back on.
+    jobControl: !NO_JOB_CONTROL.has(name),
+  };
 }

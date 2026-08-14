@@ -510,7 +510,7 @@ async function openWorkflowTool(key, tool, args) {
 
 // Spawn the user's shell with the terminal fully handed over (stdio inherit),
 // inheriting the current cwd + env. No args → an interactive shell; a raw
-// command string → `$SHELL -ic "<cmd>"` (one-off). Interactive so the command
+// command string → `$SHELL +m -ic "<cmd>"` (one-off). Interactive so the command
 // can see the aliases and functions in ~/.zshrc — see src/shell.mjs for why
 // that is not optional. Resolves { ok, code, signal }.
 function runShell(rawCmd) {
