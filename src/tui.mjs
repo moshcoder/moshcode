@@ -464,6 +464,35 @@ let activeMirror = null;
  */
 const childSink = () => (activeMirror ? (chunk) => activeMirror?.write(chunk) : undefined);
 
+/**
+ * How fast an exit has to be before it is worth remarking on.
+ *
+ * A person who opens an agent and immediately quits takes longer than this.
+ * Nothing that actually started a session lands under it.
+ */
+const INSTANT_EXIT_MS = 1500;
+
+/**
+ * The note for a hand-off that ended the moment it began, or null.
+ *
+ * A CLI that exits 0 without doing anything is indistinguishable, from out
+ * here, from one the operator opened and closed — both are "exited (code 0)",
+ * which reads as success and sent somebody looking for the bug in the wrong
+ * program. It happens for real: @serjm/deepseek-code 0.5.0 compares
+ * `resolve(process.argv[1])` against `import.meta.url` to decide whether it is
+ * the entrypoint, and npm installs every global bin as a symlink, so the
+ * comparison fails and the whole CLI silently runs nothing.
+ *
+ * Timing is all we have — the child owns the terminal, so its output is not
+ * ours to inspect — and it is enough to say "this looks wrong" without
+ * claiming to know why.
+ */
+export function instantExitNote({ key, bin, code, ms }) {
+  if (code !== 0 || ms >= INSTANT_EXIT_MS) return null;
+  return `${key} exited instantly without running — that usually means a broken install, not a clean session.`
+    + ` check it directly with \`${bin} --version\`, and reinstall with /install ${key} if that prints nothing.`;
+}
+
 async function openEngine(key, engine, args, { agentMode = false } = {}) {
   if (!engine.installed && !args.length) {
     console.log(info(`${key} isn't installed — try ${acid("/install " + key)} first.`));
@@ -479,7 +508,9 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
   console.log(info(`opening ${bone(key)}${agentMode ? " autonomously" : " raw"} — hand-off to its CLI, exit it to come back…`));
   console.log(hr());
   activeMirror?.setEngine(key);
+  const startedAt = Date.now();
   const r = await openSession(engine, agentMode ? agentLaunchArgs(engine, args) : args, { onOutput: childSink() });
+  const elapsed = Date.now() - startedAt;
   activeMirror?.setEngine(null);
   console.log(hr());
   if (!r.ok) {
@@ -488,6 +519,8 @@ async function openEngine(key, engine, args, { agentMode = false } = {}) {
       : err(`couldn't launch ${key}: ${r.error?.message || r.error}`));
   } else {
     console.log(info(`${key} exited${r.code != null ? ` (code ${r.code})` : ""}. back in the pit.`));
+    const note = instantExitNote({ key, bin: engine.bin, code: r.code, ms: elapsed });
+    if (note) console.log(warn(note));
   }
 }
 
@@ -497,7 +530,9 @@ async function openWorkflowTool(key, tool, args) {
   }
   console.log(info(`opening ${bone(key)} — native CLI owns the terminal until it exits…`));
   console.log(hr());
+  const toolStartedAt = Date.now();
   const result = await openTool(tool, args, { onOutput: childSink() });
+  const toolElapsed = Date.now() - toolStartedAt;
   console.log(hr());
   if (!result.ok) {
     console.log(result.error?.code === "ENOENT"
@@ -505,6 +540,8 @@ async function openWorkflowTool(key, tool, args) {
       : err(`couldn't launch ${key}: ${result.error?.message || result.error}`));
   } else {
     console.log(info(`${key} exited${result.code != null ? ` (code ${result.code})` : result.signal ? ` (${result.signal})` : ""}. back in the pit.`));
+    const note = instantExitNote({ key, bin: tool.bin, code: result.code, ms: toolElapsed });
+    if (note) console.log(warn(note));
   }
 }
 
