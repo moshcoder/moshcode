@@ -43,6 +43,7 @@ import {
   renderMarkdown, renderScriptVerb, suggest, wantsHelp, withoutHelp,
 } from "../src/help.mjs";
 import { moshcodeVersion } from "../src/ui.mjs";
+import { needsRootHere, primeEscalation } from "../src/escalate.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = path.join(HERE, "..", "examples", "alive.mosh");
@@ -445,6 +446,9 @@ async function main() {
     }
     const { install, desc, bin } = entry;
     console.log(`🎸 installing ${target} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
+    // Ask for the password before the installer starts, not after it has spent a
+    // minute refreshing package lists and then stopped to wait on one.
+    if (needsRootHere(entry)) primeEscalation({ what: target });
     const result = await runCmd(install.cmd, install.args);
     if (!result.ok) {
       console.error(`install failed: ${result.error?.message || result.error || "unknown error"}`);
