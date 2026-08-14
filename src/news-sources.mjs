@@ -272,16 +272,24 @@ export const DEFAULT_FEEDS = [
  * one. They are somebody else's lists, and that is the point: the feeds inside
  * them stay current without moshcode shipping a release.
  *
- * Two shapes, because the lists worth reading come in two:
+ * Three shapes, because the lists worth reading come in three:
  *
  *   `format: "opml"` — an OPML document, parsed by parseOpml.
- *   `format: "text"` — one feed URL per line, `#` comments ignored. Kagi's
- *     smallweb list is published this way and there is no OPML of it.
+ *   `format: "text"` — one feed URL per line, `#` comments ignored.
+ *   `format: "feed"` — the URL is not a catalogue at all but a single feed that
+ *     already aggregates one. Nothing is fetched to list it; `add` subscribes
+ *     to the one URL. This is how smallweb is carried — see below.
  *
- * `searchOnly` marks a list too large to subscribe to wholesale. smallweb is
- * 32,000+ feeds: importing it would write a 32,000-entry news.opml and then try
- * to fetch every one of them on the next `/news`. It is a catalogue to search,
- * not a subscription — `/rss search <keyword>` is how you get feeds out of it.
+ * Kagi's Small Web used to be here as its catalogue: a 5MB OPML of 33,000
+ * personal blogs, plus a 1.1MB plain-text fork of the same thing. Both were
+ * marked search-only, because subscribing to 33,000 feeds is not a thing a
+ * reader can do — but `find` reads every list on every search, so *searching*
+ * loaded and parsed 33,000 outlines each time, which is what took `/rss` and
+ * `/news find` down. Lazily paging a catalogue that size is a feature nobody
+ * asked for, so the catalogue is gone and the firehose stands in for it:
+ * kagi.com/smallweb/feed is those same blogs already merged into one Atom
+ * document, newest first, with titles and summaries. One feed, one fetch, and
+ * `/news --feed smallweb` reads it on its own.
  */
 export const FEED_LISTS = [
   {
@@ -310,17 +318,11 @@ export const FEED_LISTS = [
   },
   {
     name: "smallweb",
-    description: "Kagi Small Web — 33k personal blogs, with titles",
-    url: "https://kagi.com/smallweb/opml",
-    format: "opml",
-    searchOnly: true,
-  },
-  {
-    name: "smallweb-txt",
-    description: "Kagi Small Web, profullstack's fork — the plain-text list",
-    url: "https://raw.githubusercontent.com/ralyodio/smallweb/refs/heads/main/smallweb.txt",
-    format: "text",
-    searchOnly: true,
+    description: "Kagi Small Web — 33k personal blogs, merged into one feed",
+    url: "https://kagi.com/smallweb/feed",
+    format: "feed",
+    title: "Kagi Small Web",
+    site: "https://kagi.com/smallweb",
   },
 ];
 
