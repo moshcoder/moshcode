@@ -354,6 +354,7 @@ const COMMANDS = [
   cliVerb("tailscale", "drive the Tailscale CLI (mesh VPN: up, status, ssh, serve)"),
   cliVerb("coral", "drive the Coral CLI (SQL over APIs, databases, and internal systems)"),
   cliVerb("alpaca", "drive the native Alpaca trading CLI"),
+  cliVerb("mcpjam", "drive the MCPJam CLI (test, debug, and validate MCP servers)"),
   cliVerb("trade", "look up tickers, inspect markets, and preview/place Alpaca orders"),
   cliVerb("pwd", "print the current repo/location"),
 ];
