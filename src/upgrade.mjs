@@ -6,6 +6,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { ENGINES, engineStatus, exitReason, ranOk, resolveEngine, upgradeSpec, runCmd } from "./engines.mjs";
 import { TOOLS, resolveTool, toolStatus, toolUpgradeSpec } from "./tools.mjs";
+import { needsRootHere, primeEscalation } from "./escalate.mjs";
 
 // Self-upgrade re-runs the moshcode installer's `update` path. Defaults to the
 // GitHub-hosted install.sh (always live); override with MOSHCODE_INSTALL_URL.
@@ -84,6 +85,7 @@ export function planUpgrade(targets = []) {
       // is something other than the installer, so a fallback can never repeat
       // the command that just failed.
       fallback: installed && upgradeSpec(ENGINES[key]) !== ENGINES[key].install ? ENGINES[key].install : null,
+      needsRoot: needsRootHere(ENGINES[key]),
       installed,
     });
   };
@@ -98,6 +100,7 @@ export function planUpgrade(targets = []) {
       kind: "tool",
       spec: installed ? toolUpgradeSpec(TOOLS[key]) : TOOLS[key].install,
       fallback: installed && toolUpgradeSpec(TOOLS[key]) !== TOOLS[key].install ? TOOLS[key].install : null,
+      needsRoot: needsRootHere(TOOLS[key]),
       installed,
     });
   };
@@ -166,6 +169,17 @@ export async function runUpgrade(targets = [], io = {}) {
   }
 
   const exec = io.runCmd || runCmd;
+
+  // Get the password prompt out of the way before the first download rather than
+  // somewhere in the middle of the plan. A plan is long and unattended by
+  // design; the one interactive moment in it should not be buried where nobody
+  // is looking. Skipped entirely when nothing in the plan needs root, so the
+  // common `moshcode update` never asks.
+  const rootItems = items.filter((it) => it.needsRoot);
+  if (rootItems.length) {
+    const prime = io.primeEscalation || primeEscalation;
+    prime({ what: rootItems.map((it) => it.label).join(", "), out: log });
+  }
 
   const results = [];
   const attempt = async (name, spec, note) => {

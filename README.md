@@ -449,6 +449,12 @@ MoshCode resolves the latest GitHub release and drops the binary in
 goes through your distro's package manager and will ask for sudo (on macOS it
 delegates to the App Store).
 
+MoshCode asks for that password **before** starting the work rather than letting
+the installer stop for it partway through — which matters most in `moshcode
+update`, where tailscale is one step in a long unattended run and the prompt
+would otherwise land where nobody is watching. Nothing is asked when the plan has
+no privileged step in it, when a credential is already cached, or on macOS.
+
 Top-level passthrough preserves stdin, stdout, stderr, environment variables,
 the current directory, and the native exit result. That keeps JSON pipelines
 usable:

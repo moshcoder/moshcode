@@ -118,6 +118,17 @@ export const TOOLS = {
     // which means it needs root — it finds sudo/doas itself and may prompt for a
     // password (stdio is inherited, so the prompt works). On macOS the same
     // script delegates to the App Store.
+    //
+    // `needsRoot` is what lets us get that prompt out of the way before the work
+    // starts rather than partway through it. It says nothing about how the
+    // escalation happens — the vendor script still does its own — only that one
+    // is coming, which is all primeEscalation needs to know. `tailscale update`
+    // needs root for the same reason, so it covers both directions.
+    //
+    // macOS is the exception, and the same line above says why: there the script
+    // delegates to the App Store, which does its own authorisation. Asking for a
+    // sudo password there would be a prompt for a step that never escalates.
+    needsRoot: { except: ["darwin"] },
     install: { cmd: "sh", args: ["-c", "curl -fsSL https://tailscale.com/install.sh | sh"] },
     // Native updater on Linux (v1.36+) and Windows. macOS updates come from the
     // App Store, so there it fails with tailscale's own message rather than

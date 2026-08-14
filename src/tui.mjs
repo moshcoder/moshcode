@@ -26,6 +26,7 @@ import { cryptoCommand } from "./crypto.mjs";
 import { gamesCommand } from "./games.mjs";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { shellInvocation } from "./shell.mjs";
+import { needsRootHere, primeEscalation } from "./escalate.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
@@ -550,6 +551,9 @@ function installTarget(key) {
     const target = (Object.hasOwn(ENGINES, key) && ENGINES[key]) || (Object.hasOwn(TOOLS, key) && TOOLS[key]);
     if (!target) { console.log(err(`unknown engine or tool "${key}"`)); return resolve(); }
     console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
+    // Before the rule, so the prompt reads as the pit asking rather than as
+    // something the installer's output scrolled into view.
+    if (needsRootHere(target)) primeEscalation({ what: key, out: (s) => console.log(info(s.replace(/^· /, ""))) });
     console.log(hr());
     const child = spawn(target.install.cmd, target.install.args, { stdio: "inherit" });
     child.on("error", (e) => {
