@@ -1021,6 +1021,25 @@ test("smallweb subscribes as one feed, without downloading it first", async () =
   assert.deepEqual(loadFeeds(env), []);
 });
 
+test("a catalogue-sized OPML is refused however it is reached", async () => {
+  // The door that was left open: search-only guarded the list name, so
+  // `add smallweb` was refused and `add https://kagi.com/smallweb/opml` wrote
+  // 32,969 outlines into news.opml — after which every /rss tried to fetch all
+  // of them. A URL is not a smaller promise than a name.
+  const { env } = sandbox();
+  const outlines = Array.from({ length: 2500 }, (_, i) =>
+    `<outline text="blog ${i}" xmlUrl="https://b${i}.example/rss"/>`).join("");
+  const io = sink();
+  const code = await newsCommand(["add", "https://huge.example/list.opml"], {
+    ...io, env,
+    fetchImpl: fakeFetch({ "https://huge.example/list.opml": `<opml><body>${outlines}</body></opml>` }),
+  });
+  assert.equal(code, 1);
+  assert.match(io.errorText(), /2,500 feeds/);
+  assert.match(io.errorText(), /catalogue, not a subscription/);
+  assert.deepEqual(loadFeeds(env), []);
+});
+
 test("a one-feed list is searchable without a catalogue fetch", async () => {
   const list = resolveBundle("smallweb");
   assert.equal(list.format, "feed");
