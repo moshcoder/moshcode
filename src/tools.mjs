@@ -160,6 +160,15 @@ export const TOOLS = {
     },
     installHelp: "Go is required to install Alpaca; install Go, then retry `moshcode install alpaca`.",
   },
+  mcpjam: {
+    desc: "MCPJam — test, debug, and validate MCP servers (health, OAuth, tool-surface diffs)",
+    bin: "mcpjam",
+    // The companion to `moshcode mcp`: that registers a server across engines,
+    // this one tells you whether the server is actually worth registering.
+    // Published as an ordinary global npm package, and `npm install -g` is
+    // idempotent, so it doubles as the upgrade path — no `upgrade` key needed.
+    install: { cmd: "npm", args: ["install", "-g", "@mcpjam/cli"] },
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */

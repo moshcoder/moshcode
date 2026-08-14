@@ -440,6 +440,19 @@ moshcode railway up
 moshcode doctl compute droplet list
 ```
 
+### MCP server testing
+
+```sh
+moshcode install mcpjam           # npm i -g @mcpjam/cli
+
+moshcode mcpjam --help            # straight through to the native CLI
+```
+
+MCPJam is the companion to `moshcode mcp`: `mcp` registers a server across your
+engines, `mcpjam` tells you whether that server is healthy first — health
+checks, OAuth conformance, tool-surface diffing, and structured triage from the
+terminal or CI. Re-running `moshcode install mcpjam` is also its upgrade path.
+
 `gh`, `supabase`, and `doctl` publish no cross-platform install script, so
 MoshCode resolves the latest GitHub release and drops the binary in
 `$MOSHCODE_BIN` (default `~/.local/bin`) — no sudo, no package manager. Set
@@ -1069,6 +1082,7 @@ chmod +x deploy.mosh
 | `turso(args…)` | drive the Turso CLI |
 | `tailscale(args…)` | drive the Tailscale CLI |
 | `coral(args…)` | drive the Coral CLI (SQL over APIs, databases, internal systems) |
+| `mcpjam(args…)` | drive the MCPJam CLI (test, debug, and validate MCP servers) |
 | `pwd()` | print the current repo/location |
 | `run(file)` | run another .mosh file (include/compose) |
 

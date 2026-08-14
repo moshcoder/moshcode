@@ -165,6 +165,41 @@ test("railway installs from the official npm package", () => {
   });
 });
 
+test("MCPJam is a workflow tool installed from its official npm package", () => {
+  assert.deepEqual(resolveTool("MCPJAM"), ["mcpjam", TOOLS.mcpjam]);
+  assert.equal(TOOLS.mcpjam.bin, "mcpjam");
+  assert.deepEqual(TOOLS.mcpjam.install, {
+    cmd: "npm",
+    args: ["install", "-g", "@mcpjam/cli"],
+  });
+  // No self-updater: `npm install -g` is idempotent, so re-running the install
+  // IS the upgrade. Asserted so adding one later is a deliberate change.
+  assert.equal(TOOLS.mcpjam.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.mcpjam), TOOLS.mcpjam.install);
+  assert.match(toolList(), /mcpjam/);
+});
+
+test("install mcpjam delegates to the official npm package", async () => {
+  const root = tempDir("moshcode-install-mcpjam-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "npm-args.json");
+  mkdirSync(nativeBin);
+  writeExecutable(nativeBin, "npm", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "mcpjam"], {
+    binDir: nativeBin,
+    env: { NPM_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "install", "-g", "@mcpjam/cli",
+  ]);
+});
+
 test("doppler installs user-local and updates natively", () => {
   // --install-path keeps the binary out of /usr/local/bin, so no sudo prompt.
   const [flag, script] = TOOLS.doppler.install.args;
