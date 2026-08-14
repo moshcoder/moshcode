@@ -25,6 +25,7 @@ import { stocksCommand } from "./advisor.mjs";
 import { cryptoCommand } from "./crypto.mjs";
 import { gamesCommand } from "./games.mjs";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
+import { shellInvocation } from "./shell.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
@@ -128,7 +129,7 @@ export function splitCommandLine(line) {
 }
 
 // Everything after the first word of a command line, exactly as typed. `/shell`
-// hands this straight to `$SHELL -c`, the same way `!cmd` does: the shell does
+// hands this straight to `$SHELL -ic`, the same way `!cmd` does: the shell does
 // its own parsing, so re-joining the tokenized parts would strip the user's
 // quotes and escapes and silently split `-m "two words"` into two arguments.
 function commandRemainder(line, words = 1) {
@@ -148,7 +149,7 @@ function commandRemainder(line, words = 1) {
  * quotes there belong to the shell. Tokenizing tells the two apart: exactly one
  * token means the whole value was quoted, so use it with the quotes stripped;
  * anything else is a bare command line, and it goes through verbatim so the
- * user's own quoting survives into `$SHELL -c`.
+ * user's own quoting survives into `$SHELL -ic`.
  */
 export function aliasValue(line) {
   const raw = commandRemainder(line, 3); // past "/alias", "set", "<name>"
@@ -508,12 +509,12 @@ async function openWorkflowTool(key, tool, args) {
 
 // Spawn the user's shell with the terminal fully handed over (stdio inherit),
 // inheriting the current cwd + env. No args → an interactive shell; a raw
-// command string → `$SHELL -c "<cmd>"` (one-off). Resolves { ok, code, signal }.
+// command string → `$SHELL -ic "<cmd>"` (one-off). Interactive so the command
+// can see the aliases and functions in ~/.zshrc — see src/shell.mjs for why
+// that is not optional. Resolves { ok, code, signal }.
 function runShell(rawCmd) {
   return new Promise((resolve) => {
-    const shell = process.env.SHELL
-      || (process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : "/bin/sh");
-    const args = rawCmd ? ["-c", rawCmd] : [];
+    const { shell, args } = shellInvocation(rawCmd);
     let child;
     try { child = spawn(shell, args, { stdio: "inherit" }); }
     catch (e) { resolve({ ok: false, error: e }); return; }
@@ -525,9 +526,12 @@ function runShell(rawCmd) {
 // vim `:sh` — drop into a shell and land back at the mosh prompt on exit, with
 // the whole TUI session (history, cwd) intact. `rawCmd` runs a one-off instead.
 async function openShell(rawCmd) {
-  const shellName = path.basename(process.env.SHELL || "sh");
+  // The flags come from the same place the spawn does, so the echoed line is
+  // what actually ran — a `-c` printed above an `-ic` invocation is the kind of
+  // small lie that sends someone debugging the wrong shell.
+  const { flags, name: shellName } = shellInvocation(rawCmd);
   console.log(info(rawCmd
-    ? `${bone(shellName)} ${ash("-c")} ${ash(rawCmd)}`
+    ? `${bone(shellName)} ${ash(flags)} ${ash(rawCmd)}`
     : `dropping to ${bone(shellName)} — ${ash("`exit` or Ctrl-D brings you back to the pit")}`));
   console.log(hr());
   const r = await runShell(rawCmd);

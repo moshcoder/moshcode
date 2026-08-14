@@ -20,6 +20,7 @@ import { cliVerb, aiVerb } from "./cli.mjs";
 import { ingestApproval, pollApproval } from "./notify.mjs";
 import { capture, killSession, sendPrompt } from "./herd.mjs";
 import { herdStart, roster, waitFor } from "./herd-cli.mjs";
+import { shellInvocation } from "./shell.mjs";
 
 // The moshcoding pit-anthem playlist. mosh() blasts this URL and, on a desktop
 // with a GUI, tries to open it in the default browser.
@@ -190,9 +191,9 @@ const COMMANDS = [
 
   {
     name: "shell",
-    summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL -c elsewhere)",
+    summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL elsewhere)",
     usage: "shell(cmd)",
-    detail: "runs cmd in $SHELL; returns { ok, code, signal }",
+    detail: "runs cmd in $SHELL, loading your rc file where it can; returns { ok, code, signal }",
     // The moshscript system verb for arbitrary shell commands. Blocking
     // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
     // and the child owns the terminal for interactive commands. Returns
@@ -202,15 +203,16 @@ const COMMANDS = [
       const cmd = args.join(" ");
       if (!cmd) throw new Error("moshscript: shell() requires a command string");
       if (ctx.dryRun) {
-        ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL -c ${JSON.stringify(cmd)}`);
+        ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL ${shellInvocation(cmd).flags} ${JSON.stringify(cmd)}`);
         // Same R8 contract as the comment above: `code` is always present, so a
         // script branching on the exit status behaves the same under --dry-run.
         return { ok: true, code: 0, dryRun: true };
       }
-      const sh = process.platform === "win32"
-        ? (process.env.COMSPEC || "cmd.exe")
-        : (process.env.SHELL || "/bin/sh");
-      const shArgs = process.platform === "win32" ? ["/d", "/s", "/c", cmd] : ["-c", cmd];
+      // Same invocation the pit's own `!cmd` uses, so a command that works when
+      // typed works when scripted: interactive where a terminal is attached, so
+      // the user's rc file — and the aliases in it — are loaded. src/shell.mjs
+      // has the reasoning, including why a headless run stays non-interactive.
+      const { shell: sh, args: shArgs } = shellInvocation(cmd);
       ctx.out(`  ▶ shell: ${cmd}`);
       const res = spawnSync(sh, shArgs, { stdio: "inherit" });
       if (res.error) throw res.error;
