@@ -433,6 +433,7 @@ moshcode install doppler          # official script, installed user-local (needs
 moshcode install doctl            # GitHub release binary → ~/.local/bin
 moshcode install turso            # official script → ~/.turso (new shell to pick up PATH)
 moshcode install tailscale        # official script; system daemon, so it needs root
+moshcode install coral            # official script → ~/.local/bin (checksum-verified)
 
 moshcode gh pr list               # straight through to the native CLI
 moshcode railway up
@@ -1061,6 +1062,7 @@ chmod +x deploy.mosh
 | `doctl(args…)` | drive the DigitalOcean CLI |
 | `turso(args…)` | drive the Turso CLI |
 | `tailscale(args…)` | drive the Tailscale CLI |
+| `coral(args…)` | drive the Coral CLI (SQL over APIs, databases, internal systems) |
 | `pwd()` | print the current repo/location |
 | `run(file)` | run another .mosh file (include/compose) |
 

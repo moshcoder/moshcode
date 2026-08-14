@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 
 import { isInstalled } from "../src/engines.mjs";
-import { TOOLS, resolveTool, retry, toolList } from "../src/tools.mjs";
+import { TOOLS, resolveTool, retry, toolList, toolUpgradeSpec } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -211,6 +211,20 @@ test("tailscale uses the official installer and native updater", () => {
   assert.deepEqual(TOOLS.tailscale.upgrade, { cmd: "tailscale", args: ["update"] });
 });
 
+test("Coral installs from its official script and re-runs it to upgrade", () => {
+  assert.deepEqual(resolveTool("CORAL"), ["coral", TOOLS.coral]);
+  assert.equal(TOOLS.coral.bin, "coral");
+  assert.deepEqual(TOOLS.coral.install, {
+    cmd: "bash",
+    args: ["-c", "curl -fsSL https://withcoral.com/install.sh | bash"],
+  });
+  // Coral ships no self-updater, so re-running the installer IS the upgrade —
+  // asserted here so adding one later is a deliberate change, not a silent one.
+  assert.equal(TOOLS.coral.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.coral), TOOLS.coral.install);
+  assert.match(toolList(), /coral/);
+});
+
 test("release-only CLIs install via the bundled downloader", () => {
   // gh, supabase, and doctl publish no cross-platform install script, so their
   // spec runs src/release-install.mjs on this node, not a vendor URL.
@@ -306,6 +320,7 @@ for (const [name, shell, script] of [
   ["coinpay", "sh", "curl -fsSL https://coinpayportal.com/install.sh | sh"],
   ["c0mpute", "sh", "curl -fsSL https://c0mpute.com/install.sh | sh"],
   ["c0upons", "sh", "curl -fsSL https://c0upons.com/install.sh | sh"],
+  ["coral", "bash", "curl -fsSL https://withcoral.com/install.sh | bash"],
 ]) {
   test(`install ${name} delegates to its official install script`, async () => {
     const root = tempDir("moshcode-install-");
