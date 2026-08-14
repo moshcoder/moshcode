@@ -106,5 +106,9 @@ test("the vocabulary exposes summaries for `moshcode commands`", () => {
 test("shell() summary describes the portable shell behavior", () => {
   const cmd = moshVocabulary().get("shell");
   assert.match(cmd.summary, /cmd\.exe on Windows/);
-  assert.match(cmd.summary, /\$SHELL -c elsewhere/);
+  // No flag in the summary any more: the flags depend on the shell and on
+  // whether a terminal is attached, so naming one here would be wrong half the
+  // time. The detail line is where the rc-loading promise is made.
+  assert.match(cmd.summary, /\$SHELL elsewhere/);
+  assert.match(cmd.detail, /rc file/);
 });

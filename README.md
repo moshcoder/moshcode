@@ -1035,7 +1035,7 @@ chmod +x deploy.mosh
 | `ask(prompt)` | blocking gate — waits for human reply at moshcode.sh |
 | `say("…")` | print a line |
 | `sleep(ms)` | pause for N milliseconds (blocking) |
-| `shell(cmd)` | run a shell command (blocking, `$SHELL -c`); returns `{ ok, code }` |
+| `shell(cmd)` | run a shell command (blocking, `$SHELL -ic`, so your rc file loads); returns `{ ok, code }` |
 | `stop()` | end the loop (`alive = false`) |
 | `repeat()` | back to the top of the loop |
 

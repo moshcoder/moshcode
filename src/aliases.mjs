@@ -8,7 +8,7 @@
 // An alias is a name and a line. The line is a shell command unless it starts
 // with `/`, in which case it is a pit command:
 //
-//   /alias set gs "git status"       → /gs   runs `$SHELL -c "git status"`
+//   /alias set gs "git status"       → /gs   runs `$SHELL -ic "git status"`
 //   /alias set cc "/agents claude"   → /cc   opens claude autonomously
 //
 // Shell-by-default because that is what the prompt is mostly asked for, and the
@@ -148,7 +148,7 @@ export function removeAlias(name) {
  *
  * Appended rather than substituted, the way a shell alias behaves: `/gs -sb` is
  * `git status -sb`. `args` is the raw remainder of the typed line, not the
- * tokenized parts, so the user's own quoting survives into `$SHELL -c`.
+ * tokenized parts, so the user's own quoting survives into `$SHELL -ic`.
  *
  * The `!` is what routes a bare value to the shell — the pit already reads a
  * leading `!` as "run this in $SHELL", so an alias does not need a second path
