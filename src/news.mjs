@@ -124,6 +124,15 @@ const FEED_MAX_BYTES = 2 * 1024 * 1024;
  */
 const PER_FEED_ITEMS = 200;
 
+/**
+ * The most feeds one `add` may subscribe to at once.
+ *
+ * Whatever the source — a named list, a URL, a local file. The largest list
+ * published by name holds 611 feeds, so this refuses only the thing that is a
+ * catalogue rather than a reading list.
+ */
+const MAX_IMPORT_FEEDS = 2000;
+
 /** How many feeds are in flight at once. Politeness, not throughput. */
 const CONCURRENCY = 6;
 
@@ -1577,6 +1586,17 @@ async function addCommand(request, { out, fail, fetchImpl, env }) {
     // Tagged with the list it came from, so `rm <list>` can take it back out.
     const incoming = bundle ? tagWithList(parsedList, bundle.name) : parsedList;
     if (!incoming.length) { fail(danger(`✗ that ${bundle?.format === "text" ? "list" : "OPML file"} lists no feeds`)); return 1; }
+    // A catalogue is not a subscription. `searchOnly` guarded the *name* but
+    // never the URL, so `add https://kagi.com/smallweb/opml` wrote 32,969
+    // outlines into news.opml and every `/rss` afterwards tried to fetch all of
+    // them — the crash this was supposed to prevent, through the one door left
+    // open. The limit sits well above every published list (the largest is 611)
+    // and well below a catalogue.
+    if (incoming.length > MAX_IMPORT_FEEDS) {
+      fail(danger(`✗ that list holds ${incoming.length.toLocaleString()} feeds — more than ${MAX_IMPORT_FEEDS.toLocaleString()}, which is more than a reader can fetch`));
+      fail(`  ${ash("it is a catalogue, not a subscription — search it instead:")} ${bone("/rss search <keyword>")}`);
+      return 1;
+    }
     let feeds = existing;
     const added = [];
     let skipped = 0;
