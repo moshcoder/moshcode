@@ -148,9 +148,32 @@ export async function registerTld({ tld: input, userId, ownerEmail = null, owner
 const logAction = (tld, userId, action) =>
   run(`INSERT INTO moshpit_tld_log (tld, user_id, action, at) VALUES (?,?,?,?)`, [tld, userId, action, Date.now()]);
 
-/** The append-only allocation log -- the answer to "who claimed it first". */
-export async function tldLog(limit = 500) {
-  return all(`SELECT seq, tld, user_id, action, at FROM moshpit_tld_log ORDER BY seq ASC LIMIT ?`, [limit]);
+/**
+ * The append-only allocation log -- the answer to "who claimed it first".
+ *
+ * `since` is a seq and it is exclusive, because that is the only piece of state
+ * a mirror actually has: the last entry it stored. "Everything after 41" is the
+ * whole of the question, and answering it needs the server to remember nothing
+ * about who is asking -- which is what makes the log mirrorable by anyone
+ * rather than by whoever we have set up as a replica.
+ *
+ * Ordering is by seq and never by `at`. Two entries can share a millisecond,
+ * and a reader that sorts on the clock would put them in a different order than
+ * the writer did -- at which point two mirrors of the same log disagree about
+ * who claimed a name first, which is the one thing this table exists to settle.
+ */
+export async function tldLog({ since = 0, limit = 500 } = {}) {
+  const after = Number.isInteger(since) && since > 0 ? since : 0;
+  return all(
+    `SELECT seq, tld, user_id, action, at FROM moshpit_tld_log WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+    [after, limit],
+  );
+}
+
+/** How many entries the log holds -- so a page of it can say that it is one. */
+export async function countTldLog() {
+  const row = await get(`SELECT COUNT(*) AS n FROM moshpit_tld_log`);
+  return Number(row?.n ?? 0);
 }
 
 /* ---- aliases ---- */

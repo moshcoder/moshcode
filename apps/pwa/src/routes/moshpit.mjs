@@ -1,6 +1,7 @@
 // The Moshpit namespace: claim `.<whatever>`, alias it, exempt names from the
 // alias, and resolve.
 //
+//   GET    /api/moshpit/log?since=&limit=     the allocation log, in order, to anyone
 //   GET    /api/moshpit/tlds                  the public registry (`?mine=1` for yours)
 //   POST   /api/moshpit/tlds                  claim `.<whatever>`
 //   GET    /api/moshpit/tlds/:tld             availability lookup, no auth
@@ -17,6 +18,7 @@
 //   GET    /pit                               the human page
 //   GET    /pit/records                       the DNS records on the names you hold
 //   GET    /pit/dns                           how to reach these names from a machine
+import { createHash } from "node:crypto";
 import { Router } from "express";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
@@ -35,6 +37,7 @@ import {
   clearExempt,
   countNames,
   countRecordNames,
+  countTldLog,
   countTlds,
   countTldsForUser,
   countSearchTlds,
@@ -87,6 +90,7 @@ import {
   shortCount,
   suggestedLabels,
   summarizeBulkClaim,
+  tldLog,
   tldRejection,
   zoneLine,
 } from "../moshpit.mjs";
@@ -204,6 +208,67 @@ function pageParams(query) {
   const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
   return { limit, offset };
 }
+
+/**
+ * The allocation log, in order, to anyone who asks.
+ *
+ * `moshpit_tlds` is a cache; this table is the record. That distinction was
+ * written into the model months ago and then went nowhere, because nothing
+ * could read it: no route, no export, no way for a second copy of this registry
+ * to exist. "The directory can be mirrored and served by anyone" was true of
+ * the schema and false of the product.
+ *
+ * Unauthenticated, because a log only one party can read settles nothing. The
+ * point of publishing it is that a claim can be checked against the order it
+ * was made in, by someone who does not trust us -- and a reader who has to ask
+ * us for permission first is trusting us again.
+ *
+ * `?since=` is a seq, exclusive. A mirror stores the last seq it saw and asks
+ * for what came after; catching up and staying caught up are the same call.
+ *
+ * The owning account is a digest rather than the user id. Ownership is already
+ * public -- who claimed `.eggs` first is the whole point -- but the account
+ * behind it is not, which is the same line /api/moshpit/tlds/:tld draws when it
+ * answers "already registered" without saying by whom. The digest is stable and
+ * derived only from the id, so two entries by one owner are still visibly one
+ * owner, and every mirror computes the same value for them.
+ */
+moshpitRouter.get("/api/moshpit/log", async (req, res) => {
+  const sinceRaw = Number.parseInt(req.query.since, 10);
+  const since = Number.isInteger(sinceRaw) && sinceRaw > 0 ? sinceRaw : 0;
+
+  const limitRaw = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(MAX_PAGE, limitRaw) : DEFAULT_LOG_PAGE;
+
+  // One more than asked for, so "is there another page" is answered by what
+  // came back rather than by a second count that could disagree with it.
+  const rows = await tldLog({ since, limit: limit + 1 });
+  const more = rows.length > limit;
+  const entries = more ? rows.slice(0, limit) : rows;
+
+  res.json({
+    total: await countTldLog(),
+    since,
+    limit,
+    // The seq to pass back as `?since=`. Null means caught up -- not "start
+    // again", which is what an absent cursor would otherwise be read as.
+    next: more ? entries[entries.length - 1].seq : null,
+    entries: entries.map((e) => ({
+      seq: e.seq,
+      tld: e.tld,
+      action: e.action,
+      owner: ownerDigest(e.user_id),
+      at: e.at,
+    })),
+  });
+});
+
+// 500 rather than the 200 the endings list uses: these rows are small, and a
+// mirror catching up from empty is the normal case rather than the exception.
+const DEFAULT_LOG_PAGE = 500;
+
+const ownerDigest = (userId) =>
+  (userId ? createHash("sha256").update(`moshpit:owner:${userId}`).digest("hex").slice(0, 16) : null);
 
 moshpitRouter.post("/api/moshpit/tlds", async (req, res) => {
   if (!req.user) return unauthorized(res);
