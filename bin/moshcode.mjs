@@ -336,7 +336,7 @@ async function main() {
     const [key, engine] = resolved;
     return launchEngine(key, engine, rest.slice(1));
   }
-  // The herd (PRD 0009). `herd` is the namespace; the five verbs people reach
+  // The herd (PRD 0009). `herd` is the namespace; the verbs people reach
   // for most often are also top-level, because `moshcode ps` is what someone
   // types when they want to know what is running and nobody should have to
   // learn a namespace to ask that.
@@ -344,7 +344,7 @@ async function main() {
     process.exitCode = (await herdCommand(rest)) || 0;
     return;
   }
-  if (["ps", "attach", "kill", "wait", "restore"].includes(cmd)) {
+  if (["ps", "attach", "kill", "wait", "restore", "cost"].includes(cmd)) {
     process.exitCode = (await herdCommand([cmd === "ps" ? "ps" : cmd, ...rest])) || 0;
     return;
   }

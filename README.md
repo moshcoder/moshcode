@@ -30,6 +30,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode start` | engines | launch an engine with its native defaults |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
+| `moshcode cost` | runtime | what each session is spending, read from the engines' own logs |
 | `moshcode attach` | runtime | attach this terminal to a herd session |
 | `moshcode kill` | runtime | end a herd session |
 | `moshcode wait` | runtime | block until a session is blocked, done, or idle |
@@ -337,6 +338,58 @@ moshcode herd start claude --name watch  # then run `moshcode herd watch` in the
 ```
 
 With `--ask`, whatever you reply is typed into the session that was waiting.
+
+### What it is costing
+
+Every engine already writes down what it used, so nothing has to be
+instrumented or proxied — `moshcode cost` reads the CLIs' own session logs and
+lines them up against the herd:
+
+```sh
+moshcode cost                    # per session, in the window (default: 24h)
+moshcode cost api                # one session, with its engine runs
+moshcode cost --all --since 7d   # every engine session on the box, herd or not
+moshcode cost --watch            # the same report, re-read every 10s
+moshcode cost --json             # for a script
+```
+
+```
+  session  engine  model          in    out   cache  cost    age
+  api      claude  claude-opus-5  1.2k  27k   10.5M  $9.91~  42m
+  audit    codex   gpt-5.6-sol    400   200   600    —       12m
+
+  total  $9.91~  1.6k in · 27k out · 10.5M cached
+  ~ estimated from published rates; unmarked figures are the engine's own.
+⚠ no rate for gpt-5.6-sol — tokens counted, cost omitted.
+```
+
+| engine | where the number comes from |
+|---|---|
+| claude | per-message `usage` in `~/.claude/projects/**/*.jsonl` |
+| codex | cumulative `token_count` events in `~/.codex/sessions/…` |
+| opencode, privacycode | the per-message `cost` each one computed itself |
+| aider | the running session total it prints into `.aider.chat.history.md` |
+
+**A `~` is an estimate, and an unmarked figure is not.** opencode and aider
+price their own messages, and that price is reported untouched. Claude Code and
+Codex record tokens only — which is the honest state of things on a
+subscription, where the marginal request costs nothing extra — so those are
+multiplied by published rates to answer "what would this have cost on the API".
+
+A model nobody has priced shows its tokens and no cost, rather than a
+convincing-looking zero. Price it yourself in `~/.moshcode/pricing.json`:
+
+```json
+{ "gpt-5.6-sol": { "input": 1.25, "output": 10 } }
+```
+
+Cache tokens get their own column because on a long agent session they are most
+of the traffic and a tenth of the price; folding them into `in` makes a $3
+session look like a $60 one. Attribution is engine + directory + "started before
+this run did", so a session that shares a directory with another agent can pick
+up its neighbour's work — `--json` carries the run list when you need to check.
+gemini, kimi, qwen, deepseek and openagents keep no readable usage log, so they
+report no cost rather than zero cost.
 
 ### Driving it from a script or another agent
 

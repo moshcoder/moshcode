@@ -113,6 +113,31 @@ export const CORE_CLI_COMMANDS = [
     note: "state is idle, working, blocked, done or unknown — unknown is a safe answer, not a failure.",
   },
   {
+    name: "cost",
+    group: "runtime",
+    description: "what each session is spending, read from the engines' own logs",
+    synopsis: [["moshcode cost [name] [--all] [--since 6h] [--json]", "session, engine, model, tokens, cost"]],
+    flags: [
+      ["--all", "every engine session on disk, herd or not", ""],
+      ["--since <dur>", "how far back to look (30m, 6h, 3d)", "24h"],
+      ["--engine <list>", "only these engines, comma-separated", "all"],
+      ["--watch [secs]", "re-read on an interval until ctrl-c", "10"],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode cost", "what is the herd costing me right now?"],
+      ["moshcode cost api --json", "one session, with its engine runs broken out"],
+      ["moshcode cost --all --since 7d", "everything the agents did this week"],
+    ],
+    seeAlso: ["ps", "herd", "attach"],
+    note: "the numbers come from each CLI's own session log — claude's ~/.claude/projects transcripts, "
+      + "codex's rollout token counts, opencode's per-message cost, aider's chat history. a figure marked "
+      + "`~` was worked out from published rates and is what the tokens WOULD cost on the api; unmarked "
+      + "figures are the engine's own arithmetic. models with no rate show tokens and no cost — add yours "
+      + "to ~/.moshcode/pricing.json. gemini, kimi, qwen, deepseek and openagents log nothing readable, "
+      + "so they report no cost rather than zero.",
+  },
+  {
     name: "attach",
     group: "runtime",
     description: "attach this terminal to a herd session",
@@ -874,6 +899,14 @@ export const HERD_VERBS = [
   { name: "status", description: "what the herd is running on, and how many sessions",
     synopsis: [["moshcode herd status [--json]", ""]],
     flags: [["--json", "machine-readable", ""]] },
+  { name: "cost", description: "what each session is spending, from the engines' own logs",
+    synopsis: [["moshcode herd cost [name] [--all] [--since 6h] [--json]", ""]],
+    flags: [
+      ["--all", "every engine session on disk, herd or not", ""],
+      ["--since <dur>", "how far back to look", "24h"],
+      ["--watch [secs]", "re-read on an interval", "10"],
+      ["--json", "machine-readable", ""],
+    ] },
   { name: "start", description: "start a session and hand the prompt back",
     synopsis: [["moshcode herd start <engine> [--name <slug>] [--agent] [args…]", ""]],
     flags: [
@@ -994,6 +1027,8 @@ export const PIT_COMMANDS = [
     description: "sessions that keep running when you leave" },
   { name: "ps", cli: "ps",
     description: "what the herd is running, and which one wants you" },
+  { name: "cost", args: "[name] [--all]", cli: "cost",
+    description: "what the herd is spending, from the engines' own logs" },
   { name: "attach", args: "<name>", cli: "attach",
     description: "step into a herd session (detach leaves it running)" },
   { name: "kill", args: "<name…>", cli: "kill",

@@ -833,6 +833,7 @@ export async function tui() {
     // sessions run somewhere that outlives it.
     if (cmd === "herd") { await herdCommand(rest); continue; }
     if (cmd === "ps") { await herdCommand(["ps", ...rest]); continue; }
+    if (cmd === "cost") { await herdCommand(["cost", ...rest]); continue; }
     if (cmd === "kill") { await herdCommand(["kill", ...rest]); continue; }
     if (cmd === "wait") { await herdCommand(["wait", ...rest]); continue; }
     if (cmd === "restore") { await herdCommand(["restore", ...rest]); continue; }
