@@ -68,6 +68,42 @@ jobs:
             echo "::notice::CLI $(threatcrush --version 2>/dev/null || echo unknown) predates --format; converting terminal output instead."
           fi
 
+      # Which files does this pull request actually touch?
+      #
+      # The scan below still covers the whole tree, and the whole tree still
+      # goes to the Security tab — coverage is unchanged. This list exists only
+      # to decide what the PR *comment* talks about. A comment that reports
+      # every finding in the repository says the same thing on every pull
+      # request, which is the same as saying nothing: a five-file change to the
+      # games code drew a 53-row table about `install.sh`, the service worker
+      # and the DNS client, none of which it went near. Reviewers learn to
+      # scroll past it, and the one finding that *is* theirs scrolls past with
+      # it.
+      #
+      # Paginated deliberately: `listFiles` caps at 100 per page, and a
+      # truncated list here would silently mark real findings as out-of-scope.
+      - name: Collect the PR's changed files
+        id: changed
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            // Removed files cannot hold a finding; keeping them would only
+            // widen the set with paths the scan never saw.
+            const paths = files
+              .filter((f) => f.status !== 'removed')
+              .map((f) => f.filename);
+            require('fs').writeFileSync(
+              `${process.env.RUNNER_TEMP}/changed-files.txt`,
+              paths.join('\n'),
+            );
+            core.info(`${paths.length} changed file(s) in this PR`);
+
       - name: Scan
         id: scan
         run: |
@@ -170,6 +206,29 @@ jobs:
               results = None
               print(f"::warning::could not read SARIF: {err}")
 
+          # The comment reports on this pull request. Anything outside it is
+          # counted and pointed at, never tabulated: it is not news, it did not
+          # arrive with this branch, and nobody reviewing this diff can act on
+          # it here.
+          try:
+              with open(os.environ["RUNNER_TEMP"] + "/changed-files.txt") as handle:
+                  changed = {line.strip() for line in handle if line.strip()}
+          except Exception as err:
+              # Fail *open* on purpose, and only here. Everywhere else in this
+              # workflow an unknown is treated as "not scanned", because
+              # claiming a clean scan is the dangerous direction. This one is
+              # the opposite: if the changed-file list is missing we cannot
+              # tell which findings are in scope, and the safe move is to show
+              # all of them rather than hide a real one behind an empty set.
+              changed = None
+              print(f"::warning::could not read changed-file list: {err}")
+
+          def in_scope(result):
+              if changed is None:
+                  return True
+              uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+              return uri.lstrip("./") in changed
+
           lines = ["## ThreatCrush Security Scan", ""]
 
           # Fail closed: render findings only on positive evidence that a scan
@@ -188,13 +247,25 @@ jobs:
                   "This is not a clean result. See the job log.",
               ]
           else:
+              scanned = results
+              results = [r for r in scanned if in_scope(r)]
+              elsewhere = len(scanned) - len(results)
+
               counts = {"error": 0, "warning": 0, "note": 0}
               for result in results:
                   level = result.get("level", "warning")
                   if level in counts:
                       counts[level] += 1
 
-              lines.append(f"**{len(results)}** finding(s)")
+              # Say which of the two things this number is. On the fail-open
+              # path it is every finding in the tree, and calling that "in the
+              # files this PR changes" would be a plain falsehood — the one
+              # claim this comment must never make is a narrower scope than it
+              # actually looked at.
+              scope = "in the files this PR changes" if changed is not None else (
+                  "repository-wide — the changed-file list was unavailable, so nothing could be scoped out"
+              )
+              lines.append(f"**{len(results)}** finding(s) {scope}")
               lines.append("")
 
               if results:
@@ -222,7 +293,20 @@ jobs:
                       lines += ["", f"_…and {len(results) - 50} more. Full results in the Security tab._"]
                   lines += ["", "Snippets are redacted; ThreatCrush never prints matched credential material."]
               else:
-                  lines.append("No findings.")
+                  lines.append(f"No findings {scope}.")
+
+              # Counted, not hidden. The whole tree was scanned and the whole
+              # tree is in the Security tab; this line is what says so, so that
+              # "no findings" above can never be misread as "the repository is
+              # clean". Rendering these rows here instead would put the same
+              # unchanged wall of pre-existing findings on every pull request.
+              if elsewhere:
+                  lines += [
+                      "",
+                      f"_{elsewhere} further finding(s) elsewhere in the repository are not "
+                      "shown: they are pre-existing and untouched by this PR. "
+                      "The full tree was scanned — see the Security tab._",
+                  ]
 
           with open(os.environ["RUNNER_TEMP"] + "/threatcrush-comment.md", "w") as handle:
               handle.write("\n".join(lines) + "\n")
