@@ -143,6 +143,54 @@ export function forgetSession(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Remote members — the last thing a URL told us (PRD 0011 R11)
+// ---------------------------------------------------------------------------
+//
+// A remote member has no pane to capture and no pid to signal, so its state can
+// only come from a request. Requests are slow and the roster is drawn on every
+// pit start, so what `ps` reads is a *cache*: whatever the last call to that
+// remote observed, with the time it was observed at. The alternative — a roster
+// that opens N sockets before it prints a line — makes `moshcode ps` as fast as
+// the slowest agent someone registered, which is not a trade worth making for a
+// column that already says `authority: remote`.
+//
+// It lives here rather than in herd-remote.mjs so that herd-state.mjs can read
+// it without importing the module that makes network calls.
+
+const remoteFile = (name) => path.join(herdDir(), "remote", `${name}.json`);
+
+/** Record what a remote just told us. Best effort: a failed write loses a poll. */
+export function recordRemoteStatus(name, status = {}) {
+  try {
+    fs.mkdirSync(path.join(herdDir(), "remote"), { recursive: true, mode: 0o700 });
+    const file = remoteFile(name);
+    fs.writeFileSync(file, JSON.stringify({ ...status, at: status.at ?? Date.now() }), { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * The cached status of a remote member, or null when it has never answered.
+ *
+ * Deliberately un-expiring. A hook report has a TTL because a stale one would
+ * outrank a screen that could be read instead; there is nothing better to fall
+ * back to here, and "it was idle an hour ago" beats "unknown" as long as the
+ * age travels with it — which it does, in `--json` and in `herd remote list`.
+ */
+export function remoteStatus(name) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(remoteFile(name), "utf8"));
+    return raw && typeof raw === "object" ? raw : null;
+  } catch { return null; }
+}
+
+export function clearRemoteStatus(name) {
+  try { fs.rmSync(remoteFile(name), { force: true }); return true; }
+  catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
 // Substrate detection
 // ---------------------------------------------------------------------------
 
@@ -226,10 +274,17 @@ export function tmux(args, { runner = spawnSync, env = process.env, encoding = "
  * (an inherited ANTHROPIC_API_KEY hijacks its stored login — see ENGINES), and
  * `-e KEY=` sets an empty value, which is not the same as unset.
  */
-export function sessionCommand({ bin, args = [], stripEnv = [], exec = true }) {
+export function sessionCommand({ bin, args = [], stripEnv = [], setEnv = {}, exec = true }) {
   const unset = stripEnv.flatMap((key) => ["-u", key]);
+  // Set through the same `env` prefix rather than tmux's `-e`, for two reasons:
+  // `-e` is a 3.2+ flag and the pty substrate has no equivalent at all, so one
+  // prefix is the only spelling both substrates can share.
+  const set = Object.entries(setEnv)
+    .filter(([key, value]) => key && value !== undefined && value !== null)
+    .map(([key, value]) => `${key}=${String(value)}`);
   const command = [bin, ...args].map(shQuote).join(" ");
-  const withEnv = unset.length ? `env ${unset.map(shQuote).join(" ")} ${command}` : command;
+  const prefix = [...unset, ...set];
+  const withEnv = prefix.length ? `env ${prefix.map(shQuote).join(" ")} ${command}` : command;
   // `exec` so the engine replaces the shell rather than sitting under it — one
   // less process between a signal and the thing meant to receive it. The pty
   // substrate passes exec:false because it needs the shell to outlive the
@@ -302,6 +357,24 @@ export function pidAlive(pid) {
  * never sees EOF and waits for input forever, which is what an idle agent
  * should do.
  */
+/**
+ * What every session knows about itself (PRD 0011 R2).
+ *
+ * A lifecycle hook fires inside the engine's own process tree and has to name
+ * the session it is reporting for. Nothing else in that tree knows the name, so
+ * the herd puts it there at launch. `MOSHCODE_HERD_DIR` rides along because a
+ * hook shells out to `moshcode herd report`, and a box whose herd lives
+ * somewhere non-default would otherwise have its reports written to the default
+ * directory nobody is reading.
+ *
+ * A hook fired outside a herd session sees neither, which is the signal to exit
+ * quietly — see `herdReport`. Hooks must never break an engine that is not in
+ * the herd.
+ */
+export function sessionEnv(name) {
+  return { MOSHCODE_HERD_NAME: name, MOSHCODE_HERD_DIR: herdDir() };
+}
+
 function ptyStart({ name, cwd, bin, args, stripEnv, env, spawner = spawn, runner = spawnSync, size = {} }) {
   ensureDir();
   const cols = Number(size.cols) || Number(env.COLUMNS) || process.stdout.columns || 80;
@@ -328,7 +401,7 @@ function ptyStart({ name, cwd, bin, args, stripEnv, env, spawner = spawn, runner
   // that a session which finishes on its own leaves proof it finished.
   const command = [
     `stty rows ${rows} cols ${cols} 2>/dev/null`,
-    sessionCommand({ bin, args, stripEnv, exec: false }),
+    sessionCommand({ bin, args, stripEnv, setEnv: sessionEnv(name), exec: false }),
     `printf '%s' "$?" > ${shQuote(exit)}`,
   ].join("; ");
   // Reuse ptySpec's flag knowledge rather than re-deriving it: util-linux and
@@ -347,7 +420,7 @@ function ptyStart({ name, cwd, bin, args, stripEnv, env, spawner = spawn, runner
       cwd,
       // Belt and braces with the stty above: some toolkits read COLUMNS/LINES
       // before they ever ask the terminal.
-      env: { ...env, COLUMNS: String(cols), LINES: String(rows), MOSHCODE_HERD_SESSION: name },
+      env: { ...env, COLUMNS: String(cols), LINES: String(rows), MOSHCODE_HERD_SESSION: name, ...sessionEnv(name) },
       stdio: [stdin, "ignore", "ignore"],
       detached: true,
     });
@@ -565,7 +638,7 @@ export function startSession({
   };
 
   if (substrate === "tmux") {
-    const command = sessionCommand({ bin, args, stripEnv });
+    const command = sessionCommand({ bin, args, stripEnv, setEnv: sessionEnv(name) });
     const started = tmux(tmuxStartPlan({ name, cwd, command }), { runner, env });
     if (!started.ok) {
       return { ok: false, error: new Error(started.stderr.trim() || started.error?.message || "tmux could not start the session") };
@@ -802,12 +875,21 @@ export function listSessions({ substrate = detectSubstrate(), runner = spawnSync
   const names = [...new Set([...live, ...Object.keys(manifest.sessions)])].sort();
   return names.map((name) => {
     const meta = manifest.sessions[name] || {};
-    const alive = live.has(name);
-    const exited = !alive ? null
+    // A remote member (PRD 0011 R11) has no pane and no pid — it is a URL. The
+    // substrate can only ever report it as absent, so liveness for those rows
+    // means "still registered", and whether the far end answers is a question
+    // for herd-remote.mjs's cache rather than for tmux.
+    const remote = meta.kind === "remote";
+    const alive = remote ? true : live.has(name);
+    const exited = remote ? false
+      : !alive ? null
       : panes ? Boolean(panes.get(name)?.dead)
       : sessionExited(name, { substrate, runner });
     return {
       name,
+      kind: meta.kind || "local",
+      url: meta.url || null,
+      remoteKind: meta.remoteKind || null,
       engine: meta.engine || "?",
       // Sessions started before herds existed have none. They belong to `main`
       // rather than to a group rendered as "undefined".

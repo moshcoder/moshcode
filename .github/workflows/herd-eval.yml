@@ -1,0 +1,109 @@
+# NOT managed by the sh1pt Actions Fleet — hand-written for PRD 0011 R13.
+# The two fleet-managed workflows (ci.yml, test.yml) carry a pack hash and are
+# reverted by the next fleet sync, so this lives in its own file rather than as
+# a job added to one of them.
+#
+# What this gates: "the agent still passes the dataset", as a red/green check
+# next to `npm test`. It needs a real engine with real credentials, which a
+# runner does not have by default — so the whole job is a no-op until a
+# credential secret exists, and says so rather than going green by accident. A
+# gate that fails on every fork because nobody added a secret is a gate people
+# turn off.
+name: herd eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Score every engine has to reach (0-1)"
+        default: "0.8"
+      engines:
+        description: "Comma-separated engines to compare"
+        default: "claude"
+  pull_request:
+    paths:
+      - "evals/**"
+      - "src/herd-eval.mjs"
+      - "src/herd-tasks.mjs"
+      - ".github/workflows/herd-eval.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: herd-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The `secrets` context is not available in a job-level `if`, so the
+      # check is a step that publishes an output the rest of the job reads.
+      - id: creds
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=herd eval skipped::no engine credentials on this runner — add ANTHROPIC_API_KEY to turn this check on"
+          fi
+
+      - uses: pnpm/action-setup@v6
+        if: steps.creds.outputs.have == 'true'
+
+      - uses: actions/setup-node@v7
+        if: steps.creds.outputs.have == 'true'
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.creds.outputs.have == 'true'
+
+      # The herd needs somewhere to run its sessions. Without tmux it would
+      # fall back to script(1), which works, but tmux is one apt away and is
+      # the substrate people actually use.
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+        if: steps.creds.outputs.have == 'true'
+
+      - run: npm install -g @anthropic-ai/claude-code
+        if: steps.creds.outputs.have == 'true'
+
+      # `rules` as the judge, not an engine: the dataset carries its own
+      # expectations, and a judge that is itself an LLM would make a flaky
+      # check out of a deterministic one. Exit 4 is "below the threshold" and
+      # exit 5 is "the harness could not run" — the job distinguishes them so a
+      # broken runner does not get filed as a worse agent.
+      - name: run the dataset
+        if: steps.creds.outputs.have == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          node bin/moshcode.mjs herd eval \
+            --dataset evals/moshcode.jsonl \
+            --engines "${{ inputs.engines || 'claude' }}" \
+            --threshold "${{ inputs.threshold || '0.8' }}" \
+            --json > eval.json
+          code=$?
+          set -e
+          cat eval.json
+          case "$code" in
+            0) echo "::notice title=herd eval::every engine is at or above the threshold" ;;
+            4) echo "::error title=herd eval::an engine scored below the threshold"; exit 1 ;;
+            5) echo "::error title=herd eval::the harness could not run (infrastructure, not the agent)"; exit 1 ;;
+            *) echo "::error title=herd eval::unexpected exit $code"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        if: steps.creds.outputs.have == 'true' && always()
+        with:
+          name: herd-eval-report
+          path: eval.json
+          if-no-files-found: ignore

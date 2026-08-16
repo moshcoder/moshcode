@@ -263,9 +263,9 @@ moshcode agents claude -d --name api     # and an agent
 
 ```sh
 $ moshcode ps
-  api    claude  blocked   ~/src/coinpay   3m
-  logs   shell   idle      ~/src/coinpay   3m
-  work   shell   idle      ~/src/coinpay   3m
+  api    claude  blocked   ~/src/coinpay   3m   screen
+  logs   shell   idle      ~/src/coinpay   3m   screen
+  work   shell   idle      ~/src/coinpay   3m   screen
 
 ⚠ 1 waiting on you — moshcode attach api
 ```
@@ -317,9 +317,9 @@ Every session carries a state: `working`, `blocked`, `done`, `idle`, or
 `unknown`. `blocked` means a human decision is the only thing missing.
 
 ```
-  api       claude  blocked   ~/src/coinpay        12m
-  web       codex   working   ~/src/ugig.net        4m
-  audit     opencode  done    ~/src/moshpit-dns     1h
+  api       claude  blocked   ~/src/coinpay        12m   hook
+  web       codex   working   ~/src/ugig.net        4m   screen
+  audit     opencode  done    ~/src/moshpit-dns     1h   runtime
 ```
 
 State comes from one authority per session, never two. An engine that reports
@@ -415,6 +415,120 @@ herdPrompt("web", "port the dashboard");
 await herdWait("api"); await herdWait("web");
 say(herdRead("api", { lines: 20 }));
 ```
+
+Fanning work out is easy; joining on it used to be a hand-rolled polling loop.
+`--any` returns on the first session to get there, `--all` when the last one
+has, and both take the same `--state` and `--timeout` as a single wait:
+
+```sh
+moshcode wait --any api web docs           # --json names the winner
+moshcode wait --all api web --state done
+```
+
+```js
+const first = await herdWait(["api", "web", "docs"], { any: true });
+await herdWait(["api", "web"], { states: ["done"] });
+```
+
+### Let the engine say what it is doing
+
+Reading a screen works and it rots — engines change their wording between
+releases and nothing tells you. When an engine has lifecycle hooks, install
+them once and its state comes from the engine itself:
+
+```sh
+moshcode herd hooks install claude
+✓ claude — 3 hooks installed (stop, notification, prompt-submit)
+```
+
+`moshcode ps` then reads `hook` in its last column instead of `screen`. The
+file is **merged, never clobbered** — your own hooks stay, and `hooks remove`
+takes out only what moshcode put in. A hook that fires outside a herd session
+does nothing and exits 0, so installing one cannot break an engine you run by
+hand, and the screen rules stay as the fallback for everything else.
+`moshcode herd doctor` says what is installed, what has drifted, and — for the
+first time — what is wrong with your `rules.json` instead of ignoring it.
+
+### What happened while you slept
+
+Every prompt through the herd mints a **task**: an id, its state transitions
+with timestamps, and the output it produced. `ps` still answers "now"; this
+answers "what happened".
+
+```sh
+$ moshcode herd tasks api
+  t-01  22:14  done      4m     "port the auth routes"
+  t-02  22:19  blocked   6h11   "run the migration"
+
+$ moshcode herd task t-02        # transitions, and what came back
+$ moshcode herd log api          # the raw state history
+$ moshcode herd stats api
+api          working 3h02 · blocked 6h11 · idle 1h40
+  blocked 6h11 over 2 spell(s) — that one is you
+```
+
+Blocked time is the herd's name for *human latency*: the agent was ready and
+you were asleep. Ledgers live in `~/.moshcode/herd/tasks/<session>.jsonl` at
+`0600`, capped at the last 500 tasks per session. From a script,
+`herdTasks(name)` and `herdTask(id)` return them as values.
+
+### Agents that are not on this box
+
+A deployed agent can be a herd member. Two kinds: `a2a` speaks
+[A2A v0.3.0](https://a2a-protocol.org/v0.3.0/specification/) (card discovery,
+`message/send`, `tasks/get`, `tasks/cancel`), and `run` is a bare endpoint that
+takes `POST {"prompt": …}` — the shape a `gradient agent deploy` prints.
+
+```sh
+moshcode herd remote add research https://agents.do-ai.run/…/production --kind run
+export MOSHCODE_REMOTE_RESEARCH_TOKEN=…       # never written to the manifest, never synced
+```
+
+```
+$ moshcode ps
+  api        claude   blocked   ~/src/coinpay      12m   hook
+  research   remote   idle      agents.do-ai.run   —     remote
+```
+
+`prompt`, `read`, `wait` and `kill` work on it unchanged, which is the point: a
+fan-out script across a local pty and a deployed agent contains no `if
+(remote)`. A remote's state is the *remote's claim* — `ps` says `remote` in the
+last column so it is never mistaken for something this box verified — and
+`kill` on one deregisters it here rather than reaching across the network to
+end somebody else's agent.
+
+### The herd, over A2A
+
+`moshcode herd serve` exposes this machine's herd to any A2A client: the herd's
+card at `/.well-known/agent-card.json`, each member at `/<name>/`,
+`message/send` → prompt, `tasks/get` → the ledger, `tasks/cancel` → interrupt.
+`blocked` is A2A's `input-required`; the states that do not map cleanly round
+down and carry the honest one in task metadata.
+
+```sh
+moshcode login                 # it verifies tokens against app.moshcode.sh
+moshcode herd serve            # 127.0.0.1:7683 by default
+```
+
+It is a shell on a socket and is treated like one: **no unauthenticated mode,
+loopback included**, a loud warning past `127.0.0.1`, and sessions started with
+`--agent` withheld unless you pass `--expose-autonomous` — an engine with its
+approvals bypassed plus a network prompt is the worst pairing on the menu.
+
+### Which engine is best at *this* repo
+
+Not a leaderboard run against engines nobody deploys on repos nobody has — your
+dataset, your engines, your machine:
+
+```sh
+moshcode herd eval --dataset evals/moshcode.jsonl --engines claude,codex --threshold 0.8
+```
+
+A row is `{"prompt": "…", "expect": "pattern"}` or
+`{"prompt": "…", "rubric": "…"}` (jsonl, json or csv). Scoring is either the
+dataset's own patterns or an engine acting as judge (`--judge claude`). Exit
+codes are distinct on purpose — `0` pass, `4` below the threshold, `5` the
+harness could not run — because CI has to tell a worse agent from a broken box.
 
 ### After a reboot
 

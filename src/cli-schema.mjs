@@ -95,6 +95,11 @@ export const CORE_CLI_COMMANDS = [
       ["# driving one without attaching", ""],
       ["moshcode herd prompt api \"run the tests\" --wait", "hand it work, block until it lands"],
       ["moshcode herd read api --lines 40", "read its screen"],
+      ["", ""],
+      ["# what happened while you slept", ""],
+      ["moshcode herd hooks install claude", "state from the engine, not from its screen"],
+      ["moshcode herd tasks api", "every prompt, and how long each one waited on you"],
+      ["moshcode herd remote add research https://agents.do-ai.run/…/production", "a deployed agent, same verbs"],
     ],
     seeAlso: ["ps", "attach", "wait", "restore", "start"],
     note: "`start` is for the engines moshcode installs; `run` and `shell` take anything else, "
@@ -165,15 +170,25 @@ export const CORE_CLI_COMMANDS = [
     name: "wait",
     group: "runtime",
     description: "block until a session is blocked, done, or idle",
-    synopsis: [["moshcode wait <name> [--state blocked,done] [--timeout 30m]", ""]],
+    synopsis: [
+      ["moshcode wait <name> [--state blocked,done] [--timeout 30m]", ""],
+      ["moshcode wait --any <a> <b> …", "the first one there wins"],
+      ["moshcode wait --all <a> <b> …", "join the whole fan-out"],
+    ],
     flags: [
       ["--state <list>", "states to wait for, comma-separated", "blocked,done"],
+      ["--any", "return as soon as one of them reaches the state", ""],
+      ["--all", "return when every one of them has", "implied by naming several"],
       ["--timeout <dur>", "give up after this long (30s, 10m, 2h)", "30m"],
       ["--json", "machine-readable", ""],
     ],
-    examples: [["moshcode wait api --state blocked --timeout 1h", "exit 0 matched · 2 timed out · 3 gone"]],
+    examples: [
+      ["moshcode wait api --state blocked --timeout 1h", "exit 0 matched · 2 timed out · 3 gone"],
+      ["moshcode wait --any api web docs", "--json names the winner"],
+    ],
     seeAlso: ["herd", "ps"],
-    note: "exit codes are the point: 0 matched, 2 timed out, 3 no such session.",
+    note: "exit codes are the point: 0 matched, 2 timed out, 3 no such session. "
+      + "--any/--all are what fan-in scripts used to spell out as a polling loop; a remote member waits the same way a local one does.",
   },
   {
     name: "restore",
@@ -963,11 +978,21 @@ export const HERD_VERBS = [
   { name: "send-keys", description: "send raw keys (Enter, Escape, C-c, literal text)",
     synopsis: [["moshcode herd send-keys <name> <keys…>", ""]] },
   { name: "wait", description: "block until a session reaches a state",
-    synopsis: [["moshcode herd wait <name> [--state blocked,done]", ""]],
+    synopsis: [
+      ["moshcode herd wait <name> [--state blocked,done]", ""],
+      ["moshcode herd wait --any <a> <b> …", "returns on the first one to get there"],
+      ["moshcode herd wait --all <a> <b> …", "returns when every one of them has"],
+    ],
     flags: [
       ["--state <list>", "states to wait for", "blocked,done"],
+      ["--any", "return on the first session to reach the state", ""],
+      ["--all", "return when every named session has", "implied by naming several"],
       ["--timeout <dur>", "give up after this long", "30m"],
       ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode wait --any api web docs", "whichever finishes first"],
+      ["moshcode wait --all api web --state done", "join the whole fan-out"],
     ] },
   { name: "restore", description: "rebuild remembered sessions after a reboot",
     synopsis: [["moshcode herd restore [--resume] [--dry-run]", ""]],
@@ -988,6 +1013,72 @@ export const HERD_VERBS = [
   { name: "stop", description: "stop the whole runtime and everything in it",
     synopsis: [["moshcode herd stop --yes", ""]],
     flags: [["--yes, -y", "required when sessions are running", ""]] },
+
+  // PRD 0011 — the engine speaks, the herd remembers, and the roster reaches
+  // past this box.
+  { name: "hooks", description: "install the engine's own lifecycle hooks, so state comes from it and not from its screen",
+    synopsis: [["moshcode herd hooks <install|remove|status> [<engine>|all]", ""]],
+    flags: [
+      ["--dry-run", "print the change to the engine's settings file and write nothing", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode herd hooks install claude", "3 hooks: stop, notification, prompt-submit"],
+      ["moshcode herd hooks status", "per-engine, and which events are current"],
+    ],
+    note: "the file is merged, never clobbered, and remove takes out only what moshcode put in. "
+      + "a hook fired outside a herd session does nothing and exits 0, so installing one cannot break an engine you run by hand. "
+      + "screen rules stay as the fallback." },
+  { name: "doctor", description: "check the things that actually go wrong: substrate, manifest drift, stale reports, rules.json",
+    synopsis: [["moshcode herd doctor [--json]", ""]],
+    flags: [["--json", "machine-readable, for provisioning scripts", ""]],
+    note: "a broken ~/.moshcode/herd/rules.json is ignored silently everywhere else by design — this is where it gets to be loud." },
+  { name: "tasks", description: "every prompt submitted to a session, and what came of it",
+    synopsis: [["moshcode herd tasks <session> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "task", description: "one task: its state transitions and its output",
+    synopsis: [["moshcode herd task <id> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "log", description: "the timestamped state history of a session",
+    synopsis: [["moshcode herd log <session> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "stats", description: "time in state, including how long things sat blocked waiting on you",
+    synopsis: [["moshcode herd stats [session] [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "remote", description: "put a deployed agent on the roster — A2A, or a bare POST endpoint",
+    synopsis: [["moshcode herd remote <list|add|remove|ping|card> [args…]", ""]],
+    flags: [
+      ["--kind <a2a|run>", "A2A JSON-RPC, or a plain POST {prompt}", "run"],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode herd remote add research https://agents.do-ai.run/…/production --kind run", ""],
+      ["moshcode herd prompt research \"summarise the week\"", "the same verb as a local session"],
+    ],
+    note: "auth comes from MOSHCODE_REMOTE_<NAME>_TOKEN in the environment — never written to the manifest, never synced. "
+      + "a remote's state is the remote's claim, and `ps` says `remote` in the from column so nobody mistakes it for something this box verified." },
+  { name: "serve", description: "expose the herd over A2A v0.3.0, behind your moshcode login",
+    synopsis: [["moshcode herd serve [--port 7683] [--bind 127.0.0.1]", ""]],
+    flags: [
+      ["--port <n>", "port to listen on", "7683"],
+      ["--bind <addr>", "interface to bind", "127.0.0.1"],
+      ["--expose-autonomous", "also serve sessions started with --agent", "off"],
+    ],
+    note: "message/send is keystrokes into a real pty. there is no unauthenticated mode, loopback included, and sessions "
+      + "started with --agent are withheld unless you ask for them: an engine with approvals bypassed plus a network prompt "
+      + "is the worst pairing on the menu." },
+  { name: "eval", description: "run a dataset through several engines and score them",
+    synopsis: [["moshcode herd eval --dataset <file> --engines a,b [--judge <engine>|rules]", ""]],
+    flags: [
+      ["--dataset <file>", "jsonl, json or csv of { prompt, expect | rubric }", ""],
+      ["--engines <list>", "engines to compare", ""],
+      ["--judge <engine>|rules", "score with an engine, or with the dataset's own patterns", "rules"],
+      ["--threshold <0-1>", "the score every engine has to reach", "0.8"],
+      ["--keep", "leave the eval sessions running afterwards", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    note: "exit codes are distinct on purpose: 0 pass, 4 below the threshold, 5 the harness could not run — "
+      + "CI has to tell a worse agent from a broken box." },
 ];
 
 export const VERB_TABLES = {

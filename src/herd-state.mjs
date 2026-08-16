@@ -20,10 +20,38 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ENGINES } from "./engines.mjs";
-import { capture, herdDir, sessionExited } from "./herd.mjs";
+import { capture, herdDir, remoteStatus, sessionExited } from "./herd.mjs";
+import { TOOLS } from "./tools.mjs";
 
 /** The vocabulary the roster, notifications, and `wait` all share. */
 export const STATES = ["working", "blocked", "done", "idle", "unknown"];
+
+/**
+ * What a blocked session is blocked *on* (PRD 0011 R4).
+ *
+ * The roster still prints `blocked`, because five kinds of amber is four more
+ * than anyone reads at a glance. The sub-kind rides in `--json` and in
+ * notifications, where it is worth something: an `--ask` reply to a numbered
+ * menu wants a digit, and one to a question wants a sentence, and answering a
+ * menu with a paragraph types the paragraph into the menu.
+ */
+export const BLOCKED_KINDS = ["permission", "question", "menu"];
+
+/**
+ * Parse the state token a hook or a human passes to `herd report`.
+ *
+ * `blocked:permission` is one string on a command line and two facts here.
+ * Returns null for anything not in the vocabulary — an unknown state has to
+ * fail loudly at the edge rather than be written into the status file where
+ * every later reader has to cope with it.
+ */
+export function parseState(raw) {
+  const [state, kind] = String(raw ?? "").trim().split(":");
+  if (!STATES.includes(state)) return null;
+  if (kind === undefined || kind === "") return { state };
+  if (state !== "blocked" || !BLOCKED_KINDS.includes(kind)) return null;
+  return { state, kind };
+}
 
 /**
  * `gone` is deliberately not in STATES: it is not a state an agent is in, it is
@@ -102,6 +130,43 @@ export const COMMON_RULES = {
 };
 
 /**
+ * Which *kind* of blocked a screen is showing.
+ *
+ * Only consulted once a screen has already classified as `blocked`, so these
+ * are labels rather than detectors and can afford to be loose. A screen that
+ * matches nothing here is blocked with no sub-kind, which is exactly what the
+ * roster printed before this existed.
+ */
+export const BLOCKED_KIND_RULES = {
+  // The menu test goes first: Claude Code's permission dialog IS a numbered
+  // menu, and "which keystroke answers this" is the question the sub-kind is
+  // for. A y/n is a menu of two with no digits, so it stays a permission.
+  menu: [/^\s*[❯›▸>]\s*\d+\.\s+\S/m],
+  permission: [
+    /\[y\/n\]/i,
+    /\((?:y(?:es)?\/n(?:o)?)\)\s*[:?]?\s*$/im,
+    /\((?:Y\)es|N\)o)/,
+    /\bdo you want to\b/i,
+    /\bpermission (?:request|required)\b/i,
+    /\ballow (?:this )?(?:command|tool|execution)\b/i,
+    /\bapprove this (?:command|edit|change)\b/i,
+    /\bwaiting for (?:your )?(?:approval|confirmation)\b/i,
+  ],
+  question: [/\?\s*$/m, /\bpress (?:enter|return) to continue\b/i],
+};
+
+/** The sub-kind of an already-blocked screen, or null when it does not say. */
+export function blockedKind(screen) {
+  const text = stripAnsi(screen);
+  const lines = text.split("\n");
+  const tail = lines.slice(Math.max(0, lines.length - 25)).join("\n");
+  for (const kind of ["menu", "permission", "question"]) {
+    if ((BLOCKED_KIND_RULES[kind] || []).some((re) => re.test(tail))) return kind;
+  }
+  return null;
+}
+
+/**
  * User overrides, so a rule that rots can be fixed on the box it rots on.
  *
  * Shape mirrors the engine table: { "<engine>": { blocked: ["…"], … } }, with
@@ -130,9 +195,76 @@ export function loadUserRules(file = path.join(herdDir(), "rules.json")) {
   return out;
 }
 
-/** The rule set for one engine: user overrides, then its own, then the shared. */
+/** The states a user rules file is allowed to carry patterns for. */
+const RULE_STATES = ["blocked", "working", "idle"];
+
+/**
+ * Everything wrong with the user's rules file, said out loud (PRD 0011 R3).
+ *
+ * loadUserRules() is silent by design — a malformed rules file must not take
+ * down the roster, and it does not. The cost of that is a file which has been
+ * quietly ignored since the day someone typo'd a bracket in it, with the herd
+ * classifying from the built-in rules and nothing anywhere saying so. This is
+ * where that gets to be loud, and `herd doctor` is the one caller.
+ */
+export function inspectUserRules(file = path.join(herdDir(), "rules.json")) {
+  const empty = { file, present: false, ok: true, patterns: 0, problems: [] };
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); }
+  catch (error) {
+    return error.code === "ENOENT" ? empty
+      : { ...empty, present: true, ok: false, problems: [{ where: file, error: String(error.message || error) }] };
+  }
+
+  let raw;
+  try { raw = JSON.parse(text); }
+  catch (error) {
+    return { ...empty, present: true, ok: false, problems: [{ where: file, error: `not valid JSON — ${error.message}` }] };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...empty, present: true, ok: false, problems: [{ where: file, error: 'the top level must be { "<engine>": { "blocked": ["…"] } }' }] };
+  }
+
+  const problems = [];
+  let patterns = 0;
+  for (const [engine, group] of Object.entries(raw)) {
+    if (!group || typeof group !== "object" || Array.isArray(group)) {
+      problems.push({ where: engine, error: "must be an object of state → patterns" });
+      continue;
+    }
+    for (const key of Object.keys(group)) {
+      if (!RULE_STATES.includes(key)) {
+        problems.push({ where: `${engine}.${key}`, error: `not a state the classifier reads (${RULE_STATES.join(", ")})` });
+      }
+    }
+    for (const state of RULE_STATES) {
+      if (group[state] === undefined) continue;
+      if (!Array.isArray(group[state])) {
+        problems.push({ where: `${engine}.${state}`, error: "must be an array of pattern strings" });
+        continue;
+      }
+      for (const pattern of group[state]) {
+        try { new RegExp(pattern, "im"); patterns++; }
+        catch (error) { problems.push({ where: `${engine}.${state}`, pattern: String(pattern), error: String(error.message || error) }); }
+      }
+    }
+  }
+  return { file, present: true, ok: problems.length === 0, patterns, problems };
+}
+
+/**
+ * The rule set for one engine: user overrides, then its own, then the shared.
+ *
+ * TOOLS is consulted as well as ENGINES because `herd run -- gradient agent run
+ * --dev` names its session after the binary, and the workflow CLIs are exactly
+ * the long-running processes people put in the herd next to an agent (PRD 0011
+ * R15). A tool's rules live in src/tools.mjs beside its install spec for the
+ * same reason an engine's live beside its own.
+ */
 export function rulesFor(engine, { userRules = loadUserRules() } = {}) {
-  const own = ENGINES[engine]?.state || {};
+  const own = (Object.hasOwn(ENGINES, engine) ? ENGINES[engine]?.state : null)
+    || (Object.hasOwn(TOOLS, engine) ? TOOLS[engine]?.state : null)
+    || {};
   const user = userRules[engine] || {};
   const common = userRules.common || {};
   const merge = (state) => [
@@ -179,13 +311,18 @@ export function classify(screen, rules) {
  * someone noticed by hand.
  */
 export function reportState(name, state, { ttl = HOOK_TTL_MS, now = Date.now() } = {}) {
-  if (!STATES.includes(state)) return { ok: false, error: new Error(`unknown state ${JSON.stringify(state)} — one of ${STATES.join(", ")}`) };
+  const parsed = parseState(state);
+  if (!parsed) {
+    return { ok: false, error: new Error(`unknown state ${JSON.stringify(state)} — one of ${STATES.join(", ")}${` (blocked takes :${BLOCKED_KINDS.join(", :")})`}`) };
+  }
   try {
     fs.mkdirSync(statusDir(), { recursive: true, mode: 0o700 });
     const file = statusFile(name);
-    fs.writeFileSync(file, JSON.stringify({ state, at: now, ttl: Math.min(Number(ttl) || HOOK_TTL_MS, HOOK_TTL_MS) }), { mode: 0o600 });
+    const record = { state: parsed.state, at: now, ttl: Math.min(Number(ttl) || HOOK_TTL_MS, HOOK_TTL_MS) };
+    if (parsed.kind) record.kind = parsed.kind;
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
     fs.chmodSync(file, 0o600);
-    return { ok: true, state };
+    return { ok: true, ...parsed };
   } catch (error) {
     return { ok: false, error };
   }
@@ -199,7 +336,9 @@ export function hookReport(name, { now = Date.now() } = {}) {
   if (!raw || !STATES.includes(raw.state)) return null;
   const ttl = Math.min(Number(raw.ttl) || HOOK_TTL_MS, HOOK_TTL_MS);
   if (!Number.isFinite(raw.at) || now - raw.at > ttl) return null;
-  return { state: raw.state, at: raw.at };
+  const report = { state: raw.state, at: raw.at };
+  if (raw.state === "blocked" && BLOCKED_KINDS.includes(raw.kind)) report.kind = raw.kind;
+  return report;
 }
 
 export function clearReport(name) {
@@ -218,9 +357,19 @@ export function clearReport(name) {
  * first useful question is "was anything even reading the screen?", and a
  * roster that cannot answer it sends people to read this file instead.
  */
-export function sessionState(session, { now = Date.now(), userRules = loadUserRules(), read = capture } = {}) {
+export function sessionState(session, { now = Date.now(), userRules = loadUserRules(), read = capture, remote = remoteStatus } = {}) {
   const name = typeof session === "string" ? session : session.name;
   const meta = typeof session === "string" ? {} : session;
+
+  // A remote member's state is the remote's claim and nothing more (PRD 0011
+  // R11). It is reported with `authority: "remote"` so nobody mistakes a URL
+  // that answered five minutes ago for something this box just verified.
+  if (meta.kind === "remote") {
+    const claim = remote(name, { now });
+    return claim?.state
+      ? { state: claim.state, authority: "remote" }
+      : { state: "unknown", authority: "remote" };
+  }
 
   if (meta.alive === false) return { state: "gone", authority: "runtime" };
 
@@ -231,11 +380,19 @@ export function sessionState(session, { now = Date.now(), userRules = loadUserRu
   if (exited === null && meta.alive === undefined) return { state: "gone", authority: "runtime" };
 
   const hook = hookReport(name, { now });
-  if (hook) return { state: hook.state, authority: "hook" };
+  if (hook) return hook.kind ? { state: hook.state, authority: "hook", blockedOn: hook.kind } : { state: hook.state, authority: "hook" };
 
   const screen = read(name);
   if (!screen) return { state: "unknown", authority: "screen" };
-  return { state: classify(screen, rulesFor(meta.engine, { userRules })), authority: "screen" };
+  const state = classify(screen, rulesFor(meta.engine, { userRules }));
+  // `blockedOn` is only ever added when there is one to add: this object is
+  // spread over every roster row, so an always-present `blockedOn: undefined`
+  // would be a new key on every row for the benefit of none. It is also not
+  // called `kind` — that name already belongs to the row, where it says whether
+  // the member is a local pty or a URL.
+  if (state !== "blocked") return { state, authority: "screen" };
+  const kind = blockedKind(screen);
+  return kind ? { state, authority: "screen", blockedOn: kind } : { state, authority: "screen" };
 }
 
 /** listSessions() output, each row carrying its state. */
