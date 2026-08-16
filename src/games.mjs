@@ -45,8 +45,14 @@ import { OUTRUN } from "./games-outrun.mjs";
  * @property {number|Function} [tickMs]  real-time games only — a number, or (state) => number
  * @property {boolean} [vim]     false when a game wants h/j/k/l as letters, not arrows
  * @property {boolean} [restartable]  false when `r` is only a restart once the game is over
+ * @property {boolean} [heldKeys] true for a game where a key is held rather than
+ *   tapped, which is worth asking the terminal for key releases for. See
+ *   `HELD_KEYS`; `ctx.heldKeys` then says whether it agreed.
  * @property {Function} create   ({ rng }) => state
- * @property {Function} onKey    (state, key, { rng }) => state
+ * @property {Function} onKey    (state, key, { rng, heldKeys }) => state
+ * @property {Function} [onRelease] (state, key, ctx) => state — that key let go,
+ *   and only in a terminal that reports it. Never the first thing a game hears
+ *   about a key, so it is only ever a reason to stop.
  * @property {Function} [tick]   (state, { rng }) => state
  * @property {Function} render   (state) => string[]   the board, already coloured
  * @property {Function} status   (state) => string     right of the title
@@ -112,12 +118,58 @@ export function frame({ title = "", status = "", rows = [], keys = "" } = {}) {
 
 /* --------------------------------------------------------------------- keys */
 
+const VIM_KEYS = { h: "left", j: "down", k: "up", l: "right" };
+
+/** Codepoints that are a named key rather than a character. */
+const NAMED_CODES = { 9: "tab", 13: "enter", 27: "escape", 32: "space", 127: "backspace" };
+
+/** A CSI sequence ends at the first byte in this range. */
+const isFinal = (c) => c >= "\x40" && c <= "\x7e";
+
+/**
+ * One CSI sequence → a key name, or null for one the arcade does not use.
+ *
+ * Two shapes arrive here. Arrows are `CSI A`..`CSI D`, as they have been
+ * forever. Everything from the keyboard protocol (see `HELD_KEYS` below) is
+ * `CSI code ; modifiers : event u` — a codepoint, which modifier keys were
+ * down, and whether the key was pressed, repeated or released. Both carry the
+ * event in the same place, so both are read the same way.
+ */
+function csiKey(params, final, vim) {
+  const fields = params.split(";");
+  const key = (fields[0] ?? "").split(":");
+  const mod = (fields[1] ?? "").split(":");
+  // Modifiers are sent as a bitmask plus one, so that an absent field and "no
+  // modifiers" are the same thing.
+  const modifiers = mod[0] ? Number.parseInt(mod[0], 10) - 1 : 0;
+  const event = mod[1] ? Number.parseInt(mod[1], 10) : 1;
+
+  let name = { A: "up", B: "down", C: "right", D: "left" }[final] ?? null;
+  if (!name && final === "u") {
+    const code = Number.parseInt(key[0], 10);
+    if (!Number.isFinite(code)) return null;
+    name = NAMED_CODES[code]
+      ?? (code >= 32 && code <= 126 ? String.fromCodePoint(code).toLowerCase() : null);
+  }
+  if (!name) return null;
+  // Ctrl-c and ctrl-d are a quit however they arrive.
+  if (modifiers & 4) return name === "c" || name === "d" ? "quit" : null;
+  if (vim && VIM_KEYS[name]) name = VIM_KEYS[name];
+  // 1 is a press, 2 a repeat — both are the key being down, which is all a game
+  // that does not care about releases ever sees. 3 is the key coming back up.
+  return event === 3 ? `release:${name}` : name;
+}
+
 /**
  * Raw terminal bytes → key names the games understand.
  *
  * Games never see an escape sequence; they see "up", "enter", "a". A chunk can
  * hold several keypresses (hold an arrow key down and they arrive in batches),
  * which is why this returns a list.
+ *
+ * A key coming back up arrives as `release:up`, and only in a terminal that was
+ * asked for them and agreed — see `HELD_KEYS`. Games that do not implement
+ * `onRelease` never see one.
  *
  * `vim: false` is for the games that read letters — hangman cannot ask for a
  * word with an `h` in it while `h` means left, and blackjack wants `h` to be
@@ -129,12 +181,22 @@ export function decodeKeys(chunk, { vim = true } = {}) {
   for (let i = 0; i < input.length; i++) {
     const c = input[i];
     if (c === "\x1b") {
-      const seq = input.slice(i, i + 3);
-      const arrow = { "\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left" }[seq];
-      if (arrow) { keys.push(arrow); i += 2; continue; }
-      // A bare escape is a quit everywhere in the arcade; a longer sequence we
-      // don't know (mouse, function key) is swallowed rather than misread.
-      if (input[i + 1] === "[" || input[i + 1] === "O") { i += 2; continue; }
+      const intro = input[i + 1];
+      if (intro === "[" || intro === "O") {
+        // Run to the end of the sequence and read it as a whole. Skipping a
+        // fixed two bytes instead — which is what this used to do — leaves the
+        // tail of anything longer than an arrow to be read as if it had been
+        // typed, so a mouse report or a terminal's answer to a question lands
+        // in the game as a fistful of letters.
+        let j = i + 2;
+        while (j < input.length && !isFinal(input[j])) j++;
+        // A sequence split across two chunks is dropped rather than half-read.
+        if (j >= input.length) break;
+        const key = csiKey(input.slice(i + 2, j), input[j], vim);
+        if (key) keys.push(key);
+        i = j;
+        continue;
+      }
       keys.push("escape");
       continue;
     }
@@ -145,7 +207,7 @@ export function decodeKeys(chunk, { vim = true } = {}) {
     if (c === "\t") { keys.push("tab"); continue; }
     // vim keys, everywhere, for free — every game that reads arrows gets them
     // without knowing about them. A game that reads letters opts out.
-    const vimKey = vim ? { h: "left", j: "down", k: "up", l: "right" }[c] : null;
+    const vimKey = vim ? VIM_KEYS[c] : null;
     if (vimKey) { keys.push(vimKey); continue; }
     if (c >= " " && c <= "~") keys.push(c.toLowerCase());
   }
@@ -195,6 +257,36 @@ const ESC = {
   down: (n) => (n > 0 ? `\x1b[${n}B` : ""),
   eraseDown: "\x1b[0J",
   eraseLine: "\x1b[K",
+};
+
+/**
+ * Asking the terminal to say when a key comes back up.
+ *
+ * A terminal does not report key releases. What it reports is auto-repeat: the
+ * press, then nothing for about half a second, then thirty a second until you
+ * let go. For a game where you hold a direction that half second is the whole
+ * problem — a pong paddle cannot start moving until the ball is a third of the
+ * way down the table, and no amount of making the paddle faster fixes it,
+ * because there is nothing to be fast about yet.
+ *
+ * The keyboard protocol fixes it properly: `HELD_KEYS.on` asks for keys to be
+ * reported as press, repeat and release, so a paddle can move for exactly as
+ * long as the key is down and stop the instant it is not.
+ *
+ * Not every terminal implements it, so it is asked for rather than assumed:
+ * `ask` is a question a terminal that supports it answers and one that does not
+ * ignores, and only an answer turns it on. That is what keeps this free of
+ * risk — a terminal that stays quiet is sent nothing and behaves exactly as it
+ * did before, and one that answers has told us it understands the sequences it
+ * is about to be sent.
+ */
+const HELD_KEYS = {
+  ask: "\x1b[?u",
+  answer: /\x1b\[\?[\d;]*u/,
+  on: "\x1b[>3u",   // disambiguate escape codes, and report press/repeat/release
+  off: "\x1b[<u",   // put back whatever the terminal had before
+  /** How long a terminal gets to answer before we take the silence as a no. */
+  waitMs: 60,
 };
 
 /**
@@ -332,11 +424,44 @@ export async function runGame(game, deps = {}) {
     arm();
   }
 
+  /**
+   * Ask the terminal whether it will report key releases, and wait briefly.
+   *
+   * Only for the games that can use them, and only on a real terminal — a test
+   * hands in a stream that will never answer, and waiting on it would put a
+   * timeout in front of every game in the suite.
+   *
+   * Anything the player typed while we were waiting is handed back rather than
+   * eaten, so that a key pressed the instant a game starts still counts.
+   */
+  const askForReleases = () => {
+    if (!game.heldKeys || !input.isTTY) return Promise.resolve({ held: false, typed: "" });
+    return new Promise((res) => {
+      let seen = "";
+      let settled = false;
+      const finish = (held) => {
+        if (settled) return;
+        settled = true;
+        clearTimer(waiting);
+        input.off?.("data", listen);
+        res({ held, typed: seen.replace(HELD_KEYS.answer, "") });
+      };
+      const listen = (chunk) => {
+        seen += String(chunk);
+        if (HELD_KEYS.answer.test(seen)) finish(true);
+      };
+      const waiting = setTimer(() => finish(false), HELD_KEYS.waitMs);
+      input.on?.("data", listen);
+      output.write(HELD_KEYS.ask);
+    });
+  };
+
   const wasRaw = Boolean(input.isRaw);
   const restore = () => {
     if (closed) return;
     closed = true;
     stop();
+    if (ctx.heldKeys) output.write(HELD_KEYS.off);
     output.write(ESC.showCursor);
     try { input.setRawMode?.(wasRaw); } catch { /* already gone */ }
     input.off?.("data", onData);
@@ -345,18 +470,34 @@ export async function runGame(game, deps = {}) {
   const onSignal = () => { restore(); process.exit(130); };
 
   function onData(chunk) {
+    // One chunk can carry several keypresses — holding an arrow down delivers
+    // them in batches — and every one of them is applied before anything is
+    // drawn. Drawing per key instead paints frames nobody can see: the batch is
+    // consumed in the same millisecond, so all but the last are overwritten
+    // before the terminal has finished with them, having cost a full frame
+    // build and a write each on the way past.
+    let moved = false;
     for (const key of decodeKeys(chunk, { vim: game.vim !== false })) {
+      // A key coming back up is not a move. It only ever tells a game to stop
+      // doing something, so it cannot start, restart or end one.
+      if (key.startsWith("release:")) {
+        if (game.onRelease && !state.over) {
+          state = game.onRelease(state, key.slice(8), ctx) || state;
+          moved = true;
+        }
+        continue;
+      }
       if (key === "quit" || key === "q" || key === "escape") { restore(); resolve(); return; }
       if (key === "r" && (state.over || game.restartable !== false)) {
         state = game.create(ctx);
         dueAt = null; // a new game starts its clock from now, not from the old one
-        draw();
+        moved = true;
         arm();
         continue;
       }
       if (state.over) continue; // a finished board takes r and q, nothing else
       state = game.onKey(state, key, ctx) || state;
-      draw();
+      moved = true;
       // A key can end a real-time game — a hard drop into the ceiling — so the
       // clock is stopped when that happens. Otherwise see `nudge`.
       if (game.tickMs) {
@@ -364,6 +505,7 @@ export async function runGame(game, deps = {}) {
         else nudge();
       }
     }
+    if (moved) draw();
   }
 
   let resolve;
@@ -373,12 +515,22 @@ export async function runGame(game, deps = {}) {
   try { input.setRawMode?.(true); } catch { /* not a tty */ }
   input.setEncoding?.("utf8");
   input.resume?.();
-  input.on?.("data", onData);
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
+  // The board goes up before the terminal is asked anything, so that a game
+  // still starts instantly on a terminal that takes the full wait to not answer.
   draw();
-  arm();
+  const { held, typed } = await askForReleases();
+  // Quitting while the terminal was being asked leaves nothing to set up, and
+  // turning the protocol on now would leave it on with no game to turn it off.
+  if (!closed) {
+    ctx.heldKeys = held;
+    if (held) output.write(HELD_KEYS.on);
+    input.on?.("data", onData);
+    if (typed) onData(typed);
+    arm();
+  }
   await done;
   restore();
   process.off("SIGINT", onSignal);
