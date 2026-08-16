@@ -754,6 +754,10 @@ const VERBS = {
   bar: async (argv, options) => (await import("./herd-bar.mjs")).herdBar(options),
   tile: async (argv, options) => (await import("./herd-tile.mjs")).herdTile(argv, options),
   untile: async (argv, options) => (await import("./herd-tile.mjs")).herdUntile(argv, options),
+  // Lazy for the same reason as the UI verbs: reading every engine's session
+  // log is work nobody asked for until they type `cost`, and cost-cli imports
+  // roster() back out of this file.
+  cost: async (argv, options) => (await import("./cost-cli.mjs")).costCommand(argv, options),
   ps: herdPs, list: herdPs, status: herdStatus,
   start: herdStart, run: herdRun, shell: herdShell,
   attach: herdAttach, kill: herdKill, prune: herdPrune,

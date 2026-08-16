@@ -584,6 +584,7 @@ const COMMANDS = [
   cliVerb("agents", "launch an autonomous agent session (moshcode agents <engine>)"),
   cliVerb("herd", "drive the herd (moshcode herd <verb>) — see herdStart/herdWait for values"),
   cliVerb("ps", "print the herd roster"),
+  cliVerb("cost", "print what the herd is spending (moshcode cost [name] [--all])"),
   cliVerb("start", "raw-launch an engine (moshcode start <engine>)"),
   cliVerb("install", "install an engine or workflow tool"),
   cliVerb("upgrade", "upgrade moshcode, engines, and tools"),
