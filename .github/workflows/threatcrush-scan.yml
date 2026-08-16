@@ -1,12 +1,21 @@
 # Managed by sh1pt Actions Fleet
-# pack: threatcrush-scan@1.1.0
+# pack: threatcrush-scan@1.7.0
 # install: sh1pt-actions-store
-# hash: sha256:8b7430185637af9aea9bef6223b7ed1754a7f1c5e0d78ad058d47832a1ac46d3
+# hash: sha256:8c407ba97b68e36e52b7fc4e69d6d56ca6d30a70fad0a4b29e9088c161dcf977
 name: threatcrush security scan
 
 on:
   pull_request:
 
+# Only what the enabled outputs actually need. Both write scopes exist to
+# serve an optional feature — the Security tab upload and the PR comment — and
+# were requested unconditionally even when both were switched off.
+#
+# With uploadSarif and commentOnPr both false this reads `contents: read` and
+# nothing else, and the findings arrive in the job summary and the artifact.
+# SAG declined partly on "an externally maintained CLI ... together with PR and
+# security-reporting permissions"; a scanner that asks for write scopes it is
+# not going to use has no answer to that, and now it does not have to ask.
 permissions:
   contents: read
   pull-requests: write
@@ -19,9 +28,53 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      # persist-credentials: false because nothing here pushes. Left at the
+      # default, checkout leaves a credential in .git/config for the rest of
+      # the job — and the rest of this job runs a scanner installed from the
+      # network over the contents of a pull request. A token that no step
+      # needs should not be sitting in the working tree while that happens.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # Two commits, so the merge ref's own parents are present and the
+          # report can tell this pull request's files from the rest of the
+          # repository. See "Determine which files this pull request touches".
+          fetch-depth: 2
 
-      - uses: actions/setup-node@v7
+      # Which findings belong to this review?
+      #
+      # The scan covers the whole tree, and it should: a credential three
+      # directories away is still committed. But a *pull request comment* is a
+      # review artifact, and a review is about the change under review. Posting
+      # the repository's entire standing backlog on every pull request means an
+      # author who changed two files is handed ninety findings they did not
+      # write, cannot action, and did not ask about — and the one finding that
+      # is theirs sits somewhere in the middle of it.
+      #
+      # `refs/pull/N/merge` has the base branch as its first parent and the
+      # pull request head as its second, so `HEAD^1..HEAD` is exactly this
+      # pull request's diff, with no API call and no token.
+      #
+      # That identity only holds for a real merge ref. When the pull request
+      # has conflicts GitHub cannot produce one, checkout falls back to the
+      # head commit, and `HEAD^1` silently becomes "the previous commit on the
+      # branch" — a plausible-looking answer to a different question. So the
+      # shape is verified before it is trusted, and a failure falls back to
+      # reporting everything unscoped rather than scoping to the wrong set.
+      - name: Determine which files this pull request touches
+        id: changed
+        run: |
+          if [ "$(git rev-list --parents --max-count=1 HEAD | wc -w)" -eq 3 ]; then
+            git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/threatcrush-changed.txt"
+            echo "scoped=true" >> "$GITHUB_OUTPUT"
+            echo "Scoping the report to $(wc -l < "$RUNNER_TEMP/threatcrush-changed.txt") changed file(s)."
+          else
+            : > "$RUNNER_TEMP/threatcrush-changed.txt"
+            echo "scoped=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No merge ref (conflicted pull request?) — reporting every finding, unscoped."
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
@@ -29,18 +82,67 @@ jobs:
       # whether a security gate runs at all. Retry before giving up; a
       # transient registry blip is not a security signal and should not read
       # like one.
+      #
+      # --ignore-scripts because a lifecycle script is arbitrary code from the
+      # dependency tree, and this job holds `pull-requests: write` and
+      # `security-events: write`. The CLI does not need them: it declares no
+      # install hook of its own, and `scan` was verified to run correctly from
+      # an --ignore-scripts install. A security gate that opens a shell for
+      # its own supply chain is not a gate.
+      #
+      # Downloaded, hashed, and only then installed. A pinned version says
+      # which release to fetch; it does not say the bytes are the ones that
+      # release was published with, and the party answering "which version"
+      # is the party serving the tarball. The hash is the half a version pin
+      # cannot give you, which is the distinction Haven's maintainer drew
+      # when they asked for "exact version + integrity hash" rather than
+      # treating the pin as the answer.
+      #
+      # Into RUNNER_TEMP, never the checkout: `npm pack` writes to the working
+      # directory by default, and a stray .tgz in the tree is something this
+      # workflow then scans and reports on.
       - name: Install ThreatCrush
         run: |
+          set -euo pipefail
+          spec='@profullstack/threatcrush@0.11.2'
+          want='sha512-8N3jqCQixK0Onc+/bvuJaNCSvGZlJYZcSAGsd1nEfRZ4kOu1Ifom7Bd1t2muYJAmAxBTPmz1iseWSay/0gg3Gw=='
+
+          name=""
           for attempt in 1 2 3; do
-            if npm install -g "@profullstack/threatcrush@latest"; then
-              exit 0
+            if name=$(npm pack --silent --pack-destination "${RUNNER_TEMP}" "${spec}" | tail -1) \
+              && [ -n "${name}" ] && [ -f "${RUNNER_TEMP}/${name}" ]; then
+              break
             fi
+            name=""
             delay=$((attempt * 10))
-            echo "::warning::ThreatCrush install attempt ${attempt}/3 failed; retrying in ${delay}s"
+            echo "::warning::ThreatCrush download attempt ${attempt}/3 failed; retrying in ${delay}s"
             sleep "${delay}"
           done
-          echo "::error::ThreatCrush install failed after 3 attempts"
-          exit 1
+          if [ -z "${name}" ]; then
+            echo "::error::ThreatCrush download failed after 3 attempts"
+            exit 1
+          fi
+          tarball="${RUNNER_TEMP}/${name}"
+
+          # Not retried, unlike the download. A blip and a mismatch are not the
+          # same event: one is the network, the other is the registry handing
+          # back bytes nobody signed off on, and retrying that just asks again
+          # until it succeeds.
+          if [ -n "${want}" ]; then
+            got="sha512-$(openssl dgst -sha512 -binary "${tarball}" | openssl base64 -A)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::ThreatCrush integrity mismatch for ${spec}"
+              echo "::error::expected ${want}"
+              echo "::error::received ${got}"
+              echo "::error::refusing to install — this is not a transient failure"
+              exit 1
+            fi
+            echo "Integrity verified for ${spec}: ${got}"
+          else
+            echo "::warning::no integrity hash pinned for ${spec}; installing unverified"
+          fi
+
+          npm install -g --ignore-scripts "${tarball}"
 
       # Recorded into every run log so a release that changes the interface
       # shows up immediately, rather than silently scoring zero.
@@ -49,61 +151,22 @@ jobs:
           threatcrush --version || true
           threatcrush scan --help || true
 
-      # Which interface does the installed CLI actually have?
+      # The CLI emits SARIF itself, so this asks for it and nothing converts
+      # anything.
       #
-      # Determined up front rather than inferred from an exit code, because
-      # exit codes cannot tell the two failures apart. `0.2.2` has no
-      # `--format`: the scan died with `error: unknown option '--format'` and
-      # commander exited 1 — the same code the CLI uses for "findings at or
-      # above --fail-on". Read as a result, that produced a green check and a
-      # "0 findings" comment on a repository nothing had scanned.
-      - name: Detect the CLI output interface
-        id: iface
-        run: |
-          if threatcrush scan --help 2>&1 | grep -q -- '--format'; then
-            echo "native=true" >> "$GITHUB_OUTPUT"
-            echo "Native SARIF output available."
-          else
-            echo "native=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::CLI $(threatcrush --version 2>/dev/null || echo unknown) predates --format; converting terminal output instead."
-          fi
-
-      # Which files does this pull request actually touch?
+      # There used to be a second path here: a capability probe on `--format`,
+      # and a 235-line Python converter that parsed the terminal output when
+      # the probe said no. Both are gone, because the premise stopped holding.
+      # `threatcrushPackageSpec` pins an exact version and the step above
+      # refuses to install any other bytes, so "which interface does the
+      # installed CLI have" is answered by the pack, not discovered at
+      # runtime — the probe could only ever say yes.
       #
-      # The scan below still covers the whole tree, and the whole tree still
-      # goes to the Security tab — coverage is unchanged. This list exists only
-      # to decide what the PR *comment* talks about. A comment that reports
-      # every finding in the repository says the same thing on every pull
-      # request, which is the same as saying nothing: a five-file change to the
-      # games code drew a 53-row table about `install.sh`, the service worker
-      # and the DNS client, none of which it went near. Reviewers learn to
-      # scroll past it, and the one finding that *is* theirs scrolls past with
-      # it.
-      #
-      # Paginated deliberately: `listFiles` caps at 100 per page, and a
-      # truncated list here would silently mark real findings as out-of-scope.
-      - name: Collect the PR's changed files
-        id: changed
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              per_page: 100,
-            });
-            // Removed files cannot hold a finding; keeping them would only
-            // widen the set with paths the scan never saw.
-            const paths = files
-              .filter((f) => f.status !== 'removed')
-              .map((f) => f.filename);
-            require('fs').writeFileSync(
-              `${process.env.RUNNER_TEMP}/changed-files.txt`,
-              paths.join('\n'),
-            );
-            core.info(`${paths.length} changed file(s) in this PR`);
-
+      # Deleting it is a security change more than a tidying one. The
+      # converter reconstructed findings by regex out of a display format that
+      # is free to change, which is a silent-undercount waiting to happen; and
+      # every file a pack installs into somebody else's repository is surface
+      # they have to review. This one now installs a single workflow.
       - name: Scan
         id: scan
         run: |
@@ -112,32 +175,11 @@ jobs:
           SCAN_PATH="."
           code=0
 
-          if [ "${{ steps.iface.outputs.native }}" = "true" ]; then
-            ARGS=(scan "$SCAN_PATH" --format sarif --output threatcrush.sarif)
-            if [ -n "$FAIL_ON" ]; then
-              ARGS+=(--fail-on "$FAIL_ON")
-            fi
-            threatcrush "${ARGS[@]}" || code=$?
-          else
-            # Compatibility path for CLIs older than native SARIF. The
-            # converter fails closed: if it cannot recognise the output it
-            # exits non-zero and writes nothing, so an unparseable scan can
-            # never arrive downstream looking like a clean one.
-            threatcrush scan "$SCAN_PATH" 2>&1 | tee threatcrush-output.txt || true
-            PREFIX=""
-            if [ "$SCAN_PATH" != "." ]; then
-              # Paths in terminal output are relative to the scan root. Left
-              # unprefixed they resolve to nothing in the repository view, and
-              # every finding reads as out-of-scope.
-              PREFIX="$SCAN_PATH"
-            fi
-            python3 .github/threatcrush-to-sarif.py \
-              --input threatcrush-output.txt \
-              --output threatcrush.sarif \
-              --path-prefix "$PREFIX" \
-              --tool-version "$(threatcrush --version 2>/dev/null || echo unknown)" \
-              --fail-on "$FAIL_ON" || code=$?
+          ARGS=(scan "$SCAN_PATH" --format sarif --output threatcrush.sarif)
+          if [ -n "$FAIL_ON" ]; then
+            ARGS+=(--fail-on "$FAIL_ON")
           fi
+          threatcrush "${ARGS[@]}" || code=$?
 
           # The SARIF file is the evidence that a scan happened, and it is the
           # only evidence worth trusting. An exit code says what the process
@@ -167,27 +209,27 @@ jobs:
               ;;
           esac
 
-      # Reached only when the scan step already failed the job. The empty run
-      # exists so the upload does not error on a missing file and bury the real
-      # cause; it is not a result. The scan step has already set status=error,
-      # so the report says NOT RUN rather than rendering this as a clean scan.
-      - name: Ensure SARIF exists
-        if: always()
-        run: |
-          if [ ! -f threatcrush.sarif ]; then
-            cat > threatcrush.sarif <<'JSON'
-          {
-            "version": "2.1.0",
-            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-            "runs": [{ "tool": { "driver": { "name": "ThreatCrush", "rules": [] } }, "results": [] }]
-          }
-          JSON
-          fi
-
+      # Uploaded only when a scan actually produced results. Never on failure,
+      # and never as a synthesised empty file.
+      #
+      # This used to write a zero-result SARIF when the file was missing, so the
+      # upload would not error and bury the real cause. That reasoning covered
+      # the wrong path. Code scanning treats a new analysis in a category as the
+      # current truth for that category, so an empty run does not read as "no
+      # data" — it resolves every open ThreatCrush alert the repository already
+      # had. A scanner that fails and marks the findings it previously reported
+      # as fixed is worse than one that does not run.
+      #
+      # Found in review by the SAG maintainers, who were right: the old comment
+      # defended the PR comment path (which does say NOT RUN) and said nothing
+      # about the upload, because nobody had looked at the upload.
       - name: Upload to the Security tab
-        if: always() && 'true' == 'true'
+        if: >-
+          always() && 'true' == 'true'
+          && (steps.scan.outputs.status == 'clean' || steps.scan.outputs.status == 'findings')
+          && hashFiles('threatcrush.sarif') != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
         with:
           sarif_file: threatcrush.sarif
           category: threatcrush
@@ -205,29 +247,6 @@ jobs:
           except Exception as err:
               results = None
               print(f"::warning::could not read SARIF: {err}")
-
-          # The comment reports on this pull request. Anything outside it is
-          # counted and pointed at, never tabulated: it is not news, it did not
-          # arrive with this branch, and nobody reviewing this diff can act on
-          # it here.
-          try:
-              with open(os.environ["RUNNER_TEMP"] + "/changed-files.txt") as handle:
-                  changed = {line.strip() for line in handle if line.strip()}
-          except Exception as err:
-              # Fail *open* on purpose, and only here. Everywhere else in this
-              # workflow an unknown is treated as "not scanned", because
-              # claiming a clean scan is the dangerous direction. This one is
-              # the opposite: if the changed-file list is missing we cannot
-              # tell which findings are in scope, and the safe move is to show
-              # all of them rather than hide a real one behind an empty set.
-              changed = None
-              print(f"::warning::could not read changed-file list: {err}")
-
-          def in_scope(result):
-              if changed is None:
-                  return True
-              uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-              return uri.lstrip("./") in changed
 
           lines = ["## ThreatCrush Security Scan", ""]
 
@@ -247,65 +266,112 @@ jobs:
                   "This is not a clean result. See the job log.",
               ]
           else:
-              scanned = results
-              results = [r for r in scanned if in_scope(r)]
-              elsewhere = len(scanned) - len(results)
+              LABELS = {"error": "HIGH", "warning": "MEDIUM", "note": "LOW"}
+              # Most serious first. The old order was SARIF's, which is file
+              # order — so the 50-row cap was decided by where a finding sat in
+              # the tree, and a `high` in the last file scanned could be cut
+              # while fifty `note`s from the first file were printed in full.
+              RANK = {"error": 0, "warning": 1, "note": 2}
 
-              counts = {"error": 0, "warning": 0, "note": 0}
-              for result in results:
-                  level = result.get("level", "warning")
-                  if level in counts:
-                      counts[level] += 1
+              def locate(result):
+                  locations = result.get("locations") or []
+                  physical = (locations[0] if locations else {}).get("physicalLocation", {})
+                  uri = physical.get("artifactLocation", {}).get("uri", "")
+                  return uri, physical.get("region", {}).get("startLine", 1)
 
-              # Say which of the two things this number is. On the fail-open
-              # path it is every finding in the tree, and calling that "in the
-              # files this PR changes" would be a plain falsehood — the one
-              # claim this comment must never make is a narrower scope than it
-              # actually looked at.
-              scope = "in the files this PR changes" if changed is not None else (
-                  "repository-wide — the changed-file list was unavailable, so nothing could be scoped out"
-              )
-              lines.append(f"**{len(results)}** finding(s) {scope}")
-              lines.append("")
+              def tally(rows):
+                  counts = {"error": 0, "warning": 0, "note": 0}
+                  for row in rows:
+                      level = row.get("level", "warning")
+                      if level in counts:
+                          counts[level] += 1
+                  return counts
 
-              if results:
-                  badges = []
+              def badges(counts):
+                  out = []
                   if counts["error"]:
-                      badges.append(f"**HIGH/CRITICAL**: {counts['error']}")
+                      out.append(f"**HIGH/CRITICAL**: {counts['error']}")
                   if counts["warning"]:
-                      badges.append(f"**MEDIUM**: {counts['warning']}")
+                      out.append(f"**MEDIUM**: {counts['warning']}")
                   if counts["note"]:
-                      badges.append(f"**LOW**: {counts['note']}")
-                  if badges:
-                      lines += [" | ".join(badges), ""]
+                      out.append(f"**LOW**: {counts['note']}")
+                  return " | ".join(out)
 
-                  lines += ["| Severity | Rule | Location |", "|---|---|---|"]
-                  for result in results[:50]:
-                      location = result["locations"][0]["physicalLocation"]
-                      uri = location["artifactLocation"]["uri"]
-                      line_no = location.get("region", {}).get("startLine", 1)
-                      label = {"error": "HIGH", "warning": "MEDIUM", "note": "LOW"}.get(
-                          result.get("level", "warning"), "INFO"
-                      )
-                      lines.append(f"| {label} | `{result.get('ruleId','?')}` | `{uri}`:{line_no} |")
-                  if len(results) > 50:
+              def table(rows, limit):
+                  out = ["| Severity | Rule | Location |", "|---|---|---|"]
+                  for result in rows[:limit]:
+                      # SARIF permits a result with no locations, and the native
+                      # --format sarif path is written by the CLI rather than by
+                      # the converter beside this file. Indexing [0] there threw
+                      # out of the enclosing try, so the report file was never
+                      # written and the comment fell back to "could not be read"
+                      # — a message that hides real findings behind a wrong one.
+                      uri, line_no = locate(result)
+                      label = LABELS.get(result.get("level", "warning"), "INFO")
+                      where = f"`{uri}`:{line_no}" if uri else "_(no location)_"
+                      out.append(f"| {label} | `{result.get('ruleId','?')}` | {where} |")
+                  if len(rows) > limit:
                       # Say so. A silent truncation reads as "that was everything".
-                      lines += ["", f"_…and {len(results) - 50} more. Full results in the Security tab._"]
-                  lines += ["", "Snippets are redacted; ThreatCrush never prints matched credential material."]
-              else:
-                  lines.append(f"No findings {scope}.")
+                      out += ["", f"_…and {len(rows) - limit} more. Full results in the Security tab._"]
+                  return out
 
-              # Counted, not hidden. The whole tree was scanned and the whole
-              # tree is in the Security tab; this line is what says so, so that
-              # "no findings" above can never be misread as "the repository is
-              # clean". Rendering these rows here instead would put the same
-              # unchanged wall of pre-existing findings on every pull request.
-              if elsewhere:
+              try:
+                  with open(os.environ["RUNNER_TEMP"] + "/threatcrush-changed.txt") as handle:
+                      changed = {entry.strip() for entry in handle if entry.strip()}
+              except Exception:
+                  changed = set()
+
+              scoped = os.environ.get("SCAN_SCOPED", "") == "true"
+              results.sort(key=lambda r: (RANK.get(r.get("level", "warning"), 3), locate(r)))
+
+              if scoped:
+                  touched = [r for r in results if locate(r)[0] in changed]
+                  backlog = [r for r in results if locate(r)[0] not in changed]
+              else:
+                  touched, backlog = results, []
+
+              if not results:
+                  lines.append("No findings.")
+              else:
+                  if scoped:
+                      lines += [
+                          f"**{len(touched)}** finding(s) in the {len(changed)} file(s) this "
+                          "pull request changes.",
+                          "",
+                      ]
+                  else:
+                      lines += [f"**{len(results)}** finding(s)", ""]
+
+                  if touched:
+                      badge_line = badges(tally(touched))
+                      if badge_line:
+                          lines += [badge_line, ""]
+                      lines += table(touched, 50)
+                  elif scoped:
+                      lines.append("Nothing in the files this pull request changes.")
+
+                  # The rest of the repository is reported, but not *at* the
+                  # author of an unrelated change. It is a standing backlog, it
+                  # was there before this branch, and it belongs behind a fold
+                  # — not in ninety rows above the review.
+                  if backlog:
+                      summary = badges(tally(backlog)) or "no severities"
+                      lines += [
+                          "",
+                          "<details>",
+                          f"<summary>{len(backlog)} pre-existing finding(s) elsewhere in the "
+                          f"repository — {summary}</summary>",
+                          "",
+                          "Not introduced by this pull request. The full set is in the "
+                          "Security tab.",
+                          "",
+                      ]
+                      lines += table(backlog, 20)
+                      lines += ["", "</details>"]
+
                   lines += [
                       "",
-                      f"_{elsewhere} further finding(s) elsewhere in the repository are not "
-                      "shown: they are pre-existing and untouched by this PR. "
-                      "The full tree was scanned — see the Security tab._",
+                      "Snippets are redacted; ThreatCrush never prints matched credential material.",
                   ]
 
           with open(os.environ["RUNNER_TEMP"] + "/threatcrush-comment.md", "w") as handle:
@@ -313,17 +379,24 @@ jobs:
           PYEOF
         env:
           SCAN_STATUS: ${{ steps.scan.outputs.status }}
+          # Empty when the changed-file step was skipped or could not identify
+          # a merge ref, which reads as "not scoped" and reports everything.
+          SCAN_SCOPED: ${{ steps.changed.outputs.scoped }}
 
       - name: Write report to job summary
         if: always()
         run: cat "$RUNNER_TEMP/threatcrush-comment.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
+      # if-no-files-found: ignore, because nothing synthesises the file any
+      # more. A run that never produced SARIF has no artifact to keep, and that
+      # is the honest outcome rather than a reason to invent one.
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: threatcrush-sarif
           path: threatcrush.sarif
+          if-no-files-found: ignore
           retention-days: 30
 
       # Best-effort. `pull_request` gives fork PRs a read-only token, so this
@@ -333,9 +406,12 @@ jobs:
       # get a writable token: that event runs with repository secrets in scope
       # against a checkout of untrusted contributor code.
       - name: Comment on PR
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+        if: >-
+          always() && 'true' == 'true'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.actor != 'dependabot[bot]'
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const fs = require('fs');
@@ -347,10 +423,16 @@ jobs:
             }
 
             try {
-              const { data: comments } = await github.rest.issues.listComments({
+              // Paginated. listComments returns the first thirty and stops, so
+              // on a pull request with more discussion than that the existing
+              // report falls off the page, is not found, and every subsequent
+              // run posts another one. The bug only appears on the requests
+              // people actually engage with, which is the worst place for it.
+              const comments = await github.paginate(github.rest.issues.listComments, {
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
+                per_page: 100,
               });
               const existing = comments.find(
                 (c) => c.user.type === 'Bot' && c.body.includes('ThreatCrush Security Scan'),
