@@ -12,6 +12,7 @@
 
 import { db, get, all, run } from "./db.mjs";
 import { normalizeFeedKind, normalizeFeedUrl } from "./lib/feed.mjs";
+import { contentOut, MAX_ITEMS_PER_NAME, normalizeContent, normalizeSlug } from "./lib/moshpit-content.mjs";
 import { normalizeTarget } from "./lib/moshpit-gateway.mjs";
 import {
   BULK_CHUNK,
@@ -41,6 +42,11 @@ export {
   DEFAULT_TTL, MAX_PRIORITY, MAX_TTL, MAX_TXT_BYTES, MIN_TTL, RECORD_HELP, RECORD_TYPES,
   effectiveTarget, isMoshpitTarget, normalizeRecord, normalizeRecordType, zoneLine,
 } from "./lib/moshpit-records.mjs";
+
+export {
+  CONTENT_KINDS, MAX_GALLERY, MAX_ITEMS_PER_NAME, MAX_NAV, NAV_KINDS, POST_KINDS,
+  navFor, normalizeContent, normalizeSlug, postsFor,
+} from "./lib/moshpit-content.mjs";
 
 /**
  * The largest number this column will accept.
@@ -1030,6 +1036,142 @@ export async function listRecordsForNames(names = []) {
     found.get(key).push(row);
   }
   return found;
+}
+
+/* ---- what a name publishes here ---- */
+
+const CONTENT_COLS = `tld, label, slug, kind, title, body, url, media, section, nav, position,
+  published_at, user_id, created_at, updated_at`;
+
+/** Everything a name has published, drafts included. Ordering is the renderer's job. */
+export async function listContent(tldInput, labelInput) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return [];
+  const rows = await all(
+    `SELECT ${CONTENT_COLS} FROM moshpit_content WHERE tld = ? AND label = ?
+     ORDER BY published_at DESC, updated_at DESC`,
+    [tld, label],
+  );
+  return rows.map(contentOut);
+}
+
+export async function countContent(tldInput, labelInput) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return 0;
+  const row = await get(`SELECT COUNT(*) AS n FROM moshpit_content WHERE tld = ? AND label = ?`, [tld, label]);
+  return row?.n ?? 0;
+}
+
+/** One item, by its slug. */
+export async function getContent(tldInput, labelInput, slugInput) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  const slug = normalizeSlug(slugInput);
+  if (!tld || !label || !slug) return null;
+  const row = await get(
+    `SELECT ${CONTENT_COLS} FROM moshpit_content WHERE tld = ? AND label = ? AND slug = ?`,
+    [tld, label, slug],
+  );
+  return contentOut(row);
+}
+
+/**
+ * What a name publishes, for a name as it was typed.
+ *
+ * Aliases followed, like every other read: `.agentic` pointing at `.agent`
+ * means one site reachable by two names, and content filed under one of them
+ * has to be found from the other or half the network's names go blank.
+ */
+export async function contentForName(input) {
+  const resolution = await resolveMoshpitName(input);
+  if (!resolution?.name_registered) return null;
+  const parsed = parseMoshpitName(resolution.resolved);
+  if (!parsed) return null;
+  return listContent(parsed.tld, parsed.label);
+}
+
+/**
+ * Publish one item, creating it or replacing it.
+ *
+ * Upsert rather than insert-or-fail, because the caller is a webhook. Anything
+ * firing over HTTP retries — on a timeout it never saw the answer to, on a
+ * redeploy, on a queue redelivery — and a publish endpoint that makes a second
+ * copy every time is one that fills a site with duplicates the first time a
+ * network blips. The slug is the identity, so the same call twice is the same
+ * post twice, which is to say once.
+ *
+ * `created_at` survives an update. It is when the thing was first published,
+ * which is not something a later edit gets to rewrite.
+ */
+export async function putContent({ tld: tldInput, label: labelInput, userId, item: input, now = Date.now() }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const normalized = normalizeContent(input, { now });
+  if (!normalized.ok) return normalized;
+  const item = normalized.item;
+
+  // Bounded per name. Checked before the write and only for a slug that is not
+  // already there, so editing an existing item still works on a full site --
+  // otherwise hitting the cap would lock an owner out of fixing what is in it.
+  const existing = await get(`SELECT slug, created_at FROM moshpit_content WHERE tld = ? AND label = ? AND slug = ?`,
+    [owned.tld, owned.label, item.slug]);
+  if (!existing) {
+    const count = await countContent(owned.tld, owned.label);
+    if (count >= MAX_ITEMS_PER_NAME) {
+      return { ok: false, error: `${owned.label}.${owned.tld} already holds ${MAX_ITEMS_PER_NAME} items` };
+    }
+  }
+
+  await run(
+    `INSERT INTO moshpit_content
+       (tld, label, slug, kind, title, body, url, media, section, nav, position, published_at, user_id, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT (tld, label, slug) DO UPDATE SET
+       kind = excluded.kind, title = excluded.title, body = excluded.body, url = excluded.url,
+       media = excluded.media, section = excluded.section, nav = excluded.nav,
+       position = excluded.position, published_at = excluded.published_at, updated_at = excluded.updated_at`,
+    [
+      owned.tld, owned.label, item.slug, item.kind, item.title, item.body, item.url, item.media,
+      item.section, item.nav, item.position, item.published_at, userId,
+      existing?.created_at ?? now, now,
+    ],
+  );
+
+  return {
+    ok: true,
+    created: !existing,
+    item: await getContent(owned.tld, owned.label, item.slug),
+  };
+}
+
+/** Take one item back down. */
+export async function deleteContent({ tld: tldInput, label: labelInput, userId, slug: slugInput }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const slug = normalizeSlug(slugInput);
+  if (!slug) return { ok: false, error: "not a valid slug" };
+  const existing = await getContent(owned.tld, owned.label, slug);
+  if (!existing) return { ok: false, error: `${owned.label}.${owned.tld} has nothing at "${slug}"`, missing: true };
+  await run(`DELETE FROM moshpit_content WHERE tld = ? AND label = ? AND slug = ?`, [owned.tld, owned.label, slug]);
+  return { ok: true, slug };
+}
+
+/** How many items each of these names has published, for a listing. */
+export async function countContentForNames(names = []) {
+  const counts = new Map();
+  if (!names.length) return counts;
+  const keys = names.map((n) => `${n.label}.${n.tld}`);
+  const placeholders = keys.map(() => "?").join(",");
+  const rows = await all(
+    `SELECT tld, label, COUNT(*) AS n FROM moshpit_content
+     WHERE (label || '.' || tld) IN (${placeholders}) GROUP BY tld, label`,
+    keys,
+  );
+  for (const row of rows) counts.set(`${row.label}.${row.tld}`, row.n);
+  return counts;
 }
 
 /* ---- claiming a list of endings at once ---- */
