@@ -160,6 +160,49 @@ export const TOOLS = {
     },
     installHelp: "Go is required to install Alpaca; install Go, then retry `moshcode install alpaca`.",
   },
+  gradient: {
+    desc: "DigitalOcean Gradient ADK — build, run, deploy and evaluate agents (A2A-capable)",
+    bin: "gradient",
+    // The one tool here that is not a self-contained binary. gradient-adk is a
+    // Python package, and moshcode stays Node: the tool owns its runtime, the
+    // same way CoinPay owns Node 20. So the install spec checks for a Python
+    // the package can actually run on and NAMES the requirement when it is
+    // missing, rather than letting pip fail three screens later with a
+    // resolution error nobody reads. `--user` keeps it out of the system
+    // site-packages, which is also the only place a non-root install can go on
+    // a modern distro.
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        'python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null '
+        + '|| { echo "gradient-adk needs Python 3.10 or newer on PATH as python3 — install it, then re-run: moshcode install gradient" >&2; exit 1; }; '
+        + "python3 -m pip install --user --upgrade gradient-adk",
+      ],
+    },
+    installHelp: "gradient-adk is a Python package: it needs python3 (3.10+) and pip. moshcode does not install Python for you.",
+    // pip --user drops console scripts here, and appends nothing to PATH for
+    // the shell that ran the install — the same gap turso and kimi have.
+    binDirs: [path.join(homedir(), ".local", "bin")],
+    // How the ADK's dev server reads in the herd (PRD 0011 R15). `gradient
+    // agent run --dev` is uvicorn underneath, and its startup banner is a clear
+    // "I am up and waiting", which is `idle`.
+    //
+    // There is deliberately no `working` rule. uvicorn writes its access line
+    // when a request has FINISHED, so a screen showing one is a screen showing
+    // a server that is free again — a rule matching it would pin the tile to
+    // `working` from the first request until the line scrolled away, which is
+    // the exact kind of rot the sub-kinds and hooks exist to get away from. So
+    // the completed request counts as idle too, and it is right both times.
+    // Watching a *deployed* agent's state is what `herd remote add` is for.
+    state: {
+      idle: [
+        /\buvicorn running on\b/i,
+        /\bapplication startup complete\b/i,
+        /"(?:POST|GET|PUT) \/[^"]*" \d{3}\b/,
+      ],
+    },
+  },
   mcpjam: {
     desc: "MCPJam — test, debug, and validate MCP servers (health, OAuth, tool-surface diffs)",
     bin: "mcpjam",

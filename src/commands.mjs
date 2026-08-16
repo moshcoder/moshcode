@@ -18,8 +18,9 @@ import { spawn, spawnSync } from "node:child_process";
 import { createRegistry } from "./registry.mjs";
 import { cliVerb, aiVerb, runMoshcode } from "./cli.mjs";
 import { ingestApproval, pollApproval } from "./notify.mjs";
-import { capture, killSession, sendPrompt } from "./herd.mjs";
-import { herdStart, roster, waitFor } from "./herd-cli.mjs";
+import { capture, killSession, remoteStatus, sendPrompt } from "./herd.mjs";
+import { herdStart, isRemoteMember, roster, waitForMany, waitMember } from "./herd-cli.mjs";
+import { endTask, findTask, readTasks, startTask } from "./herd-tasks.mjs";
 import { shellInvocation } from "./shell.mjs";
 import { identity, loginAuto, logout as forgetCreds } from "./auth.mjs";
 import { expandAlias, getAlias, loadAliases, removeAlias, setAlias } from "./aliases.mjs";
@@ -511,29 +512,62 @@ const COMMANDS = [
   },
   {
     name: "herdPrompt",
-    summary: "type a prompt into a herd session",
+    summary: "type a prompt into a herd session (local or remote)",
     usage: "herdPrompt(name, text)",
-    detail: "returns { ok }; does not wait — use herdWait() to join",
+    detail: "returns { ok, task }; does not wait — use herdWait() to join",
     run(ctx, name, ...words) {
       const text = words.join(" ");
       if (!name || !text) throw new Error("moshscript: herdPrompt(name, text) requires both");
       if (ctx.dryRun) { ctx.out(`  💬 herdPrompt(${name}) → would send: ${text}`); return { ok: true, dryRun: true }; }
       ctx.out(`  💬 herdPrompt(${name}) → ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`);
-      const sent = sendPrompt(String(name), text);
-      return { ok: Boolean(sent.ok) };
+      const session = String(name);
+
+      // A remote member takes the same call with the same arguments — the point
+      // of PRD 0011 R12 is that a script fanning across a local pty and a
+      // deployed agent contains no `if (remote)`. This one stays synchronous
+      // like every other local verb, so the no-`await` style keeps working: the
+      // request is in flight when it returns, and herdWait() is how a script
+      // joins on it, exactly as for a local session.
+      if (isRemoteMember(session)) {
+        const task = startTask(session, text, { screen: "" });
+        import("./herd-remote.mjs")
+          .then((remote) => remote.promptRemote(session, text)
+            .then((sent) => endTask(session, task, { state: sent.state || "done", artifact: sent.artifact || String(sent.error?.message || "") })))
+          .catch(() => endTask(session, task, { state: "done", artifact: "the request never left this machine" }));
+        return { ok: true, task, remote: true };
+      }
+
+      const task = startTask(session, text, { screen: capture(session, { lines: 60 }) });
+      const sent = sendPrompt(session, text);
+      if (!sent.ok) endTask(session, task, { state: "done", artifact: String(sent.error?.message || sent.error) });
+      return { ok: Boolean(sent.ok), task };
     },
   },
   {
     name: "herdWait",
     summary: "BLOCK until a herd session is blocked, done, or idle",
-    usage: "herdWait(name, { states, timeout })",
-    detail: "returns the state it reached. needs await",
+    usage: "herdWait(name | [names], { states, timeout, any })",
+    detail: "one name returns the state it reached; a list returns the winner's name (any) or every result (all). needs await",
     async run(ctx, name, opts = {}) {
       if (!name) throw new Error("moshscript: herdWait(name) requires a session name");
       const states = opts.states || ["blocked", "done", "idle"];
+      const timeout = opts.timeout ? { timeoutMs: Number(opts.timeout) } : {};
+
+      // A list of names is a join (PRD 0011 R8) — the thing every fan-out
+      // script so far has spelled out by hand as a polling loop.
+      if (Array.isArray(name)) {
+        const names = name.map(String);
+        const mode = opts.any ? "any" : "all";
+        if (ctx.dryRun) { ctx.out(`  ⏳ herdWait([${names.join(", ")}]) → would wait for ${mode} of them to reach ${states.join("/")}`); return mode === "any" ? names[0] : names.map((n) => ({ name: n, state: "idle" })); }
+        ctx.out(`  ⏳ herdWait([${names.join(", ")}]) → waiting for ${mode}…`);
+        const result = await waitForMany(names, states, { mode, ...timeout });
+        ctx.out(`     ${result.outcome === "matched" ? "✅" : "⌛"} ${mode === "any" ? `${result.winner} first` : `${result.outcome}`}`);
+        return mode === "any" ? result.winner : result.results;
+      }
+
       if (ctx.dryRun) { ctx.out(`  ⏳ herdWait(${name}) → would wait for ${states.join("/")}`); return "idle"; }
       ctx.out(`  ⏳ herdWait(${name}) → waiting for ${states.join("/")}…`);
-      const result = await waitFor(String(name), states, opts.timeout ? { timeoutMs: Number(opts.timeout) } : {});
+      const result = await waitMember(String(name), states, timeout);
       ctx.out(`     ${result.outcome === "matched" ? "✅" : "⌛"} ${name} is ${result.state}`);
       return result.state;
     },
@@ -546,7 +580,11 @@ const COMMANDS = [
     run(ctx, name, opts = {}) {
       if (!name) throw new Error("moshscript: herdRead(name) requires a session name");
       if (ctx.dryRun) { ctx.out(`  📖 herdRead(${name}) → would read its screen`); return ""; }
-      return capture(String(name), { lines: Number(opts.lines) || 60 });
+      const session = String(name);
+      // A remote has no screen; what it has is the last thing it said, and
+      // that is what `read` means for it (PRD 0011 R12).
+      if (isRemoteMember(session)) return String(remoteStatus(session)?.artifact || "");
+      return capture(session, { lines: Number(opts.lines) || 60 });
     },
   },
   {
@@ -569,6 +607,41 @@ const COMMANDS = [
       if (ctx.dryRun) { ctx.out(`  ⏹ herdKill(${name}) → would end it`); return { ok: true, dryRun: true }; }
       ctx.out(`  ⏹ herdKill(${name})`);
       return { ok: Boolean(killSession(String(name)).ok) };
+    },
+  },
+
+  // The ledger (PRD 0011 R6). Same contract as herdRead/herdList and for the
+  // same reason: a script fans work out and then has to read what came back.
+  // `[]`/`null` on anything missing, never a throw — a script joining on four
+  // agents must not die because one of them has no history yet.
+  //
+  //   herdPrompt("api", "port the auth routes");
+  //   await herdWait("api");
+  //   const [last] = herdTasks("api").slice(-1);
+  //   say(herdTask(last.id).artifact);
+  {
+    name: "herdTasks",
+    summary: "every prompt submitted to a session, and what came of it",
+    usage: "herdTasks(name)",
+    detail: "returns [{ id, text, state, status, submitted, durationMs }, …], oldest first",
+    run(ctx, name) {
+      if (!name) throw new Error("moshscript: herdTasks(name) requires a session name");
+      if (ctx.dryRun) { ctx.out(`  📒 herdTasks(${name}) → would read the ledger`); return []; }
+      try {
+        return readTasks(String(name)).map(({ id, text, state, status, submitted, endedAt, durationMs }) =>
+          ({ id, text, state, status, submitted, endedAt, durationMs }));
+      } catch { return []; }
+    },
+  },
+  {
+    name: "herdTask",
+    summary: "one task by id — its transitions and its output",
+    usage: "herdTask(id)",
+    detail: "returns { id, session, text, transitions, artifact, state } or null",
+    run(ctx, id) {
+      if (!id) throw new Error("moshscript: herdTask(id) requires a task id");
+      if (ctx.dryRun) { ctx.out(`  📒 herdTask(${id}) → would read the ledger`); return null; }
+      try { return findTask(String(id)); } catch { return null; }
     },
   },
 
@@ -600,6 +673,7 @@ const COMMANDS = [
   cliVerb("supabase", "drive the Supabase CLI (local stack, migrations, functions)"),
   cliVerb("doppler", "drive the Doppler CLI (secrets, env injection)"),
   cliVerb("doctl", "drive the DigitalOcean CLI (droplets, apps, databases)"),
+  cliVerb("gradient", "drive the DigitalOcean Gradient ADK (init, run, deploy, logs, evaluate)"),
   cliVerb("turso", "drive the Turso CLI (auth, databases, replicas)"),
   cliVerb("tailscale", "drive the Tailscale CLI (mesh VPN: up, status, ssh, serve)"),
   cliVerb("coral", "drive the Coral CLI (SQL over APIs, databases, and internal systems)"),

@@ -19,6 +19,14 @@
 // repeating; only put a pattern here when it is this engine's own wording.
 // Every pattern is matched against the bottom of the screen with ANSI stripped.
 //
+// `hooks` (optional) is how this engine reports its own state, so the herd can
+// stop reading paint (PRD 0011 R1). It sits here for the same reason `state`
+// does — and because the two are the same fact at different confidence: a hook
+// spec supersedes the screen rules below it, so an engine that gains one should
+// keep its rules rather than delete them. A missing `hooks` is not a gap to
+// paper over with a guess; it means this engine is classified from its screen,
+// which is what every engine did before.
+//
 // `resume` (optional) is the argv that reopens this engine's last conversation,
 // used by `moshcode restore --resume` after a reboot. Omit it rather than guess:
 // a session that starts fresh is a small disappointment, and one that starts
@@ -82,6 +90,30 @@ export const ENGINES = {
       "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
     ],
     resume: ["--continue"],
+    // The engine speaking for itself (PRD 0011 R1). Claude Code's lifecycle
+    // hooks are documented and stable, which is why it is the one engine that
+    // ships a spec here rather than a promise to write one: a hook schema we
+    // guessed at would be a rule that rots with no screen to fall back to.
+    //
+    // `file` is a function, not a path, because the whole install is a write to
+    // the user's home and the only honest way to test that is to move HOME.
+    hooks: {
+      format: "claude-settings",
+      file: () => path.join(homedir(), ".claude", "settings.json"),
+      // Stop fires when the turn ends, which is the end of the *task* — A2A
+      // calls the same moment `completed`. Notification covers both halves of
+      // blocked (a permission request and a plain question). UserPromptSubmit
+      // is the cheapest honest `working`: PreToolUse would also do it, at the
+      // cost of forking a moshcode per tool call for a state it is already in.
+      // `label` is what moshcode calls the event; `event` is what the engine
+      // calls it. They differ because one is a sentence and the other is a
+      // schema key, and printing the schema key at someone is not an answer.
+      events: [
+        { event: "Stop", state: "done", label: "stop" },
+        { event: "Notification", state: "blocked", label: "notification" },
+        { event: "UserPromptSubmit", state: "working", label: "prompt-submit" },
+      ],
+    },
     state: {
       // The permission dialog's own heading, and the selector on its first
       // option — the generic numbered-menu pattern would catch the second only

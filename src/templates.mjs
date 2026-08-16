@@ -41,6 +41,23 @@ function isOwnManifest(relative) {
 
 /* ------------------------------------------------------------------ listing */
 
+/**
+ * Template collections worth knowing about that this repo does not ship
+ * (PRD 0011 R15).
+ *
+ * A pointer rather than a copy, deliberately. `template install` already takes
+ * an `owner/repo`, so vendoring somebody else's templates would mean carrying
+ * their updates by hand forever — and pinning a stale copy of an SDK's starter
+ * kit is worse than not having one. What is missing is only that nobody knows
+ * the name to type, so the listing says it.
+ */
+export const TEMPLATE_POINTERS = [
+  {
+    spec: "digitalocean/gradient-adk-templates",
+    description: "DigitalOcean Gradient ADK — agent starters (A2A-capable; pairs with `moshcode install gradient`)",
+  },
+];
+
 /** The bundled templates, each with whatever its manifest says about it. */
 export async function listTemplates(dir = BUNDLED_DIR) {
   let entries;
@@ -347,19 +364,29 @@ export async function templateCommand(
     }
     const templates = await listTemplates();
     if (rest.includes("--json")) {
+      // The bundled list stays an array, because that is what it has always
+      // been and something is parsing it. Pointers are named separately rather
+      // than mixed in: `template install <name>` works for one and not the
+      // other, and a listing that hid that difference would be a listing that
+      // lies about what it can do.
       out(JSON.stringify(templates, null, 2));
       return 0;
     }
     if (!templates.length) {
       out("no templates bundled with this install");
-      return 0;
-    }
-    const width = Math.max(...templates.map((t) => t.name.length));
-    for (const { name, description } of templates) {
-      out(`  ${name.padEnd(width)}  ${description}`);
+    } else {
+      const width = Math.max(...templates.map((t) => t.name.length));
+      for (const { name, description } of templates) {
+        out(`  ${name.padEnd(width)}  ${description}`);
+      }
     }
     out("");
-    out("install one with: moshcode template install <name>");
+    out("elsewhere:");
+    for (const { spec, description } of TEMPLATE_POINTERS) {
+      out(`  ${spec}  ${description}`);
+    }
+    out("");
+    out("install one with: moshcode template install <name|owner/repo|url>");
     return 0;
   }
 

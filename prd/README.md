@@ -26,4 +26,5 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0008](0008-ticker-research-and-plugin-marketplace.md) | Bring equity research into the pit, and ship the pit's slash commands as a plugin | Draft |
 | [0009](0009-persistent-agent-runtime.md) | Keep the herd alive — a persistent runtime, semantic agent state, and one control surface for humans and agents | Accepted |
 | [0010](0010-cloud-settings-sync.md) | Sync the pit's settings to your moshcode.sh account | Draft |
+| [0011](0011-herd-agent-protocol.md) | Teach the herd the agent protocol — hooks-first state, a task ledger, and an A2A surface for local and remote agents | Draft |
 <!-- PRD-INDEX:END -->
