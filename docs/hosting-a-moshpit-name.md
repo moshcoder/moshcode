@@ -184,6 +184,70 @@ Worth knowing:
   `PUT /api/moshpit/tlds/<tld>/names/feed` — `{"label":"blue","feed":"…","feed_kind":"podcast"}`.
   An empty `feed` clears it.
 
+## Publishing to a name over HTTP
+
+A feed points at writing that already exists somewhere. If it does not exist
+anywhere yet, publish it to the name directly — one endpoint, your existing
+moshcode API key, no dashboard.
+
+```sh
+curl -X POST https://pit.moshcode.sh/api/moshpit/sites/blue.eggs/content \
+  -H "authorization: Bearer $MOSHCODE_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"kind":"link","title":"Worth reading","url":"https://example.com/post"}'
+```
+
+That is the whole integration. Point a webhook, a cron job, a bot or a form at
+it and the name has a site.
+
+### What you can publish
+
+| `kind` | what it is | needs |
+|---|---|---|
+| `section` | a heading in the nav that posts can be filed under | `title` |
+| `page` | a standalone page in the nav — about, colophon | `title`, `body` |
+| `text` | a post that is its own body | `title`, `body` |
+| `link` | a post that points somewhere | `title`, `url` |
+| `image` | one picture | `url` |
+| `gallery` | several | `media[]` |
+| `video` | something to watch | `url` |
+| `embed` | a card for a URL we will not inline | `title`, `url` |
+
+Other fields: `slug` (the URL and the identity — made from the title if you
+omit it), `section` (which section a post is filed under), `published_at`
+(epoch seconds, milliseconds or a date string; `null` for a draft), `position`
+and `nav` (where it sits in the navigation).
+
+### The rest of the verbs
+
+| | |
+|---|---|
+| `GET /api/moshpit/sites/<name>/content` | read the site back out (drafts only if it's yours) |
+| `POST /api/moshpit/sites/<name>/content` | publish — one object, or an array of up to 50 |
+| `PUT …/content/<slug>` | replace one item |
+| `DELETE …/content/<slug>` | take one down |
+
+**It upserts on the slug.** A webhook that fires twice updates one post instead
+of creating two, which matters the first time a delivery is retried. A batch
+that is partly valid answers `207` and reports each item separately, so one bad
+entry does not discard the good ones.
+
+### What the site looks like
+
+`/n/<name>` is the front page — every published post, newest first. Sections and
+pages become the nav, capped at 12 entries, because a nav that wraps onto three
+lines has stopped being one. Each post gets `/n/<name>/<slug>`. Publish a page
+with the slug `home` to give the site a title and a tagline.
+
+Everything published is escaped on the way out, and only `http(s)` URLs are
+accepted. A `video` is inlined when it is a media file or on a short list of
+known hosts (YouTube, Vimeo, PeerTube); anything else becomes a card that links
+out, because an arbitrary URL in an iframe on `app.moshcode.sh` is a phishing
+surface with our hostname on it.
+
+**Precedence for a name:** target (your server) → posts published here → feed →
+the ending's directory.
+
 ## Limits worth knowing before you build
 
 - **No HTTPS, ever.** No CA will issue for an ending outside the DNS root. That
