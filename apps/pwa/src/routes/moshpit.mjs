@@ -17,6 +17,11 @@
 //   DELETE /api/moshpit/tlds/:tld/records     withdraw one
 //   GET    /pit                               the human page
 //   PUT    /api/moshpit/tlds/:tld/names/feed  point a name you hold at an RSS/Atom feed
+//   GET    /api/moshpit/sites/:name/content   everything a name publishes
+//   POST   /api/moshpit/sites/:name/content   publish a page, section or post (upsert — the webhook)
+//   GET    /api/moshpit/sites/:name/content/:slug   one item
+//   PUT    /api/moshpit/sites/:name/content/:slug   replace one item
+//   DELETE /api/moshpit/sites/:name/content/:slug   take one down
 //   GET    /pit/records                       the DNS records on the names you hold
 //   GET    /pit/dns                           how to reach these names from a machine
 import { createHash } from "node:crypto";
@@ -29,6 +34,8 @@ import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import { FEED_KINDS, loadFeed } from "../lib/feed.mjs";
 import { FEED_CSS, feedPage, feedUnavailable } from "../lib/moshpit-feed-page.mjs";
+import { CONTENT_KINDS } from "../lib/moshpit-content.mjs";
+import { SITE_CSS, sitePage, sitePart } from "../lib/moshpit-site-page.mjs";
 import { nameQuery, tldQuery } from "../lib/moshpit-search.mjs";
 import {
   MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, fetchOriginTls, forwardableHeaders, tlsRedirect,
@@ -38,6 +45,8 @@ import {
   addRecord,
   clearAlias,
   clearExempt,
+  countContent,
+  countContentForNames,
   countNames,
   countRecordNames,
   countTldLog,
@@ -46,10 +55,13 @@ import {
   countSearchTlds,
   countTldsNotOwnedBy,
   DEFAULT_TLD_PRICE_USD,
+  deleteContent,
+  getContent,
   getName,
   getTld,
   getTldWithPrice,
   listAliasesTo,
+  listContent,
   listAllNames,
   listExempt,
   listNames,
@@ -67,12 +79,14 @@ import {
   normalizeLabel,
   normalizeMode,
   normalizePinKind,
+  normalizeSlug,
   normalizeTld,
   openNamePurchase,
   parseMoshpitName,
   PIN_KINDS,
   pinsForName,
   popularLabels,
+  putContent,
   quoteName,
   RECORD_HELP,
   RECORD_TYPES,
@@ -405,6 +419,131 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/names", async (req, res) => {
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), released: true });
 });
 
+/* ---- what a name publishes here ---- */
+
+/**
+ * Resolve `:name` for a content route.
+ *
+ * Aliases are followed, so `hello.agentic` and `hello.agent` are one site
+ * rather than two half-empty ones, and a webhook configured before an alias was
+ * repointed keeps writing to the place the reads come from.
+ */
+async function siteName(input) {
+  const resolution = await resolveMoshpitName(input);
+  if (!resolution) return null;
+  const parsed = parseMoshpitName(resolution.resolved);
+  if (!parsed) return null;
+  return { ...parsed, name: resolution.name, resolved: resolution.resolved, registered: resolution.name_registered };
+}
+
+/**
+ * Everything a name publishes, drafts included, to its owner.
+ *
+ * Public for a published site — it is the same content the page draws, and a
+ * site that can be read by a browser but not by a script is one that cannot be
+ * mirrored, backed up or moved. Drafts are the exception: they are only in the
+ * answer when the caller owns the name.
+ */
+moshpitRouter.get("/api/moshpit/sites/:name/content", async (req, res) => {
+  const site = await siteName(req.params.name);
+  if (!site) return bad(res, "not a Moshpit name");
+  if (!site.registered) return res.status(404).json({ error: "that name is not registered", content: [] });
+
+  const owner = await getName(site.tld, site.label);
+  const mine = Boolean(req.user && owner && owner.user_id === req.user.id);
+  const items = await listContent(site.tld, site.label);
+
+  res.json({
+    name: site.name,
+    resolved: site.resolved,
+    content: mine ? items : items.filter((item) => item.published_at),
+  });
+});
+
+/**
+ * Publish something. The endpoint a webhook points at.
+ *
+ * POST rather than PUT because the caller does not have to know the slug — send
+ * a title and one is made — and it upserts rather than failing on a repeat,
+ * because anything firing over HTTP retries. The slug is the identity, so the
+ * same call twice is the same post once.
+ *
+ * A body may be one item or an array of them: a feed importer, a crossposter
+ * and a backfill all have several things to say at once, and making them fire
+ * one request each is how a publish endpoint turns into a rate limit. They are
+ * applied in order and each reports its own outcome, so a bad item in a batch
+ * does not discard the good ones.
+ */
+moshpitRouter.post("/api/moshpit/sites/:name/content", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const site = await siteName(req.params.name);
+  if (!site) return bad(res, "not a Moshpit name");
+
+  const payload = Array.isArray(req.body) ? req.body : [req.body ?? {}];
+  if (!payload.length) return bad(res, "nothing to publish");
+  if (payload.length > 50) return bad(res, "publish up to 50 items at a time");
+
+  const results = [];
+  for (const input of payload) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await putContent({ tld: site.tld, label: site.label, userId: req.user.id, item: input });
+    results.push(result.ok
+      ? { ok: true, created: result.created, slug: result.item.slug, url: `${config.pitOrigin}/n/${encodeURIComponent(site.resolved)}/${result.item.slug}` }
+      : { ok: false, error: result.error });
+  }
+
+  const failed = results.filter((result) => !result.ok);
+  // One item in, one item out — a caller that sent an object should not have to
+  // unwrap an array of one to find out what happened.
+  const body = Array.isArray(req.body) ? { results } : results[0];
+
+  // 207 when a batch was partly applied: 200 would claim it all worked and 400
+  // would suggest none of it did, and both send the caller looking in the wrong
+  // place. A single item keeps the plain answer it always had.
+  if (!Array.isArray(req.body)) {
+    return failed.length ? bad(res, results[0].error) : res.status(results[0].created ? 201 : 200).json(body);
+  }
+  return res.status(failed.length ? (failed.length === results.length ? 400 : 207) : 201).json(body);
+});
+
+moshpitRouter.get("/api/moshpit/sites/:name/content/:slug", async (req, res) => {
+  const site = await siteName(req.params.name);
+  if (!site) return bad(res, "not a Moshpit name");
+  const item = await getContent(site.tld, site.label, req.params.slug);
+  if (!item) return res.status(404).json({ error: "nothing published at that slug" });
+
+  const owner = await getName(site.tld, site.label);
+  const mine = Boolean(req.user && owner && owner.user_id === req.user.id);
+  if (!item.published_at && !mine) return res.status(404).json({ error: "nothing published at that slug" });
+  res.json({ name: site.name, item });
+});
+
+/** Replace one item. The slug in the path wins over one in the body. */
+moshpitRouter.put("/api/moshpit/sites/:name/content/:slug", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const site = await siteName(req.params.name);
+  if (!site) return bad(res, "not a Moshpit name");
+
+  const result = await putContent({
+    tld: site.tld, label: site.label, userId: req.user.id,
+    item: { ...(req.body ?? {}), slug: req.params.slug },
+  });
+  if (!result.ok) return bad(res, result.error || "could not publish that");
+  res.status(result.created ? 201 : 200).json({ ok: true, created: result.created, item: result.item });
+});
+
+moshpitRouter.delete("/api/moshpit/sites/:name/content/:slug", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const site = await siteName(req.params.name);
+  if (!site) return bad(res, "not a Moshpit name");
+
+  const result = await deleteContent({
+    tld: site.tld, label: site.label, userId: req.user.id, slug: req.params.slug,
+  });
+  if (!result.ok) return bad(res, result.error || "could not take that down", result.missing ? 404 : 400);
+  res.json({ name: site.name, slug: result.slug, deleted: true });
+});
+
 /* ---- the DNS records a name publishes ---- */
 
 /**
@@ -508,9 +647,12 @@ const nameUrl = (name) => `${config.pitOrigin}/n/${encodeURIComponent(name)}`;
  * column of, and its host is the part that identifies it — "substack.com" says
  * where the writing lives, which is what a reader scanning the list is after.
  */
-function livePointer(name) {
+function livePointer(name, published = 0) {
   if (name.target) return esc(name.target);
-  try { return `feed · ${esc(new URL(name.feed_url).host)}`; } catch { return "feed"; }
+  if (name.feed_url) {
+    try { return `feed · ${esc(new URL(name.feed_url).host)}`; } catch { return "feed"; }
+  }
+  return `${published} item${published === 1 ? "" : "s"} published here`;
 }
 
 function nameHead(resolution) {
@@ -599,6 +741,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
         listTldsForUser(owner.user_id, { limit: 50 }),
         popularLabels(),
       ]);
+      const publishing = await countContentForNames(names);
       // What could go under it next — the third question, after what is under
       // it and what is near it.
       const suggestions = suggestedLabels({
@@ -609,7 +752,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
       return res.status(200).send(page({
         title: `.${ending}`,
         head: endingHead(ending, owner),
-        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, suggestions, user: req.user, req }),
+        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, suggestions, publishing, user: req.user, req }),
       }));
     }
     // Still 400 for an ending nobody holds: otherwise every typo under /n/
@@ -635,6 +778,22 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     return proxyToOrigin(req, res, resolution, check);
   }
 
+  // Published here: the name's own site, which outranks a feed because it is
+  // the thing its owner typed into this registry rather than a mirror of
+  // somewhere else. Only when something is actually published — an empty site
+  // is not a site, and a name with a feed and an empty draft should still show
+  // the feed.
+  if (parsed && req.query.view !== "directory" && req.query.view !== "feed") {
+    const items = await listContent(parsed.tld, parsed.label);
+    if (items.some((item) => item.published_at)) {
+      return res.status(200).send(page({
+        title: resolution.name,
+        head: siteHead(resolution, items),
+        body: sitePage({ name: resolution.name, items, feedUrl: resolution.feed }),
+      }));
+    }
+  }
+
   // No server, but something to publish. A feed is the second thing a name can
   // be, and it is deliberately only consulted once the target has had its turn:
   // an owner who stood a server up did not do it so that we could show a feed
@@ -651,6 +810,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     listTlds({ limit: 200 }),
   ]);
   const owner = tld ? await getTldWithPrice(tld) : null;
+  const publishing = await countContentForNames(names);
 
   // Quoted rather than assumed: quoteName is the same call the checkout makes,
   // so an offer shown here is one the next click can actually honour — no
@@ -668,7 +828,61 @@ moshpitRouter.get("/n/:name", async (req, res) => {
   res.status(200).send(page({
     title: resolution.name,
     head: nameHead(resolution),
-    body: directory({ resolution, tld, owner, names, tlds, quote, user: req.user, req }),
+    body: directory({ resolution, tld, owner, names, tlds, quote, publishing, user: req.user, req }),
+  }));
+});
+
+/**
+ * Head tags for a name served from what it publishes here.
+ *
+ * The site's own words, for the same reason the feed page uses the feed's: a
+ * link preview that says "blue.eggs is registered on the Moshpit network" is a
+ * fact about the registry and tells a reader nothing about the page.
+ */
+function siteHead(resolution, items, item = null) {
+  const canonical = item
+    ? `${nameUrl(resolution.resolved || resolution.name)}/${encodeURIComponent(item.slug)}`
+    : nameUrl(resolution.resolved || resolution.name);
+  const home = items.find((entry) => entry.slug === "home" && entry.published_at);
+  const title = item?.title || home?.title || resolution.name;
+  const description = (item?.body || home?.body || `${resolution.name} on the Moshpit network.`)
+    .replace(/\s+/g, " ").slice(0, 300);
+  const image = item?.url && item.kind === "image" ? item.url : item?.media?.[0]?.url;
+
+  return `<link rel="canonical" href="${esc(canonical)}">
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="${item && item.kind !== "page" && item.kind !== "section" ? "article" : "website"}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:url" content="${esc(canonical)}">
+<meta property="og:description" content="${esc(description)}">
+${image ? `<meta property="og:image" content="${esc(image)}">` : ""}
+${resolution.feed ? `<link rel="alternate" type="application/rss+xml" title="${esc(title)}" href="${esc(resolution.feed)}">` : ""}
+<style>${SITE_CSS}</style>`;
+}
+
+/**
+ * One slug on a name's site: a section, a page or a post's permalink.
+ *
+ * Only for names that publish here. A name with a target has this path
+ * forwarded nowhere and answers as it did before — the gateway does not serve
+ * sub-paths, and quietly starting to do so from a content route is not the
+ * place to change that.
+ */
+moshpitRouter.get("/n/:name/:slug", async (req, res, next) => {
+  const resolution = await resolveMoshpitName(req.params.name);
+  if (!resolution?.name_registered || resolution.target) return next();
+
+  const parsed = parseMoshpitName(resolution.resolved);
+  if (!parsed) return next();
+
+  const items = await listContent(parsed.tld, parsed.label);
+  const item = items.find((entry) => entry.slug === normalizeSlug(req.params.slug) && entry.published_at);
+  if (!item) return next();
+
+  return res.status(200).send(page({
+    title: `${item.title || item.slug} — ${resolution.name}`,
+    head: siteHead(resolution, items, item),
+    body: sitePart({ name: resolution.name, items, item, feedUrl: resolution.feed }),
   }));
 });
 
@@ -823,11 +1037,13 @@ function endingHead(tld, owner) {
  * ending's price and a box to pick a name under it — and the listing is the
  * whole ending rather than "what else lives near the name you asked for".
  */
-function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], user, req }) {
-  // A name with a feed is as live as one with a server: it draws a page when
-  // you visit it, which is the only thing this list sorts on.
-  const live = names.filter((n) => n.target || n.feed_url);
-  const claimed = names.filter((n) => !n.target && !n.feed_url);
+function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], publishing = new Map(), user, req }) {
+  // A name with a feed, or with something published here, is as live as one
+  // with a server: it draws a page when you visit it, which is the only thing
+  // this list sorts on.
+  const drawn = (n) => Boolean(n.target || n.feed_url || publishing.get(`${n.label}.${n.tld}`));
+  const live = names.filter(drawn);
+  const claimed = names.filter((n) => !drawn(n));
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
   // An ending links to its own page — there is no label to carry across here,
@@ -893,7 +1109,7 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], su
 
   ${live.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
-  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">&rarr; ${livePointer(n)}</span></li>`).join("")}</ul>` : ""}
+  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">&rarr; ${livePointer(n, publishing.get(`${n.label}.${n.tld}`))}</span></li>`).join("")}</ul>` : ""}
 
   ${claimed.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Claimed, not pointed anywhere</h2>
@@ -939,11 +1155,12 @@ const unreachable = (resolution, why) => `
  * answer is what does. Live sites first — they are the only entries that go
  * anywhere real — then the rest of the ending, then other endings.
  */
-function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
-  // As in endingDirectory: a feed makes a name a site, so it belongs in the
-  // list of entries that go somewhere real.
-  const live = names.filter((n) => n.target || n.feed_url);
-  const claimed = names.filter((n) => !n.target && !n.feed_url);
+function directory({ resolution, tld, owner, names, tlds, quote, publishing = new Map(), user, req }) {
+  // As in endingDirectory: a feed, or a post published here, makes a name a
+  // site, so it belongs in the list of entries that go somewhere real.
+  const drawn = (n) => Boolean(n.target || n.feed_url || publishing.get(`${n.label}.${n.tld}`));
+  const live = names.filter(drawn);
+  const claimed = names.filter((n) => !drawn(n));
 
   // "Related" without a taxonomy: an alias is an explicit statement by an
   // operator that two endings belong together, and shared ownership is the
@@ -985,7 +1202,7 @@ function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
 
   ${live.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
-  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">→ ${livePointer(n)}</span></li>`).join("")}</ul>`
+  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">→ ${livePointer(n, publishing.get(`${n.label}.${n.tld}`))}</span></li>`).join("")}</ul>`
     : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">No site under .${esc(tld)} points anywhere yet.</p>`}
 
   ${claimed.length ? `
@@ -1781,6 +1998,45 @@ function feedHelp() {
 </details>`;
 }
 
+/**
+ * How to publish to a name without opening this page again.
+ *
+ * The feature is an API before it is a screen — the whole point is that
+ * whatever already produces the thing being published can post it — so what
+ * belongs beside the field is the call, not a description of one.
+ */
+function publishHelp() {
+  return `<details class="pit-bulk">
+  <summary>how do I publish posts to a name from a script?</summary>
+  <p class="pit-copy" style="font-size:.84rem">One endpoint, one call. It takes your existing
+    moshcode API key as a bearer token, and it <strong>upserts on the slug</strong> — so a webhook
+    that fires twice updates one post rather than making two.</p>
+  <div class="pit-pre">curl -X POST ${esc(config.pitOrigin)}/api/moshpit/sites/blue.eggs/content \\
+  -H "authorization: Bearer $MOSHCODE_API_KEY" \\
+  -H "content-type: application/json" \\
+  -d '{"kind":"link","title":"Worth reading","url":"https://example.com/post"}'</div>
+  <ul class="pit-steps dim">
+    <li><strong>kind</strong> is one of <code>${CONTENT_KINDS.join("</code>, <code>")}</code> —
+      <code>section</code> and <code>page</code> are the nav, the rest are posts.</li>
+    <li><strong>slug</strong> is the URL and the identity. Leave it out and one is made from the
+      title; send it to update something you posted before.</li>
+    <li><strong>published_at</strong> takes epoch seconds, milliseconds or a date string. Send
+      <code>null</code> for a draft — written, addressable by you, absent from the site.</li>
+    <li>Post an <strong>array</strong> to publish up to 50 at once. Each item reports its own
+      outcome, so one bad entry does not discard the good ones.</li>
+    <li><code>PUT</code> and <code>DELETE</code> the same path plus <code>/&lt;slug&gt;</code> to
+      replace or take one down. <code>GET</code> it to read the site back out.</li>
+  </ul>
+  <p class="pit-copy" style="font-size:.84rem">A name that publishes anything serves its site at
+    <code>/n/&lt;name&gt;</code>, with sections and pages as the nav and each post at
+    <code>/n/&lt;name&gt;/&lt;slug&gt;</code>. Publish a <code>page</code> with the slug
+    <code>home</code> to give the site a title and a tagline.</p>
+  <p class="pit-copy" style="font-size:.84rem">Order of precedence for a name:
+    <strong>target</strong> (your server) → <strong>posts published here</strong> →
+    <strong>feed</strong> → the ending's directory.</p>
+</details>`;
+}
+
 moshpitRouter.get("/pit", async (req, res) => {
   // An unknown ?tab= falls back to Yours rather than rendering an empty page.
   const tab = req.query.tab === "theirs" ? "theirs" : "yours";
@@ -1843,6 +2099,7 @@ moshpitRouter.get("/pit", async (req, res) => {
   const exemptions = new Map();
   const names = new Map();
   const nameTotals = new Map();
+  const published = new Map();
   if (tab === "yours") {
     // Exemptions are only meaningful for a TLD that points somewhere.
     await Promise.all(shown.filter((t) => t.alias_of).map(async (t) => exemptions.set(t.tld, await listExempt(t.tld))));
@@ -1850,6 +2107,9 @@ moshpitRouter.get("/pit", async (req, res) => {
       names.set(t.tld, await listNames(t.tld, focused ? NAMES_FOCUSED : NAMES_PER_TLD));
       nameTotals.set(t.tld, await countNames(t.tld));
     }));
+    // How much each name publishes here, in one query rather than one per row.
+    const drawn = [...names.values()].flat();
+    for (const [key, count] of await countContentForNames(drawn)) published.set(key, count);
   }
 
   const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
@@ -1889,6 +2149,10 @@ moshpitRouter.get("/pit", async (req, res) => {
                       : n.feed_url
                         ? `<span class="mono faint" style="font-size:.68rem">the target wins — clear it to serve this feed</span>`
                         : ""}
+                    ${published.get(`${n.label}.${t.tld}`)
+                      ? `<a class="mono acid" style="font-size:.68rem" href="/n/${esc(n.label)}.${esc(t.tld)}"
+                          >${published.get(`${n.label}.${t.tld}`)} published here →</a>`
+                      : ""}
                   </span>
                 </form>`).join("")
               : `<p class="mono faint" style="font-size:.72rem;margin:6px 0">no names under .${esc(t.tld)} yet</p>`}
@@ -1992,6 +2256,7 @@ moshpitRouter.get("/pit", async (req, res) => {
     </p>`}
     ${hostingHelp()}
     ${feedHelp()}
+    ${publishHelp()}
     ${mineHtml}
     ${focused ? "" : pager({
       page: pageNo, total: mineTotal, perPage: TLDS_PER_PAGE,
