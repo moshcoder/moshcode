@@ -11,6 +11,7 @@
 // checkable rather than trusted.
 
 import { db, get, all, run } from "./db.mjs";
+import { normalizeFeedKind, normalizeFeedUrl } from "./lib/feed.mjs";
 import { normalizeTarget } from "./lib/moshpit-gateway.mjs";
 import {
   BULK_CHUNK,
@@ -282,7 +283,7 @@ async function ownedTldAndLabel(tldInput, labelInput, userId) {
 
 /* ---- names under a TLD ---- */
 
-const NAME_COLS = `tld, label, user_id, target, created_at`;
+const NAME_COLS = `tld, label, user_id, target, feed_url, feed_kind, created_at`;
 
 export async function getName(tld, label) {
   return get(`SELECT ${NAME_COLS} FROM moshpit_names WHERE tld = ? AND label = ?`, [tld, label]);
@@ -351,7 +352,7 @@ export async function listNamesForUser(userId) {
  * it under a different TLD than the one asked for, and repointing the alias
  * later would strand it.
  */
-export async function registerName({ tld: tldInput, label: labelInput, userId, target = null }) {
+export async function registerName({ tld: tldInput, label: labelInput, userId, target = null, feed = null, feedKind = null }) {
   const tld = normalizeTld(tldInput);
   const label = normalizeLabel(labelInput);
   if (!tld || !label) return { ok: false, error: "not a valid name — letters, digits and dashes only" };
@@ -366,9 +367,19 @@ export async function registerName({ tld: tldInput, label: labelInput, userId, t
   const dest = normalizeTarget(target);
   if (!dest.ok) return { ok: false, error: dest.error };
 
+  // Same reasoning as the target, one field over: a feed URL that will never
+  // parse is a name that looks like a site and shows an error to everyone who
+  // visits it. Rejected at the form, not discovered by a reader.
+  const stream = normalizeFeedUrl(feed);
+  if (!stream.ok) return { ok: false, error: stream.error };
+  const layout = normalizeFeedKind(feedKind);
+  if (!layout.ok) return { ok: false, error: layout.error };
+
   try {
-    await run(`INSERT INTO moshpit_names (tld, label, user_id, target, created_at) VALUES (?,?,?,?,?)`,
-      [tld, label, userId, dest.target, Date.now()]);
+    await run(
+      `INSERT INTO moshpit_names (tld, label, user_id, target, feed_url, feed_kind, created_at) VALUES (?,?,?,?,?,?,?)`,
+      [tld, label, userId, dest.target, stream.feed, layout.kind, Date.now()],
+    );
   } catch {
     const existing = await getName(tld, label);
     if (existing) return { ok: false, error: `${label}.${tld} is already registered`, taken: true };
@@ -389,6 +400,35 @@ export async function setNameTarget({ tld: tldInput, label: labelInput, userId, 
     [dest.target, owned.tld, owned.label]);
   await logAction(owned.tld, userId, `retarget:${owned.label}`);
   return { ok: true };
+}
+
+/**
+ * Point a name at a feed, or take the feed off it.
+ *
+ * Separate from setNameTarget rather than another argument on it, because the
+ * two answer different questions and owners set them at different times: a
+ * target is "I run a server", a feed is "I publish somewhere else". A name may
+ * carry both, and which one a visitor gets is decided at read time by /n/ —
+ * the server wins, because an owner who has stood one up did not do it so we
+ * could show them a feed instead.
+ *
+ * An empty feed clears the row's feed and its layout together. Leaving a
+ * `feed_kind` behind on a name with no feed is a setting for a page that no
+ * longer exists, and it would silently apply to whatever feed came next.
+ */
+export async function setNameFeed({ tld: tldInput, label: labelInput, userId, feed, kind = null }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const stream = normalizeFeedUrl(feed);
+  if (!stream.ok) return { ok: false, error: stream.error };
+  const layout = normalizeFeedKind(kind);
+  if (!layout.ok) return { ok: false, error: layout.error };
+
+  await run(`UPDATE moshpit_names SET feed_url = ?, feed_kind = ? WHERE tld = ? AND label = ?`,
+    [stream.feed, stream.feed ? layout.kind : null, owned.tld, owned.label]);
+  await logAction(owned.tld, userId, `${stream.feed ? "feed" : "unfeed"}:${owned.label}`);
+  return { ok: true, feed: stream.feed, kind: stream.feed ? layout.kind : null };
 }
 
 /** Give the name back. */
@@ -665,6 +705,11 @@ export async function resolveMoshpitName(input) {
     ...(Boolean(owner.alias_of) && !aliased ? { exempt: true } : {}),
     name_registered: Boolean(entry),
     target: entry?.target ?? null,
+    // Carried alongside the target rather than folded into it. A resolver
+    // answering AAAA has no use for a feed and ignores these; /n/ is the caller
+    // that turns them into a page, and it needs both to decide which it serves.
+    feed: entry?.feed_url ?? null,
+    feed_kind: entry?.feed_kind ?? null,
   };
 }
 

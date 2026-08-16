@@ -1,0 +1,31 @@
+-- The feed a name publishes: `blue.eggs` → https://example.com/feed.xml.
+--
+-- Until now a name could show exactly one thing, and only if its owner already
+-- ran a web server: `target` is an address the gateway proxies. That is the
+-- right primitive and the wrong first step. Most people who claim a name have
+-- something to publish and nowhere to publish it from, so the name sits parked
+-- on the directory page — the registry's commonest outcome is a name that
+-- never becomes a site.
+--
+-- A feed closes that gap without asking anyone to host anything. Almost
+-- everybody writing already emits RSS or Atom from somewhere else — a blog, a
+-- podcast host, a newsletter — and pointing a name at that URL is enough for
+-- the pit to render a real site at it. The name gets a page; nobody stands up
+-- a server.
+--
+-- Two columns on the name rather than a table of their own, unlike
+-- moshpit_records. Records are many-per-name by nature (two AAAA records are
+-- how a name gets a second address); a name has one feed, the same way it has
+-- one target, because what it publishes is a single stream. If names ever grow
+-- a real multi-feed page, that is when this grows a table.
+ALTER TABLE moshpit_names ADD COLUMN feed_url TEXT;
+
+-- 'blog' or 'podcast', or null for "work it out from the feed".
+--
+-- Null is the default and the honest one: whether a feed is a podcast is a
+-- property of its entries (do they carry audio enclosures?), not of anything
+-- its owner has to declare. The column exists for the feeds that guess wrong —
+-- a blog that attaches one audio file, a podcast whose host omits enclosures
+-- from the summary feed — so the owner has a way to say which layout they
+-- meant instead of filing a bug about a heuristic.
+ALTER TABLE moshpit_names ADD COLUMN feed_kind TEXT;

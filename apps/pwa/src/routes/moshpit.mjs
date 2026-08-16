@@ -16,6 +16,7 @@
 //   POST   /api/moshpit/tlds/:tld/records     publish a record on a name you hold
 //   DELETE /api/moshpit/tlds/:tld/records     withdraw one
 //   GET    /pit                               the human page
+//   PUT    /api/moshpit/tlds/:tld/names/feed  point a name you hold at an RSS/Atom feed
 //   GET    /pit/records                       the DNS records on the names you hold
 //   GET    /pit/dns                           how to reach these names from a machine
 import { createHash } from "node:crypto";
@@ -26,6 +27,8 @@ import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
+import { FEED_KINDS, loadFeed } from "../lib/feed.mjs";
+import { FEED_CSS, feedPage, feedUnavailable } from "../lib/moshpit-feed-page.mjs";
 import { nameQuery, tldQuery } from "../lib/moshpit-search.mjs";
 import {
   MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, fetchOriginTls, forwardableHeaders, tlsRedirect,
@@ -85,6 +88,7 @@ import {
   searchTlds,
   setAlias,
   setExempt,
+  setNameFeed,
   setNameTarget,
   setTldPrice,
   shortCount,
@@ -356,9 +360,33 @@ moshpitRouter.post("/api/moshpit/tlds/:tld/names", async (req, res) => {
   if (!req.user) return unauthorized(res);
   const result = await registerName({
     tld: req.params.tld, label: req.body?.label, userId: req.user.id, target: req.body?.target,
+    feed: req.body?.feed, feedKind: req.body?.feed_kind,
   });
   if (!result.ok) return bad(res, result.error || "could not register that name", result.taken ? 409 : 400);
   res.status(201).json({ name: result.name });
+});
+
+/**
+ * Point a name at a feed, or clear it by sending an empty one.
+ *
+ * Its own endpoint rather than another field on the retarget PUT: the two are
+ * set at different times by different people (a deploy script owns the target,
+ * a publisher owns the feed), and folding them together would mean a script
+ * that only knows about addresses silently wiping a feed it never sent.
+ */
+moshpitRouter.put("/api/moshpit/tlds/:tld/names/feed", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await setNameFeed({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id,
+    feed: req.body?.feed, kind: req.body?.feed_kind,
+  });
+  if (!result.ok) return bad(res, result.error || "could not set that feed");
+  res.json({
+    tld: normalizeTld(req.params.tld),
+    label: normalizeLabel(req.body?.label),
+    feed: result.feed,
+    feed_kind: result.kind,
+  });
 });
 
 moshpitRouter.put("/api/moshpit/tlds/:tld/names", async (req, res) => {
@@ -473,6 +501,18 @@ const nameUrl = (name) => `${config.pitOrigin}/n/${encodeURIComponent(name)}`;
  * `.agent` means one page, reachable by two names, and saying so keeps the two
  * from competing as duplicates.
  */
+/**
+ * What a live name is pointed at, for a directory row.
+ *
+ * A target is an address and reads as one. A feed is a URL nobody wants a
+ * column of, and its host is the part that identifies it — "substack.com" says
+ * where the writing lives, which is what a reader scanning the list is after.
+ */
+function livePointer(name) {
+  if (name.target) return esc(name.target);
+  try { return `feed · ${esc(new URL(name.feed_url).host)}`; } catch { return "feed"; }
+}
+
 function nameHead(resolution) {
   const canonical = nameUrl(resolution.resolved || resolution.name);
   const description = resolution.name_registered
@@ -580,6 +620,8 @@ moshpitRouter.get("/n/:name", async (req, res) => {
   const parsed = parseMoshpitName(resolution.resolved);
   const tld = parsed?.tld;
 
+  // A name serves its origin if it has one, its feed if it does not, and the
+  // directory if it has neither.
   if (resolution.target) {
     const check = await checkTarget(resolution.target);
     if (!check.ok) {
@@ -593,7 +635,17 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     return proxyToOrigin(req, res, resolution, check);
   }
 
-  // No target: the directory.
+  // No server, but something to publish. A feed is the second thing a name can
+  // be, and it is deliberately only consulted once the target has had its turn:
+  // an owner who stood a server up did not do it so that we could show a feed
+  // instead. `?view=directory` is the way back out to the rest of the ending,
+  // and it is only honoured here — a pointed name's query string belongs to its
+  // origin, so the gateway above never inspects one.
+  if (resolution.feed && req.query.view !== "directory") {
+    return serveFeed(res, resolution);
+  }
+
+  // Neither: the directory.
   const [names, tlds] = await Promise.all([
     tld ? listNames(tld) : Promise.resolve([]),
     listTlds({ limit: 200 }),
@@ -619,6 +671,63 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     body: directory({ resolution, tld, owner, names, tlds, quote, user: req.user, req }),
   }));
 });
+
+/**
+ * Head tags for a name being served from its feed.
+ *
+ * The feed's own title and description rather than the registry's boilerplate:
+ * this page is a site, and "blue.eggs is registered on the Moshpit network" is
+ * a fact about the registry that tells a reader — or a crawler, or a link
+ * preview — nothing about what they are looking at.
+ */
+function feedHead(resolution, feed) {
+  const canonical = nameUrl(resolution.resolved || resolution.name);
+  const description = feed.description || `${resolution.name} — ${feed.title}`;
+  return `<link rel="canonical" href="${esc(canonical)}">
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="${esc(feed.title || resolution.name)}">
+<meta property="og:url" content="${esc(canonical)}">
+<meta property="og:description" content="${esc(description)}">
+${feed.image ? `<meta property="og:image" content="${esc(feed.image)}">` : ""}
+<link rel="alternate" type="application/rss+xml" title="${esc(feed.title || resolution.name)}" href="${esc(resolution.feed)}">
+<style>${FEED_CSS}</style>`;
+}
+
+/**
+ * Draw a name from the feed it publishes.
+ *
+ * A feed that will not load is still a 200. The name is claimed and pointed at
+ * something, so what the visitor has found is a site with its contents
+ * temporarily missing — not a missing name, which is what a 4xx or 5xx would
+ * tell a browser, a link checker and a crawler that reads the status before the
+ * body. The same reasoning the parked directory page is a 200 for.
+ */
+async function serveFeed(res, resolution) {
+  const result = await loadFeed(resolution.feed);
+
+  if (!result.ok) {
+    return res.status(200).send(page({
+      title: resolution.name,
+      head: `<link rel="canonical" href="${esc(nameUrl(resolution.resolved || resolution.name))}">
+<meta name="robots" content="noindex">
+<style>${FEED_CSS}</style>`,
+      body: feedUnavailable({ name: resolution.name, feedUrl: resolution.feed, error: result.error }),
+    }));
+  }
+
+  return res.status(200).send(page({
+    title: `${result.feed.title || resolution.name} — ${resolution.name}`,
+    head: feedHead(resolution, result.feed),
+    body: feedPage({
+      name: resolution.name,
+      feed: result.feed,
+      feedUrl: resolution.feed,
+      kind: resolution.feed_kind,
+      stale: Boolean(result.stale),
+    }),
+  }));
+}
 
 /** Fetch the origin and hand the result back, bounded in time and size. */
 async function proxyToOrigin(req, res, resolution, check) {
@@ -715,8 +824,10 @@ function endingHead(tld, owner) {
  * whole ending rather than "what else lives near the name you asked for".
  */
 function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], user, req }) {
-  const live = names.filter((n) => n.target);
-  const claimed = names.filter((n) => !n.target);
+  // A name with a feed is as live as one with a server: it draws a page when
+  // you visit it, which is the only thing this list sorts on.
+  const live = names.filter((n) => n.target || n.feed_url);
+  const claimed = names.filter((n) => !n.target && !n.feed_url);
   const nameLink = (n) =>
     `<a class="mono acid" href="/n/${esc(n.label)}.${esc(tld)}">${esc(n.label)}.${esc(tld)}</a>`;
   // An ending links to its own page — there is no label to carry across here,
@@ -782,7 +893,7 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], su
 
   ${live.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
-  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">&rarr; ${esc(n.target)}</span></li>`).join("")}</ul>` : ""}
+  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">&rarr; ${livePointer(n)}</span></li>`).join("")}</ul>` : ""}
 
   ${claimed.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Claimed, not pointed anywhere</h2>
@@ -829,8 +940,10 @@ const unreachable = (resolution, why) => `
  * anywhere real — then the rest of the ending, then other endings.
  */
 function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
-  const live = names.filter((n) => n.target);
-  const claimed = names.filter((n) => !n.target);
+  // As in endingDirectory: a feed makes a name a site, so it belongs in the
+  // list of entries that go somewhere real.
+  const live = names.filter((n) => n.target || n.feed_url);
+  const claimed = names.filter((n) => !n.target && !n.feed_url);
 
   // "Related" without a taxonomy: an alias is an explicit statement by an
   // operator that two endings belong together, and shared ownership is the
@@ -872,7 +985,7 @@ function directory({ resolution, tld, owner, names, tlds, quote, user, req }) {
 
   ${live.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:26px">Sites on .${esc(tld)}</h2>
-  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">→ ${esc(n.target)}</span></li>`).join("")}</ul>`
+  <ul class="pit-dir">${live.map((n) => `<li>${nameLink(n)} <span class="faint mono">→ ${livePointer(n)}</span></li>`).join("")}</ul>`
     : `<p class="mono faint" style="font-size:.72rem;margin-top:26px">No site under .${esc(tld)} points anywhere yet.</p>`}
 
   ${claimed.length ? `
@@ -1311,6 +1424,11 @@ const PIT_CSS = `
 .pit-names{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 .pit-name{background:var(--bg-tint);border-radius:8px;padding:6px 10px;margin-bottom:6px}
 .pit-name .mono{min-width:150px}
+.pit-feed-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex-basis:100%;
+  margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)}
+.pit-feed-row input{flex:1 1 220px}
+.pit-feed-row select{width:auto;padding:8px 10px;font-size:.78rem;background:var(--bg-tint);
+  border:1px solid var(--line-2);border-radius:8px}
 .pit-forsale{border-color:color-mix(in srgb,var(--acid) 35%,var(--line))}
 .pit-tab .count{font-size:.68rem;color:var(--faint);margin-left:6px}
 .pit-tab.on .count{color:var(--acid)}
@@ -1630,6 +1748,39 @@ function hostingHelp() {
 </details>`;
 }
 
+/**
+ * What the feed field is for.
+ *
+ * Sits beside the hosting steps because it is the answer for everyone those
+ * steps do not fit: the three of them assume you have a machine, and most
+ * people claiming a name have something to publish and nothing to publish it
+ * from. Kept short — the whole feature is "paste the URL you already have".
+ */
+function feedHelp() {
+  return `<details class="pit-bulk">
+  <summary>I don't run a server — can a name still be a site?</summary>
+  <p class="pit-copy" style="font-size:.84rem">Yes. Paste an RSS or Atom URL into the
+    <strong>feed</strong> box on any name you hold and the pit draws the site for you — the name's
+    page becomes your posts or your episodes, hosted nowhere, updated whenever your feed is.</p>
+  <ul class="pit-steps dim">
+    <li><strong>A blog feed</strong> renders as posts: date, headline, the opening lines, and a link
+      out to the real article. Anything that emits RSS works — a static site generator, Substack,
+      Ghost, WordPress, a Mastodon account's <code>.rss</code>.</li>
+    <li><strong>A podcast feed</strong> renders as episodes, with cover art and a player on each one,
+      so the name is somewhere people can actually listen rather than a page of links. Paste the
+      same URL your show is submitted to Apple and Spotify with.</li>
+    <li><strong>auto / blog / podcast</strong> picks the layout. Auto looks at whether the entries
+      carry audio, which is right nearly always — set it by hand when it is not.</li>
+  </ul>
+  <p class="pit-copy" style="font-size:.84rem">A name that has <em>both</em> a target and a feed
+    serves the target: a server you have stood up beats a page we drew. Clear the target and the
+    feed takes over, which also makes the feed a soft landing for a site that has gone down.</p>
+  <p class="pit-copy" style="font-size:.84rem">The feed is fetched by the pit and cached for a few
+    minutes, so a name that gets linked somewhere busy does not turn into traffic on your feed
+    host.</p>
+</details>`;
+}
+
 moshpitRouter.get("/pit", async (req, res) => {
   // An unknown ?tab= falls back to Yours rather than rendering an empty page.
   const tab = req.query.tab === "theirs" ? "theirs" : "yours";
@@ -1725,6 +1876,20 @@ moshpitRouter.get("/pit", async (req, res) => {
                   <input name="target" placeholder="points at… (IPv6 or hostname)" value="${esc(n.target || "")}" autocomplete="off">
                   <button class="btn" type="submit" name="retarget" value="1">Save</button>
                   <button class="btn" type="submit" name="release" value="1">Release</button>
+                  <span class="pit-feed-row">
+                    <input name="feed" placeholder="…or a feed (RSS/Atom URL)" value="${esc(n.feed_url || "")}" autocomplete="off">
+                    <select name="feed_kind" aria-label="how to draw ${esc(n.label)}.${esc(t.tld)}">
+                      <option value=""${n.feed_kind ? "" : " selected"}>auto</option>
+                      ${FEED_KINDS.map((k) =>
+                        `<option value="${k}"${n.feed_kind === k ? " selected" : ""}>${k}</option>`).join("")}
+                    </select>
+                    <button class="btn" type="submit" name="refeed" value="1">Save feed</button>
+                    ${n.feed_url && !n.target
+                      ? `<a class="btn" href="/n/${esc(n.label)}.${esc(t.tld)}">View →</a>`
+                      : n.feed_url
+                        ? `<span class="mono faint" style="font-size:.68rem">the target wins — clear it to serve this feed</span>`
+                        : ""}
+                  </span>
                 </form>`).join("")
               : `<p class="mono faint" style="font-size:.72rem;margin:6px 0">no names under .${esc(t.tld)} yet</p>`}
             ${(nameTotals.get(t.tld) ?? 0) > (names.get(t.tld) || []).length ? `
@@ -1738,6 +1903,7 @@ moshpitRouter.get("/pit", async (req, res) => {
               <input name="label" placeholder="new name" autocomplete="off" required>
               <span class="mono faint">.${esc(t.tld)}</span>
               <input name="target" placeholder="points at… (IPv6 or hostname, optional)" autocomplete="off">
+              <input name="feed" placeholder="…or a feed URL (optional)" autocomplete="off">
               <button class="btn acid" type="submit">Add name</button>
             </form>
           </div>
@@ -1825,6 +1991,7 @@ moshpitRouter.get("/pit", async (req, res) => {
       ending and let anyone buy one.
     </p>`}
     ${hostingHelp()}
+    ${feedHelp()}
     ${mineHtml}
     ${focused ? "" : pager({
       page: pageNo, total: mineTotal, perPage: TLDS_PER_PAGE,
@@ -2432,16 +2599,24 @@ moshpitRouter.post("/pit/:tld/names", requireAuth, async (req, res) => {
   const label = req.body?.label;
   const args = { tld, label, userId: req.user.id };
 
+  const full = `${normalizeLabel(label)}.${normalizeTld(tld)}`;
+
   let result, done;
   if (req.body?.release) {
     result = await releaseName(args);
-    done = `${normalizeLabel(label)}.${normalizeTld(tld)} released.`;
+    done = `${full} released.`;
+  } else if (req.body?.refeed) {
+    result = await setNameFeed({ ...args, feed: req.body?.feed, kind: req.body?.feed_kind });
+    // Said differently for the two outcomes: clearing a feed is an action
+    // people take deliberately, and "updated" would leave them wondering
+    // whether the empty field took.
+    done = result.feed ? `${full} now serves its feed.` : `${full} no longer serves a feed.`;
   } else if (req.body?.retarget) {
     result = await setNameTarget({ ...args, target: req.body?.target });
-    done = `${normalizeLabel(label)}.${normalizeTld(tld)} updated.`;
+    done = `${full} updated.`;
   } else {
-    result = await registerName({ ...args, target: req.body?.target });
-    done = `${normalizeLabel(label)}.${normalizeTld(tld)} is yours.`;
+    result = await registerName({ ...args, target: req.body?.target, feed: req.body?.feed, feedKind: req.body?.feed_kind });
+    done = `${full} is yours.`;
   }
 
   if (!result.ok) return back(res, { err: result.error || "could not update that name" });

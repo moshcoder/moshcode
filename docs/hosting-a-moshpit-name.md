@@ -144,6 +144,46 @@ DNS carries an address and has nowhere to put a port. A target naming a
 non-default port therefore works only through the gateway, and a browser using
 the resolver will go to port 80 regardless of what the target says.
 
+## No server? Point the name at a feed instead
+
+Everything above assumes you have a machine. If you do not, a name can still be
+a site: paste an RSS or Atom URL into the **feed** box next to any name you
+hold, and the Pit renders the page for you.
+
+```
+blue.eggs   points at   (empty)
+            feed        https://example.com/feed.xml     [auto ▾]
+```
+
+Visiting `blue.eggs` — or `pit.moshcode.sh/n/blue.eggs` — then draws the feed:
+
+| the feed carries | you get |
+|---|---|
+| posts | a blog: date, headline, opening lines, link out to the article |
+| episodes with audio enclosures | a podcast: cover art, running time, and a player on every episode |
+
+**auto / blog / podcast** picks the layout. Auto decides on whether the entries
+carry audio, which is right nearly always — set it by hand for the feeds where
+it is not (a blog that attaches one recording, a show whose host omits
+enclosures).
+
+Worth knowing:
+
+- **A target beats a feed.** A name with both serves the target — a server you
+  stood up beats a page we drew. Clear the target and the feed takes over, which
+  also makes a feed a soft landing for a site that has gone down.
+- **The Pit fetches the feed, not the visitor.** It is cached for a few minutes,
+  so a name that gets linked somewhere busy does not become traffic on your feed
+  host. If the feed stops answering, the last good copy keeps serving for a day
+  with a note on it.
+- **The feed must be on the public internet** over http(s), like a target.
+  Private and link-local addresses are refused when you save.
+- **Feed pages work without the resolver**, at `pit.moshcode.sh/n/<name>` — the
+  page is rendered by the Pit, so there is no origin for a visitor to reach.
+- Set it from a script with
+  `PUT /api/moshpit/tlds/<tld>/names/feed` — `{"label":"blue","feed":"…","feed_kind":"podcast"}`.
+  An empty `feed` clears it.
+
 ## Limits worth knowing before you build
 
 - **No HTTPS, ever.** No CA will issue for an ending outside the DNS root. That
