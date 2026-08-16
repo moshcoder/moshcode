@@ -1408,8 +1408,17 @@ test("a ball past the paddle is a point, and seven of them is the match", () => 
 });
 
 test("the machine can be beaten, but not by doing nothing", () => {
+  // Beaten the way the game says it has to be: off the end of the paddle. A
+  // return taken off the middle leaves dead flat, the machine parks in front of
+  // it, and the rally goes on until somebody gets bored — which is the game
+  // working as designed, not a machine that cannot lose. (This player used to
+  // centre the paddle and still won, but only because a paddle that moved a
+  // whole row per keypress could not hold a centre and kept hitting off it by
+  // accident. A paddle that travels smoothly centres properly, so the aim here
+  // has to be the real one.)
   const tracking = (state) => {
-    const want = state.ball.y - (PADDLE - 1) / 2;
+    const middle = state.ball.y - (PADDLE - 1) / 2;
+    const want = middle + (state.ball.y < HEIGHT_P / 2 ? 1.4 : -1.4);
     if (want < state.you - 0.5) PONG.onKey(state, "up");
     else if (want > state.you + 0.5) PONG.onKey(state, "down");
   };
@@ -2752,4 +2761,174 @@ test("a redraw writes only the rows that changed, and lands back where it starte
 
   input.emit("data", "q");
   await done;
+});
+
+/* ------------------------------------------------- paddles and held keys */
+
+/** Where the paddle is, tick by tick, for a game driven by `act`. */
+function paddleTrack(game, at, ticks, act = () => {}, ctx = {}) {
+  let state = game.create({ rng: seeded(1) });
+  const track = [at(state)];
+  for (let t = 0; t < ticks; t++) {
+    act(state, t);
+    state = game.tick(state, ctx) || state;
+    track.push(at(state));
+  }
+  return track;
+}
+
+const biggestJump = (track) => track.slice(1).reduce((w, v, i) => Math.max(w, Math.abs(v - track[i])), 0);
+
+test("a paddle moves on the game's clock, not on the keypress", () => {
+  // The bug this pins: the paddle used to be the only thing on the board that
+  // did not move on the tick. It jumped, by a whole step, at whatever rate the
+  // terminal happened to repeat at — which is both the visible chop and the
+  // reason it could not be made smooth however fast the game ran.
+  for (const [name, game, at, key] of [
+    ["pong", PONG, (s) => s.you, "up"],
+    ["breakout", BREAKOUT, (s) => s.paddle, "left"],
+  ]) {
+    const tapped = paddleTrack(game, at, 30, (s, t) => { if (t === 0) game.onKey(s, key); });
+    const moved = Math.abs(tapped.at(-1) - tapped[0]);
+    assert.ok(moved > 0, `${name}: a press moved the paddle nowhere`);
+    // One press is worth one step of travel, and it is paid out over several
+    // ticks rather than landing in one.
+    const ticksMoving = tapped.slice(1).filter((v, i) => v !== tapped[i]).length;
+    assert.ok(ticksMoving >= 3, `${name}: a press landed in ${ticksMoving} tick(s), which is a jump`);
+    assert.ok(biggestJump(tapped) < moved, `${name}: the whole press arrived in one frame`);
+  }
+});
+
+test("a press moves the paddle in the very frame it was pressed", () => {
+  // Waiting for the next tick is only sixteen milliseconds, but it is the
+  // difference between a control that answers and one that agrees to shortly.
+  const pong = PONG.create({ rng: seeded(1) });
+  const wasP = pong.you;
+  PONG.onKey(pong, "up");
+  assert.ok(pong.you < wasP, "pong: the press frame has not moved");
+
+  const brk = BREAKOUT.create({ rng: seeded(1) });
+  const wasB = brk.paddle;
+  BREAKOUT.onKey(brk, "left");
+  assert.ok(brk.paddle < wasB, "breakout: the press frame has not moved");
+  assert.equal(brk.ball.x, brk.paddle + PADDLE_W / 2, "and the resting ball came with it");
+});
+
+test("letting go of the key stops the paddle, and holding it does not", () => {
+  const held = { heldKeys: true };
+  for (const [name, game, at, key, far] of [
+    ["pong", PONG, (s) => s.you, "down", 5],
+    ["breakout", BREAKOUT, (s) => s.paddle, "right", 15],
+  ]) {
+    // Held: one press, no repeats at all, and the paddle keeps going — which is
+    // exactly the half second of auto-repeat delay that used to be dead time.
+    const holding = paddleTrack(game, at, 40, (s, t) => { if (t === 0) game.onKey(s, key, held); }, held);
+    const went = Math.abs(holding.at(-1) - holding[0]);
+    assert.ok(went > far, `${name}: a held key only travelled ${went.toFixed(1)}`);
+    // And it runs at a steady speed rather than in jumps. Measured before it
+    // reaches the end of the board, where the last step is short because that
+    // is where the board stops.
+    const open = holding.slice(0, 13);
+    const steps = open.slice(1).map((v, i) => Math.abs(v - open[i])).filter((d) => d > 1e-9);
+    assert.ok(Math.max(...steps) - Math.min(...steps) < 1e-9, `${name}: a held paddle changed speed`);
+
+    // Released: it stops, and stays stopped.
+    const letGo = paddleTrack(game, at, 40, (s, t) => {
+      if (t === 0) game.onKey(s, key, held);
+      if (t === 5) game.onRelease(s, key, held);
+    }, held);
+    assert.deepEqual(letGo.slice(8), Array(letGo.length - 8).fill(letGo[8]), `${name}: it carried on after release`);
+  }
+});
+
+test("releasing the arrow you are no longer holding does not stop the one you are", () => {
+  // Rolling from one direction into the other sends the release for the first
+  // after the press for the second. Stopping on it would drop every reversal.
+  const held = { heldKeys: true };
+  const s = BREAKOUT.create({ rng: seeded(1) });
+  BREAKOUT.onKey(s, "left", held);
+  BREAKOUT.onKey(s, "right", held);
+  BREAKOUT.onRelease(s, "left", held);
+  const before = s.paddle;
+  BREAKOUT.tick(s, held);
+  assert.ok(s.paddle > before, "the reversal was cancelled by the stale release");
+});
+
+test("a key release is decoded, and a press and a repeat are not", () => {
+  assert.deepEqual(decodeKeys("\x1b[1;1:1D"), ["left"], "a press");
+  assert.deepEqual(decodeKeys("\x1b[1;1:2D"), ["left"], "auto-repeat is still the key being down");
+  assert.deepEqual(decodeKeys("\x1b[1;1:3D"), ["release:left"], "and this one is it coming back up");
+  // Keys arrive by codepoint once the protocol is on.
+  assert.deepEqual(decodeKeys("\x1b[113u"), ["q"]);
+  assert.deepEqual(decodeKeys("\x1b[32u"), ["space"]);
+  assert.deepEqual(decodeKeys("\x1b[13u"), ["enter"]);
+  assert.deepEqual(decodeKeys("\x1b[27u"), ["escape"]);
+  assert.deepEqual(decodeKeys("\x1b[99;5u"), ["quit"], "ctrl-c is a quit however it arrives");
+  assert.deepEqual(decodeKeys("\x1b[107u"), ["up"], "vim keys survive the protocol");
+  assert.deepEqual(decodeKeys("\x1b[107u", { vim: false }), ["k"], "and so does opting out of them");
+});
+
+test("an escape sequence is never half-read as typing", () => {
+  // This used to skip a fixed two bytes and let the rest of the sequence fall
+  // through as though it had been typed, so a terminal answering a question put
+  // a fistful of letters into the game.
+  assert.deepEqual(decodeKeys("\x1b[?1u"), [], "an answer is swallowed whole");
+  assert.deepEqual(decodeKeys("\x1b[<0;24;12M"), [], "and so is a mouse report");
+  assert.deepEqual(decodeKeys("\x1b[5~"), [], "and a page-up");
+  assert.deepEqual(decodeKeys("\x1b[?1u\x1b[Aq"), ["up", "q"], "and what follows still arrives");
+  assert.deepEqual(decodeKeys("\x1b[A"), ["up"], "the plain arrows are untouched");
+});
+
+/** A stdin that claims to be a terminal, so the driver will talk to it. */
+function fakeTTY(answer) {
+  const io = fakeIO();
+  io.input.isTTY = true;
+  const write = io.output.write;
+  // A terminal that supports the protocol answers the question it is asked.
+  io.output.write = (s) => {
+    write(s);
+    if (s === "\x1b[?u" && answer) setImmediate(() => io.input.emit("data", answer));
+  };
+  return io;
+}
+
+test("a terminal that will not say when a key comes up is not sent the sequence", async () => {
+  const { input, output, written } = fakeTTY(null);
+  const done = runGame(PONG, { input, output, rng: seeded(3) });
+  await new Promise((r) => setTimeout(r, 100));
+  const screen = written.join("");
+  assert.ok(screen.includes("\x1b[?u"), "it should still have been asked");
+  assert.ok(!screen.includes("\x1b[>3u"), "but silence is a no, and it was turned on anyway");
+  input.emit("data", "q");
+  await done;
+  assert.ok(!written.join("").includes("\x1b[<u"), "and there is nothing to put back");
+});
+
+test("a terminal that answers gets the protocol, and its releases reach the paddle", async () => {
+  const { input, output, written } = fakeTTY("\x1b[?0u");
+  let state = null;
+  const spy = {
+    ...PONG,
+    onKey: (s, k, ctx) => { state = PONG.onKey(s, k, ctx); return state; },
+    onRelease: (s, k, ctx) => { state = PONG.onRelease(s, k, ctx); return state; },
+  };
+  const done = runGame(spy, { input, output, rng: seeded(3) });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.ok(written.join("").includes("\x1b[>3u"), "an answer should turn it on");
+
+  input.emit("data", "\x1b[1;1:1B");            // down, pressed
+  assert.equal(state.motion.held, 1, "a held key should put the paddle in gear");
+  input.emit("data", "\x1b[1;1:3B");            // down, released
+  assert.equal(state.motion.held, 0, "and letting go should take it out again");
+
+  input.emit("data", "q");
+  await done;
+  assert.ok(written.join("").includes("\x1b[<u"), "and the terminal is put back as it was");
+});
+
+test("a key pressed while the terminal is being asked is not eaten", async () => {
+  const { input, output } = fakeTTY("\x1b[?0u");
+  const done = runGame(PONG, { input, output, rng: seeded(3) });
+  input.emit("data", "q");                      // typed before the answer lands
+  assert.equal(await done, 0, "the game should have quit");
 });

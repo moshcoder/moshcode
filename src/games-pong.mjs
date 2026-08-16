@@ -8,6 +8,7 @@
 // not. That is the whole game, and it is why the angle off the paddle depends on
 // where the ball hit it.
 import { advanceBall, drawnBall, drawnCell, snapBall } from "./games-draw.mjs";
+import { glidePaddle, holdPaddle, paddleMotion, perSecond, pressPaddle, releasePaddle } from "./games-paddle.mjs";
 import { acid, bone, danger, dim } from "./ui.mjs";
 
 export const WIDTH = 44;
@@ -64,9 +65,33 @@ const THEM_SPEED = 0.3 * SCALE;   // slow enough that a ball into the corner bea
 const FLAT = 0.08 * SCALE;        // below this a rally has gone flat
 const NUDGE = 0.12 * SCALE;       // and this is the angle it is put back at
 const MAX_VY = 0.5 * SCALE;
-const YOU_STEP = 1;               // a keypress, not a tick — the same either way
+
+/**
+ * Your paddle, which moves on this game's clock and not on the keyboard's.
+ *
+ * `YOU_RATE` is the speed the paddle actually travels at while you hold an
+ * arrow, in rows per second, so it says something about the game rather than
+ * about the rate the game happens to tick at. Twenty-one rows a second crosses
+ * the table's twelve in a little over half a second — comfortably faster than
+ * the ball falls, which is what makes a ball put into the corner a shot you
+ * lost rather than one you were never allowed to reach. The machine is left at
+ * ten rows a second and so is still beatable exactly where it always was.
+ *
+ * `YOU_STEP` is what one press is worth, and therefore also how far the paddle
+ * will still glide after you let go: nudging without holding moves a shade over
+ * a row, and a released paddle is done within a tenth of a second. See
+ * games-paddle.mjs for why a press buys movement instead of performing it.
+ */
+const YOU_RATE = perSecond(21, TICK_MS);
+const YOU_STEP = 1.2;             // rows one press is worth
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** The table's ends, as far as your paddle is concerned. */
+const YOU_GLIDE = { rate: YOU_RATE, step: YOU_STEP, lo: 0, hi: HEIGHT - PADDLE };
+
+/** Which way an arrow moves your paddle, and 0 for a key that is not one. */
+const towards = (key) => (key === "up" ? -1 : key === "down" ? 1 : 0);
 
 /** A ball in the middle, heading at whoever just lost the point. */
 export function serve(state, toward) {
@@ -103,6 +128,9 @@ function returned(ball, top, dir) {
 
 /** One tick of rally. Exported so a test can play a whole match with no clock. */
 export function step(state) {
+  // Your paddle moves here, with everything else, rather than back in `onKey`.
+  state.you = glidePaddle(state.motion, state.you, YOU_GLIDE);
+
   const ball = state.ball;
   ball.x += ball.vx;
   ball.y += ball.vy;
@@ -151,10 +179,12 @@ export const PONG = {
   blurb: "first to seven, and the angle is all in where you hit it",
   keys: "↑ ↓ move · q quit",
   tickMs: TICK_MS,
+  heldKeys: true,   // worth asking the terminal for key releases — see games.mjs
 
   create({ rng = Math.random } = {}) {
     const state = {
       you: (HEIGHT - PADDLE) / 2,
+      motion: paddleMotion(),
       them: (HEIGHT - PADDLE) / 2,
       yours: 0,
       theirs: 0,
@@ -166,9 +196,28 @@ export const PONG = {
 
   tick: step,
 
-  onKey(state, key) {
-    if (key === "up") state.you = clamp(state.you - YOU_STEP, 0, HEIGHT - PADDLE);
-    if (key === "down") state.you = clamp(state.you + YOU_STEP, 0, HEIGHT - PADDLE);
+  onKey(state, key, ctx) {
+    const dir = towards(key);
+    if (!dir) return state;
+    // Told when the key comes back up, the paddle is simply put in gear and the
+    // tick does the rest — including for the auto-repeats that keep arriving
+    // while it is held, which must not be allowed to add a second helping of
+    // speed on top of the one the tick is already paying. See games-paddle.mjs.
+    if (ctx?.heldKeys) { holdPaddle(state.motion, dir); return state; }
+    // Not told, the paddle is paid for a press at a time. A press that finds it
+    // standing still is also spent immediately, so the frame this keypress
+    // draws is already one it has moved in; a press that finds it already
+    // moving is not, because the tick is paying it out evenly and a second
+    // helping on top would be the very jolt this is here to remove.
+    const resting = state.motion.owed === 0;
+    pressPaddle(state.motion, dir, YOU_STEP);
+    if (resting) state.you = glidePaddle(state.motion, state.you, YOU_GLIDE);
+    return state;
+  },
+
+  onRelease(state, key) {
+    const dir = towards(key);
+    if (dir) releasePaddle(state.motion, dir);
     return state;
   },
 
