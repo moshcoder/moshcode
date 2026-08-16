@@ -257,6 +257,24 @@ test("cancelling is best effort, and a run endpoint says so plainly", async () =
   });
 });
 
+test("stopping the runtime does not deregister a remote agent", async () => {
+  // `stop` ends the runtime — the tmux server and every process in it — and a
+  // remote member is neither. Wiping the whole manifest meant stopping the
+  // herd to reclaim a laptop silently lost the roster entry for a deployed
+  // agent that never stopped. Taking one off is `herd remote remove`.
+  await withHerdDir(async () => {
+    const { rememberSession, stopRuntime } = await import("../src/herd.mjs");
+    rememberSession("local", { engine: "claude", cwd: "/x" });
+    addRemote("research", "https://example.com", { kind: "run" });
+
+    stopRuntime({ substrate: "tmux", runner: () => ({ status: 0, stdout: "", stderr: "" }) });
+
+    const left = Object.keys(readManifest().sessions);
+    assert.deepEqual(left, ["research"]);
+    assert.equal(listRemotes().length, 1);
+  });
+});
+
 test("discovery looks where the spec says it does", () => {
   assert.equal(cardUrl("https://agents.do-ai.run/w/prod/"), "https://agents.do-ai.run/w/prod/.well-known/agent-card.json");
 });

@@ -737,13 +737,25 @@ export function killSession(name, { substrate = detectSubstrate(), runner = spaw
 
 /** Stop the whole runtime. Every session in it goes too — hence the name. */
 export function stopRuntime({ substrate = detectSubstrate(), runner = spawnSync } = {}) {
+  // Remote members survive it. `stop` ends the *runtime* — the tmux server and
+  // every process in it — and a remote member is neither: it is a URL somebody
+  // registered, running on somebody else's machine. Wiping the whole manifest
+  // deregistered those too, so stopping the herd to reclaim a laptop silently
+  // lost the roster entry for a deployed agent that never stopped. Taking one
+  // off is `herd remote remove`, which is a decision.
+  const remotes = Object.fromEntries(
+    Object.entries(readManifest().sessions).filter(([, meta]) => meta?.kind === "remote"),
+  );
   if (substrate === "tmux") {
     const r = tmux(["kill-server"], { runner });
-    writeManifest({ sessions: {} });
+    writeManifest({ sessions: remotes });
     return { ok: r.ok };
   }
   if (substrate === "pty") {
-    for (const name of Object.keys(readManifest().sessions)) killSession(name, { substrate, runner });
+    for (const [name, meta] of Object.entries(readManifest().sessions)) {
+      if (meta?.kind === "remote") continue;
+      killSession(name, { substrate, runner });
+    }
     return { ok: true };
   }
   return { ok: false };
