@@ -1013,6 +1013,9 @@ agents("claude");                              // drop into an autonomous sessio
 
 ```sh
 moshcode run examples/alive.mosh              # run a script
+moshcode run examples/account.mosh --dry-run  # log in, then do work that needs an account
+moshcode run examples/aliases.mosh --dry-run  # define and run the pit's shortcuts
+moshcode run examples/research-desk.mosh      # stocksRead/cryptoRead/newsRead → one digest
 moshcode run deploy.mosh --dry-run            # narrate without executing
 moshcode run alive.mosh --max 5               # bound the while loop (default 3)
 moshcode run deploy.mosh staging --fast       # extra args reach the script as argv
@@ -1058,6 +1061,35 @@ chmod +x deploy.mosh
 | `stop()` | end the loop (`alive = false`) |
 | `repeat()` | back to the top of the loop |
 
+**Account verbs** (see [Authentication](#authentication)):
+
+| verb | description |
+|---|---|
+| `await requireLogin()` | gate — verify, log in if needed, **throw** if it can't; returns the user |
+| `await login({ device, browser, force })` | authenticate; no-op when already signed in; returns `{ ok, email, already }` |
+| `await whoami()` | the account as a value: `{ status, verified, api, user: { id, email, name, credits } }` |
+| `logout()` | forget this machine's credentials |
+
+**Alias verbs** — the pit's own shortcuts (`~/.moshcode/aliases.json`), readable and writable from a script:
+
+| verb | description |
+|---|---|
+| `alias()` | every alias, as a `name → line` map |
+| `alias(name)` | one alias's line, or `null` |
+| `alias(name, line)` | define one; refuses names moshcode already owns |
+| `unalias(name)` | forget one |
+| `runAlias(name, …args)` | run one, args appended; returns `{ ok, code }` |
+
+**Read verbs** — the tools as *values* rather than tables:
+
+| verb | description |
+|---|---|
+| `await stocksRead(…)` | same args as `stocks(…)`, returns the parsed JSON |
+| `await cryptoRead(…)` | same args as `crypto(…)`, returns the parsed JSON |
+| `await newsRead({ list, limit })` | headlines as `[{ title, link, source, date }, …]` |
+| `herdRead(name, { lines })` | a herd session's screen, as a string |
+| `herdList()` | the roster: `[{ name, engine, state, cwd, alive }, …]` |
+
 **CLI verbs** (each shells out to `moshcode <name> ...args`):
 
 | verb | description |
@@ -1082,7 +1114,26 @@ chmod +x deploy.mosh
 | `turso(args…)` | drive the Turso CLI |
 | `tailscale(args…)` | drive the Tailscale CLI |
 | `coral(args…)` | drive the Coral CLI (SQL over APIs, databases, internal systems) |
+| `alpaca(args…)` | drive the native Alpaca trading CLI |
 | `mcpjam(args…)` | drive the MCPJam CLI (test, debug, and validate MCP servers) |
+| `trade(args…)` | look up tickers, inspect markets, preview/place Alpaca orders |
+| `stocks(args…)` | research tickers via advis0r (`stocksRead` returns the data) |
+| `crypto(args…)` | research crypto pairs via advis0r (`cryptoRead` returns the data) |
+| `advisor(args…)` | query advis0r directly |
+| `news(args…)` | read, search, and subscribe to news feeds (`newsRead` returns the items) |
+| `rss(args…)` | manage RSS subscriptions and reading lists |
+| `plugin(args…)` | install/manage moshcode plugins from the marketplace |
+| `engines()` | list coding engines and whether they're installed |
+| `tools()` | list the adjacent workflow CLIs and whether they're installed |
+| `dns(args…)` | drive the Moshpit DNS bridge (enable, status, resolve) |
+| `doh(args…)` | run/inspect the DNS-over-HTTPS endpoint |
+| `site(args…)` | scaffold and publish a site |
+| `serve(args…)` | serve a directory over HTTP |
+| `template(args…)` | scaffold from a moshcode template |
+| `save()` / `load()` | push/pull settings to your moshcode account (needs login) |
+| `herd(args…)` | drive the herd (`herdStart`/`herdWait`/`herdRead` return values) |
+| `ps()` | print the herd roster |
+| `ai(prompt, { engine })` | run an engine headlessly and **return** its output as a string |
 | `pwd()` | print the current repo/location |
 | `run(file)` | run another .mosh file (include/compose) |
 
@@ -1093,6 +1144,81 @@ chmod +x deploy.mosh
 | `alive` | `true` while the loop may continue; iterations bounded by `--max` |
 | `argv` | positional args passed after the script file |
 | `env` | `process.env` — parameterize scripts from the environment |
+
+### Authentication
+
+Some verbs need an account: `notify()`/`ask()` reach you through
+`app.moshcode.sh`, and `save()`/`load()` sync settings to it. A script says so
+once, at the top, instead of failing one call at a time later on:
+
+```js
+const me = await requireLogin();          // verifies; logs in if it has to
+say(`signed in as ${me.email} (${me.credits} credits)`);
+```
+
+- **`requireLogin({ device, browser })`** — the gate. Verifies this machine
+  against the app; if there's no usable session it runs the login flow, then
+  re-checks. Returns the verified `{ id, email, name, credits }`. **Throws** if
+  it still can't authenticate — the one verb here that does, because "require"
+  means the script must not continue without an account.
+- **`login({ device, browser, force })`** — idempotent. Returns early with
+  `{ already: true }` when you're already signed in, so a script you re-run all
+  day never throws a browser tab at you. Returns `{ ok: false, error }` on
+  failure rather than throwing, so a script can fall back to read-only work.
+- **`whoami()`** — the account as a value, verified against the app:
+  `{ status, verified, api, user }` where `status` is `authenticated`,
+  `not_logged_in`, `expired`, `unverified`, or `unreachable`. Never throws — an
+  unreachable app is a status, not an exception.
+- **`logout()`** — forget the local credentials.
+
+The flow is picked for where the script is running: the loopback/browser flow
+locally, and the device-code flow over SSH or on a headless box (where a
+`127.0.0.1` callback would land on the *browser's* machine and never arrive).
+`{ device: true }` / `{ browser: true }` pin it either way. Credentials live in
+`~/.moshcode/credentials.json` (mode `0600`) — the same ones `moshcode login`
+writes, so logging in once covers the CLI, the pit, and every script.
+
+```js
+// gate on the balance, not just the session
+const me = await whoami();
+if (!me.verified) { say("read-only run — not signed in"); }
+else if (me.user.credits < 10) notify(`only ${me.user.credits} credits left`);
+```
+
+### Aliases
+
+The pit keeps named shortcuts for the lines you retype (`/alias set gs "git
+status"`). Scripts read and write the same store, so your vocabulary and
+moshcode's are one thing rather than two:
+
+```js
+alias("gs", "git status --short");   // define (refuses names moshcode owns)
+alias("cc", "/agents claude");       // a leading `/` is a moshcode command
+runAlias("gs", "--branch");          // → git status --short --branch
+```
+
+Expansion is the pit's rule: a leading `/` routes to the moshcode command of
+that name, anything else is a shell line, and arguments are **appended** rather
+than substituted — exactly how a shell alias behaves. `runAlias()` returns
+`{ ok, code }` like `shell()`, and `{ ok: false, code: 127 }` when there's no
+such alias.
+
+### Reading the tools, not just running them
+
+`stocks report NVDA` prints a table; a script usually wants the number. The
+`*Read()` verbs call the same layer the printed commands render from and hand
+back parsed data:
+
+```js
+const report = await stocksRead("report", "NVDA");   // → JSON, or null on error
+const btc    = await cryptoRead("quote", "BTC/USD");
+const items  = await newsRead({ limit: 5 });          // [{ title, link, source, date }]
+```
+
+A failed lookup returns `null` (or `[]`) rather than throwing, so one bad symbol
+doesn't take a briefing script down. Same reasoning as the herd's
+`herdRead()`/`herdList()`: shelling out gives you `{ ok, code }`, and the whole
+point of these is the value.
 
 ### Human-in-the-loop
 

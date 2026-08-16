@@ -1,0 +1,48 @@
+#!/usr/bin/env moshscript
+// account.mosh — authenticate the operator, then do work that needs an account.
+//
+// `requireLogin()` is the gate: it verifies this machine against
+// app.moshcode.sh and, if there is no usable session, runs the login flow
+// (browser locally, device code over SSH) before the script continues. Anything
+// downstream that needs an account — notify(), ask(), save()/load() — would
+// otherwise fail one call at a time, much later and much less legibly.
+//
+// Try it safely first:
+//
+//   moshcode run examples/account.mosh --dry-run
+//   chmod +x examples/account.mosh && ./examples/account.mosh 5
+//
+// argv[0] is the minimum credit balance to demand (default: 1).
+
+const needCredits = Number(argv[0] || 1);
+
+// Blocks until there is a verified account. THROWS if it can't get one — that
+// is what "require" means, and it stops the script here rather than halfway
+// through the work.
+const me = await requireLogin();
+say(`🤘 signed in as ${me.email || me.name || "moshcoder"}`);
+
+// whoami() hands the account back as a value, so a script can branch on it
+// instead of re-parsing `moshcode whoami` output.
+if (me.credits != null && me.credits < needCredits) {
+  say(`⛔ ${me.credits} credits left, need ${needCredits} — topping up is a human job`);
+  notify(`moshcode is out of credits (${me.credits}) — top up to keep the pit going`);
+  stop();
+} else {
+  // Settings sync needs the account we just proved we have.
+  load();                       // → moshcode load   (pull settings down)
+  say("⚙️  settings pulled from your account");
+
+  const test = shell("pnpm -r test");
+  if (!test.ok) {
+    // The human-in-the-loop gate: this blocks until someone answers at
+    // app.moshcode.sh/approve/:id — which only works because we're logged in.
+    const next = await ask(`tests failed (exit ${test.code}) — ship anyway, or fix?`);
+    say(`👤 operator says: ${next ?? "(no reply — stopping)"}`);
+    if (next == null) stop();
+  } else {
+    say("✅ green — saving settings back up");
+    save();                     // → moshcode save   (push settings up)
+    notify("moshcode: tests green, settings synced 🤘");
+  }
+}

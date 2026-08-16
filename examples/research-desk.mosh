@@ -1,0 +1,49 @@
+#!/usr/bin/env moshscript
+// research-desk.mosh — a morning briefing, assembled from the read verbs.
+//
+// `stocks report NVDA` prints a table; `stocksRead("report", "NVDA")` hands
+// back the JSON. That is the difference this script is built on: the *Read()
+// verbs return values, so a script can rank, threshold, and summarize instead
+// of scraping stdout. Same advis0r/feed layer the printed commands render from.
+//
+// Try it safely first:
+//
+//   moshcode run examples/research-desk.mosh --dry-run
+//   chmod +x examples/research-desk.mosh && ./examples/research-desk.mosh NVDA AMD
+//
+// argv is the ticker list (default: NVDA TSLA).
+
+const tickers = argv.length ? argv : ["NVDA", "TSLA"];
+const briefing = [];
+
+// Rank the tickers by whatever score advis0r returns, keeping only the ones
+// worth a human's attention. A failed lookup comes back null rather than
+// throwing, so one bad symbol doesn't take the briefing down.
+for (const symbol of tickers) {
+  const data = await stocksRead("report", symbol);
+  if (!data) { say(`⚠️  no data for ${symbol}`); continue; }
+  const score = data.score ?? data.report?.score ?? null;
+  briefing.push({ symbol, score });
+  say(`📈 ${symbol}: ${score ?? "no score"}`);
+}
+
+// Crypto reads the same way.
+const btc = await cryptoRead("quote", "BTC/USD");
+if (btc) say(`🪙 BTC/USD: ${btc.price ?? btc.quote?.price ?? "?"}`);
+
+// Headlines from your own subscriptions (or pass { list: "smallweb" } for one
+// of the built-in feed lists).
+const headlines = await newsRead({ limit: 5 });
+for (const item of headlines) {
+  say(`📰 ${item.source ? `[${item.source}] ` : ""}${item.title}`);
+}
+
+// One ping with the whole picture, rather than one per lookup.
+const movers = briefing
+  .filter((b) => b.score != null)
+  .sort((a, b) => b.score - a.score)
+  .slice(0, 3)
+  .map((b) => `${b.symbol} ${b.score}`)
+  .join(", ");
+
+notify(`morning desk — ${movers || "no scores today"} · ${headlines.length} headline(s)`);

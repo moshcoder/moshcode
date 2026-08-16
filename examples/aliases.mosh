@@ -1,0 +1,56 @@
+#!/usr/bin/env moshscript
+// aliases.mosh — the pit's shortcuts, from a script.
+//
+// The pit keeps named shortcuts for the lines you retype (`/alias set gs "git
+// status"`). They are your vocabulary, not moshcode's, so a script can read the
+// same store, define new ones, and run them — instead of re-spelling every one
+// of those lines in every script.
+//
+// The expansion rule is the pit's: a leading `/` is a moshcode command,
+// anything else is a shell line, and arguments are appended rather than
+// substituted — so runAlias("gs", "--short") is `git status --short`.
+//
+// Try it safely first:
+//
+//   moshcode run examples/aliases.mosh --dry-run
+//   chmod +x examples/aliases.mosh && ./examples/aliases.mosh
+//
+// argv[0] is the engine an alias should open (default: claude).
+
+const engine = argv[0] || "claude";
+
+// Set up a small kit. alias(name, line) returns { ok, error, previous }; a name
+// moshcode already owns (`agents`, `install`, …) is refused rather than
+// shadowed, because a shortcut that silently does nothing is worse than one
+// that was never accepted.
+const kit = {
+  gs: "git status --short --branch",
+  gl: "git log --oneline -12",
+  cc: `/agents ${engine}`,          // a leading `/` → the moshcode command
+};
+
+for (const [name, line] of Object.entries(kit)) {
+  const r = alias(name, line);
+  if (!r.ok) say(`⚠️  couldn't define /${name} — ${r.error}`);
+}
+
+// alias() with no arguments is the whole map — the same one the pit shows.
+const all = alias();
+say(`🔖 ${Object.keys(all).length} alias(es) on this machine`);
+
+// Run one. Returns { ok, code } like shell() and the CLI verbs, so a script can
+// branch on the outcome without try/catch.
+//
+// Under --dry-run nothing above was actually written, so these report the
+// aliases as missing (code 127) rather than pretending to run them — a dry run
+// narrates what it would do, and it genuinely doesn't know what an undefined
+// alias expands to. Run it for real to see them execute.
+const status = runAlias("gs");
+if (!status.ok && status.code !== 127) say(`git status exited ${status.code}`);
+
+runAlias("gl", "--author", env.USER || "");   // extra args are appended
+
+// Clean up the throwaway ones, leave the useful one behind.
+unalias("gl");
+
+say(`🤘 /cc is yours now — type it in the pit to open ${engine}`);
