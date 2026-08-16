@@ -16,11 +16,18 @@
 import { spawn, spawnSync } from "node:child_process";
 
 import { createRegistry } from "./registry.mjs";
-import { cliVerb, aiVerb } from "./cli.mjs";
+import { cliVerb, aiVerb, runMoshcode } from "./cli.mjs";
 import { ingestApproval, pollApproval } from "./notify.mjs";
 import { capture, killSession, sendPrompt } from "./herd.mjs";
 import { herdStart, roster, waitFor } from "./herd-cli.mjs";
 import { shellInvocation } from "./shell.mjs";
+import { identity, loginAuto, logout as forgetCreds } from "./auth.mjs";
+import { expandAlias, getAlias, loadAliases, removeAlias, setAlias } from "./aliases.mjs";
+import { CORE_CLI_COMMAND_NAMES, PIT_COMMANDS } from "./cli-schema.mjs";
+import { fetchAdvisor, stocksArgs } from "./advisor.mjs";
+import { cryptoArgs, fetchCrypto } from "./crypto.mjs";
+import { collectNews, loadListFeeds, readingList } from "./news.mjs";
+import { resolveList } from "./news-sources.mjs";
 
 // The moshcoding pit-anthem playlist. mosh() blasts this URL and, on a desktop
 // with a GUI, tries to open it in the default browser.
@@ -63,6 +70,61 @@ function expectNoArgs(name, args) {
     throw new Error(`moshscript: ${name}() does not take arguments`);
   }
 }
+
+/**
+ * Whether a name already belongs to moshcode, for alias().
+ *
+ * The pit asks the dispatcher this by resolving; a script has no dispatcher, so
+ * it asks the schema instead — the CLI commands and the pit's own verbs, which
+ * is what an alias could collide with. Kept as a predicate (the shape
+ * setAlias() takes) rather than an exported list, so this stays the caller's
+ * answer and not a second roster to drift from the first.
+ */
+function isReserved(name) {
+  const key = String(name).toLowerCase();
+  return CORE_CLI_COMMAND_NAMES.includes(key)
+    || PIT_COMMANDS.some((c) => (typeof c === "string" ? c : c.name) === key);
+}
+
+// The shell verb, named so runAlias() can execute an expanded alias line
+// through exactly the same path a script's own shell() call takes — one
+// invocation, one dry-run story, one { ok, code } contract. It is registered in
+// COMMANDS below like every other verb.
+const SHELL = {
+  name: "shell",
+  summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL elsewhere)",
+  usage: "shell(cmd)",
+  detail: "runs cmd in $SHELL, loading your rc file where it can; returns { ok, code, signal }",
+  // The moshscript system verb for arbitrary shell commands. Blocking
+  // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
+  // and the child owns the terminal for interactive commands. Returns
+  // { ok, code } so scripts can branch on the exit status:
+  //   const r = shell("npm test"); if (!r.ok) say("tests failed");
+  run(ctx, ...args) {
+    const cmd = args.join(" ");
+    if (!cmd) throw new Error("moshscript: shell() requires a command string");
+    if (ctx.dryRun) {
+      ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL ${shellInvocation(cmd).flags} ${JSON.stringify(cmd)}`);
+      // Same R8 contract as the comment above: `code` is always present, so a
+      // script branching on the exit status behaves the same under --dry-run.
+      return { ok: true, code: 0, dryRun: true };
+    }
+    // Same invocation the pit's own `!cmd` uses, so a command that works when
+    // typed works when scripted: interactive where a terminal is attached, so
+    // the user's rc file — and the aliases in it — are loaded. src/shell.mjs
+    // has the reasoning, including why a headless run stays non-interactive.
+    const { shell: sh, args: shArgs } = shellInvocation(cmd);
+    ctx.out(`  ▶ shell: ${cmd}`);
+    const res = spawnSync(sh, shArgs, { stdio: "inherit" });
+    if (res.error) throw res.error;
+    const code = res.status ?? 1;
+    if (code !== 0) {
+      ctx.out(`  ✗ shell() exited ${res.signal || code}`);
+      return { ok: false, code, signal: res.signal || null };
+    }
+    return { ok: true, code: 0 };
+  },
+};
 
 // The vocabulary, in registration order. mosh() is the worked example of the
 // command shape; the rest follow the same pattern.
@@ -189,39 +251,227 @@ const COMMANDS = [
     },
   },
 
+  SHELL,
+
+  // The account. Local rather than cliVerbs for the same reason the herd is:
+  // `moshcode whoami` prints, and a script needs to *branch* on the answer —
+  // "am I logged in?", "whose account is this?", "are there credits left?".
+  // Shelling out returns { ok, code }, so the only way to read the account
+  // would be to re-parse stdout. src/auth.mjs owns the flows either way; these
+  // are a second caller of the same identity(), not a second implementation.
   {
-    name: "shell",
-    summary: "run a shell command (blocking, cmd.exe on Windows or $SHELL elsewhere)",
-    usage: "shell(cmd)",
-    detail: "runs cmd in $SHELL, loading your rc file where it can; returns { ok, code, signal }",
-    // The moshscript system verb for arbitrary shell commands. Blocking
-    // (spawnSync + inherited stdio) so it runs inline in the no-`await` style,
-    // and the child owns the terminal for interactive commands. Returns
-    // { ok, code } so scripts can branch on the exit status:
-    //   const r = shell("npm test"); if (!r.ok) say("tests failed");
-    run(ctx, ...args) {
-      const cmd = args.join(" ");
-      if (!cmd) throw new Error("moshscript: shell() requires a command string");
+    name: "whoami",
+    summary: "the logged-in account, as a value (verified against app.moshcode.sh)",
+    usage: "whoami()",
+    detail: "returns { status, verified, api, user: { id, email, name, credits } }. needs await",
+    // Never throws — an unreachable app is a `status`, not an exception,
+    // because the caller is usually deciding whether to start work.
+    async run(ctx) {
       if (ctx.dryRun) {
-        ctx.out(`  ▶ shell(${JSON.stringify(cmd)}) → would run: $SHELL ${shellInvocation(cmd).flags} ${JSON.stringify(cmd)}`);
-        // Same R8 contract as the comment above: `code` is always present, so a
-        // script branching on the exit status behaves the same under --dry-run.
-        return { ok: true, code: 0, dryRun: true };
+        ctx.out("  👤 whoami()  → would check app.moshcode.sh");
+        return { status: "dry_run", verified: false, api: null, user: null, dryRun: true };
       }
-      // Same invocation the pit's own `!cmd` uses, so a command that works when
-      // typed works when scripted: interactive where a terminal is attached, so
-      // the user's rc file — and the aliases in it — are loaded. src/shell.mjs
-      // has the reasoning, including why a headless run stays non-interactive.
-      const { shell: sh, args: shArgs } = shellInvocation(cmd);
-      ctx.out(`  ▶ shell: ${cmd}`);
-      const res = spawnSync(sh, shArgs, { stdio: "inherit" });
-      if (res.error) throw res.error;
-      const code = res.status ?? 1;
-      if (code !== 0) {
-        ctx.out(`  ✗ shell() exited ${res.signal || code}`);
-        return { ok: false, code, signal: res.signal || null };
+      const me = await identity();
+      const who = me.user?.email || me.user?.name;
+      ctx.out(me.verified
+        ? `  👤 whoami()  → ${who || "moshcoder"} (${me.user.credits ?? "?"} credits)`
+        : `  👤 whoami()  → ${me.status}${who ? ` (${who}, unverified)` : ""}`);
+      return me;
+    },
+  },
+  {
+    name: "login",
+    summary: "authenticate this machine against app.moshcode.sh",
+    usage: "login({ device, browser, force })",
+    detail: "no-op when already authenticated unless force; returns { ok, email, already }. needs await",
+    // Idempotent by default. A script that opens with login() should be safe to
+    // re-run all day without throwing a browser tab at an operator who is
+    // already signed in — so the verified case returns early. `force` re-runs
+    // the flow anyway (switching accounts), and device/browser pin the flow
+    // rather than letting loginAuto sniff for SSH.
+    async run(ctx, opts = {}) {
+      if (ctx.dryRun) {
+        ctx.out("  🔑 login()   → would authenticate against app.moshcode.sh");
+        return { ok: true, email: null, already: false, dryRun: true };
       }
-      return { ok: true, code: 0 };
+      if (!opts.force) {
+        const me = await identity();
+        if (me.verified) {
+          ctx.out(`  🔑 login()   → already signed in as ${me.user.email || me.user.name || "moshcoder"}`);
+          return { ok: true, email: me.user.email ?? null, already: true };
+        }
+      }
+      try {
+        const r = await loginAuto({ device: Boolean(opts.device), browser: Boolean(opts.browser) });
+        ctx.out(`  🔑 login()   → signed in as ${r.email || "moshcoder"} 🤘`);
+        return { ok: true, email: r.email ?? null, already: false };
+      } catch (e) {
+        // R8: hand back the failure instead of throwing, so a script can fall
+        // back (skip the notify, run read-only) rather than die at line 1.
+        ctx.out(`  ✗ login() failed — ${e.message}`);
+        return { ok: false, email: null, already: false, error: e.message };
+      }
+    },
+  },
+  {
+    name: "requireLogin",
+    summary: "BLOCK until this machine is authenticated — the gate for scripts that need an account",
+    usage: "requireLogin({ device, browser })",
+    detail: "returns the verified { id, email, name, credits }; THROWS if it can't authenticate. needs await",
+    // The one verb here that throws, and on purpose: "require" means the script
+    // must not continue unauthenticated. Everything downstream (notify, ask,
+    // credits) would fail one call at a time and much less legibly, so a script
+    // that needs an account says so once, at the top.
+    async run(ctx, opts = {}) {
+      if (ctx.dryRun) {
+        ctx.out("  🔒 requireLogin() → would require an authenticated account");
+        return { id: null, email: null, name: null, credits: null, dryRun: true };
+      }
+      let me = await identity();
+      if (!me.verified) {
+        ctx.out(`  🔒 requireLogin() → ${me.status} — starting the login flow…`);
+        try { await loginAuto({ device: Boolean(opts.device), browser: Boolean(opts.browser) }); }
+        catch (e) { throw new Error(`moshscript: requireLogin() could not authenticate — ${e.message}`); }
+        me = await identity();
+      }
+      if (!me.verified) {
+        throw new Error(`moshscript: requireLogin() could not authenticate (${me.status}) — run \`moshcode login\``);
+      }
+      ctx.out(`  🔒 requireLogin() → ${me.user.email || me.user.name || "moshcoder"} 🤘`);
+      return me.user;
+    },
+  },
+  {
+    name: "logout",
+    summary: "forget this machine's credentials",
+    usage: "logout()",
+    detail: "returns { ok }",
+    run(ctx, ...args) {
+      expectNoArgs("logout", args);
+      if (ctx.dryRun) { ctx.out("  🚪 logout()  → would forget the local credentials"); return { ok: true, dryRun: true }; }
+      forgetCreds();
+      return { ok: true };
+    },
+  },
+
+  // Aliases. The pit already keeps named shortcuts (src/aliases.mjs) and they
+  // are the operator's own vocabulary — the things *they* retype. A script that
+  // cannot reach them has to re-spell every one of those lines, so the same
+  // store is readable and writable here, and runAlias() executes one.
+  {
+    name: "alias",
+    summary: "read, list, or define pit aliases",
+    usage: 'alias() | alias(name) | alias(name, line)',
+    detail: "no args → the whole map; one arg → that line or null; two → defines it, returns { ok, name, value, previous }",
+    run(ctx, name, value) {
+      if (name === undefined) return loadAliases();
+      if (value === undefined) return getAlias(String(name));
+      if (ctx.dryRun) {
+        ctx.out(`  🔖 alias(${name}) → would define: ${value}`);
+        return { ok: true, name: String(name), value: String(value), previous: null, dryRun: true };
+      }
+      // Same reservation rule the pit enforces: a shortcut that collides with a
+      // built-in would be silently dead, so it is refused rather than shadowed.
+      const r = setAlias(name, value, { isReserved });
+      ctx.out(r.ok ? `  🔖 alias(${r.name}) → ${r.value}` : `  ✗ alias() — ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "unalias",
+    summary: "forget a pit alias",
+    usage: "unalias(name)",
+    detail: "returns { ok, name, value } — { ok: false } when there was no such alias",
+    run(ctx, name) {
+      if (!name) throw new Error("moshscript: unalias(name) requires an alias name");
+      if (ctx.dryRun) { ctx.out(`  🔖 unalias(${name}) → would forget it`); return { ok: true, name: String(name), dryRun: true }; }
+      const r = removeAlias(name);
+      ctx.out(r.ok ? `  🔖 unalias(${r.name})` : `  ✗ unalias() — ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "runAlias",
+    summary: "run a pit alias by name, with extra arguments appended",
+    usage: "runAlias(name, ...args)",
+    detail: "returns { ok, code } like shell()/CLI verbs; { ok: false, code: 127 } when undefined",
+    // The expansion rule is the pit's (src/aliases.mjs): a leading `/` is a pit
+    // command, anything else is a shell line, and typed arguments are appended
+    // rather than substituted. A pit command routes to its CLI twin here —
+    // moshscript is not the pit, but `/agents claude` and `moshcode agents
+    // claude` are the same capability, which is the whole cliVerb premise.
+    run(ctx, name, ...args) {
+      if (!name) throw new Error("moshscript: runAlias(name) requires an alias name");
+      const value = getAlias(String(name));
+      if (value == null) {
+        ctx.out(`  ✗ runAlias(${name}) — no alias named "${name}"`);
+        return { ok: false, code: 127 };
+      }
+      const line = expandAlias(value, args.map(String).join(" "));
+      if (line.startsWith("/")) {
+        const [verb, ...rest] = line.slice(1).split(/\s+/).filter(Boolean);
+        return runMoshcode(verb, rest, ctx);
+      }
+      return SHELL.run(ctx, line.replace(/^!/, ""));
+    },
+  },
+
+  // Reading the tools, not just running them. `stocks report NVDA` prints a
+  // table; a script wants the score. These call the same advis0r/feed layer the
+  // CLI renders from, so a verb here can never drift from its printed twin.
+  {
+    name: "stocksRead",
+    summary: "run a stocks query and RETURN its JSON (advis0r)",
+    usage: 'stocksRead("report", "NVDA")',
+    detail: "same arguments as stocks(); returns the parsed data, or null on error. needs await",
+    async run(ctx, ...args) {
+      const request = stocksArgs(args.map(String));
+      if (request.error) throw new Error(`moshscript: stocksRead() — ${request.error}`);
+      if (ctx.dryRun) { ctx.out(`  📈 stocksRead(${args.join(" ")}) → would query advis0r`); return null; }
+      ctx.out(`  📈 stocksRead(${args.join(" ")})`);
+      const res = await fetchAdvisor(request);
+      if (!res.ok) { ctx.out(`     ! ${res.error || `advis0r returned ${res.status}`}`); return null; }
+      return res.data;
+    },
+  },
+  {
+    name: "cryptoRead",
+    summary: "run a crypto query and RETURN its JSON (advis0r)",
+    usage: 'cryptoRead("report", "BTC/USD")',
+    detail: "same arguments as crypto(); returns the parsed data, or null on error. needs await",
+    async run(ctx, ...args) {
+      const request = cryptoArgs(args.map(String));
+      if (request.error) throw new Error(`moshscript: cryptoRead() — ${request.error}`);
+      if (ctx.dryRun) { ctx.out(`  🪙 cryptoRead(${args.join(" ")}) → would query advis0r`); return null; }
+      ctx.out(`  🪙 cryptoRead(${args.join(" ")})`);
+      const res = await fetchCrypto(request);
+      if (!res.ok) { ctx.out(`     ! ${res.error || `advis0r returned ${res.status}`}`); return null; }
+      return res.data;
+    },
+  },
+  {
+    name: "newsRead",
+    summary: "fetch the news feeds and RETURN the headlines",
+    usage: 'newsRead({ list, limit })',
+    detail: "returns [{ title, link, source, date }, …] — your subscriptions, or a named list. needs await",
+    // `list` names one of the built-in feed lists; omit it for the operator's
+    // own subscriptions (the same reading list `/news` shows).
+    async run(ctx, opts = {}) {
+      const limit = Number(opts.limit) || 20;
+      if (ctx.dryRun) { ctx.out(`  📰 newsRead() → would fetch ${opts.list || "your"} feeds`); return []; }
+      let feeds;
+      if (opts.list) {
+        const list = resolveList(String(opts.list));
+        if (!list) throw new Error(`moshscript: newsRead() — no feed list named "${opts.list}"`);
+        const loaded = await loadListFeeds(list);
+        if (!loaded.ok) { ctx.out(`     ! couldn't load ${opts.list}`); return []; }
+        feeds = loaded.feeds;
+      } else {
+        feeds = readingList().feeds;
+      }
+      ctx.out(`  📰 newsRead() → reading ${feeds.length} feed(s)…`);
+      const { items } = await collectNews(feeds);
+      return items.slice(0, limit).map(({ title, link, source, date }) => ({ title, link, source, date }));
     },
   },
 
@@ -357,6 +607,31 @@ const COMMANDS = [
   cliVerb("mcpjam", "drive the MCPJam CLI (test, debug, and validate MCP servers)"),
   cliVerb("trade", "look up tickers, inspect markets, and preview/place Alpaca orders"),
   cliVerb("pwd", "print the current repo/location"),
+
+  // Research and feeds. The *Read() verbs above return the data; these are the
+  // rendered CLI, for when a script wants the table on the operator's screen.
+  cliVerb("stocks", "research tickers via advis0r (report, discover, signals, research)"),
+  cliVerb("crypto", "research crypto pairs via advis0r (quote, report, bars, book)"),
+  cliVerb("advisor", "query advis0r directly"),
+  cliVerb("news", "read, search, and subscribe to news feeds"),
+  cliVerb("rss", "manage RSS subscriptions and reading lists"),
+
+  // Extending moshcode from a script — the same fan-out `mcp`/`skill` do.
+  cliVerb("plugin", "install/manage moshcode plugins from the marketplace"),
+  cliVerb("engines", "list coding engines and whether they're installed"),
+  cliVerb("tools", "list the adjacent workflow CLIs and whether they're installed"),
+
+  // Hosting: the Moshpit side of the CLI, so a deploy script can claim a name,
+  // serve a site, and bring the resolver up without dropping to $SHELL.
+  cliVerb("dns", "drive the Moshpit DNS bridge (enable, status, resolve)"),
+  cliVerb("doh", "run/inspect the DNS-over-HTTPS endpoint"),
+  cliVerb("site", "scaffold and publish a site"),
+  cliVerb("serve", "serve a directory over HTTP"),
+  cliVerb("template", "scaffold from a moshcode template"),
+
+  // Settings sync (PRD 0010) — needs an account, so pair with requireLogin().
+  cliVerb("save", "push local settings to your moshcode account"),
+  cliVerb("load", "pull settings from your moshcode account"),
 ];
 
 /** A fresh registry preloaded with the built-in vocabulary. */

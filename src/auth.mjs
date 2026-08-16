@@ -166,89 +166,84 @@ export async function loginAuto({ device = false, browser = false } = {}) {
   return loginDevice({ open: !isRemoteShell() });
 }
 
-/** Print who is logged in (verified against the app). */
-export async function whoami({ json = false } = {}) {
+/**
+ * Who is logged in, as a value — the shape `whoami --json` prints, and what
+ * moshscript's whoami()/requireLogin() read (src/commands.mjs).
+ *
+ * Returning rather than printing is the point: a script needs to branch on the
+ * account ("do I have credits?", "is this the right email?"), and the only way
+ * to get that out of a printing function is to re-parse its stdout. One
+ * verified-identity implementation, two callers — the CLI renders it, the
+ * script reads it — so the two can never disagree about what "logged in" means.
+ *
+ * Never throws: an unreachable app is a `status` like any other, because the
+ * caller is usually deciding whether to *start* work, not reporting an outage.
+ */
+export async function identity() {
   const creds = loadCreds();
   if (!creds?.token) {
-    if (json) {
-      console.log(JSON.stringify({
-        status: "not_logged_in",
-        verified: false,
-        api: API(),
-        user: null,
-      }, null, 2));
-    } else {
-      console.log("not logged in — run: moshcode login");
-    }
-    return;
+    return { status: "not_logged_in", verified: false, api: API(), user: null };
   }
   const api = creds.api || API();
+  // What we know locally, used for every unverified outcome. Deliberately not
+  // presented as confirmed: the app is the authority on the account, and these
+  // fields are only what the last successful login happened to write down.
   const localUser = {
     id: creds.id ?? null,
     email: creds.email ?? null,
     name: null,
     credits: null,
   };
-  const printJson = (value) => console.log(JSON.stringify(value, null, 2));
   try {
     const res = await fetch(`${api}/api/me`, { headers: { authorization: `Bearer ${creds.token}` } });
     if (res.status === 401) {
-      if (json) {
-        printJson({
-          status: "expired",
-          verified: false,
-          api,
-          user: localUser,
-          error: { type: "auth", status: 401 },
-        });
-      }
-      else console.log("session expired — run: moshcode login");
-      return;
+      return { status: "expired", verified: false, api, user: localUser, error: { type: "auth", status: 401 } };
     }
     // Any other error status still has a body, and it isn't an account — reading
-    // it as one prints a made-up identity for a session the app just refused.
+    // it as one reports a made-up identity for a session the app just refused.
     if (!res.ok) {
-      if (json) {
-        printJson({
-          status: "unverified",
-          verified: false,
-          api,
-          user: localUser,
-          error: { type: "http", status: res.status },
-        });
-      } else {
-        console.log(`${creds.email || "logged in"} @ ${api} (couldn't verify — the app returned ${res.status})`);
-      }
-      return;
+      return { status: "unverified", verified: false, api, user: localUser, error: { type: "http", status: res.status } };
     }
     const me = await res.json();
-    if (json) {
-      printJson({
-        status: "authenticated",
-        verified: true,
-        api,
-        user: {
-          id: me.id ?? creds.id ?? null,
-          email: me.email ?? creds.email ?? null,
-          name: me.name ?? null,
-          credits: me.credits ?? null,
-        },
-      });
-    } else {
-      console.log(`${me.email || me.name || "moshcoder"} 🤘  (${me.credits ?? "?"} credits)  @ ${api}`);
-    }
+    return {
+      status: "authenticated",
+      verified: true,
+      api,
+      user: {
+        id: me.id ?? creds.id ?? null,
+        email: me.email ?? creds.email ?? null,
+        name: me.name ?? null,
+        credits: me.credits ?? null,
+      },
+    };
   } catch {
-    if (json) {
-      printJson({
-        status: "unreachable",
-        verified: false,
-        api,
-        user: localUser,
-        error: { type: "network" },
-      });
-    } else {
-      console.log(`${creds.email || "logged in"} @ ${api} (couldn't reach the app to verify)`);
-    }
+    return { status: "unreachable", verified: false, api, user: localUser, error: { type: "network" } };
+  }
+}
+
+/** Print who is logged in (verified against the app). */
+export async function whoami({ json = false } = {}) {
+  const me = await identity();
+  if (json) {
+    console.log(JSON.stringify(me, null, 2));
+    return;
+  }
+  const who = me.user?.email || me.user?.name;
+  switch (me.status) {
+    case "not_logged_in":
+      console.log("not logged in — run: moshcode login");
+      return;
+    case "expired":
+      console.log("session expired — run: moshcode login");
+      return;
+    case "unverified":
+      console.log(`${who || "logged in"} @ ${me.api} (couldn't verify — the app returned ${me.error.status})`);
+      return;
+    case "unreachable":
+      console.log(`${who || "logged in"} @ ${me.api} (couldn't reach the app to verify)`);
+      return;
+    default:
+      console.log(`${who || "moshcoder"} 🤘  (${me.user.credits ?? "?"} credits)  @ ${me.api}`);
   }
 }
 
