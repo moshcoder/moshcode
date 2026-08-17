@@ -1742,7 +1742,7 @@ export function parseUdpListeners(text) {
   return out;
 }
 
-const defaultUdpListeners = async () => {
+export const defaultUdpListeners = async () => {
   const { execFile } = await import("node:child_process");
   const text = await new Promise((resolve) => {
     execFile("ss", ["-lnup"], { timeout: 5000 }, (err, stdout) => resolve(err ? "" : String(stdout)));
@@ -1781,6 +1781,89 @@ export function portHolder(listeners, { host = DEFAULT_HOST, port = DEFAULT_PORT
     return l;
   }
   return null;
+}
+
+/**
+ * What is actually on the bridge's port, rather than what our pidfile claims.
+ *
+ * `status` used to answer this from the pidfile alone, and that file only ever
+ * describes a bridge *this tool* started, in *this* privilege context. Every
+ * other way a bridge reaches 5354 read as "not running": a systemd unit, a
+ * hand-started `dns start`, or — the common one — an `enable` that escalated to
+ * root and therefore wrote its pidfile under root's HOME instead of the
+ * invoking user's runtime dir.
+ *
+ * That is not a cosmetic lie. Status followed it with "routing is in place but
+ * the bridge is not running", and the fix it advised starts a second bridge on
+ * 127.0.0.1 while the working one holds 0.0.0.0. The kernel delivers to the
+ * more specific socket, so the advice shadows the bridge it was meant to
+ * rescue and the machine stops resolving — the outage `portHolder` above
+ * already describes, arrived at this time by following our own instructions.
+ *
+ * So the port gets asked. A bridge nothing here started is still a bridge.
+ * Both questions are put because they fail differently: a resolver that has
+ * stopped answering Moshpit names loses a namespace, and one that has stopped
+ * forwarding takes the machine off the internet.
+ */
+export async function bridgePresence({
+  host = DEFAULT_HOST,
+  port = DEFAULT_PORT,
+  recorded = { running: false, pid: null, stale: false },
+  listeners = defaultUdpListeners,
+  answers = probeResolver,
+  forwards = probeForwarding,
+} = {}) {
+  const [moshpit, clearnet] = await Promise.all([
+    answers({ host, port }).catch(() => false),
+    forwards({ host, port, name: CLEARNET_PROBE }).catch(() => false),
+  ]);
+  const answering = Boolean(moshpit || clearnet);
+
+  // Ours and alive is the ordinary case, and the probe still runs first: a
+  // recorded pid that no longer answers is worth saying out loud rather than
+  // reporting as a healthy bridge on the strength of the file alone.
+  if (recorded.running) {
+    return { kind: "ours", pid: recorded.pid, answering, forwards: clearnet, moshpit };
+  }
+
+  if (!answering) {
+    return recorded.stale
+      ? { kind: "stale", pid: recorded.pid, answering: false, forwards: false, moshpit: false }
+      : { kind: "none", pid: null, answering: false, forwards: false, moshpit: false };
+  }
+
+  // Only asked once something is known to be there, because `ss` is the
+  // expensive half and an unattributable owner is not a reason to call a
+  // demonstrably answering bridge absent.
+  const holder = portHolder(await listeners().catch(() => []), { host, port });
+  return {
+    kind: "foreign",
+    pid: holder?.pid ?? null,
+    process: holder?.process ?? null,
+    answering: true,
+    forwards: clearnet,
+    moshpit,
+  };
+}
+
+/** One line for `status`, kept next to the states it names. */
+export function describeBridge(presence, { host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
+  switch (presence.kind) {
+    case "ours":
+      return presence.answering
+        ? `running (pid ${presence.pid})`
+        : `running (pid ${presence.pid}) — but not answering on ${host}:${port}`;
+    case "foreign": {
+      const who = presence.pid
+        ? `pid ${presence.pid}${presence.process ? `, ${presence.process}` : ""}`
+        : "owner not visible";
+      return `answering on ${host}:${port} (${who}) — started by something other than \`dns enable\``;
+    }
+    case "stale":
+      return `NOT running — stale pidfile for ${presence.pid}`;
+    default:
+      return "not running";
+  }
 }
 
 /**
@@ -2151,7 +2234,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
-  requiredPort, startDaemon, stopDaemon,
+  probeResolver, requiredPort, startDaemon, stopDaemon,
 } from "./dns-system.mjs";
 import { escalateSelf } from "./escalate.mjs";
 
@@ -2230,6 +2313,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     applyWith = applyWithRollback,
     verify = verifyResolution,
     bridgeStatus = daemonStatus,
+    presenceImpl = bridgePresence,
     startBridge = startDaemon,
     proxyReachableImpl = proxyReachable,
     findLocalProxyImpl = findLocalProxy,
@@ -3009,9 +3093,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
 
   if (sub === "status") {
     const platform = detectPlatform();
-    const daemon = await daemonStatus();
+    const daemon = await bridgeStatus();
+    const statusPort = requiredPort(platform, port);
+    const presence = await presenceImpl({ port: statusPort, recorded: daemon });
     out(`platform   ${platform || process.platform}`);
-    out(`bridge     ${daemon.running ? `running (pid ${daemon.pid})` : daemon.stale ? `NOT running — stale pidfile for ${daemon.pid}` : "not running"}`);
+    out(`bridge     ${describeBridge(presence, { port: statusPort })}`);
 
     // Routing is read off the filesystem rather than remembered, so a config
     // someone edited or removed by hand is reported as it actually is.
@@ -3019,15 +3105,32 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const routed = platform === "linux" ? existsSync(marker) : platform === "macos" ? existsSync(marker) : null;
     out(`routing    ${routed === null ? "(check NRPT: Get-DnsClientNrptRule)" : routed ? `configured (${marker})` : "not configured"}`);
 
-    // The state worth shouting about: names are pointed at a bridge that is not
-    // there, so every Moshpit name fails instead of falling through.
-    if (routed && !daemon.running) {
+    // The state worth shouting about, and the condition is "nothing answers"
+    // rather than "our pidfile is empty". Those are not the same machine, and
+    // shouting on the second one sent people to start a bridge that shadowed
+    // the working one they already had.
+    //
+    // The advice drops its `sudo` too: the CLI escalates the one step that
+    // needs root, and teaching `sudo moshcode` is how `sudo moshcode update`
+    // ends up reinstalling the whole tool into /root.
+    if (routed && !presence.answering) {
       out("");
-      out("! routing is in place but the bridge is not running — Moshpit names will fail.");
-      out("  fix with: sudo moshcode dns enable     undo with: sudo moshcode dns disable");
+      out(`! routing is in place but nothing answers on ${DEFAULT_HOST}:${statusPort} — Moshpit names will fail.`);
+      out("  fix with: moshcode dns enable     undo with: moshcode dns disable");
     }
 
-    const known = await fetchTlds({ registryBase }).catch(() => null);
+    // Answering but not forwarding is the dangerous half, and it is invisible
+    // from the Moshpit side: names resolve, and everything else on the machine
+    // stops. Catch-all routing is what makes it total.
+    if (routed && presence.answering && !presence.forwards) {
+      out("");
+      out(`! the bridge on ${DEFAULT_HOST}:${statusPort} answers Moshpit names but is not forwarding`);
+      out("  clearnet lookups routed through it will fail. Restart it, or `moshcode dns disable`.");
+    }
+
+    // The injected one, like every other caller. Reaching past it here made
+    // `status` the one subcommand that could not be tested without a network.
+    const known = await fetchTldsImpl({ registryBase }).catch(() => null);
     const probe = known
       ? await resolveName(`probe.${known[0] || "moshpit"}`, { registryBase }).catch(() => null)
       : null;
