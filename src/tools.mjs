@@ -212,6 +212,37 @@ export const TOOLS = {
     // idempotent, so it doubles as the upgrade path — no `upgrade` key needed.
     install: { cmd: "npm", args: ["install", "-g", "@mcpjam/cli"] },
   },
+  spinifex: {
+    desc: "Spinifex — AWS-compatible cloud on your own hardware (EC2, EBS, S3, VPC, IAM)",
+    // The product is Spinifex; the binary it installs is `spx`. Same split as
+    // `secrets` → `logicsrc`: the moshcode command reads as the product name.
+    bin: "spx",
+    // https://docs.mulgadc.com/docs/install — the vendor script drops
+    // /usr/local/bin/spx, installs systemd units and scoped sudoers rules, and
+    // pulls QEMU/OVN/AWS CLI through apt, so it is Linux-only (Ubuntu 26.04 /
+    // Debian 13) and always escalates. It finds sudo itself, like tailscale's,
+    // so needsRoot only says a password prompt is coming — see primeEscalation.
+    //
+    // The script is bash (it uses bashisms and documents `| bash`), so `sh -c
+    // "curl … | sh"` would not do.
+    //
+    // INSTALL_SPINIFEX_SKIP_NEWGRP is the important part: on a TTY the
+    // installer finishes with `exec newgrp spinifex`, replacing itself with an
+    // interactive subshell to activate the new group. Under `moshcode install`
+    // that never returns — the operator lands in a subshell instead of back in
+    // the pit, and inside `moshcode update` it would park the rest of the plan
+    // behind a shell nobody asked for. Skipping it costs nothing a new login
+    // shell does not fix.
+    needsRoot: true,
+    install: {
+      cmd: "bash",
+      args: ["-c", "curl -fsSL https://install.mulgadc.com | INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash"],
+    },
+    // Re-running the installer is Spinifex's own documented update path — it
+    // detects the existing install, replaces the binary, runs pending config
+    // migrations, and restarts the services. toolUpgradeSpec falls back to
+    // install, so there is deliberately no upgrade key.
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */

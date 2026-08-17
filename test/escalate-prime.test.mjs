@@ -54,6 +54,14 @@ test("an except list spares the platform that does not escalate", () => {
   assert.equal(needsRootHere(TOOLS.tailscale, "darwin"), false);
 });
 
+test("Spinifex escalates everywhere it can run", () => {
+  // Unlike tailscale there is no platform that gets a pass: the installer writes
+  // systemd units, sudoers rules, and /usr/local/bin on the only OSes it
+  // supports, and it has no macOS build to delegate to.
+  assert.equal(needsRootHere(TOOLS.spinifex, "linux"), true);
+  assert.equal(needsRootHere(TOOLS.spinifex, "darwin"), true);
+});
+
 test("an explicit platform list is the other direction", () => {
   assert.equal(needsRootHere({ needsRoot: ["linux"] }, "linux"), true);
   assert.equal(needsRootHere({ needsRoot: ["linux"] }, "win32"), false);

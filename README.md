@@ -601,11 +601,56 @@ moshcode install doctl            # GitHub release binary → ~/.local/bin
 moshcode install turso            # official script → ~/.turso (new shell to pick up PATH)
 moshcode install tailscale        # official script; system daemon, so it needs root
 moshcode install coral            # official script → ~/.local/bin (checksum-verified)
+moshcode install spinifex         # official script; Linux host platform, so it needs root
 
 moshcode gh pr list               # straight through to the native CLI
 moshcode railway up
 moshcode doctl compute droplet list
+moshcode spinifex ec2 describe-instances
 ```
+
+### Spinifex — your own AWS-compatible cloud
+
+[Spinifex](https://mulgadc.com/spinifex) is the other end of the infra list:
+instead of driving someone else's cloud, it turns your own hardware into one.
+EC2, EBS, S3, VPC, and IAM, API-compatible with AWS, on bare metal, edge boxes,
+or on-prem racks — so the same `aws` calls and Terraform providers work against
+hardware you own.
+
+```sh
+moshcode install spinifex         # curl -fsSL https://install.mulgadc.com | bash
+moshcode spinifex version         # straight through to the native `spx` CLI
+moshcode spinifex admin init --node node1 --nodes 1
+```
+
+The product is Spinifex, the binary is `spx`, and `moshcode spinifex …` is exact
+passthrough to it — the same split as `moshcode secrets` and `logicsrc`.
+
+Spinifex is a host platform, not a standalone binary, so its installer is the
+most invasive one on this list. Read this before running it:
+
+- **Linux only**, and specifically Ubuntu 26.04 or Debian 13. The installer
+  pulls QEMU/KVM, OVN/Open vSwitch, and the AWS CLI through apt.
+- **Root.** It writes `/usr/local/bin/spx`, systemd units, and scoped
+  `sudoers.d` rules. Like tailscale, it finds sudo itself; MoshCode only gets
+  the password prompt out of the way first.
+- **Your WAN interface must already be bridged to `br-wan`** before you start —
+  check with `ip -br link show br-wan`. The installer does not create it, and
+  bridging a live uplink can drop the box off the network.
+
+After it finishes, Spinifex's own docs take over — `setup-ovn.sh --management`,
+`spx admin init`, then `systemctl start spinifex.target`. See
+[docs.mulgadc.com/docs/install](https://docs.mulgadc.com/docs/install).
+
+MoshCode passes `INSTALL_SPINIFEX_SKIP_NEWGRP=1`, because on a TTY the vendor
+script ends by `exec`ing `newgrp spinifex` to activate the new group. That would
+strand you in a subshell instead of returning to the pit — and would park the
+rest of a `moshcode update` run behind it. Log in again (or run `newgrp
+spinifex` yourself) to pick up the group.
+
+Re-running `moshcode install spinifex` is also its upgrade path: the installer
+detects the existing install, replaces the binary, applies pending config
+migrations, and restarts the services.
 
 ### MCP server testing
 
@@ -625,9 +670,10 @@ MoshCode resolves the latest GitHub release and drops the binary in
 `$MOSHCODE_BIN` (default `~/.local/bin`) — no sudo, no package manager. Set
 `MOSHCODE_BIN` to install elsewhere.
 
-`tailscale` is the exception: it is a system daemon, so its official installer
-goes through your distro's package manager and will ask for sudo (on macOS it
-delegates to the App Store).
+`tailscale` and `spinifex` are the exceptions: both install system services
+rather than a user-local binary, so their official installers go through the
+distro's package manager and will ask for sudo (tailscale on macOS delegates to
+the App Store instead; Spinifex has no macOS build at all).
 
 MoshCode asks for that password **before** starting the work rather than letting
 the installer stop for it partway through — which matters most in `moshcode
@@ -1283,6 +1329,7 @@ chmod +x deploy.mosh
 | `coral(args…)` | drive the Coral CLI (SQL over APIs, databases, internal systems) |
 | `alpaca(args…)` | drive the native Alpaca trading CLI |
 | `mcpjam(args…)` | drive the MCPJam CLI (test, debug, and validate MCP servers) |
+| `spinifex(args…)` | drive the Spinifex CLI (`spx` — AWS-compatible cloud on your own hardware) |
 | `trade(args…)` | look up tickers, inspect markets, preview/place Alpaca orders |
 | `stocks(args…)` | research tickers via advis0r (`stocksRead` returns the data) |
 | `crypto(args…)` | research crypto pairs via advis0r (`cryptoRead` returns the data) |
