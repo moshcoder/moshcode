@@ -142,6 +142,9 @@ export const CORE_CLI_COMMANDS = [
       + "to ~/.moshcode/pricing.json. gemini, kimi, qwen, deepseek and openagents log nothing readable, "
       + "so they report no cost rather than zero.",
   },
+  // Everyone who has used a coding agent's own `/usage` types that word first,
+  // and tokens-and-spend is exactly what `cost` already answers.
+  { name: "usage", aliasOf: "cost", description: "alias for cost" },
   {
     name: "attach",
     group: "runtime",
@@ -1118,7 +1121,7 @@ export const PIT_COMMANDS = [
     description: "sessions that keep running when you leave" },
   { name: "ps", cli: "ps",
     description: "what the herd is running, and which one wants you" },
-  { name: "cost", args: "[name] [--all]", cli: "cost",
+  { name: "cost", aliases: ["usage"], args: "[name] [--all]", cli: "cost",
     description: "what the herd is spending, from the engines' own logs" },
   { name: "attach", args: "<name>", cli: "attach",
     description: "step into a herd session (detach leaves it running)" },
