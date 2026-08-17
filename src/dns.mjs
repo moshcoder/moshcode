@@ -2314,6 +2314,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     verify = verifyResolution,
     bridgeStatus = daemonStatus,
     presenceImpl = bridgePresence,
+    exists = existsSync,
     startBridge = startDaemon,
     proxyReachableImpl = proxyReachable,
     findLocalProxyImpl = findLocalProxy,
@@ -3102,7 +3103,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // Routing is read off the filesystem rather than remembered, so a config
     // someone edited or removed by hand is reported as it actually is.
     const marker = platform === "macos" ? "/etc/resolver" : MOSHPIT_DROPIN;
-    const routed = platform === "linux" ? existsSync(marker) : platform === "macos" ? existsSync(marker) : null;
+    // Injected like every other system call this command makes. Read straight
+    // off the filesystem, "is this machine routed" made the status tests depend
+    // on whether the machine running them happened to have Moshpit enabled —
+    // green on a developer's box, red on a clean runner.
+    const routed = platform === "linux" || platform === "macos" ? exists(marker) : null;
     out(`routing    ${routed === null ? "(check NRPT: Get-DnsClientNrptRule)" : routed ? `configured (${marker})` : "not configured"}`);
 
     // The state worth shouting about, and the condition is "nothing answers"

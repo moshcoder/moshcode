@@ -131,11 +131,16 @@ test("a probe that throws is a probe that said no, not a crash", async () => {
 
 /* --------------------------------------------------------- the status line */
 
-const statusRun = async (presence) => {
+// `routed` is stated rather than inherited. Left to read the real filesystem,
+// these tests passed on a machine with Moshpit enabled and failed on a clean
+// runner — the assertions are about what status says once routing is in place,
+// so that has to be an input.
+const statusRun = async (presence, { routed = true } = {}) => {
   const lines = [];
   const code = await dnsCommand(["status"], (l) => lines.push(String(l)), {
     bridgeStatus: async () => NO_PIDFILE,
     presenceImpl: async () => presence,
+    exists: () => routed,
     // Unreachable on purpose: the registry half of `status` is not what these
     // assert, and letting it reach the network made each one a 3s test.
     tlds: async () => { throw new Error("registry unreachable"); },
@@ -148,8 +153,20 @@ test("status does not advise starting a bridge on top of a working one", async (
     kind: "foreign", pid: 1330, process: "bun", answering: true, forwards: true, moshpit: true,
   });
   assert.match(out, /answering on 127\.0\.0\.1:5354 \(pid 1330, bun\)/);
+  // Routing really is in place — this is the exact machine that used to be told
+  // its bridge was missing, so the alarm's absence has to be meaningful.
+  assert.match(out, /routing {4}configured/);
   assert.doesNotMatch(out, /the bridge is not running/);
   assert.doesNotMatch(out, /Moshpit names will fail/);
+});
+
+test("an unrouted machine with no bridge is not an emergency", async () => {
+  const { out } = await statusRun(
+    { kind: "none", pid: null, answering: false, forwards: false, moshpit: false },
+    { routed: false },
+  );
+  assert.match(out, /routing {4}not configured/);
+  assert.doesNotMatch(out, /will fail/);
 });
 
 test("status still shouts when routing points at nothing at all", async () => {
