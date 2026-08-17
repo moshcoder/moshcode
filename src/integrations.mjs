@@ -105,6 +105,22 @@ export function parseMcp(tokens) {
     };
   }
 
+  // A remote server is a URL and nothing else — every engine's builder pushes
+  // the target alone and discards `args`. So a leftover token here is not a
+  // command line, it is something the user typed that this command will silently
+  // throw away. `mcp install <url> --dry-run` is the case that matters: the flag
+  // does not exist, it lands here, and the install goes ahead and writes to
+  // every engine's config — the exact opposite of what the person typing it
+  // expected. Say so instead of dropping it on the floor.
+  if (!cmdParts && target && isRemoteTarget(target) && args.length) {
+    const extra = args[0];
+    return {
+      error: extra.startsWith("-")
+        ? `unknown mcp flag "${extra}" — mcp takes --name, -t/--transport, -e/--env, and -H/--header, and has no --dry-run`
+        : `unexpected argument "${extra}" after a remote server URL — a URL server takes no command arguments`,
+    };
+  }
+
   if (verb === "install" && !name) {
     if (target && isRemoteTarget(target)) name = deriveName(target);
     else return { error: "a stdio command server needs an explicit --name" };
@@ -185,6 +201,9 @@ export function printSkillTargets(json = false) {
 function summarize(results) {
   for (const r of results) {
     if (r.status === "added" || r.status === "installed" || r.status === "removed") console.log(line(r.key, ok(r.status)));
+    // Nothing to do and nothing wrong: grey, like the other "we didn't act"
+    // rows, rather than the green of a change we actually made.
+    else if (r.status === "already") console.log(line(r.key, ash("already registered")));
     else if (r.status === "failed") console.log(line(r.key, err(`failed${r.code != null ? ` (code ${r.code})` : r.signal ? ` (${r.signal})` : ""}`)));
     else if (r.status === "not-installed") console.log(line(r.key, ash("not installed — /install " + r.key)));
     else console.log(line(r.key, ash(`skipped — ${r.reason}`)));

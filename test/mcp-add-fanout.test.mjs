@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ENGINES } from "../src/engines.mjs";
-import { MCP_ENGINES, mcpAddArgs, planMcpAdd, runMcpAdd } from "../src/mcp.mjs";
+import { MCP_ENGINES, alreadyRegistered, mcpAddArgs, planMcpAdd, runMcpAdd } from "../src/mcp.mjs";
 import { mcpTargetStatus } from "../src/integrations.mjs";
 
 const REMOTE = { name: "sentry", target: "https://mcp.sentry.dev/mcp", args: [], env: [], headers: [] };
@@ -77,8 +77,13 @@ test("the fan-out and the /mcp list matrix name the same engines", () => {
 
 // --- controls: the fix must not over-report ----------------------------------
 
-test("MCP_ENGINES is unchanged — no engine gained MCP support", () => {
-  assert.deepEqual(MCP_ENGINES, ["claude", "gemini", "codex", "opencode", "privacycode"]);
+test("MCP_ENGINES is the reviewed list — an engine only joins on purpose", () => {
+  // qwen joined deliberately: Qwen Code is a Gemini CLI fork and shipped the
+  // whole `qwen mcp add` surface, verified against its own --help. Everything
+  // else here is unchanged. This stays a pinned list rather than something
+  // derived from ENGINES, because "can moshcode register a server here" is a
+  // claim someone has to check against a real CLI, not infer from a roster.
+  assert.deepEqual(MCP_ENGINES, ["claude", "gemini", "qwen", "codex", "opencode", "privacycode"]);
 });
 
 test("kimi is skipped for the reason that actually applies to it", () => {
@@ -106,6 +111,29 @@ test("claude's argv is byte-identical", () => {
 test("gemini's argv is byte-identical", () => {
   const plan = byKey(planMcpAdd(REMOTE, { installedSet: new Set() }));
   assert.deepEqual(plan.gemini.argv, ["mcp", "add", "-s", "user", "-t", "http", "sentry", "https://mcp.sentry.dev/mcp"]);
+});
+
+test("qwen's argv matches gemini's — it is the same CLI surface", () => {
+  const plan = byKey(planMcpAdd(REMOTE, { installedSet: new Set() }));
+  assert.deepEqual(plan.qwen.argv, ["mcp", "add", "-s", "user", "-t", "http", "sentry", "https://mcp.sentry.dev/mcp"]);
+  assert.deepEqual(plan.qwen.argv, plan.gemini.argv);
+  assert.equal(plan.qwen.skip, undefined, "qwen registers servers; it must not be skipped");
+});
+
+test("qwen carries env and headers through, like gemini", () => {
+  const spec = { ...REMOTE, env: [["TOKEN", "z"]], headers: ["X-Api-Key: abc"] };
+  const plan = byKey(planMcpAdd(spec, { installedSet: new Set() }));
+  assert.deepEqual(plan.qwen.argv, [
+    "mcp", "add", "-s", "user", "-t", "http",
+    "-e", "TOKEN=z", "-H", "X-Api-Key: abc",
+    "sentry", "https://mcp.sentry.dev/mcp",
+  ]);
+});
+
+test("qwen takes a stdio command server too", () => {
+  const stdio = { name: "my-tools", target: "npx", args: ["-y", "my-mcp-server"], env: [], headers: [] };
+  const plan = byKey(planMcpAdd(stdio, { installedSet: new Set() }));
+  assert.deepEqual(plan.qwen.argv, ["mcp", "add", "-s", "user", "my-tools", "npx", "-y", "my-mcp-server"]);
 });
 
 test("codex's and opencode's argv are byte-identical", () => {
@@ -157,6 +185,59 @@ test("a signal or non-zero exit still reports failed, not skipped", async () => 
   assert.equal(results.claude.status, "failed");
   assert.equal(results.claude.signal, "SIGTERM");
   assert.equal(results.gemini.status, "failed");
+});
+
+// --- re-running an install is not a failure ----------------------------------
+
+test("an engine that says the server already exists reports `already`, not failed", async () => {
+  // Claude Code exits 1 with "MCP server X already exists in user config". Read
+  // as a failure, that row said moshcode could not register with Claude Code —
+  // when in fact it already had.
+  const plan = planMcpAdd(REMOTE, { installedSet: new Set(["claude"]) });
+  const results = byKey(await runMcpAdd(plan, {
+    run: async () => ({ ok: true, code: 1, output: "MCP server sentry already exists in user config\n" }),
+  }));
+  assert.equal(results.claude.status, "already");
+});
+
+test("the same wording is recognised from each engine that uses it", () => {
+  for (const words of [
+    "MCP server sentry already exists in user config", // claude
+    "Server \"sentry\" is already configured",          // gemini / qwen
+    "server already registered",
+    "sentry already added",
+  ]) {
+    assert.equal(alreadyRegistered({ code: 1, output: words }), true, words);
+  }
+});
+
+test("a failure for any other reason is still a failure", async () => {
+  const plan = planMcpAdd(REMOTE, { installedSet: new Set(["claude"]) });
+  const results = byKey(await runMcpAdd(plan, {
+    run: async () => ({ ok: true, code: 1, output: "error: connection refused\n" }),
+  }));
+  assert.equal(results.claude.status, "failed");
+  assert.equal(results.claude.code, 1);
+  // and no output at all must never be read as "already there"
+  assert.equal(alreadyRegistered({ code: 1 }), false);
+  assert.equal(alreadyRegistered({ code: 1, output: "" }), false);
+});
+
+test("a zero exit is `added` even if the word `already` appears in the noise", async () => {
+  const plan = planMcpAdd(REMOTE, { installedSet: new Set(["claude"]) });
+  const results = byKey(await runMcpAdd(plan, {
+    run: async () => ({ ok: true, code: 0, output: "note: sentry already exists upstream\n" }),
+  }));
+  assert.equal(results.claude.status, "added", "a successful add is an add");
+});
+
+test("runMcpAdd asks for captured output — it cannot classify what it cannot read", async () => {
+  const seen = [];
+  const plan = planMcpAdd(REMOTE, { installedSet: new Set(["claude"]) });
+  await runMcpAdd(plan, {
+    run: async (bin, argv, opts) => { seen.push(opts); return { ok: true, code: 0 }; },
+  });
+  assert.deepEqual(seen, [{ capture: true }]);
 });
 
 test("mcpAddArgs itself is untouched for a supported and an unsupported key", () => {
