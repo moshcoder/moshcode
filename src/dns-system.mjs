@@ -332,8 +332,24 @@ function defaultRunner(command, args) {
  * root to listen on 5354, and requiring it to write a pidfile somewhere
  * privileged would make the whole daemon need privileges it otherwise does not.
  */
-export function pidfilePath() {
-  const base = process.env.XDG_RUNTIME_DIR || join(homedir(), ".moshcode") || tmpdir();
+export function pidfilePath(env = process.env, exists = existsSync) {
+  // `dns enable` escalates, so the run that *starts* the bridge is root and the
+  // runs that later ask about it are not. Under sudo both XDG_RUNTIME_DIR and
+  // HOME belong to root, so the pidfile went to /root/.moshcode — a path the
+  // unprivileged `dns status` and `dns disable` never look at and could not
+  // read if they did. The bridge was reported "not running" for the rest of its
+  // life, and the fix status advised started a second one on top of it.
+  //
+  // So an escalated run records against the invoking user's runtime dir, and
+  // only when that directory is really there: deriving /run/user/<uid> on a
+  // machine without one trades an unreadable path for a nonexistent one. macOS
+  // has no /run/user and falls through unchanged — the escalated paths this
+  // matters for are the systemd-resolved ones.
+  const invoker = env.SUDO_UID ? `/run/user/${env.SUDO_UID}` : null;
+  const base = (invoker && exists(invoker) ? invoker : null)
+    || env.XDG_RUNTIME_DIR
+    || join(homedir(), ".moshcode")
+    || tmpdir();
   return join(base, "moshpit-dns.pid");
 }
 
