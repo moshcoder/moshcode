@@ -232,6 +232,11 @@ of creating two, which matters the first time a delivery is retried. A batch
 that is partly valid answers `207` and reports each item separately, so one bad
 entry does not discard the good ones.
 
+**A batch is capped by size as well as by count.** Fifty posts of the maximum
+body length fit; fifty maximal galleries do not, and come back as a `413`
+saying so. Split it — upserting on the slug is what makes splitting safe, so
+the halves can be retried independently and in any order.
+
 ### What the site looks like
 
 `/n/<name>` is the front page — every published post, newest first. Sections and

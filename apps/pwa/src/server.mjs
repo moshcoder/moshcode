@@ -16,13 +16,29 @@ import { pagesRouter } from "./routes/pages.mjs";
 import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
 import { socialsRouter } from "./routes/socials.mjs";
+import { MAX_BATCH, MAX_PUBLISH_BYTES } from "./lib/moshpit-content.mjs";
 
 const app = express();
 app.disable("x-powered-by");
 if (config.secure) app.set("trust proxy", 1); // Railway terminates TLS
 
 // body parsing — keep the raw body for HMAC signature verification
-app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf.toString("utf8"); } }));
+const captureRaw = (req, _res, buf) => { req.rawBody = buf.toString("utf8"); };
+
+// Publishing takes a batch, and a batch does not fit in body-parser's 100kb
+// default: the API documents a ceiling of MAX_BATCH items and would have 413'd
+// a legitimate one before the handler ever saw it.
+//
+// Scoped to the publishing paths rather than raised globally. The limit is what
+// stops an unauthenticated POST from making the process buffer megabytes, and
+// `verify` above copies every body into a string as well — so the cost of
+// raising it is paid on every route, while only this one needs the room.
+//
+// Mounted BEFORE the global parser because body-parser skips a request whose
+// body has already been read. Whichever runs first sets the limit; reverse
+// these two lines and the 100kb default silently wins again.
+app.use("/api/moshpit/sites", express.json({ limit: MAX_PUBLISH_BYTES, verify: captureRaw }));
+app.use(express.json({ verify: captureRaw }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
@@ -64,7 +80,19 @@ app.use((req, res) => res.status(404).type("html").send(
   `<body style="background:#070806;color:#edf2e4;font-family:monospace;padding:14vh 24px;text-align:center"><h1 style="color:#a6ff1a">404</h1><p>no such page in the pit.</p><a style="color:#a6ff1a" href="/">back to the pit →</a></body>`));
 
 // eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
+  // An unreadable or oversized body is the caller's mistake, and body-parser
+  // reports it as a 4xx. Without this branch it fell through to the 500 below,
+  // so a script that sent too much was told the server had a bug — and went
+  // looking in the wrong place. Report the status body-parser chose.
+  const status = Number(err?.status ?? err?.statusCode) || 500;
+  if (status >= 400 && status < 500) {
+    const detail = err?.type === "entity.too.large"
+      ? `that body is too large. Publish up to ${MAX_BATCH} items at a time, and split the batch if it is still refused — publishing upserts on the slug, so a split batch is safe to retry.`
+      : "could not read that request body as JSON";
+    if (req.path.startsWith("/api/")) return res.status(status).json({ error: detail });
+    return res.status(status).type("text").send(`${detail}\n`);
+  }
   console.error(err);
   res.status(500).type("html").send(`<body style="background:#070806;color:#ff0050;font-family:monospace;padding:14vh 24px;text-align:center"><h1>500</h1><p>a bug got in. (there are no bugs, only features.)</p></body>`);
 });

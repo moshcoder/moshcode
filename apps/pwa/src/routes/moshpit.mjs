@@ -34,7 +34,7 @@ import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import { FEED_KINDS, loadFeed } from "../lib/feed.mjs";
 import { FEED_CSS, feedPage, feedUnavailable } from "../lib/moshpit-feed-page.mjs";
-import { CONTENT_KINDS } from "../lib/moshpit-content.mjs";
+import { CONTENT_KINDS, MAX_BATCH } from "../lib/moshpit-content.mjs";
 import { SITE_CSS, sitePage, sitePart } from "../lib/moshpit-site-page.mjs";
 import { nameQuery, tldQuery } from "../lib/moshpit-search.mjs";
 import {
@@ -481,7 +481,7 @@ moshpitRouter.post("/api/moshpit/sites/:name/content", async (req, res) => {
 
   const payload = Array.isArray(req.body) ? req.body : [req.body ?? {}];
   if (!payload.length) return bad(res, "nothing to publish");
-  if (payload.length > 50) return bad(res, "publish up to 50 items at a time");
+  if (payload.length > MAX_BATCH) return bad(res, `publish up to ${MAX_BATCH} items at a time`);
 
   const results = [];
   for (const input of payload) {

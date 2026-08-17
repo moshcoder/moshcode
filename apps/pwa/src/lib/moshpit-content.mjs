@@ -41,6 +41,29 @@ export const MAX_ITEMS_PER_NAME = 500;
 /** The most entries a navigation will draw. Past this it is not a nav, it is a list. */
 export const MAX_NAV = 12;
 
+/** The most items one POST may carry. A webhook delivers a batch; this bounds it. */
+export const MAX_BATCH = 50;
+
+/**
+ * The largest a batch may be on the wire, in bytes.
+ *
+ * Derived rather than picked, because the two numbers have to agree: the API
+ * documents a ceiling of MAX_BATCH items, and body-parser's 100kb default is
+ * far below what MAX_BATCH items of this size actually weigh. The documented
+ * limit would then 413 before reaching the handler — the request rejected for
+ * a reason no field limit here explains, which is a bad afternoon.
+ *
+ * MAX_BATCH full-length bodies is ~1 MB of text. The doubling covers titles,
+ * slugs, sections, URLs and JSON escaping, which can widen one character to
+ * six bytes on the wire.
+ *
+ * A batch of MAX_BATCH *maximal galleries* is larger still and will 413. That
+ * is deliberate — the alternative is accepting multi-megabyte bodies on every
+ * request to buy headroom for a shape nobody sends. Split the batch; the
+ * endpoint upserts on the slug, so splitting is safe and retryable.
+ */
+export const MAX_PUBLISH_BYTES = MAX_BATCH * (MAX_BODY + MAX_TITLE) * 2;
+
 /**
  * A slug: lowercase, dashes, no leading or trailing dash.
  *

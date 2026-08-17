@@ -76,10 +76,10 @@ are in the right order already.
   usually because the unit was copied from another box. Re-run `bootstrap.sh`;
   it resolves the real `node` binary rather than a mise shim, which is a path
   that only works with mise's environment loaded.
-- **A large publish batch 413s.** The API takes up to 50 items, but
-  `express.json()` in `src/server.mjs` uses its 100kb default, which a batch of
-  substantial posts exceeds. The vhost allows 2m so nginx is not a second,
-  more confusing limit — the app's own ceiling is the real one.
+- **A very large publish batch 413s.** The app sizes itself for a batch of 50
+  documented-length posts (`MAX_PUBLISH_BYTES`, ~1.9M) and the vhost allows 2m
+  so nginx is never the one saying no. Past that you get a 413 in JSON telling
+  you to split the batch — safe to do, because publishing upserts on the slug.
 
 ## Verifying, one layer at a time
 
