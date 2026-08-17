@@ -120,3 +120,66 @@ test("an unknown verb still reports an unknown verb, not an unknown flag", () =>
 test("a stdio install with no name still asks for --name", () => {
   assert.match(parseMcp(["install", "--", "npx", "srv"]).error, /explicit --name/);
 });
+
+// ---------- flags AFTER a remote URL were swallowed too ----------
+//
+// The guard above only inspected the server name and the target. A flag typed
+// *after* a remote URL landed in `args`, which every engine's remote builder
+// discards — so it vanished with no error and the install went ahead. The case
+// that bites is `--dry-run`, a flag mcp does not have: someone expecting a
+// preview got five engines' config files written instead.
+
+test("an unknown flag after a remote URL is rejected, not silently dropped", () => {
+  const { error, spec } = parseMcp(["install", "https://mcp.example.com", "--dry-run"]);
+  assert.equal(spec, undefined, "the install must not proceed");
+  assert.match(error, /unknown mcp flag "--dry-run"/);
+  assert.match(error, /no --dry-run/);
+});
+
+test("the first stray flag is the one named, whichever follows it", () => {
+  const { error } = parseMcp(["install", "https://mcp.example.com", "--wat", "--dry-run"]);
+  assert.match(error, /unknown mcp flag "--wat"/);
+});
+
+test("a stray non-flag argument after a remote URL is reported as unexpected", () => {
+  const { error, spec } = parseMcp(["install", "https://mcp.example.com", "extra"]);
+  assert.equal(spec, undefined);
+  assert.match(error, /unexpected argument "extra"/);
+});
+
+test("the same guard applies to `mcp add`, not just `install`", () => {
+  const { error } = parseMcp(["add", "sentry", "https://mcp.sentry.dev/mcp", "--dry-run"]);
+  assert.match(error, /unknown mcp flag "--dry-run"/);
+});
+
+test("a legitimate remote install is unaffected", () => {
+  const { error, spec } = parseMcp(["install", "https://mcp.sentry.dev/mcp"]);
+  assert.equal(error, undefined);
+  assert.equal(spec.name, "sentry");
+  assert.deepEqual(spec.args, []);
+});
+
+test("supported flags around a remote URL still parse", () => {
+  const { error, spec } = parseMcp([
+    "install", "https://mcp.example.com", "-H", "Authorization: Bearer z", "-e", "TOKEN=z", "--name", "mine",
+  ]);
+  assert.equal(error, undefined);
+  assert.equal(spec.name, "mine");
+  assert.deepEqual(spec.headers, ["Authorization: Bearer z"]);
+  assert.deepEqual(spec.env, [["TOKEN", "z"]]);
+});
+
+test("a stdio command's own flags after `--` are still not second-guessed", () => {
+  const { error, spec } = parseMcp(["add", "mine", "--", "npx", "-y", "my-mcp-server", "--dry-run"]);
+  assert.equal(error, undefined);
+  assert.equal(spec.target, "npx");
+  assert.deepEqual(spec.args, ["-y", "my-mcp-server", "--dry-run"]);
+});
+
+test("a stdio server given without `--` keeps its arguments", () => {
+  // Not a remote target, so the discard guard must not fire: these args really
+  // are spliced into the engine's argv and do reach the command.
+  const { error, spec } = parseMcp(["add", "mine", "npx", "my-mcp-server"]);
+  assert.equal(error, undefined);
+  assert.deepEqual(spec.args, ["my-mcp-server"]);
+});

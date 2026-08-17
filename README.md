@@ -991,10 +991,14 @@ moshcode mcp catalog              # what we know how to run
 moshcode mcp add porkbun          # expands to: npx -y @porkbunllc/mcp-server
 ```
 
-That registers it across every engine that supports MCP (claude, gemini, codex,
-opencode, privacycode) in one go. Kimi is skipped with a reason: it runs MCP
-servers but has no command to register one from a script — add those in-session
-with its own `/mcp-config`, or in `~/.kimi-code/mcp.json`.
+That registers it across every engine that supports MCP (claude, gemini, qwen,
+codex, opencode, privacycode) in one go. Kimi is skipped with a reason: it runs
+MCP servers but has no command to register one from a script — add those
+in-session with its own `/mcp-config`, or in `~/.kimi-code/mcp.json`.
+
+Re-running an install is safe: an engine that already has the server reports
+`already registered` rather than an error, so the summary only goes red when
+something actually went wrong.
 
 The catalog is a convenience, never a gate — an explicit command always wins, so
 `moshcode mcp add porkbun -- node ./my-fork.js` runs your fork.

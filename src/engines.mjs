@@ -405,15 +405,37 @@ export function agentLaunchArgs(engine, args = []) {
  * Spawn an arbitrary command with stdio inherited (so its own progress/prompts
  * own the terminal). Resolves { ok, code, signal } on exit. Used by install +
  * upgrade to run engine installers/updaters.
+ *
+ * With `{ capture: true }` the child's stdout/stderr are piped and *echoed
+ * through* rather than inherited, and the combined text comes back as `output`.
+ * The terminal still sees exactly what it saw before — the tee exists so a
+ * caller can read the engine's own words about *why* it exited non-zero, which
+ * a bare exit code cannot tell apart (see `alreadyRegistered` in mcp.mjs).
+ * Inherit stays the default: piping costs a couple of streams, and every other
+ * caller runs installers whose output nobody needs to parse.
+ *
+ * stdin is inherited either way, so a child that prompts still reaches the user.
  */
-export function runCmd(cmd, args = []) {
+export function runCmd(cmd, args = [], { capture = false } = {}) {
   return new Promise((resolve) => {
     let child;
     const spec = spawnSpec(cmd, args);
-    try { child = spawn(spec.cmd, spec.args, { stdio: "inherit" }); }
+    const stdio = capture ? ["inherit", "pipe", "pipe"] : "inherit";
+    try { child = spawn(spec.cmd, spec.args, { stdio }); }
     catch (e) { resolve({ ok: false, error: e }); return; }
-    child.on("error", (e) => resolve({ ok: false, error: e }));
-    child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
+    let output = "";
+    if (capture) {
+      for (const [stream, sink] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+        stream?.on("data", (chunk) => { output += chunk.toString(); sink.write(chunk); });
+      }
+    }
+    child.on("error", (e) => resolve({ ok: false, error: e, output }));
+    // "exit" fires as soon as the process is gone, which with pipes can leave
+    // the last chunk still queued — the one line we are trying to read. "close"
+    // waits for the streams too. With stdio inherited there are no streams, so
+    // the two are the same moment and existing callers are unaffected; the
+    // distinction is kept explicit so neither branch changes by accident.
+    child.on(capture ? "close" : "exit", (code, signal) => resolve({ ok: true, code, signal, output }));
   });
 }
 
