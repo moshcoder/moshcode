@@ -1,0 +1,55 @@
+# The dev.moshcode.sh instance of the PWA, kept running across reboots.
+#
+# This is a TEMPLATE. The @NAME@ placeholders are substituted by bootstrap.sh,
+# which writes the finished unit to deploy/out/moshcode-dev.service. Install
+# that, not this file:
+#
+#   sudo install -m 644 apps/pwa/deploy/out/moshcode-dev.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now moshcode-dev
+#
+# Substituting rather than hardcoding is deliberate: the runtime lives at a
+# mise path that differs per machine and per install, and a unit that ships
+# with one box's absolute node path fails on the next box with
+# "203/EXEC" — an error that names no code and reads like the app crashed.
+
+[Unit]
+Description=moshcode PWA (dev.moshcode.sh)
+Documentation=https://github.com/moshcoder/moshcode/blob/main/apps/pwa/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+
+# No EnvironmentFile on purpose. src/config.mjs loads @APP_DIR@/.env itself,
+# and systemd's EnvironmentFile parser is not the same parser — it does not
+# strip the quotes the app's loader strips, so a quoted secret would reach the
+# app with its quotes still attached and fail authentication somewhere far from
+# here. One loader, one format.
+ExecStart=@NODE_BIN@ src/server.mjs
+
+# Migrations run at boot inside the app, so a restart is also the upgrade path.
+Restart=always
+RestartSec=2
+
+# Unprivileged: it binds @APP_PORT@, not 80 or 443. nginx owns the low ports
+# and the certificate.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# ProtectHome=read-only would otherwise make the SQLite database read-only, and
+# SQLite reports that as "attempt to write a readonly database" at the first
+# write rather than at startup. ReadWritePaths overrides ProtectHome for the
+# listed path, which is why the data directory is carved out by name.
+ReadWritePaths=@APP_DIR@/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

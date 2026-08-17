@@ -4,5 +4,8 @@ data/
 *.db-*
 .env
 .env.local
+# Rendered by deploy/bootstrap.sh — holds one box's absolute paths, so it is
+# generated per machine rather than committed.
+deploy/out/
 npm-debug.log*
 .DS_Store
