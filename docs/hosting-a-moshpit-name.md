@@ -237,6 +237,50 @@ body length fit; fifty maximal galleries do not, and come back as a `413`
 saying so. Split it — upserting on the slug is what makes splitting safe, so
 the halves can be retried independently and in any order.
 
+### Publishing a lot at once
+
+The batch endpoint reads the whole request before it does anything, so its
+ceiling is however much we are willing to hold for whoever asks. For a real
+bulk import there is a second endpoint that does not buffer at all:
+
+```sh
+curl -N -X POST https://pit.moshcode.sh/api/moshpit/sites/blue.eggs/content/stream \
+  -H "authorization: Bearer $MOSHCODE_API_KEY" \
+  -H "content-type: application/x-ndjson" \
+  --data-binary @posts.ndjson
+```
+
+`posts.ndjson` is one item per line — the same objects the batch endpoint
+takes. Each is written as it arrives, and the response is NDJSON too, sent
+while the upload is still going:
+
+```json
+{"type":"accepted","name":"blue.eggs","limits":{"items":500,"bytes":93368000}}
+{"type":"progress","index":1,"ok":true,"created":true,"slug":"first-post"}
+{"type":"progress","index":2,"ok":false,"error":"a link needs a url"}
+{"type":"done","items":500,"created":499,"updated":0,"failed":1,"ms":1605}
+```
+
+That is what makes a progress bar possible — the first `progress` line arrives
+long before the last item is uploaded. `/pit/publish` is a page that does
+exactly this with a file picker, if you would rather not script it.
+
+Worth knowing:
+
+- **A bad line costs that line.** It comes back as a `progress` with `ok:false`
+  and the stream keeps going, the same way the batch endpoint's `207` works.
+- **The caps are in the `accepted` line**, so a client knows them without
+  reading this page. Up to 500 items — a name holds 500, so one upload can fill
+  a site and cannot do more than fill it.
+- **A cap hit mid-stream cannot be a status code.** The `200` was sent before
+  the first item was written, so it arrives as a final `error` line instead,
+  and everything already written stays written.
+- **Four uploads at a time**, process-wide. Past that it is `503` with a
+  `Retry-After` rather than a queue.
+- **Send `application/x-ndjson`.** Plain `application/json` is refused, because
+  the JSON body parser would have consumed the request before the handler ran
+  and the upload would look empty rather than failing honestly.
+
 ### What the site looks like
 
 `/n/<name>` is the front page — every published post, newest first. Sections and
