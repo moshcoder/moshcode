@@ -220,6 +220,80 @@ test("codex rollouts", async (t) => {
   }));
 });
 
+test("qwen usage log", async (t) => {
+  const record = ({ at, session = "qw-1", model = "qwen3.8-max", authType = "openai", source = "main", input, output, cached = 0, thoughts = 0 }) => JSON.stringify({
+    schemaVersion: 1, id: `${session}-${at}-${source}`, timestamp: at, sessionId: session,
+    model, authType, source,
+    inputTokens: input, outputTokens: output, cachedTokens: cached, thoughtsTokens: thoughts,
+    totalTokens: input + output,
+  });
+
+  const monthFile = (home, at) => path.join(home, ".qwen", "usage", `token-usage-${at.slice(0, 7)}.jsonl`);
+
+  const runtime = (home, { slug, session, workDir }) => write(
+    path.join(home, ".qwen", "projects", slug, "chats", `${session}.runtime.json`),
+    JSON.stringify({ schema_version: 1, session_id: session, work_dir: workDir }),
+  );
+
+  await t.test("sums a session's requests and nets the cached prompt out of input", () => withHome(async (home) => {
+    const at = new Date().toISOString();
+    runtime(home, { slug: "-home-anthony-src-api", session: "qw-1", workDir: "/home/anthony/src/api" });
+    write(monthFile(home, at), [
+      record({ at, input: 1000, output: 200, cached: 600, thoughts: 120 }),
+      // A subagent's requests carry the session that spawned them.
+      record({ at, source: "Explore", input: 500, output: 50, cached: 0 }),
+    ].join("\n"));
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["qwen"] });
+    assert.equal(run.engine, "qwen");
+    assert.equal(run.id, "qw-1");
+    assert.equal(run.cwd, "/home/anthony/src/api");
+    assert.equal(run.usage.input, 900); // (1000 - 600) + 500
+    assert.equal(run.usage.cacheRead, 600);
+    // The OpenAI-compatible path counts reasoning inside `outputTokens`, so the
+    // 120 thinking tokens are already in the 200 and must not be added again.
+    assert.equal(run.usage.output, 250);
+    assert.deepEqual(run.models, ["qwen3.8-max"]);
+    // Alibaba rates are deliberately not shipped, so tokens stand and cost does not.
+    assert.equal(run.cost, null);
+    assert.deepEqual(run.unpriced, ["qwen3.8-max"]);
+  }));
+
+  await t.test("the native path reports thinking separately, so it is added back", () => withHome(async (home) => {
+    const at = new Date().toISOString();
+    write(monthFile(home, at), record({ at, authType: "qwen-oauth", input: 100, output: 40, thoughts: 60 }));
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["qwen"] });
+    assert.equal(run.usage.output, 100);
+  }));
+
+  await t.test("a session in another directory is not this directory's cost", () => withHome(async (home) => {
+    const at = new Date().toISOString();
+    runtime(home, { slug: "-home-anthony-src-web", session: "qw-1", workDir: "/home/anthony/src/web" });
+    write(monthFile(home, at), record({ at, input: 10, output: 1 }));
+    const runs = await engineRuns({ since: Date.now() - 3600e3, engines: ["qwen"], cwd: "/home/anthony/src/api" });
+    assert.deepEqual(runs, []);
+  }));
+
+  await t.test("requests older than the window do not count", () => withHome(async (home) => {
+    const old = new Date(Date.now() - 48 * 3600e3).toISOString();
+    const now = new Date().toISOString();
+    write(monthFile(home, now), [
+      record({ at: old, input: 999, output: 999 }),
+      record({ at: now, input: 10, output: 2 }),
+    ].join("\n"));
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["qwen"] });
+    assert.equal(run.usage.input, 10);
+    assert.equal(run.usage.output, 2);
+  }));
+
+  await t.test("a session with no runtime file still reports, with no directory", () => withHome(async (home) => {
+    const at = new Date().toISOString();
+    write(monthFile(home, at), record({ at, input: 10, output: 2 }));
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["qwen"] });
+    assert.equal(run.cwd, "");
+  }));
+});
+
 test("aider history", async (t) => {
   const history = [
     "# aider chat started at 2026-08-16 09:00:00",

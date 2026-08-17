@@ -2,7 +2,8 @@
 //
 // Every engine moshcode wraps already writes down what it used — Claude Code
 // keeps a per-message `usage` block in ~/.claude/projects/**/<session>.jsonl,
-// Codex emits cumulative `token_count` events into ~/.codex/sessions/…, and
+// Codex emits cumulative `token_count` events into ~/.codex/sessions/…, qwen
+// appends a record per request to ~/.qwen/usage/token-usage-YYYY-MM.jsonl, and
 // opencode stores a per-message `cost` it computed itself in SQLite. Nobody has
 // to be instrumented and nothing has to be proxied: the numbers are on disk
 // because the CLI put them there. This module reads them, normalises them into
@@ -409,6 +410,123 @@ async function opencodeRuns(engine, { since, cwd } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// qwen — ~/.qwen/usage/token-usage-YYYY-MM.jsonl, one record per request
+// ---------------------------------------------------------------------------
+
+const qwenUsageDir = () => path.join(home(), ".qwen", "usage");
+const qwenProjectsDir = () => path.join(home(), ".qwen", "projects");
+
+/** Only the monthly usage logs; the directory also holds unrelated state. */
+const QWEN_USAGE_FILE = /^token-usage-\d{4}-\d{2}\.jsonl$/;
+
+/**
+ * sessionId → the directory qwen was started in.
+ *
+ * The usage log records no path, so on its own it can say what was spent but
+ * not where. qwen writes a tiny `<sessionId>.runtime.json` beside each chat
+ * with the `work_dir` in it, and that is the only exact answer on disk — the
+ * project directory those chats sit in is a lossy dash-slug of the same path,
+ * so it can group sessions but cannot be turned back into a directory.
+ */
+function qwenSessionDirs() {
+  const dirs = new Map();
+  const root = qwenProjectsDir();
+  for (const project of listDir(root)) {
+    if (!project.isDirectory()) continue;
+    const chats = path.join(root, project.name, "chats");
+    for (const entry of listDir(chats)) {
+      if (!entry.isFile() || !entry.name.endsWith(".runtime.json")) continue;
+      let meta;
+      try { meta = parseJson(fs.readFileSync(path.join(chats, entry.name), "utf8")); }
+      catch { continue; }
+      if (meta?.session_id && meta.work_dir) dirs.set(String(meta.session_id), String(meta.work_dir));
+    }
+  }
+  return dirs;
+}
+
+/**
+ * One usage record → the shape every engine normalises into.
+ *
+ * `inputTokens` is the whole prompt and `cachedTokens` is the part of it that
+ * was a cache hit, so the fresh input is the difference — counting both would
+ * bill the cache twice at the full input rate.
+ *
+ * `thoughtsTokens` is the subtle one. On the OpenAI-compatible path — which is
+ * what `authType: "openai"` marks, and what qwen's own DashScope endpoint uses
+ * — `outputTokens` is `completion_tokens`, which already *contains* the
+ * reasoning tokens, and adding them would double-count the thinking. The native
+ * path reports Gemini's `candidatesTokenCount`, which excludes them, so that is
+ * the only case where they have to be added back.
+ */
+function qwenUsageOf(record) {
+  const cached = num(record.cachedTokens);
+  const thoughts = num(record.thoughtsTokens);
+  return {
+    input: Math.max(0, num(record.inputTokens) - cached),
+    output: num(record.outputTokens) + (record.authType === "openai" ? 0 : thoughts),
+    cacheRead: cached,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
+  };
+}
+
+/**
+ * Every qwen session in the window, one run per session.
+ *
+ * The log is per-request and flat, so the session id is what makes a run: a
+ * subagent's requests carry the same one (`source` names the subagent) and
+ * belong to the session that spawned them.
+ */
+export function qwenRuns({ since, cwd } = {}) {
+  const dirs = qwenSessionDirs();
+  const sessions = new Map();
+
+  for (const entry of listDir(qwenUsageDir())) {
+    if (!entry.isFile() || !QWEN_USAGE_FILE.test(entry.name)) continue;
+    const file = path.join(qwenUsageDir(), entry.name);
+    const stat = safeStat(file);
+    // A month untouched since before the window holds nothing inside it.
+    if (!stat || (since != null && stat.mtimeMs < since)) continue;
+
+    let text;
+    try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      if (!line || line.charCodeAt(0) !== 123) continue; // fast reject: not "{"
+      const record = parseJson(line);
+      if (!record?.sessionId) continue;
+      const at = stamp(record.timestamp);
+      if (at != null && since != null && at < since) continue;
+
+      const id = String(record.sessionId);
+      const where = dirs.get(id) || "";
+      // A session whose directory is unknown cannot be claimed for the one that
+      // was asked for — reporting it there would invent an attribution.
+      if (cwd && !samePath(where, cwd)) continue;
+
+      let run = sessions.get(id);
+      if (!run) {
+        run = {
+          engine: "qwen", id, cwd: where,
+          usage: { ...EMPTY_USAGE }, byModel: new Map(),
+          start: null, end: null, engineCost: null,
+        };
+        sessions.set(id, run);
+      }
+      const one = qwenUsageOf(record);
+      const model = record.model || "unknown";
+      run.usage = addUsage(run.usage, one);
+      run.byModel.set(model, addUsage(run.byModel.get(model) || EMPTY_USAGE, one));
+      if (at != null) {
+        run.start = run.start == null ? at : Math.min(run.start, at);
+        run.end = run.end == null ? at : Math.max(run.end, at);
+      }
+    }
+  }
+  return [...sessions.values()];
+}
+
+// ---------------------------------------------------------------------------
 // aider — it prints the running total into its own chat history
 // ---------------------------------------------------------------------------
 
@@ -486,11 +604,12 @@ export const COST_READERS = {
   codex: (opts) => codexRuns(opts),
   opencode: (opts) => opencodeRuns("opencode", opts),
   privacycode: (opts) => opencodeRuns("privacycode", opts),
+  qwen: (opts) => qwenRuns(opts),
   aider: (opts) => aiderRuns(opts),
 };
 
 /** Engines moshcode can launch but cannot cost — named so the report can say so. */
-export const UNCOSTED_ENGINES = ["gemini", "kimi", "qwen", "deepseek", "openagents"];
+export const UNCOSTED_ENGINES = ["gemini", "kimi", "deepseek", "openagents"];
 
 /**
  * Finish a run: price it, and record where the price came from.

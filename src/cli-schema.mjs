@@ -139,7 +139,7 @@ export const CORE_CLI_COMMANDS = [
       + "codex's rollout token counts, opencode's per-message cost, aider's chat history. a figure marked "
       + "`~` was worked out from published rates and is what the tokens WOULD cost on the api; unmarked "
       + "figures are the engine's own arithmetic. models with no rate show tokens and no cost — add yours "
-      + "to ~/.moshcode/pricing.json. gemini, kimi, qwen, deepseek and openagents log nothing readable, "
+      + "to ~/.moshcode/pricing.json. gemini, kimi, deepseek and openagents log nothing readable, "
       + "so they report no cost rather than zero.",
   },
   // Everyone who has used a coding agent's own `/usage` types that word first,
