@@ -260,6 +260,26 @@ test("Coral installs from its official script and re-runs it to upgrade", () => 
   assert.match(toolList(), /coral/);
 });
 
+test("Spinifex installs the spx host platform and re-runs the script to upgrade", () => {
+  assert.deepEqual(resolveTool("SPINIFEX"), ["spinifex", TOOLS.spinifex]);
+  // The product is Spinifex; the binary is spx. Getting this backwards makes
+  // `moshcode tools` report an installed platform as missing.
+  assert.equal(TOOLS.spinifex.bin, "spx");
+  assert.deepEqual(TOOLS.spinifex.install, {
+    cmd: "bash",
+    args: ["-c", "curl -fsSL https://install.mulgadc.com | INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash"],
+  });
+  // The installer ends with `exec newgrp` on a TTY, which would replace the
+  // install with an interactive subshell and never return to the pit.
+  assert.match(TOOLS.spinifex.install.args[1], /INSTALL_SPINIFEX_SKIP_NEWGRP=1/);
+  // The vendor script is bash, not POSIX sh.
+  assert.equal(TOOLS.spinifex.install.cmd, "bash");
+  // Re-running the installer IS the documented update path, so no upgrade key.
+  assert.equal(TOOLS.spinifex.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.spinifex), TOOLS.spinifex.install);
+  assert.match(toolList(), /spinifex/);
+});
+
 test("release-only CLIs install via the bundled downloader", () => {
   // gh, supabase, and doctl publish no cross-platform install script, so their
   // spec runs src/release-install.mjs on this node, not a vendor URL.
@@ -356,6 +376,7 @@ for (const [name, shell, script] of [
   ["c0mpute", "sh", "curl -fsSL https://c0mpute.com/install.sh | sh"],
   ["c0upons", "sh", "curl -fsSL https://c0upons.com/install.sh | sh"],
   ["coral", "bash", "curl -fsSL https://withcoral.com/install.sh | bash"],
+  ["spinifex", "bash", "curl -fsSL https://install.mulgadc.com | INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash"],
 ]) {
   test(`install ${name} delegates to its official install script`, async () => {
     const root = tempDir("moshcode-install-");
