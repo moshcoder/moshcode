@@ -80,6 +80,13 @@ are in the right order already.
   documented-length posts (`MAX_PUBLISH_BYTES`, ~1.9M) and the vhost allows 2m
   so nginx is never the one saying no. Past that you get a 413 in JSON telling
   you to split the batch — safe to do, because publishing upserts on the slug.
+  For a genuinely large import use the streaming endpoint instead, which does
+  not buffer at all and has its own vhost block.
+- **Bulk upload appears to hang, then finishes all at once.** That is nginx
+  buffering, and it means the `content/stream` location did not take. The
+  endpoint streams both ways; `proxy_request_buffering off` and
+  `proxy_buffering off` are what let items land while the rest is still
+  uploading. `nginx -T | grep -A5 content/stream` shows whether it is live.
 
 ## Verifying, one layer at a time
 

@@ -35,6 +35,10 @@ import { landingFor } from "../lib/moshpit-landing.mjs";
 import { FEED_KINDS, loadFeed } from "../lib/feed.mjs";
 import { FEED_CSS, feedPage, feedUnavailable } from "../lib/moshpit-feed-page.mjs";
 import { CONTENT_KINDS, MAX_BATCH } from "../lib/moshpit-content.mjs";
+import {
+  MAX_CONCURRENT_STREAMS, MAX_LINE_BYTES, MAX_STREAM_BYTES, MAX_STREAM_ITEMS, STREAM_CONTENT_TYPES,
+  acquireStreamSlot, isStreamContentType, ndjsonItems,
+} from "../lib/moshpit-publish-stream.mjs";
 import { SITE_CSS, sitePage, sitePart } from "../lib/moshpit-site-page.mjs";
 import { nameQuery, tldQuery } from "../lib/moshpit-search.mjs";
 import {
@@ -65,6 +69,7 @@ import {
   listAllNames,
   listExempt,
   listNames,
+  listNamesForUser,
   listPins,
   listRecordNames,
   listRecords,
@@ -504,6 +509,110 @@ moshpitRouter.post("/api/moshpit/sites/:name/content", async (req, res) => {
     return failed.length ? bad(res, results[0].error) : res.status(results[0].created ? 201 : 200).json(body);
   }
   return res.status(failed.length ? (failed.length === results.length ? 400 : 207) : 201).json(body);
+});
+
+/**
+ * Publish a lot, reporting each item as it lands.
+ *
+ * The batch endpoint above buffers: the whole body is parsed before the handler
+ * runs, so its ceiling is however much we are willing to hold for anyone who
+ * asks. This one reads NDJSON — one item per line — and writes each line as it
+ * arrives, so a five-hundred-item import costs the same memory as a one-item
+ * one and the caller sees progress instead of a stalled request.
+ *
+ * The response is NDJSON too, and starts before the request has finished
+ * uploading. That is the whole point: a progress bar needs the first `progress`
+ * line while the last item is still on the wire.
+ *
+ * Because the status line goes out before the first item is written, a cap hit
+ * halfway through cannot be reported as a status code. It arrives as a final
+ * `error` line instead, and the items already written stay written — the same
+ * partial-success contract the batch endpoint's 207 has, expressed in the only
+ * way a stream can express it.
+ */
+moshpitRouter.post("/api/moshpit/sites/:name/content/stream", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  if (!isStreamContentType(req.get("content-type"))) {
+    return bad(res, `send ${STREAM_CONTENT_TYPES[0]} — one JSON object per line`);
+  }
+  const site = await siteName(req.params.name);
+  if (!site) return bad(res, "not a Moshpit name");
+
+  // Refused rather than queued. A queue here is a slower way to run out of
+  // memory, and a caller that can retry is better served by being told now.
+  const release = acquireStreamSlot();
+  if (!release) {
+    res.set("retry-after", "5");
+    return res.status(503).json({ error: `too many uploads in flight (${MAX_CONCURRENT_STREAMS}); retry shortly` });
+  }
+
+  res.status(200);
+  res.set("content-type", "application/x-ndjson; charset=utf-8");
+  res.set("cache-control", "no-store");
+  // nginx buffers a proxied response by default, which would hold every
+  // progress line until the upload finished and deliver them all at once — a
+  // progress bar that jumps from 0 to 100. This opts that off for this
+  // response only, so the deploy vhost needs no special case.
+  res.set("x-accel-buffering", "no");
+  res.flushHeaders?.();
+
+  const line = (obj) => res.write(`${JSON.stringify(obj)}\n`);
+  const started = Date.now();
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+  let seen = 0;
+
+  line({
+    type: "accepted",
+    name: site.name,
+    resolved: site.resolved,
+    limits: { items: MAX_STREAM_ITEMS, bytes: MAX_STREAM_BYTES, lineBytes: MAX_LINE_BYTES },
+  });
+
+  try {
+    for await (const entry of ndjsonItems(req)) {
+      seen = entry.index;
+
+      if (entry.error) {
+        failed += 1;
+        line({ type: "progress", index: entry.index, ok: false, error: entry.error });
+        continue;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const result = await putContent({ tld: site.tld, label: site.label, userId: req.user.id, item: entry.item });
+      if (result.ok) {
+        if (result.created) created += 1; else updated += 1;
+        line({
+          type: "progress",
+          index: entry.index,
+          ok: true,
+          created: result.created,
+          slug: result.item.slug,
+          url: `${config.pitOrigin}/n/${encodeURIComponent(site.resolved)}/${result.item.slug}`,
+        });
+      } else {
+        failed += 1;
+        line({ type: "progress", index: entry.index, ok: false, error: result.error });
+      }
+    }
+
+    line({ type: "done", items: seen, created, updated, failed, ms: Date.now() - started });
+  } catch (err) {
+    line({
+      type: "error",
+      code: err?.code || "failed",
+      error: err?.message || "the upload failed",
+      items: seen,
+      created,
+      updated,
+      failed,
+    });
+  } finally {
+    release();
+    res.end();
+  }
 });
 
 moshpitRouter.get("/api/moshpit/sites/:name/content/:slug", async (req, res) => {
@@ -1624,6 +1733,27 @@ const landingCard = (req, landing) => {
   </div>`;
 };
 
+// The bulk-publish page. Kept apart from PIT_CSS because only one page loads it.
+const PUBLISH_CSS = `
+.pub-form{display:flex;flex-direction:column;gap:12px;margin:18px 0 8px;max-width:56ch}
+.pub-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pub-row>span{min-width:9ch;color:var(--dim)}
+.pub-row select,.pub-row input[type=file]{background:var(--surface);border:1px solid var(--line-2);
+  border-radius:var(--r);padding:9px 12px;color:inherit;font:inherit;flex:1 1 220px}
+.pub-row select:focus,.pub-row input:focus{border-color:var(--acid);outline:none}
+.pub-bar{height:12px;background:var(--surface);border:1px solid var(--line-2);border-radius:999px;
+  overflow:hidden;margin:20px 0 8px;max-width:56ch}
+/* Width is the only thing that animates. A transition on the fill's colour or
+   size would lag behind a stream that lands hundreds of items a second. */
+.pub-bar-fill{height:100%;width:0;background:var(--acid);transition:width .12s linear}
+.pub-stat{color:var(--dim);font-size:.9rem;margin:0 0 10px}
+.pub-log{list-style:none;padding:0;margin:0;max-height:34vh;overflow:auto;font-size:.82rem;
+  max-width:56ch;border-left:2px solid var(--line-2)}
+.pub-log li{padding:3px 10px;color:var(--dim)}
+.pub-log li.err{color:#ff0050}
+.pub-log li.ok{color:var(--acid)}
+`;
+
 const PIT_CSS = `
 .pit-form{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;margin:18px 0 8px}
 .pit-field{display:flex;align-items:center;gap:2px;background:var(--surface);border:1px solid var(--line-2);
@@ -1756,6 +1886,7 @@ const pitTabs = (active, counts = null, query = "") => {
     counts?.theirs === undefined ? "" : `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>`}</a>
   <a class="pit-tab${active === "records" ? " on" : ""}" href="/pit/records${query ? `?q=${encodeURIComponent(query)}` : ""}">DNS Records${
     counts?.records === undefined ? "" : `<span class="count">${counts.records}</span>`}</a>
+  <a class="pit-tab${active === "publish" ? " on" : ""}" href="/pit/publish">Bulk publish</a>
   <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>
 </nav>`;
 };
@@ -2622,6 +2753,179 @@ moshpitRouter.post("/pit/records/delete", requireAuth, async (req, res) => {
  * than inventing an address for a stranger to paste into their network
  * settings.
  */
+/**
+ * Bulk publish, with a progress bar.
+ *
+ * The streaming endpoint reports every item as it lands, which is only useful
+ * if something is watching. This is that something: pick a name, pick an NDJSON
+ * file, and watch it fill.
+ *
+ * The upload is the File object handed straight to fetch, so the browser
+ * streams it from disk — the page never holds the payload in memory either, and
+ * a file bigger than the tab's heap uploads fine. The response is read as it
+ * arrives, which is the whole reason the endpoint speaks NDJSON rather than
+ * answering once at the end.
+ */
+moshpitRouter.get("/pit/publish", async (req, res) => {
+  const bal = req.user ? await balance(req.user.id) : 0;
+  const names = req.user ? await listNamesForUser(req.user.id) : [];
+
+  const body = !req.user
+    ? `<p class="dim">Sign in to publish to the names you hold — the same login the CLI uses.</p>
+       <p><a class="btn acid" href="/">Sign in →</a></p>`
+    : !names.length
+      ? `<p class="dim">You don't hold a name yet. Names live under an ending —
+         <a class="acid" href="/pit">claim one in the pit</a>, then mint a name under it.</p>`
+      : `
+  <form id="pub" class="pub-form" onsubmit="return false">
+    <label class="pub-row">
+      <span>Publish to</span>
+      <select id="pub-name">${names.map((n) => {
+        const full = `${n.label}.${n.tld}`;
+        return `<option value="${esc(full)}">${esc(full)}</option>`;
+      }).join("")}</select>
+    </label>
+    <label class="pub-row">
+      <span>NDJSON file</span>
+      <input id="pub-file" type="file" accept=".ndjson,.jsonl,.json,application/x-ndjson,application/jsonl">
+    </label>
+    <p class="dim" style="font-size:.85rem;margin:2px 0 0">
+      One JSON object per line, up to ${MAX_STREAM_ITEMS} of them —
+      <span class="mono">{"kind":"link","title":"Worth reading","url":"https://example.com"}</span>
+    </p>
+    <p><button id="pub-go" class="btn acid" type="button">Publish</button>
+       <button id="pub-stop" class="btn" type="button" hidden>Stop</button></p>
+  </form>
+
+  <div id="pub-progress" hidden>
+    <div class="pub-bar"><div class="pub-bar-fill" id="pub-fill"></div></div>
+    <p class="pub-stat mono" id="pub-stat">starting…</p>
+    <ul class="pub-log mono" id="pub-log"></ul>
+  </div>
+
+  <script>
+  (() => {
+    const $ = (id) => document.getElementById(id);
+    const fill = $("pub-fill"), stat = $("pub-stat"), log = $("pub-log");
+    let abort = null;
+
+    // The item count is not known until the upload finishes, so the bar is
+    // driven by the file's line count -- counted locally, before sending. A bar
+    // that cannot say "of what" is a spinner with extra steps.
+    const countLines = async (file) => {
+      const text = await file.text();
+      return text.split("\\n").filter((l) => l.trim()).length;
+    };
+
+    const note = (text, cls) => {
+      const li = document.createElement("li");
+      if (cls) li.className = cls;
+      li.textContent = text;
+      log.prepend(li);
+      while (log.children.length > 40) log.lastChild.remove();
+    };
+
+    $("pub-stop").addEventListener("click", () => abort && abort.abort());
+
+    $("pub-go").addEventListener("click", async () => {
+      const name = $("pub-name").value;
+      const file = $("pub-file").files[0];
+      if (!file) { alert("Pick an NDJSON file first."); return; }
+
+      $("pub-progress").hidden = false;
+      $("pub-go").disabled = true;
+      $("pub-stop").hidden = false;
+      log.textContent = "";
+      fill.style.width = "0%";
+
+      const total = await countLines(file);
+      stat.textContent = "uploading " + total + " items…";
+
+      abort = new AbortController();
+      let done = 0, created = 0, updated = 0, failed = 0;
+
+      try {
+        const res = await fetch("/api/moshpit/sites/" + encodeURIComponent(name) + "/content/stream", {
+          method: "POST",
+          headers: { "content-type": "application/x-ndjson" },
+          // The File itself: the browser streams it from disk rather than
+          // reading it into the tab.
+          body: file,
+          duplex: "half",
+          signal: abort.signal,
+        });
+
+        // Everything refused before the stream opens -- 401, 400, 503 -- answers
+        // as plain JSON with a status. Only a 200 is NDJSON, so this must be
+        // read as an object or the reader below waits on a body that is one
+        // short error and never a progress line.
+        if (!res.ok) {
+          const why = await res.json().catch(() => ({}));
+          throw new Error(why.error || ("the server refused it (" + res.status + ")"));
+        }
+        if (!res.body) throw new Error("no response stream");
+
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+
+        for (;;) {
+          const { value, done: end } = await reader.read();
+          if (end) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf("\\n")) !== -1) {
+            const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+            if (!line.trim()) continue;
+            let msg; try { msg = JSON.parse(line); } catch { continue; }
+
+            if (msg.type === "progress") {
+              done += 1;
+              if (msg.ok) { msg.created ? created++ : updated++; }
+              else { failed++; note(msg.index + ": " + msg.error, "err"); }
+              fill.style.width = Math.min(100, total ? (done / total) * 100 : 0) + "%";
+              stat.textContent = done + (total ? " / " + total : "") + " — " +
+                created + " created, " + updated + " updated, " + failed + " failed";
+            } else if (msg.type === "done") {
+              fill.style.width = "100%";
+              stat.textContent = "done — " + msg.created + " created, " + msg.updated +
+                " updated, " + msg.failed + " failed in " + msg.ms + "ms";
+              note("finished", "ok");
+            } else if (msg.type === "error") {
+              stat.textContent = "stopped — " + msg.error;
+              note(msg.error, "err");
+            }
+          }
+        }
+      } catch (err) {
+        stat.textContent = err.name === "AbortError" ? "stopped" : ("failed — " + err.message);
+      } finally {
+        $("pub-go").disabled = false;
+        $("pub-stop").hidden = true;
+        abort = null;
+      }
+    });
+  })();
+  </script>`;
+
+  res.type("html").send(page({
+    title: "moshcode ▸ the pit ▸ bulk publish",
+    head: `<style>${PIT_CSS}${PUBLISH_CSS}</style>`,
+    body: `${appBar(req.user, bal, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px">
+  <p class="label">the moshpit namespace</p>
+  <h1 style="font-size:clamp(2rem,6vw,3.4rem)">Bulk <span class="acid">publish</span></h1>
+  <p class="dim" style="max-width:66ch">
+    Upload a whole site at once. One JSON object per line, streamed as it goes — items land while the
+    rest is still uploading, so a large import shows progress instead of a stalled request. It upserts
+    on the slug, so re-running the same file updates rather than duplicates.
+  </p>
+  ${pitTabs("publish")}
+  ${body}
+</main>${footer}`,
+  }));
+});
+
 moshpitRouter.get("/pit/dns", async (req, res) => {
   const bal = req.user ? await balance(req.user.id) : 0;
   const { resolvers, doh, published } = resolverConfig();
