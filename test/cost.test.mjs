@@ -364,6 +364,24 @@ test("moshcode cost", async (t) => {
     assert.match(out, /the herd is empty/);
   }));
 
+  // `/usage` is the word every coding agent uses for this, so it has to reach
+  // the same reader rather than the router's "unknown command".
+  await t.test("usage is the same command under the name people type", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), claudeAssistant({
+      id: "m", requestId: "r", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE,
+    }));
+
+    const asUsage = await run(["usage", "--all", "--json", "--since", "1h"], home);
+    const asCost = await run(["cost", "--all", "--json", "--since", "1h"], home);
+    assert.equal(asUsage.code, 0);
+    // `since` is the wall clock at the moment each ran, so it is the one field
+    // two identical reports are allowed to disagree about.
+    const body = ({ since, ...rest }) => rest;
+    assert.deepEqual(body(JSON.parse(asUsage.out)), body(JSON.parse(asCost.out)));
+  }));
+
   await t.test("--watch and --json are refused together", () => withHome(async (home) => {
     const { code, out } = await run(["cost", "--watch", "--json"], home);
     assert.notEqual(code, 0);

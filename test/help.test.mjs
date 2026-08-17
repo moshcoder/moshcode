@@ -287,6 +287,7 @@ test("a renamed command points at its replacement, and stays gone", () => {
 test("findCommand resolves aliases and rejects strangers", () => {
   assert.equal(findCommand("where").name, "pwd");
   assert.equal(findCommand("update").name, "upgrade");
+  assert.equal(findCommand("usage").name, "cost");
   assert.equal(findCommand("PWD").name, "pwd");
   assert.equal(findCommand("nope"), null);
 });
@@ -353,7 +354,7 @@ test("a pit command renders detail, delegating to the CLI block", () => {
 });
 
 test("pit aliases resolve", () => {
-  for (const [alias, target] of [["agent", "agents"], ["engines", "agents"], ["where", "pwd"], ["q", "quit"], ["sh", "shell"]]) {
+  for (const [alias, target] of [["agent", "agents"], ["engines", "agents"], ["where", "pwd"], ["q", "quit"], ["sh", "shell"], ["usage", "cost"]]) {
     assert.equal(findPitCommand(alias)?.name, target, `/${alias} should resolve to /${target}`);
   }
 });

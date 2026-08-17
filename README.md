@@ -30,7 +30,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode start` | engines | launch an engine with its native defaults |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
-| `moshcode cost` | runtime | what each session is spending, read from the engines' own logs |
+| `moshcode cost` <br>`usage` | runtime | what each session is spending, read from the engines' own logs |
 | `moshcode attach` | runtime | attach this terminal to a herd session |
 | `moshcode kill` | runtime | end a herd session |
 | `moshcode wait` | runtime | block until a session is blocked, done, or idle |

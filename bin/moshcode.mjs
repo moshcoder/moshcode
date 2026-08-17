@@ -344,8 +344,8 @@ async function main() {
     process.exitCode = (await herdCommand(rest)) || 0;
     return;
   }
-  if (["ps", "attach", "kill", "wait", "restore", "cost"].includes(cmd)) {
-    process.exitCode = (await herdCommand([cmd === "ps" ? "ps" : cmd, ...rest])) || 0;
+  if (["ps", "attach", "kill", "wait", "restore", "cost", "usage"].includes(cmd)) {
+    process.exitCode = (await herdCommand([cmd === "usage" ? "cost" : cmd, ...rest])) || 0;
     return;
   }
   if (cmd === "tools") {
