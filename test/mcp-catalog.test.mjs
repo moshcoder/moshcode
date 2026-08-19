@@ -81,3 +81,40 @@ test("the catalog listing names every entry", () => {
   for (const name of catalogNames()) assert.match(listing, new RegExp(name));
   assert.match(listing, /Porkbun/);
 });
+
+test("bufferoverride resolves to the remote HTTP server, with no args", () => {
+  const e = resolveCatalog("bufferoverride");
+  assert.equal(e.key, "bufferoverride");
+  assert.equal(e.target, "https://bufferoverride.com/mcp");
+  // A remote server takes no command arguments — every engine's builder pushes
+  // the target alone — and parseMcp rejects a leftover one rather than dropping
+  // it, so an entry that carried args would break `mcp add bufferoverride`.
+  assert.deepEqual(e.args, []);
+  // The credential is a bearer header, not a variable: nothing to name here.
+  assert.equal(e.env, undefined);
+});
+
+test("`mcp add bufferoverride` expands to the remote spec", () => {
+  const { spec, catalog, error } = parseMcp(["add", "bufferoverride"]);
+  assert.equal(error, undefined);
+  // Named as the CLI's own `bo mcp config` names it, so registering it either
+  // way produces one server rather than two.
+  assert.equal(spec.name, "bufferoverride");
+  assert.equal(spec.target, "https://bufferoverride.com/mcp");
+  assert.deepEqual(spec.args, []);
+  assert.deepEqual(spec.headers, []);
+  assert.equal(catalog.key, "bufferoverride");
+});
+
+test("the catalog listing keeps its column when a name overruns the old pad", () => {
+  // `bufferoverride` is longer than the fixed pad this used to carry, which
+  // left a single space before its description while porkbun kept a column.
+  const rows = catalogList().split("\n");
+  assert.ok(rows.length >= 2, "this only says anything with more than one entry");
+  const columns = Object.values(MCP_CATALOG).map((e) => {
+    const row = rows.find((line) => line.includes(e.desc));
+    assert.ok(row, `no row for ${e.desc}`);
+    return row.indexOf(e.desc);
+  });
+  assert.equal(new Set(columns).size, 1, `descriptions must line up:\n${catalogList()}`);
+});

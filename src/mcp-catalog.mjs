@@ -24,6 +24,23 @@ export const MCP_CATALOG = {
     // before deciding whether to trust it with keys.
     note: "API access is off by default and must be enabled per-domain; the docs tools work without keys",
   },
+  bufferoverride: {
+    // A remote HTTP server, so the target is the URL and there are no args —
+    // every engine's builder pushes the target alone for a remote server.
+    target: "https://bufferoverride.com/mcp",
+    args: [],
+    desc: "BufferOverride — version-aware technical answers, with provenance and reproductions",
+    docs: "https://bufferoverride.com/docs/mcp",
+    // Named to match what the CLI's own `bo mcp config` emits, so registering
+    // it either way produces one server rather than two under different names.
+    //
+    // No `env`: the credential is a bearer header, not a variable, and it is
+    // deliberately not listed here. Five read tools work with no key at all,
+    // and the write tools are gated on the scopes a key actually carries — so
+    // the useful default really is unauthenticated. `bo mcp config` prints the
+    // header form for a terminal that has signed in.
+    note: "reads need no credential; to publish, add -H \"Authorization: Bearer bo_…\" (see `bo mcp config`)",
+  },
 };
 
 /** Resolve a catalog name to a spec fragment, or null. Own properties only. */
@@ -44,7 +61,10 @@ export function catalogNames() {
 
 /** One line per known server, for `mcp catalog`. */
 export function catalogList() {
+  // Width from the longest name rather than a fixed pad: `bufferoverride` is
+  // wider than the old 10, and a name that overruns the pad loses the column.
+  const width = Math.max(10, ...Object.keys(MCP_CATALOG).map((key) => key.length));
   return Object.entries(MCP_CATALOG)
-    .map(([key, e]) => `  ${key.padEnd(10)} ${e.desc}`)
+    .map(([key, e]) => `  ${key.padEnd(width)} ${e.desc}`)
     .join("\n");
 }

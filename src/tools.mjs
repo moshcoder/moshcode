@@ -82,6 +82,19 @@ export const TOOLS = {
     // where those words mean something else entirely.
     aliases: { cmd: "cli-tools", args: ["aliases", "--json"] },
   },
+  bo: {
+    desc: "BufferOverride — capture a failing command, redact it, and find the answer that already exists",
+    // The product is BufferOverride and the binary is `bo`, the same split
+    // `secrets` → `logicsrc` and `spinifex` → `spx` have. It is keyed the other
+    // way round from those two on purpose: `bo` is what its own documentation
+    // tells you to type, and this is a command you run every time something
+    // fails, so the short word is the one worth having in the pit.
+    bin: "bo",
+    // An ordinary global npm package with no dependencies of its own, and
+    // `npm install -g` is idempotent, so re-running the install IS the upgrade
+    // — no `upgrade` key, the same as mcpjam and railway.
+    install: { cmd: "npm", args: ["install", "-g", "@profullstack/bufferoverride"] },
+  },
   secrets: {
     desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
     // The passthrough target is the `logicsrc` binary; the moshcode command is

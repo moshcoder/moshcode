@@ -114,7 +114,7 @@ test("runMoshcode stringifies args and never spawns under dry-run", async () => 
 
 test("the CLI capabilities are all registered as verbs", () => {
   const reg = moshVocabulary();
-  for (const name of ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "c0upons", "secrets", "alpaca", "trade", "pwd", "ai"]) {
+  for (const name of ["agents", "start", "install", "upgrade", "mcp", "skill", "prd", "ugig", "coinpay", "c0mpute", "c0upons", "bo", "secrets", "alpaca", "trade", "pwd", "ai"]) {
     assert.ok(reg.has(name), `expected ${name}() in the vocabulary`);
   }
 });
@@ -136,6 +136,7 @@ const VERB_ARGV_CASES = [
   { verb: "coinpay", args: ["wallet", "balance"],            expect: /moshcode coinpay wallet balance/ },
   { verb: "c0mpute", args: ["status"],                       expect: /moshcode c0mpute status/ },
   { verb: "c0upons", args: ["search", "nike"],               expect: /moshcode c0upons search nike/ },
+  { verb: "bo",      args: ["search", "libsql worker"],      expect: /moshcode bo search libsql worker/ },
   { verb: "secrets", args: ["teams", "list"],               expect: /moshcode secrets teams list/ },
   { verb: "alpaca", args: ["asset", "get", "--symbol-or-asset-id", "AAPL"], expect: /moshcode alpaca asset get --symbol-or-asset-id AAPL/ },
   { verb: "trade",  args: ["ticker", "AAPL"],               expect: /moshcode trade ticker AAPL/ },

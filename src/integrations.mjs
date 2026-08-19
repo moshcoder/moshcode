@@ -238,9 +238,14 @@ export async function mcpCommand(tokens, { run, installedSet } = {}) {
   const missing = (parsed.catalog?.env || []).filter((k) => !process.env[k]);
   if (missing.length) {
     console.log(ash(`  note: ${spec.name} needs ${missing.join(" and ")} in the environment.`));
-    if (parsed.catalog?.note) console.log(ash(`        ${parsed.catalog.note}`));
-    if (parsed.catalog?.docs) console.log(ash(`        ${parsed.catalog.docs}`));
   }
+  // The catalog's own note and docs are printed whenever the catalog was used,
+  // not only when a variable is missing. A server whose credential is a header
+  // rather than an environment variable — or one that needs none at all to be
+  // useful — has nothing in `env`, and hanging its note off that check is what
+  // made the note invisible for exactly the servers it was written for.
+  if (parsed.catalog?.note) console.log(ash(`  note: ${parsed.catalog.note}`));
+  if (parsed.catalog?.docs) console.log(ash(`        ${parsed.catalog.docs}`));
   if (spec.headers.length || /^https?:/i.test(spec.target)) {
     console.log(ash("  note: OAuth/HTTP servers may still need per-engine auth (e.g. `opencode mcp auth`, `codex mcp login`)."));
   }

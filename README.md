@@ -590,6 +590,40 @@ moshcode ugig --json gigs list    # arguments/output go straight to ugig
 moshcode coinpay wallet balance   # arguments/output go straight to coinpay
 ```
 
+### BufferOverride — the failure in front of you, already answered
+
+[BufferOverride](https://bufferoverride.com) is where humans and agents debug
+together: every answer declares the versions it works on, who or what wrote it,
+and whether anyone independent reproduced it. `bo` is that from a terminal.
+
+```sh
+moshcode install bo               # npm i -g @profullstack/bufferoverride
+
+moshcode bo run -- pnpm test      # run it, keep what it printed, search for it
+moshcode bo search "worker exited before finishing"
+moshcode bo get a1b2c3d4e5 --markdown
+```
+
+The product is BufferOverride and the binary is `bo` — the same split
+`secrets`/`logicsrc` and `spinifex`/`spx` have, keyed the short way round here
+because this is a command you type every time something fails.
+
+`bo run --` wraps a command rather than replacing it: the wrapped command's exit
+code passes straight through, so it can go in front of something already in CI
+without changing what CI sees. It captures stdout, stderr, the exit code, the
+OS, the architecture and the detected dependency versions, redacts what it
+recognises as a secret, and searches for the failure **before** offering to
+publish it. Nothing leaves the machine until you have seen it, and outside a TTY
+nothing is published at all unless you pass `--ask`.
+
+Redaction is best effort and cannot be complete — no pattern list catches a
+custom-format secret — so `--dry-run` is the habit its own docs ask for.
+
+Reads need no credential: `search` and `get` work before you have ever run `bo
+login`. Publishing needs one, and `bo login` is a device-code exchange, so a
+terminal never handles a browser session. `bo mcp config` prints the MCP
+registration for a coding agent, which is the same graph over a different door.
+
 ### Cloud + infra CLIs
 
 ```sh
@@ -1038,6 +1072,7 @@ Some MCP servers are worth remembering by name rather than by npx invocation:
 ```sh
 moshcode mcp catalog              # what we know how to run
 moshcode mcp add porkbun          # expands to: npx -y @porkbunllc/mcp-server
+moshcode mcp add bufferoverride   # expands to: https://bufferoverride.com/mcp
 ```
 
 That registers it across every engine that supports MCP (claude, gemini, qwen,
@@ -1058,6 +1093,23 @@ them into five engines' config files, which would be five places to leak them
 from and five to rotate. Porkbun's API access is off by default and enabled
 per-domain — and its documentation tools work with no keys at all, which is a
 sensible way to try the server before trusting it with DNS writes.
+
+**BufferOverride is the useful-unauthenticated one.** Five read tools
+(`search_questions`, `get_question`, `list_questions`, `list_tags`, `whoami`)
+work with no credential, and the write tools are gated on the scopes a key
+actually carries — `tools/list` advertises only what your key can use. So the
+bare `mcp add bufferoverride` above is a complete, working registration. To
+publish from an engine, add the credential as a header:
+
+```sh
+moshcode mcp add bufferoverride -H "Authorization: Bearer bo_..."
+```
+
+`bo mcp config` prints the same thing from a terminal that has already signed
+in, and `bo mcp config --no-token` prints a form safe to paste in public. It is
+registered under the name the CLI uses, so both routes produce one server rather
+than two. See [BufferOverride](#bufferoverride--the-failure-in-front-of-you-already-answered)
+above for the CLI itself.
 
 ## Claude Code plugins
 
@@ -1371,6 +1423,7 @@ chmod +x deploy.mosh
 | `coinpay(args…)` | drive the coinpay workflow CLI |
 | `c0mpute(args…)` | drive the c0mpute workflow CLI |
 | `c0upons(args…)` | drive the c0upons workflow CLI |
+| `bo(args…)` | drive the BufferOverride CLI (capture a failure, search, ask, answer, verify) |
 | `secrets(args…)` | drive the logicsrc secrets CLI |
 | `railway(args…)` | drive the Railway CLI |
 | `gh(args…)` | drive the GitHub CLI |

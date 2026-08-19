@@ -185,6 +185,44 @@ test("MCPJam is a workflow tool installed from its official npm package", () => 
   assert.match(toolList(), /mcpjam/);
 });
 
+test("BufferOverride is a workflow tool installed from its official npm package", () => {
+  // Keyed `bo` rather than `bufferoverride`: the binary, the pit command and
+  // the product's own documentation all say `bo`.
+  assert.deepEqual(resolveTool("BO"), ["bo", TOOLS.bo]);
+  assert.equal(TOOLS.bo.bin, "bo");
+  assert.deepEqual(TOOLS.bo.install, {
+    cmd: "npm",
+    args: ["install", "-g", "@profullstack/bufferoverride"],
+  });
+  // Same reasoning as mcpjam: `npm install -g` is idempotent, so re-running the
+  // install IS the upgrade. Asserted so adding one later is deliberate.
+  assert.equal(TOOLS.bo.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.bo), TOOLS.bo.install);
+  assert.match(toolList(), /bo /);
+  assert.match(toolList(), /BufferOverride/);
+});
+
+test("install bo delegates to the official npm package", async () => {
+  const root = tempDir("moshcode-install-bo-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "npm-args.json");
+  mkdirSync(nativeBin);
+  writeExecutable(nativeBin, "npm", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "bo"], {
+    binDir: nativeBin,
+    env: { NPM_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "install", "-g", "@profullstack/bufferoverride",
+  ]);
+});
+
 test("install mcpjam delegates to the official npm package", async () => {
   const root = tempDir("moshcode-install-mcpjam-");
   const nativeBin = path.join(root, "bin");
