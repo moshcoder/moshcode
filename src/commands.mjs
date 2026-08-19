@@ -81,7 +81,7 @@ function expectNoArgs(name, args) {
  * setAlias() takes) rather than an exported list, so this stays the caller's
  * answer and not a second roster to drift from the first.
  */
-function isReserved(name) {
+export function isReserved(name) {
   const key = String(name).toLowerCase();
   return CORE_CLI_COMMAND_NAMES.includes(key)
     || PIT_COMMANDS.some((c) => (typeof c === "string" ? c : c.name) === key);
