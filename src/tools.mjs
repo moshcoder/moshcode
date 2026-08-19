@@ -44,6 +44,32 @@ export const TOOLS = {
     // The CLI updates itself in place from the same origin the installer uses.
     upgrade: { cmd: "c0upons", args: ["upgrade"] },
   },
+  "cli-tools": {
+    desc: "Profullstack cli-tools — blog publishing, domain availability, and GitHub PR sweeps",
+    // The odd shape here: this is a *set* of commands, not one binary. The
+    // installer symlinks blog-post, domainfree, domainjson, gh-prs,
+    // gh-prs-merge, gh-prs-fix-all and tcfeed into ~/.local/bin, and `cli-tools`
+    // is the dispatcher that fronts them. Probing the dispatcher is what makes
+    // "installed" mean "the whole set is installed" rather than "one of seven
+    // names happens to exist".
+    bin: "cli-tools",
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh",
+      ],
+    },
+    // The installer symlinks into ~/.local/bin and appends nothing to PATH, so
+    // the shell that ran the install cannot see the commands — the same gap
+    // turso, gradient and kimi have.
+    binDirs: [path.join(homedir(), ".local", "bin")],
+    // Its own updater, which pulls and relinks. Deliberately not the installer:
+    // re-running that would re-clone for someone whose checkout lives
+    // elsewhere, and `cli-tools update` refuses to move a dirty or diverged
+    // tree rather than discarding work.
+    upgrade: { cmd: "cli-tools", args: ["update"] },
+  },
   secrets: {
     desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
     // The passthrough target is the `logicsrc` binary; the moshcode command is
