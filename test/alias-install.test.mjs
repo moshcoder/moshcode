@@ -9,7 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { mergeAliases } from "../src/aliases.mjs";
-import { TOOLS, readToolAliases, toolsWithAliases } from "../src/tools.mjs";
+import { TOOLS, adoptAliasLines, readToolAliases, toolsWithAliases } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -126,6 +126,61 @@ test("mergeAliases treats anything that isn't an object as no aliases at all", (
   });
 });
 
+/* -------------------------------------------------- at the end of install */
+
+test("adoptAliasLines says what an install added, and nothing when there is nothing", () => {
+  inFreshHome(() => {
+    const lines = adoptAliasLines("cli-tools", TOOLS["cli-tools"], {
+      read: () => ({ ok: true, aliases: { blog: "blog-post", free: "domainfree" } }),
+    });
+    assert.match(lines.join("\n"), /2 pit aliases/);
+    assert.match(lines.join("\n"), /\/blog → blog-post/);
+
+    // Second run: everything is already there, so an install prints nothing.
+    const again = adoptAliasLines("cli-tools", TOOLS["cli-tools"], {
+      read: () => ({ ok: true, aliases: { blog: "blog-post", free: "domainfree" } }),
+    });
+    assert.deepEqual(again, []);
+  });
+});
+
+test("adoptAliasLines stays silent for a tool that offers none, and never runs it", () => {
+  inFreshHome(() => {
+    let ran = false;
+    assert.deepEqual(adoptAliasLines("railway", TOOLS.railway, { read: () => { ran = true; return {}; } }), []);
+    assert.equal(ran, false);
+  });
+});
+
+test("a failing tool never turns a successful install into an error", () => {
+  inFreshHome(() => {
+    for (const answer of [{ ok: false, error: "not installed" }, { ok: true, aliases: {} }]) {
+      assert.deepEqual(adoptAliasLines("cli-tools", TOOLS["cli-tools"], { read: () => answer }), []);
+    }
+  });
+});
+
+test("adoptAliasLines reaches a real tool on PATH, and keeps your own line", () => {
+  inFreshHome((home) => {
+    const previousPath = process.env.PATH;
+    const binDir = join(home, "fakebin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "cli-tools");
+    writeFileSync(fake, '#!/bin/sh\necho \'{"blog":"blog-post","prs":"gh-prs"}\'\n');
+    chmodSync(fake, 0o755);
+    mkdirSync(join(home, ".moshcode"), { recursive: true });
+    writeFileSync(join(home, ".moshcode", "aliases.json"), '{"prs":"gh-prs-all"}\n');
+    process.env.PATH = `${binDir}:${previousPath}`;
+    try {
+      const lines = adoptAliasLines("cli-tools", TOOLS["cli-tools"]).join("\n");
+      assert.match(lines, /1 pit alias:/);
+      assert.match(lines, /\/blog → blog-post/);
+      assert.match(lines, /kept 1 you had already bound/);
+      assert.equal(aliasesOf(home).prs, "gh-prs-all");
+    } finally { process.env.PATH = previousPath; }
+  });
+});
+
 /* ------------------------------------------------------------ in the pit */
 
 /**
@@ -215,6 +270,16 @@ test("/alias install reports a tool that fails instead of writing anything", asy
 test("/alias install names an unknown tool rather than defining an alias for it", async () => {
   const result = await runTui("/alias install nosuchtool");
   assert.match(result.stdout, /no tool named/);
+});
+
+test("/tools install <name> routes to the installer, not to a tool called install", async () => {
+  // An unknown target, so nothing is ever downloaded: the assertion is only
+  // that the words reached installTarget, whose refusal names engines *and*
+  // tools — where resolveTool's would have been `unknown tool "install"`,
+  // pointing at the wrong word entirely.
+  const result = await runTui("/tools install nosuchtool");
+  assert.match(result.stdout, /unknown engine or tool/);
+  assert.doesNotMatch(result.stdout, /unknown tool "install"/);
 });
 
 test('"install" is a verb, so it never becomes an alias called install', async () => {

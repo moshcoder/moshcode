@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { mergeAliases } from "./aliases.mjs";
 import { isInstalled, openPassthrough } from "./engines.mjs";
 
 // gh, supabase, and doctl publish only GitHub release binaries — no official
@@ -70,7 +71,11 @@ export const TOOLS = {
     // elsewhere, and `cli-tools update` refuses to move a dirty or diverged
     // tree rather than discarding work.
     upgrade: { cmd: "cli-tools", args: ["update"] },
-    // The pit aliases this set offers, read by `/alias install cli-tools`.
+    // The pit aliases this set offers. Read at the end of /install and
+    // /upgrade, so installing the set is also configuring it — seven commands
+    // behind one dispatcher are not reachable from the pit until the words that
+    // reach them exist. `/alias install cli-tools` re-runs it on demand.
+    //
     // Declared rather than probed: a command that prints a set of aliases is
     // only safe to run against a tool we already know answers it, and an
     // `aliases --json` guessed at every installed CLI would eventually hit one
@@ -316,6 +321,31 @@ export function openTool(tool, args = [], opts = {}) {
 /** The command that prints a tool's proposed pit aliases, or null. */
 export function toolAliasSpec(tool) {
   return tool?.aliases || null;
+}
+
+/**
+ * Adopt a tool's aliases and describe the result in plain lines.
+ *
+ * The unpainted counterpart to the pit's renderer, for `moshcode install` —
+ * which is a plain-stdout surface, and may be a script's stdout. Returns [] for
+ * everything with nothing to say, so hanging this off an install costs a tool
+ * that offers no aliases exactly one function call and no output.
+ *
+ * Silent on failure by design: an installer that succeeded must not be followed
+ * by an error about a nicety, and `/alias install <tool>` says the same thing
+ * loudly for anyone who goes looking.
+ */
+export function adoptAliasLines(key, tool, { isReserved = () => false, read = readToolAliases } = {}) {
+  if (!toolAliasSpec(tool)) return [];
+  const answer = read(tool);
+  if (!answer.ok) return [];
+  const result = mergeAliases(answer.aliases, { isReserved });
+  if (!result.ok || !result.added.length) return [];
+  return [
+    `\n${key} also offers ${result.added.length} pit alias${result.added.length === 1 ? "" : "es"}:`,
+    ...result.added.map(({ name, value }) => `  /${name} → ${value}`),
+    ...(result.kept.length ? [`  (kept ${result.kept.length} you had already bound)`] : []),
+  ];
 }
 
 /** Every tool that offers pit aliases, as `[key, tool]`. */
