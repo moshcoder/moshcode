@@ -158,3 +158,68 @@ export function expandAlias(value, args = "") {
   const line = `${String(value).trim()}${args ? ` ${args}` : ""}`;
   return /^[/!]/.test(line) ? line : `!${line}`;
 }
+
+/**
+ * How many aliases one tool may offer in a single install.
+ *
+ * A bound, not a judgement about any tool: the proposal is a subprocess's
+ * stdout being written into the operator's config, and an unbounded loop over
+ * whatever it printed is how a bug in a tool becomes a thousand-line
+ * aliases.json. No CLI here offers more than a handful.
+ */
+export const MAX_PROPOSED = 64;
+
+/**
+ * Merge a tool's proposed aliases into the operator's file, in one write.
+ *
+ * Existing names always win. The file is the operator's: silently repointing a
+ * word they bound themselves is the kind of change nothing surfaces until the
+ * wrong command runs — and the pit's own aliases carry flags (`--orgs`,
+ * `--apply`) that a tool's generic suggestion does not know about.
+ *
+ * Names that collide with a pit command, engine, or tool are refused rather
+ * than written, for the reason setAlias refuses them: built-ins are resolved
+ * first, so such an alias would be silently dead.
+ *
+ * Returns { ok, error, added, kept, refused } — each a list of
+ * { name, value, previous? , reason? } so the caller can say what happened
+ * without re-deriving it.
+ */
+export function mergeAliases(proposed, { isReserved = () => false } = {}) {
+  const added = [];
+  const kept = [];
+  const refused = [];
+  if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) {
+    return { ok: false, error: "that isn't a set of aliases", added, kept, refused };
+  }
+
+  const existing = loadAliases();
+  const merged = { ...existing };
+  // Sorted so the report reads the same way twice regardless of the order the
+  // tool happened to print, and truncated rather than refused: a tool that
+  // offers too many still gets its first MAX_PROPOSED written, and the caller
+  // is told what was dropped.
+  const entries = Object.entries(proposed).sort(([a], [b]) => a.localeCompare(b));
+  const dropped = Math.max(0, entries.length - MAX_PROPOSED);
+
+  for (const [rawName, rawValue] of entries.slice(0, MAX_PROPOSED)) {
+    const name = normalizeName(rawName);
+    const value = typeof rawValue === "string" ? rawValue.trim() : "";
+    if (!name) { refused.push({ name: String(rawName), reason: "not a usable alias name" }); continue; }
+    if (!value) { refused.push({ name, reason: "nothing to run" }); continue; }
+    if (value.includes("\n")) { refused.push({ name, reason: "an alias is a single line" }); continue; }
+    if (value.length > MAX_VALUE) { refused.push({ name, reason: `${value.length} characters — the cap is ${MAX_VALUE}` }); continue; }
+    if (isReserved(name)) { refused.push({ name, reason: "already a pit command, engine, or tool" }); continue; }
+    if (Object.hasOwn(existing, name)) { kept.push({ name, value: existing[name], proposed: value }); continue; }
+    merged[name] = value;
+    added.push({ name, value });
+  }
+
+  // Nothing new is still a success — "already up to date" is the common case on
+  // a second run, and writing the file again to say so would only churn mtime.
+  if (added.length) {
+    try { saveAliases(merged); }
+    catch (e) { return { ok: false, error: `can't write ${aliasFile()}: ${e.message}`, added: [], kept, refused }; }
+  }
+  return { ok: true, added, kept, refused, dropped };
+}
