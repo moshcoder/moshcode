@@ -4,6 +4,7 @@
 // c0upons owns community coupons and bounties, the cloud CLIs below own
 // deploys/secrets/infra, Coral owns read-only data access across those systems,
 // and moshcode only conducts their native command lines.
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +70,12 @@ export const TOOLS = {
     // elsewhere, and `cli-tools update` refuses to move a dirty or diverged
     // tree rather than discarding work.
     upgrade: { cmd: "cli-tools", args: ["update"] },
+    // The pit aliases this set offers, read by `/alias install cli-tools`.
+    // Declared rather than probed: a command that prints a set of aliases is
+    // only safe to run against a tool we already know answers it, and an
+    // `aliases --json` guessed at every installed CLI would eventually hit one
+    // where those words mean something else entirely.
+    aliases: { cmd: "cli-tools", args: ["aliases", "--json"] },
   },
   secrets: {
     desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
@@ -304,6 +311,65 @@ export function toolUpgradeSpec(tool) {
 /** Invoke a tool without parsing or modifying its arguments or streams. */
 export function openTool(tool, args = [], opts = {}) {
   return openPassthrough(tool, args, opts);
+}
+
+/** The command that prints a tool's proposed pit aliases, or null. */
+export function toolAliasSpec(tool) {
+  return tool?.aliases || null;
+}
+
+/** Every tool that offers pit aliases, as `[key, tool]`. */
+export function toolsWithAliases() {
+  return Object.entries(TOOLS).filter(([, tool]) => toolAliasSpec(tool));
+}
+
+/**
+ * How long a tool gets to print its aliases before we stop waiting.
+ *
+ * This runs on an interactive verb, so the failure we care about is a CLI that
+ * blocks on something — a login prompt, a network read — rather than one that
+ * is merely slow. Printing a constant should take milliseconds.
+ */
+const ALIAS_TIMEOUT_MS = 10_000;
+
+/**
+ * Ask a tool for the pit aliases it proposes: `{ ok, aliases, error }`.
+ *
+ * Captured rather than passed through, because the output is data we are about
+ * to merge into the operator's config and not something to put on their
+ * screen. Every failure is a returned reason instead of a throw — a tool that
+ * is not installed, prints nothing, or prints something that is not JSON is an
+ * ordinary outcome of this verb, not an error the pit should fall over on.
+ *
+ * `run` is injectable so the tests do not need seven CLIs on PATH.
+ */
+export function readToolAliases(tool, { run = spawnSync } = {}) {
+  const spec = toolAliasSpec(tool);
+  if (!spec) return { ok: false, error: "offers no aliases" };
+  let result;
+  try {
+    result = run(spec.cmd, spec.args, {
+      encoding: "utf8",
+      timeout: ALIAS_TIMEOUT_MS,
+      // No inherited stdin: a tool that decides to ask a question here would
+      // otherwise hang the pit on a prompt nobody can see.
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  if (result.error) return { ok: false, error: result.error.message };
+  if (result.status !== 0) {
+    const said = String(result.stderr || "").trim().split("\n")[0];
+    return { ok: false, error: said || `${spec.cmd} exited ${result.status}` };
+  }
+  let parsed;
+  try { parsed = JSON.parse(String(result.stdout || "")); }
+  catch { return { ok: false, error: `${spec.cmd} didn't print JSON` }; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: `${spec.cmd} printed JSON, but not a set of aliases` };
+  }
+  return { ok: true, aliases: parsed };
 }
 
 // Generic utilities used by the app/package surface.

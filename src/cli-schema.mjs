@@ -1176,23 +1176,26 @@ export const PIT_COMMANDS = [
     description: "show the current dir + git repo/branch/origin" },
   { name: "shell", aliases: ["sh"], args: "[cmd]", pitOnly: true,
     description: "drop into $SHELL (exit → back to the pit); also !cmd" },
-  { name: "alias", aliases: ["aliases"], args: 'set <name> "<cmd>" | list | get | rm', pitOnly: true,
+  { name: "alias", aliases: ["aliases"], args: 'set <name> "<cmd>" | list | get | rm | install <tool>', pitOnly: true,
     description: "name a line you keep retyping; /<name> runs it",
     synopsis: [
       ['/alias set <name> "<command>"', "define one (also: /alias <name> \"<command>\")"],
       ["/alias [list] [--json]", "every alias"],
       ["/alias get <name>", "what one expands to"],
       ["/alias rm <name>", "forget one"],
+      ["/alias install <tool> | --all", "adopt the aliases a workflow tool offers"],
     ],
     examples: [
       ['/alias set gs "git status"', "then /gs — and /gs -sb appends"],
       // Deliberately not `cc`: that one is already how the pit spells claude,
       // so the example would print a refusal for anyone who typed it.
       ['/alias set cx "/agents codex"', "a pit command, not a shell one"],
+      ["/alias install cli-tools", "/blog, /free, /whois — from the tool itself"],
       ["/alias rm gs", ""],
     ],
     note: "the command runs in $SHELL unless it starts with / — then it is a pit command. "
-      + "Aliases live in ~/.moshcode/aliases.json and cannot shadow a pit command, engine, or tool.",
+      + "Aliases live in ~/.moshcode/aliases.json and cannot shadow a pit command, engine, or tool. "
+      + "/alias install never overwrites a name you bound yourself.",
   },
   { name: "help", aliases: ["?", "h"], args: "[command]", pitOnly: true,
     description: "this, or one command in detail" },

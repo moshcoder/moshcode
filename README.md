@@ -805,6 +805,21 @@ survive between sessions. A name that is already a pit command, an engine, or a
 tool is refused rather than shadowed — built-ins are dispatched first, so such
 an alias would never run.
 
+Some workflow tools ship a set of commands rather than one binary, and propose
+short words for them. `/alias install` adopts those:
+
+```text
+/alias install cli-tools          # /blog, /free, /whois — from the tool itself
+/alias install --all              # every tool that offers them
+```
+
+The tool proposes and the pit disposes: moshcode reads the suggestions and
+writes the file, so nothing else reaches into a config it does not own. A name
+you bound yourself always wins and is reported rather than replaced — your
+`/prs` may carry `--orgs` flags a generic suggestion knows nothing about.
+Deliberately its own verb rather than a step inside `/install`, which has no
+business rewriting your aliases as a side effect.
+
 ### Social posting from the pit
 
 The pit can hand a prepared post to Bluesky or Nostr without storing either

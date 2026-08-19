@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
-import { TOOLS, resolveTool, toolStatus, openTool } from "./tools.mjs";
+import { TOOLS, resolveTool, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { postSocial, socialRoster } from "./socials.mjs";
 import { runUpgrade } from "./upgrade.mjs";
@@ -31,7 +31,7 @@ import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion 
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
 import { openNewTab } from "./tabs.mjs";
-import { MAX_EXPANSIONS, expandAlias, getAlias, loadAliases, removeAlias, setAlias } from "./aliases.mjs";
+import { MAX_EXPANSIONS, expandAlias, getAlias, loadAliases, mergeAliases, removeAlias, setAlias } from "./aliases.mjs";
 import { herdCommand, herdStart, renderRoster, roster, splitDetachArgs } from "./herd-cli.mjs";
 import { detectSubstrate, substrateNote } from "./herd.mjs";
 
@@ -270,6 +270,92 @@ function printAliases({ json = false } = {}) {
 }
 
 /**
+ * `/alias install <tool>` — adopt the pit aliases a workflow tool offers.
+ *
+ * The tools in src/tools.mjs are separate products with their own release
+ * cycles, and several of them ship a set of commands rather than one binary.
+ * Which short words those deserve at this prompt is a question only the tool
+ * can answer, and only moshcode can act on: the file is ours, so a tool that
+ * wrote it directly would be reaching into a config it does not own — the same
+ * objection that keeps `railway setup agent` out of /install.
+ *
+ * So the tool proposes and the pit disposes. Deliberately its own verb rather
+ * than a step inside /install: writing the operator's aliases is a side effect
+ * an install command has no business having, and the roster is worth adopting
+ * long after the day a tool was installed.
+ */
+function aliasInstallCommand(args) {
+  const all = args.includes("--all");
+  const names = args.filter((a) => !a.startsWith("-"));
+  if (!all && !names.length) {
+    const offered = toolsWithAliases().map(([key]) => key);
+    console.log(err("usage: /alias install <tool> | --all"));
+    console.log(ash(offered.length
+      ? `   tools that offer aliases: ${offered.join(", ")}`
+      : "   no tool offers aliases yet"));
+    return;
+  }
+
+  const wanted = all
+    ? toolsWithAliases()
+    : names.map((name) => [name, resolveTool(name)?.[1] ?? null]);
+
+  // A run over --all reports per tool, because "3 added, 2 kept" for a roster
+  // is the useful shape; a single named tool reports per alias, because those
+  // are the words you are about to type.
+  let touched = 0;
+  for (const [key, tool] of wanted) {
+    const label = acid(`/${key}`);
+    if (!tool) { console.log(err(`no tool named "${key}" — /tools for the roster`)); continue; }
+    if (!tool.aliases) {
+      // Unreachable under --all, whose roster is exactly the tools that offer
+      // aliases, so this can only be one the operator named by hand.
+      console.log(info(`${label} offers no aliases`));
+      continue;
+    }
+    const read = readToolAliases(tool);
+    if (!read.ok) {
+      console.log(err(`${label} — ${read.error}`));
+      if (!isInstalledTool(key)) console.log(ash(`   not installed here — /install ${key}`));
+      continue;
+    }
+    const result = mergeAliases(read.aliases, { isReserved: isReservedName });
+    if (!result.ok) { console.log(err(`${label} — ${result.error}`)); continue; }
+    touched += result.added.length;
+
+    if (all) {
+      const parts = [`${result.added.length} added`];
+      if (result.kept.length) parts.push(`${result.kept.length} kept`);
+      if (result.refused.length) parts.push(`${result.refused.length} refused`);
+      console.log(`  ${label.padEnd(20)} ${ash(parts.join(", "))}`);
+      continue;
+    }
+    for (const { name, value } of result.added) {
+      console.log(`  ${ok(`${acid(`/${name}`)} ${ash("→")} ${bone(value)}`)}`);
+    }
+    // Named rather than counted: an alias the operator already owns is the one
+    // case where nothing changed *and* they need to know which word it was,
+    // because theirs and the tool's suggestion are both plausible.
+    for (const { name, value } of result.kept) {
+      console.log(`  ${info(`kept your own ${acid(`/${name}`)} ${ash(`(${value})`)}`)}`);
+    }
+    for (const { name, reason } of result.refused) {
+      console.log(`  ${warn(`skipped ${acid(`/${name}`)} ${ash(`— ${reason}`)}`)}`);
+    }
+    if (result.dropped) console.log(ash(`   ${result.dropped} more offered than /alias install writes at once`));
+    if (!result.added.length && !result.kept.length && !result.refused.length) {
+      console.log(info(`${label} offers no aliases`));
+    }
+  }
+  if (touched) console.log(ash("   run one with /<name> · /alias list for all of them"));
+}
+
+/** Is this tool's native executable present? Used only to explain a failure. */
+function isInstalledTool(key) {
+  return Boolean(toolStatus().find((entry) => entry.key === key)?.installed);
+}
+
+/**
  * `/alias` — define, list, and forget the shortcuts (src/aliases.mjs).
  *
  * `line` comes in alongside the tokenized `rest` because the value is a command
@@ -287,6 +373,13 @@ function aliasCommand(rest, line) {
 
   if (!verb || sub === "list" || sub === "ls") {
     printAliases({ json });
+    return;
+  }
+  // Before `set`, because `install` is a verb and not a name: falling through
+  // to the bare-`/alias <name> <value>` shorthand would define an alias called
+  // "install" pointing at whatever came next.
+  if (sub === "install" || sub === "adopt") {
+    aliasInstallCommand(args);
     return;
   }
   if (sub === "set" || sub === "add") {
@@ -322,7 +415,7 @@ function aliasCommand(rest, line) {
   // when there is a value after it, or `/alias gs` would silently define
   // nothing.
   if (args.length) { aliasCommand(["set", ...rest], `/alias set ${commandRemainder(line)}`); return; }
-  console.log(err(`unknown /alias verb "${verb}" — set, list, get, rm`));
+  console.log(err(`unknown /alias verb "${verb}" — set, list, get, rm, install`));
 }
 
 /**
