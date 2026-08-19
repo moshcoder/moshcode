@@ -260,6 +260,25 @@ test("Coral installs from its official script and re-runs it to upgrade", () => 
   assert.match(toolList(), /coral/);
 });
 
+test("cli-tools probes its dispatcher and updates through it", () => {
+  assert.deepEqual(resolveTool("CLI-TOOLS"), ["cli-tools", TOOLS["cli-tools"]]);
+
+  // This tool is a set of commands, not one binary. Probing the dispatcher is
+  // what makes "installed" mean the whole set rather than one of eight names
+  // happening to exist — several of which (gh-prs, tcfeed) a contributor may
+  // already have from an older checkout.
+  assert.equal(TOOLS["cli-tools"].bin, "cli-tools");
+
+  // The installer symlinks into ~/.local/bin and appends nothing to PATH, so
+  // without binDirs the shell that ran the install reports it missing.
+  assert.ok(TOOLS["cli-tools"].binDirs.some((dir) => dir.endsWith(path.join(".local", "bin"))));
+
+  // Its own updater, not the installer: re-running that would re-clone for
+  // someone whose checkout lives elsewhere.
+  assert.deepEqual(toolUpgradeSpec(TOOLS["cli-tools"]), { cmd: "cli-tools", args: ["update"] });
+  assert.match(toolList(), /cli-tools/);
+});
+
 test("Spinifex installs the spx host platform and re-runs the script to upgrade", () => {
   assert.deepEqual(resolveTool("SPINIFEX"), ["spinifex", TOOLS.spinifex]);
   // The product is Spinifex; the binary is spx. Getting this backwards makes
@@ -377,6 +396,11 @@ for (const [name, shell, script] of [
   ["c0upons", "sh", "curl -fsSL https://c0upons.com/install.sh | sh"],
   ["coral", "bash", "curl -fsSL https://withcoral.com/install.sh | bash"],
   ["spinifex", "bash", "curl -fsSL https://install.mulgadc.com | INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash"],
+  [
+    "cli-tools",
+    "sh",
+    "curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh",
+  ],
 ]) {
   test(`install ${name} delegates to its official install script`, async () => {
     const root = tempDir("moshcode-install-");
