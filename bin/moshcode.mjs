@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { runScript } from "../src/runtime.mjs";
-import { moshVocabulary } from "../src/commands.mjs";
+import { isReserved, moshVocabulary } from "../src/commands.mjs";
 import {
   agentLaunchArgs,
   engineList,
@@ -14,7 +14,7 @@ import {
   resolveExecutable,
   runCmd,
 } from "../src/engines.mjs";
-import { TOOLS, toolList, toolStatus, resolveTool, openTool } from "../src/tools.mjs";
+import { TOOLS, toolList, toolStatus, resolveTool, openTool, adoptAliasLines } from "../src/tools.mjs";
 import { tradeArgs, tradeUsage } from "../src/trade.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
 import { selfUpdateCommand } from "../src/selfupdate.mjs";
@@ -456,7 +456,14 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    if (result.code === 0) console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
+    if (result.code === 0) {
+      console.log(`\n✓ ${target} installed. run it with \`${bin}\`. 🤘`);
+      // Installing is also configuring: a tool that ships a set of commands is
+      // not usable from the pit until the words that reach them exist. Quiet
+      // for everything that offers none, and a name already in the file is
+      // reported by the adopter rather than replaced.
+      for (const line of adoptAliasLines(target, entry, { isReserved })) console.log(line);
+    }
     return backToPit(`install ${target}`, result.code);
   }
   if (cmd === "uninstall" || cmd === "remove") {

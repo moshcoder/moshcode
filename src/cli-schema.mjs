@@ -214,8 +214,11 @@ export const CORE_CLI_COMMANDS = [
     examples: [
       ["moshcode install claude", "an engine"],
       ["moshcode install gh", "a workflow tool"],
+      ["moshcode install cli-tools", "a set of commands — its pit aliases come too"],
     ],
     seeAlso: ["uninstall", "upgrade", "engines", "tools"],
+    note: "a tool that ships a set of commands can propose pit aliases for them; "
+      + "installing it adopts the ones you have not already bound yourself.",
   },
   {
     name: "uninstall",
@@ -1183,7 +1186,7 @@ export const PIT_COMMANDS = [
       ["/alias [list] [--json]", "every alias"],
       ["/alias get <name>", "what one expands to"],
       ["/alias rm <name>", "forget one"],
-      ["/alias install <tool> | --all", "adopt the aliases a workflow tool offers"],
+      ["/alias install <tool> | --all", "re-adopt a tool's aliases (/install does it too)"],
     ],
     examples: [
       ['/alias set gs "git status"', "then /gs — and /gs -sb appends"],

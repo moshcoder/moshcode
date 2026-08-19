@@ -47,6 +47,12 @@ function run(args, { binDir, cwd, input = "", env = {} } = {}) {
       stdio: [stdin, stdout, stderr],
       env: {
         ...process.env,
+        // After the spread, or the real one wins. A throwaway home, because a
+        // successful install is allowed to write one: a tool that offers pit
+        // aliases has them adopted into ~/.moshcode/aliases.json at the end of
+        // it. Without this the suite edits the aliases of whoever runs it.
+        HOME: tempDir("moshcode-home-"),
+        USERPROFILE: undefined,
         ...env,
         PATH: binDir
           ? `${binDir}${path.delimiter}${env.PATH ?? process.env.PATH ?? ""}`
@@ -407,9 +413,16 @@ for (const [name, shell, script] of [
     const nativeBin = path.join(root, "bin");
     const capture = path.join(root, "shell-args.json");
     mkdirSync(nativeBin);
+    // First invocation only. The spy stands in for the shell itself, so
+    // anything else the run reaches for a shell would overwrite it — a tool
+    // that offers pit aliases is asked for them once the install succeeds, and
+    // its own shebang lands right back here. The install is what this asserts,
+    // and the install is what runs first.
     writeExecutable(nativeBin, shell, `
 import fs from "node:fs";
-fs.writeFileSync(process.env.SHELL_CAPTURE, JSON.stringify(process.argv.slice(2)));
+if (!fs.existsSync(process.env.SHELL_CAPTURE)) {
+  fs.writeFileSync(process.env.SHELL_CAPTURE, JSON.stringify(process.argv.slice(2)));
+}
 `);
 
     const result = await run(["install", name], {

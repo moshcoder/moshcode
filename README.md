@@ -805,20 +805,28 @@ survive between sessions. A name that is already a pit command, an engine, or a
 tool is refused rather than shadowed — built-ins are dispatched first, so such
 an alias would never run.
 
-Some workflow tools ship a set of commands rather than one binary, and propose
-short words for them. `/alias install` adopts those:
+Some workflow tools ship a *set* of commands rather than one binary, and propose
+short words for them. Installing such a tool configures those words too — a
+dispatcher fronting seven commands is not reachable from the pit until the names
+that reach them exist:
 
 ```text
-/alias install cli-tools          # /blog, /free, /whois — from the tool itself
-/alias install --all              # every tool that offers them
+/install cli-tools                # or /tools install cli-tools
+✓ cli-tools installed. 🤘
+  ✓ /blog → blog-post
+  ✓ /free → domainfree
 ```
+
+`/upgrade` does the same, because an upgrade is where a tool *gains* commands —
+a roster adopted once at install time otherwise goes stale the first time the
+tool ships something new. `/alias install <tool>` (or `--all`) re-runs it on
+demand, for tools you installed before this existed.
 
 The tool proposes and the pit disposes: moshcode reads the suggestions and
 writes the file, so nothing else reaches into a config it does not own. A name
-you bound yourself always wins and is reported rather than replaced — your
-`/prs` may carry `--orgs` flags a generic suggestion knows nothing about.
-Deliberately its own verb rather than a step inside `/install`, which has no
-business rewriting your aliases as a side effect.
+you bound yourself always wins — your `/prs` may carry `--orgs` flags a generic
+suggestion knows nothing about — and a tool that offers nothing, or cannot be
+asked, is silent rather than turning a successful install into an error.
 
 ### Social posting from the pit
 

@@ -305,49 +305,72 @@ function aliasInstallCommand(args) {
   // are the words you are about to type.
   let touched = 0;
   for (const [key, tool] of wanted) {
-    const label = acid(`/${key}`);
     if (!tool) { console.log(err(`no tool named "${key}" — /tools for the roster`)); continue; }
-    if (!tool.aliases) {
-      // Unreachable under --all, whose roster is exactly the tools that offer
-      // aliases, so this can only be one the operator named by hand.
-      console.log(info(`${label} offers no aliases`));
-      continue;
-    }
-    const read = readToolAliases(tool);
-    if (!read.ok) {
-      console.log(err(`${label} — ${read.error}`));
-      if (!isInstalledTool(key)) console.log(ash(`   not installed here — /install ${key}`));
-      continue;
-    }
-    const result = mergeAliases(read.aliases, { isReserved: isReservedName });
-    if (!result.ok) { console.log(err(`${label} — ${result.error}`)); continue; }
-    touched += result.added.length;
+    touched += adoptToolAliases(key, tool, { compact: all, quiet: false });
+  }
+  if (touched) console.log(ash("   run one with /<name> · /alias list for all of them"));
+}
 
-    if (all) {
-      const parts = [`${result.added.length} added`];
-      if (result.kept.length) parts.push(`${result.kept.length} kept`);
-      if (result.refused.length) parts.push(`${result.refused.length} refused`);
-      console.log(`  ${label.padEnd(20)} ${ash(parts.join(", "))}`);
-      continue;
-    }
-    for (const { name, value } of result.added) {
-      console.log(`  ${ok(`${acid(`/${name}`)} ${ash("→")} ${bone(value)}`)}`);
-    }
-    // Named rather than counted: an alias the operator already owns is the one
-    // case where nothing changed *and* they need to know which word it was,
-    // because theirs and the tool's suggestion are both plausible.
+/**
+ * Read one tool's proposed aliases, merge them, and say what happened.
+ *
+ * The one place that does this, because three surfaces need it: `/install` and
+ * `/tools install` at the end of an install, `/upgrade` after a tool has gained
+ * commands, and `/alias install` on its own. Returns how many names were added
+ * so a caller can decide whether the run is worth a closing line.
+ *
+ * `quiet` is what makes it safe to hang off an install: a tool that offers
+ * nothing, or that cannot be asked, must not print a failure after a install
+ * that actually succeeded. Only real adoptions and genuine surprises speak up.
+ */
+function adoptToolAliases(key, tool, { compact = false, quiet = false } = {}) {
+  const label = acid(`/${key}`);
+  if (!tool?.aliases) {
+    if (!quiet) console.log(info(`${label} offers no aliases`));
+    return 0;
+  }
+  const read = readToolAliases(tool);
+  if (!read.ok) {
+    if (quiet) return 0;
+    console.log(err(`${label} — ${read.error}`));
+    if (!isInstalledTool(key)) console.log(ash(`   not installed here — /install ${key}`));
+    return 0;
+  }
+  const result = mergeAliases(read.aliases, { isReserved: isReservedName });
+  if (!result.ok) {
+    if (!quiet) console.log(err(`${label} — ${result.error}`));
+    return 0;
+  }
+
+  if (compact) {
+    const parts = [`${result.added.length} added`];
+    if (result.kept.length) parts.push(`${result.kept.length} kept`);
+    if (result.refused.length) parts.push(`${result.refused.length} refused`);
+    console.log(`  ${label.padEnd(20)} ${ash(parts.join(", "))}`);
+    return result.added.length;
+  }
+
+  for (const { name, value } of result.added) {
+    console.log(`  ${ok(`${acid(`/${name}`)} ${ash("→")} ${bone(value)}`)}`);
+  }
+  // Named rather than counted: an alias the operator already owns is the one
+  // case where nothing changed *and* they need to know which word it was,
+  // because theirs and the tool's suggestion are both plausible. Suppressed
+  // after an install, where a list of names that did not change is noise
+  // between the installer's output and the prompt.
+  if (!quiet) {
     for (const { name, value } of result.kept) {
       console.log(`  ${info(`kept your own ${acid(`/${name}`)} ${ash(`(${value})`)}`)}`);
     }
-    for (const { name, reason } of result.refused) {
-      console.log(`  ${warn(`skipped ${acid(`/${name}`)} ${ash(`— ${reason}`)}`)}`);
-    }
-    if (result.dropped) console.log(ash(`   ${result.dropped} more offered than /alias install writes at once`));
-    if (!result.added.length && !result.kept.length && !result.refused.length) {
-      console.log(info(`${label} offers no aliases`));
-    }
   }
-  if (touched) console.log(ash("   run one with /<name> · /alias list for all of them"));
+  for (const { name, reason } of result.refused) {
+    console.log(`  ${warn(`skipped ${acid(`/${name}`)} ${ash(`— ${reason}`)}`)}`);
+  }
+  if (result.dropped) console.log(ash(`   ${result.dropped} more offered than one run writes`));
+  if (!quiet && !result.added.length && !result.kept.length && !result.refused.length) {
+    console.log(info(`${label} offers no aliases`));
+  }
+  return result.added.length;
 }
 
 /** Is this tool's native executable present? Used only to explain a failure. */
@@ -539,6 +562,16 @@ function printPwd() {
 async function upgradeAll(targets) {
   console.log(info(`upgrading ${bone("moshcode")} + installed engines/tools — hand-off to each updater…`));
   await runUpgrade(targets, { log: (s) => console.log(s), rule: () => console.log(hr()) });
+  // An upgrade is where a tool *gains* commands, so it is the moment its new
+  // shortcuts should appear — a roster adopted once at install time otherwise
+  // goes stale the first time the tool ships something new. Quiet and
+  // never-overwrite, exactly as at install.
+  const wanted = targets?.length
+    ? toolsWithAliases().filter(([key]) => targets.includes(key))
+    : toolsWithAliases();
+  let added = 0;
+  for (const [key, tool] of wanted) added += adoptToolAliases(key, tool, { quiet: true });
+  if (added) console.log(ash(`   ${added} new alias${added === 1 ? "" : "es"} · /alias list for all of them`));
 }
 
 // The live mirror for this pit, once /sessions is watching. Module-level so the
@@ -692,7 +725,18 @@ function installTarget(key) {
       if (e.code === "ENOENT" && target.installHelp) console.log(info(target.installHelp));
       resolve();
     });
-    child.on("exit", (code) => { console.log(hr()); console.log(code === 0 ? ok(`${key} installed. 🤘`) : err(`install exited ${code}`)); resolve(); });
+    child.on("exit", (code) => {
+      console.log(hr());
+      if (code !== 0) { console.log(err(`install exited ${code}`)); return resolve(); }
+      console.log(ok(`${key} installed. 🤘`));
+      // Installing a tool is also configuring it: a set of commands is not
+      // usable from the pit until the words that reach them exist. Quiet, so a
+      // tool with nothing to offer — every engine, and most tools — finishes
+      // exactly as it did before. Names you bound yourself are never touched.
+      const added = Object.hasOwn(TOOLS, key) ? adoptToolAliases(key, TOOLS[key], { quiet: true }) : 0;
+      if (added) console.log(ash(`   ${added} alias${added === 1 ? "" : "es"} from ${key} · /alias list for all of them`));
+      resolve();
+    });
   });
 }
 
@@ -985,6 +1029,18 @@ export async function tui() {
     }
     if (cmd === "tools") {
       if (!rest[0]) { printTools(); continue; }
+      // `/tools install <name>` reads as the obvious spelling to anyone who has
+      // just been shown the roster by `/tools`, and resolveTool would otherwise
+      // answer it with `unknown tool "install"` — a dead end pointing at the
+      // wrong word. Same for the verbs that pair with it.
+      if (["install", "upgrade", "update"].includes(rest[0].toLowerCase()) && rest[1]) {
+        const verb = rest[0].toLowerCase();
+        rl.close();
+        if (verb === "install") await installTarget(rest[1].toLowerCase());
+        else await upgradeAll(rest.slice(1).map((r) => r.toLowerCase()));
+        rl = mkrl();
+        continue;
+      }
       const resolved = resolveTool(rest[0]);
       if (!resolved) { console.log(err(`unknown tool "${rest[0]}". try: ${Object.keys(TOOLS).join(", ")}`)); continue; }
       const [key, tool] = resolved;
