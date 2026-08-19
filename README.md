@@ -665,6 +665,32 @@ engines, `mcpjam` tells you whether that server is healthy first — health
 checks, OAuth conformance, tool-surface diffing, and structured triage from the
 terminal or CI. Re-running `moshcode install mcpjam` is also its upgrade path.
 
+### Alchemy — onchain data, wallets, and x402
+
+```sh
+moshcode install alchemy          # npm i -g @alchemy/cli
+
+moshcode alchemy auth             # browser login, then pick an app
+moshcode alchemy evm balance --address 0x…
+moshcode alchemy --json --no-interactive wallet send …
+```
+
+[Alchemy](https://www.alchemy.com/)'s CLI covers four things from one binary:
+querying onchain data across EVM and Solana (balances, NFTs, transfers, prices,
+blocks, logs, traces, simulations, raw RPC), managing Alchemy apps, networks,
+allowlists and webhooks, driving an agent-ready wallet (sends, swaps, contract
+calls, approvals, cross-chain bridges), and paying third-party x402 APIs in
+USDC under a spend cap.
+
+`alchemy auth` opens a browser to link your account and saves the selected app's
+API key; API keys and x402 wallet auth work too, depending on the command. Pass
+`--json --no-interactive` when a script or agent is driving, which is also what
+makes it read like the rest of the roster in a pipeline. It needs Node 22 or
+newer, and re-running `moshcode install alchemy` is its upgrade path.
+
+Where CoinPay is the payments product MoshCode ships alongside, Alchemy is the
+read side of the same world — the chain itself rather than one wallet's ledger.
+
 `gh`, `supabase`, and `doctl` publish no cross-platform install script, so
 MoshCode resolves the latest GitHub release and drops the binary in
 `$MOSHCODE_BIN` (default `~/.local/bin`) — no sudo, no package manager. Set
@@ -1357,6 +1383,7 @@ chmod +x deploy.mosh
 | `alpaca(args…)` | drive the native Alpaca trading CLI |
 | `mcpjam(args…)` | drive the MCPJam CLI (test, debug, and validate MCP servers) |
 | `spinifex(args…)` | drive the Spinifex CLI (`spx` — AWS-compatible cloud on your own hardware) |
+| `alchemy(args…)` | drive the Alchemy CLI (onchain data, apps, wallets, x402) |
 | `trade(args…)` | look up tickers, inspect markets, preview/place Alpaca orders |
 | `stocks(args…)` | research tickers via advis0r (`stocksRead` returns the data) |
 | `crypto(args…)` | research crypto pairs via advis0r (`cryptoRead` returns the data) |

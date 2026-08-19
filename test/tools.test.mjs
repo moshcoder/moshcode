@@ -206,6 +206,45 @@ fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)))
   ]);
 });
 
+test("Alchemy is a workflow tool installed from its official npm package", () => {
+  assert.deepEqual(resolveTool("ALCHEMY"), ["alchemy", TOOLS.alchemy]);
+  // The package's bin is named `alchemy`, so the pit word and the binary it
+  // launches are the same — no product/binary split like secrets → logicsrc.
+  assert.equal(TOOLS.alchemy.bin, "alchemy");
+  assert.deepEqual(TOOLS.alchemy.install, {
+    cmd: "npm",
+    args: ["install", "-g", "@alchemy/cli"],
+  });
+  // `npm install -g` is idempotent, so the install IS the upgrade. Asserted so
+  // adding a self-updater later is a deliberate change.
+  assert.equal(TOOLS.alchemy.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.alchemy), TOOLS.alchemy.install);
+  // Global npm installs land on PATH, so there is nothing for binDirs to cover.
+  assert.equal(TOOLS.alchemy.binDirs, undefined);
+  assert.match(toolList(), /alchemy/);
+});
+
+test("install alchemy delegates to the official npm package", async () => {
+  const root = tempDir("moshcode-install-alchemy-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "npm-args.json");
+  mkdirSync(nativeBin);
+  writeExecutable(nativeBin, "npm", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "alchemy"], {
+    binDir: nativeBin,
+    env: { NPM_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "install", "-g", "@alchemy/cli",
+  ]);
+});
+
 test("doppler installs user-local and updates natively", () => {
   // --install-path keeps the binary out of /usr/local/bin, so no sudo prompt.
   const [flag, script] = TOOLS.doppler.install.args;

@@ -681,6 +681,7 @@ const COMMANDS = [
   cliVerb("alpaca", "drive the native Alpaca trading CLI"),
   cliVerb("mcpjam", "drive the MCPJam CLI (test, debug, and validate MCP servers)"),
   cliVerb("spinifex", "drive the Spinifex CLI (spx — AWS-compatible cloud on your own hardware)"),
+  cliVerb("alchemy", "drive the Alchemy CLI (onchain data, apps, wallets, x402)"),
   cliVerb("trade", "look up tickers, inspect markets, and preview/place Alpaca orders"),
   cliVerb("pwd", "print the current repo/location"),
 

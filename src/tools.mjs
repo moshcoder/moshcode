@@ -281,6 +281,22 @@ export const TOOLS = {
     // migrations, and restarts the services. toolUpgradeSpec falls back to
     // install, so there is deliberately no upgrade key.
   },
+  alchemy: {
+    desc: "Alchemy — onchain data, apps and webhooks, agent wallets, and x402 payments (EVM + Solana)",
+    bin: "alchemy",
+    // An ordinary global npm package, and `npm install -g` is idempotent, so
+    // re-running the install IS the upgrade — same shape as mcpjam, hence no
+    // upgrade key. Its postinstall only prints a banner on a global install:
+    // the skill-sync branch above it needs a skills-lock.json that the
+    // published tarball does not ship, so nothing reaches out or is written.
+    //
+    // No installHelp: that line is for a MISSING installer (alpaca's go,
+    // gradient's python3), and npm is already here — moshcode runs on it. The
+    // package does declare node >=22, which npm warns about rather than
+    // refuses; the CLI then says so itself on first run, which is a better
+    // place to hear it than an install that succeeded.
+    install: { cmd: "npm", args: ["install", "-g", "@alchemy/cli"] },
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */
