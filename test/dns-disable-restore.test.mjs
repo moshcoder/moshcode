@@ -298,6 +298,10 @@ let lastVerifyArgs = null;
 
 function noSystem() {
   return {
+    // The enable/disable tree reads host drop-ins only on linux +
+    // systemd-resolved; pinning the platform makes those paths deterministic
+    // on a Mac or Windows checkout instead of silently skipped.
+    platform: () => "linux",
     tlds: async () => ["eggs", "hacker"],
     safety: async () => ({ safe: true, upstreams: ["1.1.1.1"], why: "" }),
     preflight: async () => ({ ok: true, blockers: [], conflicts: [], duplicates: [], holder: null }),

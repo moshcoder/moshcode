@@ -449,6 +449,10 @@ test("--dry-run still reports a preflight that would refuse", async () => {
 /** Every system call `enable` makes, stubbed to a machine where nothing is wrong. */
 function noSystem() {
   return {
+    // The enable tree consults host drop-ins only on linux +
+    // systemd-resolved; pinning the platform keeps those paths testable from
+    // any OS the suite runs on.
+    platform: () => "linux",
     tlds: async () => ["eggs", "hacker"],
     safety: async () => ({ safe: true, upstreams: ["1.1.1.1"], why: "no bridge is running yet — this one will be ours" }),
     preflight: async () => ({ ok: true, blockers: [], conflicts: [], holder: null }),
