@@ -1,25 +1,39 @@
-# This repo is one repo, not one dependency tree.
+# The monorepo's workspace roots.
 #
-# Both apps under apps/ install themselves. That is not an oversight and it is
-# not a migration left half-done — it is the only arrangement that currently
-# works, for two separate reasons:
-#
-#   apps/pwa has never been a workspace member. A root install skips its
-#   dependencies by design, and enrolling it here would change how the pit
-#   resolves its own tree as a side effect of a repo reorganisation.
-#
-#   apps/qryptchat-web CANNOT be enrolled today. It depends on
-#   `github:profullstack/autoblog#75e54af`, and that commit no longer exists on
-#   the remote — `git fetch` cannot find it, and pnpm cannot resolve it from
-#   scratch. The app installs only because its own pnpm-lock.yaml still carries
-#   a working resolution. Folding it into a root workspace discards that
-#   lockfile and the install fails outright. Repointing that dependency at a
-#   ref that exists is the prerequisite, and it is its own change.
-#
-# So each app keeps its own pnpm-lock.yaml and its own pnpm-workspace.yaml
-# (the latter carries qryptchat's security `overrides`, which pnpm only reads
-# from the root of the workspace it is installing).
-#
-# What lives here is only what the root package itself consumes.
+# `apps/pwa` is deliberately ABSENT. It has never been a workspace member — a
+# root install skips its dependencies on purpose — and enrolling it would change
+# how the pit resolves its own tree as a side effect of a repo reorganisation.
+# That is a separate decision, made separately.
 packages:
+  - apps/qryptchat-web
   - packages/*
+
+# ---------------------------------------------------------------------------
+# Carried up from apps/qryptchat-web/pnpm-workspace.yaml when that app joined
+# the workspace.
+#
+# pnpm reads `overrides` and `onlyBuiltDependencies` from the WORKSPACE ROOT and
+# nowhere else. Left in the nested file they are silently ignored — the install
+# succeeds, the lockfile stops recording them, and the security pins below
+# quietly stop applying. That failure has no error message, which is exactly why
+# they live here rather than beside the app they came from.
+#
+# pnpm v10 moved these out of package.json's "pnpm" block. Source of truth:
+# https://pnpm.io/settings#overrides
+# ---------------------------------------------------------------------------
+overrides:
+  glob: ">=10.5.0"
+  jws: ">=3.2.3"
+  js-yaml: ">=4.1.1"
+  cookie: "1.1.1"
+  diff: "8.0.4"
+  serialize-javascript: "7.0.5"
+
+# pnpm v10 sandboxes install scripts by default. Anything not listed here gets
+# its postinstall skipped — and in CI (or any non-interactive context) that
+# becomes ERR_PNPM_IGNORED_BUILDS instead of a warning. These need their
+# native-build / setup hooks to run.
+onlyBuiltDependencies:
+  - esbuild
+  - msw
+  - sharp
