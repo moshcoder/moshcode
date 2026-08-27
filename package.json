@@ -18,7 +18,7 @@
   "scripts": {
     "start": "node bin/moshcode.mjs",
     "demo": "node bin/moshcode.mjs run examples/alive.mosh",
-    "test": "node --test"
+    "test": "node --test \"test/**/*.test.mjs\" \"tests/**/*.test.mjs\" \"apps/pwa/test/**/*.test.mjs\""
   },
   "files": [
     "bin",
