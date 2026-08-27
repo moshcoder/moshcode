@@ -33,6 +33,7 @@ import { consoleCommand } from "../src/console.mjs";
 import { herdCommand, herdStart, splitDetachArgs } from "../src/herd-cli.mjs";
 import { detectSubstrate, substrateNote } from "../src/herd.mjs";
 import { dnsCommand } from "../src/dns.mjs";
+import { nameCommand } from "../src/name-link.mjs";
 import { templateCommand } from "../src/templates.mjs";
 import { serveCommand } from "../src/serve.mjs";
 import { createDohServer, nginxDohSite, parseDohPort, parseGuardArgs, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
@@ -543,6 +544,10 @@ async function main() {
   }
   if (cmd === "dns") {
     process.exitCode = (await dnsCommand(rest)) || 0;
+    return;
+  }
+  if (cmd === "name") {
+    process.exitCode = (await nameCommand(rest)) || 0;
     return;
   }
   if (cmd === "doh") {
