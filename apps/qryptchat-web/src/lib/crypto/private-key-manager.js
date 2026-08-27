@@ -1,0 +1,716 @@
+/**
+ * @fileoverview Post-Quantum Private Key Import/Export Manager for QryptChat
+ * Handles secure import and export of user post-quantum private keys with password protection
+ * Uses ML-KEM-1024 for quantum-resistant key management
+ */
+
+import { Base64, HKDF, ChaCha20Poly1305, SecureRandom, CryptoUtils } from './index.js';
+import { postQuantumEncryption } from './post-quantum-encryption.js';
+
+/**
+ * Export format version for compatibility
+ */
+const EXPORT_VERSION = '3.0'; // Post-quantum: ChaCha20-Poly1305 + HKDF
+
+/**
+ * PBKDF2-HMAC-SHA256 work factor for newly written exports. OWASP's guidance is
+ * 600,000 iterations; the previous 100,000 left a password-protected key export
+ * cheap enough to attack offline on a GPU.
+ */
+const PBKDF2_ITERATIONS = 600000;
+
+/**
+ * Exports written before the uplift carry no `kdfIterations` field. They must keep
+ * deriving at the count they were written with, or they stop importing entirely.
+ */
+const LEGACY_PBKDF2_ITERATIONS = 100000;
+
+/**
+ * Private key import/export manager
+ */
+export class PrivateKeyManager {
+	/**
+	 * Export user post-quantum private keys as encrypted JSON
+	 * @param {string} password - Password to encrypt the keys
+	 * @returns {Promise<string>} Encrypted JSON string containing the keys
+	 * @throws {Error} If no user keys exist or password is invalid
+	 */
+	async exportPrivateKeys(password) {
+		if (!password || password.trim().length === 0) {
+			throw new Error('Password is required for key export');
+		}
+
+		if (typeof window === 'undefined') {
+			throw new Error('Key export is only available in browser environment');
+		}
+
+		try {
+			// Initialize post-quantum encryption service
+			await postQuantumEncryption.initialize();
+
+			// Get user post-quantum keys (both ML-KEM-1024 and ML-KEM-768)
+			const allKeys = await postQuantumEncryption.exportUserKeys();
+			if (!allKeys) {
+				throw new Error('No post-quantum keys found to export');
+			}
+
+			// Prepare both key sets for encryption
+			const keysToExport = {
+				keys1024: allKeys.keys1024,
+				keys768: allKeys.keys768,
+				timestamp: Date.now(),
+				version: EXPORT_VERSION
+			};
+
+			// Convert to JSON bytes
+			const keysJson = JSON.stringify(keysToExport);
+			const keysBytes = new TextEncoder().encode(keysJson);
+
+			// Generate salt for HKDF key derivation
+			const pbkdfSalt = SecureRandom.generateSalt();
+			const hkdfSalt = SecureRandom.generateSalt();
+			
+			// Derive key material from password using PBKDF2
+			const passwordKey = await this._deriveKeyFromPassword(password, pbkdfSalt);
+			
+			// Derive ChaCha20 key using HKDF (post-quantum key derivation)
+			const chachaKey = await HKDF.derive(passwordKey, hkdfSalt, 'QryptChat-KeyBackup-ChaCha20', 32);
+			
+			// Generate nonce for ChaCha20-Poly1305
+			const nonce = SecureRandom.getRandomBytes(12);
+			
+			// Encrypt with ChaCha20-Poly1305
+			const ciphertext = await ChaCha20Poly1305.encrypt(chachaKey, nonce, keysBytes);
+
+			// Create export data structure
+			const exportData = {
+				version: EXPORT_VERSION,
+				algorithm: 'ChaCha20-Poly1305-HKDF',
+				timestamp: Date.now(),
+				encryptedKeys: Base64.encode(ciphertext),
+				pbkdfSalt: Base64.encode(pbkdfSalt),
+				hkdfSalt: Base64.encode(hkdfSalt),
+				nonce: Base64.encode(nonce),
+				kdfIterations: PBKDF2_ITERATIONS
+			};
+
+			// Clear sensitive data from memory
+			CryptoUtils.secureClear(passwordKey);
+			CryptoUtils.secureClear(chachaKey);
+			CryptoUtils.secureClear(keysBytes);
+
+			return JSON.stringify(exportData);
+
+		} catch (error) {
+			throw new Error(`Failed to export post-quantum private keys: ${error.message}`);
+		}
+	}
+
+	/**
+	 * Import user post-quantum private keys from encrypted JSON
+	 * @param {string} exportedData - Encrypted JSON string containing the keys
+	 * @param {string} password - Password to decrypt the keys
+	 * @returns {Promise<void>}
+	 * @throws {Error} If import fails due to invalid data or wrong password
+	 */
+	async importPrivateKeys(exportedData, password) {
+		if (!password || password.trim().length === 0) {
+			throw new Error('Password is required for key import');
+		}
+
+		if (typeof window === 'undefined') {
+			throw new Error('Key import is only available in browser environment');
+		}
+
+		try {
+			// Parse export data
+			let parsedData;
+			try {
+				parsedData = JSON.parse(exportedData);
+			} catch (parseError) {
+				throw new Error('Invalid export format: not valid JSON');
+			}
+
+			// Validate export data structure
+			this._validateExportData(parsedData);
+
+			// Initialize post-quantum encryption service
+			await postQuantumEncryption.initialize();
+
+			let decryptedJson;
+
+			if (parsedData.version === '3.0' && parsedData.algorithm === 'ChaCha20-Poly1305-HKDF') {
+				// v3.0: ChaCha20-Poly1305 + HKDF (post-quantum)
+				const encryptedKeysBuffer = new Uint8Array(Base64.decode(parsedData.encryptedKeys));
+				const pbkdfSalt = new Uint8Array(Base64.decode(parsedData.pbkdfSalt));
+				const hkdfSalt = new Uint8Array(Base64.decode(parsedData.hkdfSalt));
+				const nonce = new Uint8Array(Base64.decode(parsedData.nonce));
+
+				const kdfIterations = parsedData.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS;
+				const passwordKey = await this._deriveKeyFromPassword(password, pbkdfSalt, kdfIterations);
+				const chachaKey = await HKDF.derive(passwordKey, hkdfSalt, 'QryptChat-KeyBackup-ChaCha20', 32);
+
+				let plaintext;
+				try {
+					plaintext = await ChaCha20Poly1305.decrypt(chachaKey, nonce, encryptedKeysBuffer);
+				} catch (decryptError) {
+					throw new Error('Invalid password or corrupted data');
+				}
+
+				CryptoUtils.secureClear(passwordKey);
+				CryptoUtils.secureClear(chachaKey);
+				decryptedJson = new TextDecoder().decode(plaintext);
+
+			} else if (parsedData.version === '2.0' && parsedData.algorithm === 'AES-GCM-256') {
+				// v2.0 legacy: AES-GCM-256.
+				// Older exports used HKDF; newer exports use PBKDF2. Try PBKDF2 first,
+				// fall back to HKDF so old backup files still import correctly.
+				const encryptedKeysBuffer = new Uint8Array(Base64.decode(parsedData.encryptedKeys));
+				const salt = new Uint8Array(Base64.decode(parsedData.salt));
+				const iv = new Uint8Array(Base64.decode(parsedData.iv));
+
+				const tryDecrypt = async (key) => {
+					const cryptoKey = await crypto.subtle.importKey(
+						'raw', new Uint8Array(key),
+						{ name: 'AES-GCM', length: 256 }, false, ['decrypt']
+					);
+					return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, encryptedKeysBuffer);
+				};
+
+				let decryptedBuffer;
+				// Attempt 1: PBKDF2 (current derivation)
+				const pbkdf2Key = await this._deriveKeyFromPassword(
+					password,
+					salt,
+					parsedData.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS
+				);
+				try {
+					decryptedBuffer = await tryDecrypt(pbkdf2Key);
+				} catch {
+					// Attempt 2: HKDF (legacy derivation used before PBKDF2 migration)
+					const passwordBytes = new TextEncoder().encode(password);
+					const hkdfKey = await HKDF.derive(passwordBytes, salt, 'PostQuantumKeyExport', 32);
+					CryptoUtils.secureClear(passwordBytes);
+					try {
+						decryptedBuffer = await tryDecrypt(hkdfKey);
+					} catch {
+						CryptoUtils.secureClear(hkdfKey);
+						throw new Error('Invalid password or corrupted data');
+					}
+					CryptoUtils.secureClear(hkdfKey);
+				}
+				CryptoUtils.secureClear(pbkdf2Key);
+				decryptedJson = new TextDecoder().decode(decryptedBuffer);
+			} else {
+				throw new Error(`Unsupported export version/algorithm: ${parsedData.version}/${parsedData.algorithm}`);
+			}
+
+			// Parse decrypted keys
+			const importedKeys = JSON.parse(decryptedJson);
+
+			// Validate imported keys structure
+			this._validateImportedKeys(importedKeys);
+
+			// Clear existing keys and import new ones
+			await postQuantumEncryption.clearUserKeys();
+			
+			// Import the ML-KEM-1024 keys
+			if (importedKeys.keys1024) {
+				await postQuantumEncryption.importUserKeys(
+					importedKeys.keys1024.publicKey,
+					importedKeys.keys1024.privateKey,
+					importedKeys.keys1024.algorithm
+				);
+			} else if (importedKeys.publicKey) {
+				// Handle legacy format (single key set)
+				await postQuantumEncryption.importUserKeys(
+					importedKeys.publicKey,
+					importedKeys.privateKey,
+					importedKeys.algorithm || 'ML-KEM-1024'
+				);
+			}
+			
+			// Import the ML-KEM-768 keys if available
+			if (importedKeys.keys768) {
+				await postQuantumEncryption.importUserKeys(
+					importedKeys.keys768.publicKey,
+					importedKeys.keys768.privateKey,
+					importedKeys.keys768.algorithm
+				);
+			}
+
+			console.log('🔑 Post-quantum private keys imported successfully');
+			
+			// Sync public key to database after import
+			await this._syncPublicKeyToDatabase();
+
+		} catch (error) {
+			throw new Error(`Failed to import post-quantum private keys: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Derive encryption key from password using PBKDF2.
+	 * PBKDF2 is the correct algorithm for password-based key derivation (slow, iterative).
+	 * HKDF was previously used here but is designed for already-strong key material,
+	 * not for low-entropy passwords.
+	 * @param {string} password - User password
+	 * @param {Uint8Array} salt - Random salt
+	 * @returns {Promise<Uint8Array>} Derived key
+	 * @private
+	 */
+	async _deriveKeyFromPassword(password, salt, iterations = PBKDF2_ITERATIONS) {
+		// Convert password to bytes
+		const passwordBytes = new TextEncoder().encode(password);
+		
+		// Import password as key material for PBKDF2
+		const keyMaterial = await crypto.subtle.importKey(
+			'raw',
+			passwordBytes,
+			{ name: 'PBKDF2' },
+			false,
+			['deriveKey']
+		);
+
+		// Derive key using PBKDF2; the caller supplies the count recorded with the export
+		// so that older files keep importing at the work factor they were written with.
+		const derivedCryptoKey = await crypto.subtle.deriveKey(
+			{
+				name: 'PBKDF2',
+				salt: salt,
+				iterations: iterations,
+				hash: 'SHA-256'
+			},
+			keyMaterial,
+			{ name: 'AES-GCM', length: 256 },
+			true, // extractable
+			['encrypt', 'decrypt']
+		);
+
+		const keyBuffer = await crypto.subtle.exportKey('raw', derivedCryptoKey);
+		const derivedKey = new Uint8Array(keyBuffer);
+
+		// Clear password bytes from memory
+		CryptoUtils.secureClear(passwordBytes);
+
+		return derivedKey;
+	}
+
+	/**
+	 * Validate export data structure
+	 * @param {Object} data - Parsed export data
+	 * @throws {Error} If data is invalid
+	 * @private
+	 */
+	_validateExportData(data) {
+		// Common required fields
+		if (!data.version || !data.timestamp || !data.encryptedKeys || !data.algorithm) {
+			throw new Error('Invalid export format: missing required fields');
+		}
+
+		if (typeof data.version !== 'string' || typeof data.timestamp !== 'number' || 
+			typeof data.encryptedKeys !== 'string' || typeof data.algorithm !== 'string') {
+			throw new Error('Invalid export format: invalid field types');
+		}
+
+		// Validate based on version
+		if (data.algorithm === 'ChaCha20-Poly1305-HKDF') {
+			if (!data.pbkdfSalt || !data.hkdfSalt || !data.nonce) {
+				throw new Error('Invalid v3.0 export: missing pbkdfSalt, hkdfSalt, or nonce');
+			}
+		} else if (data.algorithm === 'AES-GCM-256') {
+			if (!data.salt || !data.iv) {
+				throw new Error('Invalid v2.0 export: missing salt or iv');
+			}
+		} else {
+			throw new Error(`Unsupported algorithm: ${data.algorithm}`);
+		}
+
+		// Reject any exports that contain insecure tempPrivateKey
+		if (data.hasOwnProperty('tempPrivateKey')) {
+			throw new Error('Insecure export format detected. Please re-export your keys with the current secure version.');
+		}
+	}
+
+	/**
+	 * Validate imported post-quantum keys structure
+	 * @param {Object} keys - Decrypted keys object
+	 * @throws {Error} If keys are invalid
+	 * @private
+	 */
+	_validateImportedKeys(keys) {
+		// Support both new format (keys1024/keys768) and legacy format (publicKey/privateKey)
+		if (keys.keys1024 || keys.keys768) {
+			// New format with separate key sets
+			if (keys.keys1024) {
+				this._validateSingleKeySet(keys.keys1024);
+			}
+			if (keys.keys768) {
+				this._validateSingleKeySet(keys.keys768);
+			}
+		} else if (keys.publicKey) {
+			// Legacy format with single key set
+			this._validateSingleKeySet(keys);
+		} else {
+			throw new Error('Invalid keys format: no valid key sets found');
+		}
+	}
+	
+	/**
+	 * Validate a single key set
+	 * @param {Object} keySet - Single key set object
+	 * @throws {Error} If key set is invalid
+	 * @private
+	 */
+	_validateSingleKeySet(keySet) {
+		const requiredFields = ['publicKey', 'privateKey', 'algorithm'];
+		
+		for (const field of requiredFields) {
+			if (!keySet.hasOwnProperty(field)) {
+				throw new Error(`Invalid key set format: missing ${field}`);
+			}
+		}
+
+		// Validate field types
+		if (typeof keySet.publicKey !== 'string') {
+			throw new Error('Invalid key set format: publicKey must be a string');
+		}
+		if (typeof keySet.privateKey !== 'string') {
+			throw new Error('Invalid key set format: privateKey must be a string');
+		}
+		if (typeof keySet.algorithm !== 'string') {
+			throw new Error('Invalid key set format: algorithm must be a string');
+		}
+
+		// Validate algorithm
+		if (keySet.algorithm !== 'ML-KEM-1024' && keySet.algorithm !== 'ML-KEM-768') {
+			throw new Error(`Unsupported algorithm: ${keySet.algorithm}`);
+		}
+
+		// Validate base64 format by attempting to decode
+		try {
+			Base64.decode(keySet.publicKey);
+			Base64.decode(keySet.privateKey);
+		} catch (decodeError) {
+			throw new Error('Invalid key set format: keys must be valid base64');
+		}
+	}
+
+	/**
+	 * Generate a secure filename for post-quantum key export
+	 * @returns {string} Filename with timestamp
+	 */
+	generateExportFilename() {
+		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+		return `qryptchat-pq-keys-${timestamp}.json`;
+	}
+
+	/**
+	 * Check if (typeof window !== 'undefined') supports file download
+	 * @returns {boolean} Whether file download is supported
+	 */
+	supportsFileDownload() {
+		return typeof window !== 'undefined' && typeof document !== 'undefined' && 'createElement' in document;
+	}
+
+	/**
+	 * Trigger download of exported keys
+	 * @param {string} exportedData - Encrypted JSON string
+	 * @param {string|null} filename - Optional filename
+	 */
+	downloadExportedKeys(exportedData, filename = null) {
+		if (!this.supportsFileDownload()) {
+			throw new Error('File download not supported in this environment');
+		}
+
+		const blob = new Blob([exportedData], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = filename || this.generateExportFilename();
+		
+		// Trigger download
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		
+		// Clean up
+		URL.revokeObjectURL(url);
+	}
+
+	/**
+	 * Export user private keys with GPG encryption
+	 * @param {string} password - Password to encrypt the keys
+	 * @param {string} gpgPassword - Password for GPG encryption
+	 * @returns {Promise<string>} GPG encrypted data containing the keys
+	 * @throws {Error} If no user keys exist or password is invalid
+	 */
+	async exportPrivateKeysWithGPG(password, gpgPassword) {
+		if (!password || password.trim().length === 0) {
+			throw new Error('Password is required for key export');
+		}
+
+		if (!gpgPassword || gpgPassword.trim().length === 0) {
+			throw new Error('GPG password is required for GPG encryption');
+		}
+
+		try {
+			// First, export keys using the standard method
+			const exportedData = await this.exportPrivateKeys(password);
+
+			// Encrypt the exported data with GPG
+			const gpgEncryptedData = await this._encryptWithGPG(exportedData, gpgPassword);
+
+			return gpgEncryptedData;
+
+		} catch (error) {
+			throw new Error(`Failed to export private keys with GPG: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Import user private keys from GPG encrypted data
+	 * @param {string} gpgEncryptedData - GPG encrypted data containing the keys
+	 * @param {string} password - Password to decrypt the keys
+	 * @param {string} gpgPassword - Password for GPG decryption
+	 * @returns {Promise<void>}
+	 * @throws {Error} If import fails due to invalid data or wrong password
+	 */
+	async importPrivateKeysFromGPG(gpgEncryptedData, password, gpgPassword) {
+		if (!password || password.trim().length === 0) {
+			throw new Error('Password is required for key import');
+		}
+
+		if (!gpgPassword || gpgPassword.trim().length === 0) {
+			throw new Error('GPG password is required for GPG decryption');
+		}
+
+		try {
+			// First, decrypt the GPG encrypted data
+			const exportedData = await this._decryptWithGPG(gpgEncryptedData, gpgPassword);
+
+			// Then import using the standard method
+			await this.importPrivateKeys(exportedData, password);
+
+		} catch (error) {
+			throw new Error(`Failed to import private keys from GPG: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Encrypt data using GPG with password
+	 * @param {string} data - Data to encrypt
+	 * @param {string} password - Password for encryption
+	 * @returns {Promise<string>} GPG encrypted data
+	 * @private
+	 */
+	async _encryptWithGPG(data, password) {
+		try {
+			// Create a message from the data
+			const message = await openpgp.createMessage({ text: data });
+
+			// Encrypt with password (symmetric encryption)
+			const encrypted = await openpgp.encrypt({
+				message,
+				passwords: [password],
+				config: { preferredCompressionAlgorithm: openpgp.enums.compression.zlib }
+			});
+
+			return encrypted;
+
+		} catch (error) {
+			throw new Error(`GPG encryption failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Decrypt GPG encrypted data using password
+	 * @param {string} encryptedData - GPG encrypted data
+	 * @param {string} password - Password for decryption
+	 * @returns {Promise<string>} Decrypted data
+	 * @private
+	 */
+	async _decryptWithGPG(encryptedData, password) {
+		try {
+			// Read the encrypted message
+			const message = await openpgp.readMessage({
+				armoredMessage: encryptedData
+			});
+
+			// Decrypt with password
+			const { data: decrypted } = await openpgp.decrypt({
+				message,
+				passwords: [password]
+			});
+
+			return decrypted;
+
+		} catch (error) {
+			throw new Error(`GPG decryption failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Generate a secure filename for GPG encrypted post-quantum key export
+	 * @returns {string} Filename with timestamp and .gpg extension
+	 */
+	generateGPGExportFilename() {
+		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+		return `qryptchat-pq-keys-${timestamp}.json.gpg`;
+	}
+
+	/**
+	 * Trigger download of GPG encrypted keys
+	 * @param {string} gpgEncryptedData - GPG encrypted data
+	 * @param {string|null} filename - Optional filename
+	 */
+	downloadGPGEncryptedKeys(gpgEncryptedData, filename = null) {
+		if (!this.supportsFileDownload()) {
+			throw new Error('File download not supported in this environment');
+		}
+
+		const blob = new Blob([gpgEncryptedData], { type: 'application/pgp-encrypted' });
+		const url = URL.createObjectURL(blob);
+		
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = filename || this.generateGPGExportFilename();
+		
+		// Trigger download
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		
+		// Clean up
+		URL.revokeObjectURL(url);
+	}
+
+	/**
+	 * Backup encrypted keys to the server
+	 * @param {string} password - Password to encrypt the keys
+	 * @returns {Promise<void>}
+	 */
+	async backupKeysToServer(password) {
+		if (typeof window === 'undefined') {
+			throw new Error('Key backup is only available in browser environment');
+		}
+
+		try {
+			// Export and encrypt keys using existing method
+			const encryptedData = await this.exportPrivateKeys(password);
+
+			// Push to server
+			const response = await fetch('/api/auth/key-backup', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ encrypted_keys: encryptedData })
+			});
+
+			if (!response.ok) {
+				const errorData = await response.json().catch(() => ({}));
+				throw new Error(errorData.error || `Server returned ${response.status}`);
+			}
+
+			console.log('🔑 ✅ Keys backed up to server successfully');
+		} catch (error) {
+			throw new Error(`Failed to backup keys to server: ${error.message}`);
+		}
+	}
+
+	/**
+	 * Restore encrypted keys from the server
+	 * @param {string} password - Password to decrypt the keys
+	 * @returns {Promise<void>}
+	 */
+	async restoreKeysFromServer(password) {
+		if (typeof window === 'undefined') {
+			throw new Error('Key restore is only available in browser environment');
+		}
+
+		try {
+			// Fetch encrypted backup from server
+			const response = await fetch('/api/auth/key-backup');
+
+			if (response.status === 404) {
+				throw new Error('No key backup found on server');
+			}
+
+			if (!response.ok) {
+				const errorData = await response.json().catch(() => ({}));
+				throw new Error(errorData.error || `Server returned ${response.status}`);
+			}
+
+			const { backup } = await response.json();
+			if (!backup || !backup.encrypted_keys) {
+				throw new Error('No key backup found on server');
+			}
+
+			// Decrypt and import using existing method
+			await this.importPrivateKeys(backup.encrypted_keys, password);
+
+			console.log('🔑 ✅ Keys restored from server successfully');
+		} catch (error) {
+			throw new Error(`Failed to restore keys from server: ${error.message}`);
+		}
+	}
+
+	/**
+	 * Check if a server backup exists for the current user
+	 * @returns {Promise<boolean>}
+	 */
+	async hasServerBackup() {
+		if (typeof window === 'undefined') return false;
+
+		try {
+			const response = await fetch('/api/auth/key-backup');
+			return response.ok;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+		* Sync the current user's public key to the database
+		* This should be called after importing keys to ensure database sync
+		* @private
+		*/
+	async _syncPublicKeyToDatabase() {
+		try {
+			if (typeof window === 'undefined') return;
+
+			// Get the current user's public key from post-quantum encryption
+			await postQuantumEncryption.initialize();
+			const publicKey = await postQuantumEncryption.getPublicKey();
+			
+			if (!publicKey) {
+				console.warn('🔑 ⚠️ No public key available to sync to database');
+				return;
+			}
+
+			// Sync to database via API
+			const response = await fetch('/api/crypto/public-keys', {
+				method: 'PUT',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					public_key: publicKey,
+					key_type: 'ML-KEM-1024'
+				})
+			});
+
+			if (response.ok) {
+				console.log('🔑 ✅ Successfully synced public key to database');
+			} else {
+				const errorData = await response.json().catch(() => ({}));
+				console.error('🔑 ❌ Failed to sync public key to database:', errorData.error || response.statusText);
+			}
+		} catch (error) {
+			console.error('🔑 ❌ Exception syncing public key to database:', error);
+		}
+	}
+}
+
+// Create and export singleton instance
+export const privateKeyManager = new PrivateKeyManager();

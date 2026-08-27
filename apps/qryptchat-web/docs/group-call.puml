@@ -1,0 +1,66 @@
+@startuml
+title Group E2EE Call (GCK via E2EE signaling with ML-KEM + SFU routing)
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 16
+skinparam BoxPadding 10
+
+actor A as Creator
+participant "Signaling Server\n(untrusted relay)" as Signal
+actor B
+actor C
+actor D
+participant "SFU (router only)\n(no decrypt)" as SFU
+
+== Per-Participant KEM Sessions ==
+Creator -> Signal : Offer caps { ML-KEM-1024, 768 }
+Signal -> B : Relay; B answers { 1024 }
+Signal -> C : Relay; C answers { 1024 }
+Signal -> D : Relay; D answers { 1024 }
+
+note over Creator,B,C,D
+For each participant X:\n1) Exchange PK_KEM(1568B)\n2) ss_X = ML-KEM-1024 shared secret\n3) Establish E2EE signaling channel Creator↔X\n(Fallback to 768 only if required)
+end note
+
+== Group Call Key (GCK) ==
+Creator -> Creator : Generate GCK (ephemeral per-call)
+Creator -> Signal : E2EE msg: {GCK}→B  (encrypted with ss_B)
+Signal -> B : Deliver {GCK}
+Creator -> Signal : E2EE msg: {GCK}→C  (encrypted with ss_C)
+Signal -> C : Deliver {GCK}
+Creator -> Signal : E2EE msg: {GCK}→D  (encrypted with ss_D)
+Signal -> D : Deliver {GCK}
+
+== WebRTC Join ==
+Creator -> SFU : Join + publish tracks (encrypted)
+B -> SFU : Join + publish tracks (encrypted)
+C -> SFU : Join + publish tracks (encrypted)
+D -> SFU : Join + publish tracks (encrypted)
+
+== Media Key Derivation (per-sender) ==
+note over Creator,B,C,D
+For each sender S:\nK_S = KDF(GCK, "SFrame", sender_id, direction, nonce)\nClients encrypt frames with Insertable Streams (SFrame)\nSRTP carries the encrypted frames; SFU sees only ciphertext
+end note
+
+== Routing ==
+Creator -> SFU : SFrame-over-SRTP (opaque)
+B -> SFU : SFrame-over-SRTP (opaque)
+C -> SFU : SFrame-over-SRTP (opaque)
+D -> SFU : SFrame-over-SRTP (opaque)
+SFU -> Creator : Forward others' encrypted frames
+SFU -> B : Forward others' encrypted frames
+SFU -> C : Forward others' encrypted frames
+SFU -> D : Forward others' encrypted frames
+
+== Membership Change ==
+alt New participant E joins
+  Creator -> Signal : E2EE msg: {GCK or GCK′}→E (over KEM session with E)
+else Participant leaves / removed
+  Creator -> Creator : Rotate GCK′
+  Creator -> Signal : E2EE msg: {GCK′}→remaining members
+  note over Creator,B,C,D
+  All clients re-derive K_S with GCK′ and rekey streams
+  end note
+end
+
+@enduml

@@ -1,0 +1,22 @@
+-- Step 4b of the 2026-08 security remediation.
+-- Advisory: GHSA-jpfm-vrpc-p6rr
+--
+-- Second half of 20260815204334_move_backup_pins_to_service_role_table.sql.
+-- That migration created the service-role-only `user_backup_pins` table and
+-- carried across which users have a PIN set. This one removes the column that
+-- every logged-in account could read via `users_select_authenticated`.
+--
+-- ORDERING: apply this only AFTER the code that stopped reading
+-- `users.backup_pin_hash` is deployed (src/app/api/auth/backup-pin/route.js).
+-- Applying it against the previous release breaks GET/POST /api/auth/backup-pin.
+--
+-- APPLIED TO PRODUCTION 2026-08-15, after #250 deployed. The ledger restamped it
+-- as version 20260815210532 (the Supabase MCP ignores the filename timestamp and
+-- records its own), and this file was renamed to match so that
+-- `supabase db push` does not rerun it.
+--
+-- The unsalted SHA-256 digests in this column are discarded rather than
+-- migrated: nothing ever verified them server-side, they only backed a boolean,
+-- and their whole problem is that they are trivially reversible.
+
+ALTER TABLE public.users DROP COLUMN IF EXISTS backup_pin_hash;
