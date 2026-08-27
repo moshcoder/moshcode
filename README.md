@@ -14,6 +14,28 @@ curl -fsSL https://moshcoding.com/install.sh | sh
 Zero-dependency ESM — all it needs is Node.js 18+. Later: `… | sh -s -- update`
 to upgrade, `… | sh -s -- remove` to uninstall.
 
+## What is in this repo
+
+The CLI is the root package — `bin/`, `src/`, `plugins/` — and that is what
+`npm publish` and the installer above ship. Two apps live alongside it:
+
+| path | what it is | deployed as |
+|---|---|---|
+| `apps/pwa` | the Moshpit registry and account app | pit.moshcode.sh, app.moshcode.sh |
+| `apps/qryptchat-web` | QryptChat, the post-quantum messenger | qrypt.chat |
+
+One repo, but **not one dependency tree**. Each app installs itself, with its
+own lockfile, and the root `pnpm install` does not reach into either. That is
+deliberate on both counts and `pnpm-workspace.yaml` says why. The practical
+rule: run `pnpm install` in the directory you are working in, not at the root
+and not the other way round.
+
+The two apps share a feature rather than code — a person can sign in to
+QryptChat by proving they hold a Moshpit name, which `moshcode name link`
+produces the proof for. The shared half of that is still duplicated in both
+trees; see `pnpm-workspace.yaml` for what has to be fixed before it can be
+lifted into `packages/`.
+
 ## Commands
 
 `moshcode help <command>` drills into any of these — flags, examples and all.

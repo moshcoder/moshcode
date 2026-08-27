@@ -1,0 +1,25 @@
+# This repo is one repo, not one dependency tree.
+#
+# Both apps under apps/ install themselves. That is not an oversight and it is
+# not a migration left half-done — it is the only arrangement that currently
+# works, for two separate reasons:
+#
+#   apps/pwa has never been a workspace member. A root install skips its
+#   dependencies by design, and enrolling it here would change how the pit
+#   resolves its own tree as a side effect of a repo reorganisation.
+#
+#   apps/qryptchat-web CANNOT be enrolled today. It depends on
+#   `github:profullstack/autoblog#75e54af`, and that commit no longer exists on
+#   the remote — `git fetch` cannot find it, and pnpm cannot resolve it from
+#   scratch. The app installs only because its own pnpm-lock.yaml still carries
+#   a working resolution. Folding it into a root workspace discards that
+#   lockfile and the install fails outright. Repointing that dependency at a
+#   ref that exists is the prerequisite, and it is its own change.
+#
+# So each app keeps its own pnpm-lock.yaml and its own pnpm-workspace.yaml
+# (the latter carries qryptchat's security `overrides`, which pnpm only reads
+# from the root of the workspace it is installing).
+#
+# What lives here is only what the root package itself consumes.
+packages:
+  - packages/*
