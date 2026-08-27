@@ -15,9 +15,26 @@ import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { normalizeName, CHALLENGE_TTL_MS } from '@/lib/auth/moshpit.js';
+import { normalizeDnsName, challengeRecord } from '@/lib/auth/dns-name.js';
 
 /** Namespaces a name can be proved in. */
 const NAMESPACES = ['moshpit', 'dns'];
+
+/**
+ * The two namespaces do not agree on what a name looks like.
+ *
+ * A Moshpit name is exactly `<label>.<tld>`; a public-root domain can be
+ * `example.co.uk` or `mail.example.com`. Normalizing both with the stricter
+ * rule would reject most real domains, and normalizing both with the looser one
+ * would let `a.b.c` be minted as a Moshpit name that can never resolve.
+ *
+ * @param {unknown} input
+ * @param {string} namespace
+ * @returns {string | null}
+ */
+function normalizeFor(input, namespace) {
+	return namespace === 'dns' ? normalizeDnsName(input) : normalizeName(input);
+}
 
 /** How many challenges one name may ask for per window. */
 const MAX_PER_WINDOW = 5;
@@ -49,15 +66,24 @@ export async function POST(request) {
 		return NextResponse.json({ error: 'Invalid request format' }, { status: 400 });
 	}
 
-	const name = normalizeName(body?.name);
-	if (!name) {
-		return NextResponse.json({ error: 'Not a valid name — expected <label>.<tld>' }, { status: 400 });
-	}
-
+	// The namespace is read first, because it decides what counts as a name.
 	const namespace = typeof body?.namespace === 'string' ? body.namespace : 'moshpit';
 	if (!NAMESPACES.includes(namespace)) {
 		return NextResponse.json(
 			{ error: `namespace must be one of ${NAMESPACES.join(', ')}` },
+			{ status: 400 }
+		);
+	}
+
+	const name = normalizeFor(body?.name, namespace);
+	if (!name) {
+		return NextResponse.json(
+			{
+				error:
+					namespace === 'dns'
+						? 'Not a valid domain name'
+						: 'Not a valid name — expected <label>.<tld>'
+			},
 			{ status: 400 }
 		);
 	}
@@ -101,5 +127,10 @@ export async function POST(request) {
 		return NextResponse.json({ error: 'Could not issue a challenge' }, { status: 500 });
 	}
 
-	return NextResponse.json({ jti, nonce, expiresAt, name, namespace });
+	// A DNS proof needs the person to go and publish something, so the record to
+	// create travels with the challenge rather than being described in prose
+	// somewhere else that can drift from what is actually checked.
+	const publish = namespace === 'dns' ? challengeRecord(name, nonce) : undefined;
+
+	return NextResponse.json({ jti, nonce, expiresAt, name, namespace, ...(publish ? { publish } : {}) });
 }

@@ -1,19 +1,20 @@
 /**
- * @fileoverview POST /api/auth/moshpit/verify — prove a Moshpit name, get a session.
+ * @fileoverview POST /api/auth/dns/verify — prove an ordinary domain, get a session.
  *
- * Step two of "sign in with a name". The client returns the nonce we issued,
- * signed by the key the registry pins for that name, plus the certificate
- * carrying that key and its on-device ML-KEM-1024 public key.
+ * The commodity half of "sign in with a name". There is no key to sign with in
+ * the public root, so the proof is the one thing only the holder can do:
+ * publish the challenge under the domain. The record to create travels with the
+ * challenge (see the challenge route), so nothing has to describe it twice.
  *
- * We check the signature, check the key against the published pins, burn the
- * challenge, then provision. The provisioning itself lives in
- * lib/auth/name-account.js, shared with the DNS TXT path.
+ * Weaker than the Moshpit path on purpose, and worth being clear about: whoever
+ * controls DNS controls the identity, so a registrar seizure or a lapsed
+ * renewal is an account takeover. `recheck_at` is what limits the window.
  *
- * Additive only: does NOT touch the phone/SMS, CoinPay or anon flows.
+ * Additive only: does NOT touch the phone/SMS, CoinPay, anon or Moshpit flows.
  */
 
 import { NextResponse } from 'next/server';
-import { normalizeName, verifyNameProof, NameProofError } from '@/lib/auth/moshpit.js';
+import { normalizeDnsName, verifyDnsProof, DnsProofError } from '@/lib/auth/dns-name.js';
 import {
 	createServiceClient,
 	loadSpendableChallenge,
@@ -24,9 +25,9 @@ import {
 } from '@/lib/auth/name-account.js';
 
 /**
- * POST /api/auth/moshpit/verify
+ * POST /api/auth/dns/verify
  *
- * Body: { jti, name, certPem, signature, publicKey, displayName? }
+ * Body: { jti, name, publicKey, displayName? }
  * Returns: { success, session, user }
  *
  * @param {import('next/server').NextRequest} request
@@ -39,11 +40,11 @@ export async function POST(request) {
 		return NextResponse.json({ error: 'Invalid request format' }, { status: 400 });
 	}
 
-	const { jti, certPem, signature, publicKey, displayName } = body || {};
-	const name = normalizeName(body?.name);
+	const { jti, publicKey, displayName } = body || {};
+	const name = normalizeDnsName(body?.name);
 
 	if (!name) {
-		return NextResponse.json({ error: 'Not a valid name — expected <label>.<tld>' }, { status: 400 });
+		return NextResponse.json({ error: 'Not a valid domain name' }, { status: 400 });
 	}
 	if (typeof jti !== 'string' || !jti) {
 		return NextResponse.json({ error: 'A challenge id is required' }, { status: 400 });
@@ -56,56 +57,45 @@ export async function POST(request) {
 	const serviceSupabase = createServiceClient();
 
 	// --- a) Load the challenge ---
-	const loaded = await loadSpendableChallenge(serviceSupabase, jti, {
-		name,
-		namespace: 'moshpit'
-	});
+	const loaded = await loadSpendableChallenge(serviceSupabase, jti, { name, namespace: 'dns' });
 	if ('error' in loaded) {
 		return NextResponse.json({ error: loaded.error }, { status: 400 });
 	}
 	const { challenge } = loaded;
 
-	// --- b) Check the proof BEFORE burning anything ---
-	let proof;
+	// --- b) Look for the record BEFORE burning anything ---
+	//
+	// Publishing DNS is slow and people will retry while it propagates. Spending
+	// the challenge on a lookup that simply ran too early would make the honest
+	// case -- "I just added it" -- the one that fails.
 	try {
-		proof = await verifyNameProof({
-			name: challenge.name,
-			certPem,
-			signatureB64: signature,
-			nonce: challenge.nonce
-		});
+		await verifyDnsProof({ name: challenge.name, nonce: challenge.nonce });
 	} catch (error) {
-		if (error instanceof NameProofError) {
-			// An outage is not a refusal. 503 tells the client to retry rather
-			// than to conclude the name is not theirs.
+		if (error instanceof DnsProofError) {
 			return NextResponse.json(
 				{ error: error.message, code: error.code },
 				{ status: error.definite ? 400 : 503 }
 			);
 		}
-		console.error('moshpit/verify: unexpected verification failure', error);
+		console.error('dns/verify: unexpected verification failure', error);
 		return NextResponse.json({ error: 'Could not verify that proof' }, { status: 500 });
 	}
 
 	try {
 		// --- c) Burn the challenge, atomically ---
-		//
-		// After verification (so a network blip does not spend a good challenge)
-		// and before provisioning (so a slow insert cannot be raced).
 		if (!(await burnChallenge(serviceSupabase, jti))) {
 			return NextResponse.json({ error: 'That challenge has already been used' }, { status: 400 });
 		}
 
-		// Bound on the RESOLVED name. An aliased ending means `x.foo` and `x.bar`
-		// are one name with one key, and binding the typed spelling would let it
-		// become two accounts.
+		// No pin and no pin kind: there is no key in this path, and the schema
+		// refuses a binding that claims otherwise.
 		const { userRow, email } = await provisionNameAccount({
 			serviceSupabase,
-			name: proof.resolved,
-			namespace: 'moshpit',
-			proof: 'pin-signature',
-			boundPin: proof.pin,
-			pinKind: proof.kind,
+			name,
+			namespace: 'dns',
+			proof: 'dns-txt',
+			boundPin: null,
+			pinKind: null,
 			mlkemKey,
 			displayName
 		});
@@ -114,8 +104,8 @@ export async function POST(request) {
 
 		return NextResponse.json({
 			success: true,
-			name: proof.resolved,
-			namespace: 'moshpit',
+			name,
+			namespace: 'dns',
 			session,
 			user: {
 				id: userRow.id,
@@ -128,7 +118,7 @@ export async function POST(request) {
 		if (error instanceof ProvisionError) {
 			return NextResponse.json({ error: error.message }, { status: error.status });
 		}
-		console.error('moshpit/verify: unexpected failure', error);
+		console.error('dns/verify: unexpected failure', error);
 		return NextResponse.json({ error: 'Could not verify that proof' }, { status: 500 });
 	}
 }
