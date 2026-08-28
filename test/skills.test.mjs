@@ -44,11 +44,20 @@ test("skillInstallAction: gemini installs natively, claude clones into its skill
   assert.deepEqual(gemini, { cmd: "gemini", args: ["skills", "install", "https://x/y", "--scope", "user"] });
 
   const claude = skillInstallAction("claude", { source: "https://x/y", name: "y" });
-  assert.deepEqual(claude, { cmd: "git", args: ["clone", "--depth", "1", "https://x/y", path.join(claudeSkillsDir(), "y")] });
+  assert.deepEqual(claude, {
+    cmd: "git",
+    args: ["clone", "--depth", "1", "https://x/y", path.join(claudeSkillsDir(), "y")],
+    // Carried so the runner can resolve the clone into the depth engines scan.
+    settle: path.join(claudeSkillsDir(), "y"),
+  });
 
   // Kimi Code discovers skills by scanning dirs too, so it clones into its own.
   const kimi = skillInstallAction("kimi", { source: "https://x/y", name: "y" });
-  assert.deepEqual(kimi, { cmd: "git", args: ["clone", "--depth", "1", "https://x/y", path.join(kimiSkillsDir(), "y")] });
+  assert.deepEqual(kimi, {
+    cmd: "git",
+    args: ["clone", "--depth", "1", "https://x/y", path.join(kimiSkillsDir(), "y")],
+    settle: path.join(kimiSkillsDir(), "y"),
+  });
 });
 
 test("kimiSkillsDir follows KIMI_CODE_HOME, which is what moves kimi's skills", () => {

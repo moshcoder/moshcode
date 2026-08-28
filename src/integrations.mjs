@@ -253,7 +253,7 @@ export async function mcpCommand(tokens, { run, installedSet } = {}) {
 }
 
 /** Run `/skill …`. `tokens` are the words after `skill`. `run`/`installedSet` are injectable for tests. */
-export async function skillCommand(tokens, { run, installedSet } = {}) {
+export async function skillCommand(tokens, { run, installedSet, settle } = {}) {
   const verb = tokens[0];
   if (!verb || verb === "list") { printSkillTargets(tokens.slice(1).includes("--json")); return 0; }
   if (verb !== "install") {
@@ -287,7 +287,10 @@ export async function skillCommand(tokens, { run, installedSet } = {}) {
 
   const spec = { source, name: skillName(source, name) };
   console.log(info(`installing skill ${bone(spec.name)} → ${ash(source)} across skills engines…`));
-  const results = await runSkillInstall(planSkillInstall(spec, { installedSet }), run ? { run } : {});
+  const results = await runSkillInstall(planSkillInstall(spec, { installedSet }), {
+    ...(run ? { run } : {}),
+    ...(settle ? { settle } : {}),
+  });
   summarize(results);
   return anyFailed(results) ? 1 : 0;
 }

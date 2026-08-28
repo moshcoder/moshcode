@@ -75,9 +75,14 @@ test("the error names the flag skill install does take, and how to escape a real
 
 // --- controls: the opposite direction ---------------------------------------
 
+// `run` is stubbed here, so no clone actually lands and the real settle would
+// (correctly) report an empty directory. These tests are about flag parsing,
+// not about what the clone contained.
+const settled = () => ({ kind: "single", installed: ["y"], kept: [] });
+
 test("a normal git URL still installs across the skills engines", async () => {
   const { run, calls } = spy();
-  const { code } = await capture(() => skillCommand(["install", URL], { run, installedSet: ALL }));
+  const { code } = await capture(() => skillCommand(["install", URL], { run, installedSet: ALL, settle: settled }));
   assert.equal(code, 0);
   assert.ok(calls.some((c) => c.startsWith("git clone") && c.includes(URL)), `expected a clone of the source, got ${calls.join(" | ")}`);
   assert.ok(calls.some((c) => c.startsWith(`${ENGINES.gemini.bin} skills install ${URL}`)), `expected gemini to be handed the source, got ${calls.join(" | ")}`);
@@ -85,14 +90,14 @@ test("a normal git URL still installs across the skills engines", async () => {
 
 test("--name still parses and still names the skill", async () => {
   const { run, calls } = spy();
-  const { code } = await capture(() => skillCommand(["install", URL, "--name", "renamed"], { run, installedSet: ALL }));
+  const { code } = await capture(() => skillCommand(["install", URL, "--name", "renamed"], { run, installedSet: ALL, settle: settled }));
   assert.equal(code, 0);
   assert.ok(calls.some((c) => c.includes("/renamed")), `expected the clone to land in .../renamed, got ${calls.join(" | ")}`);
 });
 
 test("a local path source is untouched by the guard", async () => {
   const { run, calls } = spy();
-  const { code } = await capture(() => skillCommand(["install", "./my-skill"], { run, installedSet: ALL }));
+  const { code } = await capture(() => skillCommand(["install", "./my-skill"], { run, installedSet: ALL, settle: settled }));
   assert.equal(code, 0);
   assert.ok(calls.some((c) => c.includes("./my-skill")), `expected the path to survive, got ${calls.join(" | ")}`);
 });
