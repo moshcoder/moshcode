@@ -1279,6 +1279,41 @@ Full walkthrough, including the layer-by-layer way to debug it and the limits
 worth knowing before you build:
 **[docs/hosting-a-moshpit-name.md](docs/hosting-a-moshpit-name.md)**.
 
+### Filtering what resolves
+
+With `dns enable` on, the bridge already sees every lookup this machine makes.
+`dns filter` is the other thing a resolver in that position can do: refuse the
+names that exist only to advertise, track, mine or phish, before a connection is
+ever opened. Nothing is filtered until you ask for it.
+
+```sh
+moshcode dns filter on             # ads, malware, phishing, mining
+moshcode dns filter update         # fetch the lists — nothing downloads on its own
+moshcode dns filter                # what is on, and what it has blocked
+moshcode dns filter test ads.example.com   # would this be blocked, and by which rule
+moshcode dns filter allow news.example     # never block it, whatever any list says
+```
+
+| list | what it blocks |
+|---|---|
+| `ads` | ads and trackers — StevenBlack unified, on by default |
+| `malware` | hosts serving malware — URLhaus, on by default |
+| `phishing` | Phishing Army, on by default |
+| `mining` | in-browser cryptominers, on by default |
+| `adult` `gambling` `social` `fakenews` | opt in by name with `filter add <list>` |
+
+Three things worth knowing. Blocking a name blocks everything under it, and an
+`allow` rule always wins — that is the escape hatch for the day a list someone
+else maintains takes down something you need. Changes reach a running bridge
+within about five seconds, so nothing has to be restarted. And a blocked name is
+answered `NXDOMAIN` by default; `--mode zero` answers `0.0.0.0` instead, and
+`--mode refuse` says `REFUSED`, which is the one a client can tell apart from a
+real absence while you work out whether the filter is what broke something.
+
+`dns filter` never turns DNS routing on — it writes a config and nothing else,
+so on a machine whose resolver has never heard of the bridge it changes nothing.
+Its status says so rather than reporting `on` and leaving you to find out.
+
 ## Shell completion
 
 MoshCode can print context-aware completion scripts for its commands, engines,

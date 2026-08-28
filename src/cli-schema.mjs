@@ -839,6 +839,17 @@ export const DNS_VERBS = [
   { name: "tlds", description: "list the endings claimed in the Pit" },
   { name: "resolve", description: "what a name resolves to, and why" },
   { name: "trust", description: "trust one name's certificate, after checking it against the registry pin" },
+  {
+    name: "filter",
+    description: "block ads, trackers, malware and phishing at the resolver",
+    synopsis: [
+      ["moshcode dns filter", "what is on, and what it has blocked"],
+      ["moshcode dns filter on [--mode nxdomain|zero|refuse] [--lists a,b]", ""],
+      ["moshcode dns filter update", "fetch the lists — nothing downloads on its own"],
+      ["moshcode dns filter allow <name>", "never block it, whatever any list says"],
+      ["moshcode dns filter test <name>", "would this be blocked, and by which rule"],
+    ],
+  },
 ];
 
 /**
