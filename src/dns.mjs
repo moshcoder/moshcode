@@ -2325,6 +2325,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     readManifest = async (path) => parseManifest(await defaultReadMaybe(path)),
     uid = typeof process.getuid === "function" ? process.getuid() : 0,
     escalate = escalateSelf,
+    // Injected for the same reason as everything above: the enable/disable
+    // decision tree reads the host's drop-ins only on linux/systemd-resolved,
+    // and a test running on any other OS must be able to say "linux" without
+    // lying about the machine it is on.
+    platform: platformImpl = detectPlatform,
   } = deps;
   const [sub, ...rest] = args;
   const flag = (name, fallback) => {
@@ -2595,7 +2600,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
   }
 
   if (sub === "enable" || sub === "disable") {
-    const platform = detectPlatform();
+    const platform = platformImpl();
     if (!platform) {
       out(`unsupported platform: ${process.platform}`);
       return 1;
