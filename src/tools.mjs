@@ -310,6 +310,32 @@ export const TOOLS = {
     // place to hear it than an install that succeeded.
     install: { cmd: "npm", args: ["install", "-g", "@alchemy/cli"] },
   },
+  elevenlabs: {
+    desc: "ElevenLabs — build, configure and deploy Eleven Agents (plus voices, TTS, dubbing, and the rest of the API)",
+    bin: "elevenlabs",
+    // A workflow tool rather than an engine, despite the name. ElevenLabs calls
+    // these "agents", but they are conversational voice agents you configure and
+    // deploy to their platform: `elevenlabs agents push/pull/list` is an API
+    // client that runs one request and exits. `/agents` promises to hand the
+    // terminal to a live session, and there is no session here to hand it, so
+    // this belongs next to the other workflow CLIs. Docs:
+    // https://elevenlabs.io/docs/eleven-agents/operate/cli
+    //
+    // Authenticate once with `moshcode elevenlabs auth login` — a PKCE OAuth
+    // flow that stores the credential in the system keyring (falling back to a
+    // file under ~/.config), rather than an env var to keep exporting.
+    //
+    // The published package is a tiny Node shim; the real CLI is a native
+    // binary shipped per platform as an OPTIONAL dependency
+    // (@elevenlabs/cli-linux-x64 and friends). That is why the install spec is
+    // the plain global install with no flags: an install run with
+    // `--omit=optional` or `--no-optional` still succeeds and still puts
+    // `elevenlabs` on PATH, but every invocation then dies with "the platform
+    // package is not installed". `npm install -g` is idempotent and the CLI
+    // ships no updater of its own, so this doubles as the upgrade path and
+    // there is deliberately no `upgrade` key.
+    install: { cmd: "npm", args: ["install", "-g", "@elevenlabs/cli"] },
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */

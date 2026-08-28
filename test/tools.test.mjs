@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { isInstalled } from "../src/engines.mjs";
+import { isInstalled, resolveEngine } from "../src/engines.mjs";
 import { TOOLS, resolveTool, retry, toolList, toolUpgradeSpec } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
@@ -280,6 +280,50 @@ fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)))
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
     "install", "-g", "@alchemy/cli",
+  ]);
+});
+
+test("ElevenLabs is a workflow tool, not an engine", () => {
+  assert.deepEqual(resolveTool("ELEVENLABS"), ["elevenlabs", TOOLS.elevenlabs]);
+  // The name is the trap: ElevenLabs' product is "Eleven Agents", but every
+  // subcommand is an API call that exits, so it must not be reachable as an
+  // engine — `/agents elevenlabs` would hand the terminal to a program that
+  // prints help and leaves.
+  assert.equal(resolveEngine("elevenlabs"), null);
+  assert.equal(TOOLS.elevenlabs.bin, "elevenlabs");
+  // No flags on the install: the platform binary is an OPTIONAL dependency, so
+  // anything that omits optional deps installs a shim that cannot run.
+  assert.deepEqual(TOOLS.elevenlabs.install, {
+    cmd: "npm",
+    args: ["install", "-g", "@elevenlabs/cli"],
+  });
+  // `npm install -g` is idempotent and the CLI ships no updater, so the
+  // install IS the upgrade. Asserted so adding one later is deliberate.
+  assert.equal(TOOLS.elevenlabs.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.elevenlabs), TOOLS.elevenlabs.install);
+  // Global npm installs land on PATH, so there is nothing for binDirs to cover.
+  assert.equal(TOOLS.elevenlabs.binDirs, undefined);
+  assert.match(toolList(), /elevenlabs/);
+});
+
+test("install elevenlabs delegates to the official npm package", async () => {
+  const root = tempDir("moshcode-install-elevenlabs-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "npm-args.json");
+  mkdirSync(nativeBin);
+  writeExecutable(nativeBin, "npm", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "elevenlabs"], {
+    binDir: nativeBin,
+    env: { NPM_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "install", "-g", "@elevenlabs/cli",
   ]);
 });
 

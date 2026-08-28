@@ -700,6 +700,35 @@ engines, `mcpjam` tells you whether that server is healthy first — health
 checks, OAuth conformance, tool-surface diffing, and structured triage from the
 terminal or CI. Re-running `moshcode install mcpjam` is also its upgrade path.
 
+### ElevenLabs — Eleven Agents, voices, and speech
+
+```sh
+moshcode install elevenlabs       # npm i -g @elevenlabs/cli
+
+moshcode elevenlabs auth login    # PKCE OAuth, stored in the system keyring
+moshcode elevenlabs agents list
+moshcode elevenlabs agents push   # upload local agent configs to the platform
+moshcode elevenlabs text-to-speech convert …
+```
+
+[ElevenLabs](https://elevenlabs.io/docs/eleven-agents/operate/cli)' CLI manages
+**Eleven Agents** — conversational voice agents you define in files and
+`push`/`pull` against their platform, alongside the knowledge bases, tools,
+tests and phone numbers those agents use. The same binary reaches the rest of
+the API: voices, text-to-speech, dubbing, transcription, music, and workspace
+usage.
+
+They are agents in a different sense than the ones under `/agents`: you deploy
+them and callers talk to them, rather than handing your terminal to one. That is
+why it sits here with the workflow CLIs — every subcommand runs one request and
+exits, so it pipes like the rest of the roster. `--format json` (the default
+when stdout is not a TTY) and `--query` (JMESPath) are what a script wants.
+
+The npm package is a small shim over a native binary shipped as an optional
+dependency, so install it without `--omit=optional` or the `elevenlabs` on your
+PATH will refuse to run. Re-running `moshcode install elevenlabs` is its upgrade
+path.
+
 ### Alchemy — onchain data, wallets, and x402
 
 ```sh
@@ -1438,6 +1467,7 @@ chmod +x deploy.mosh
 | `mcpjam(args…)` | drive the MCPJam CLI (test, debug, and validate MCP servers) |
 | `spinifex(args…)` | drive the Spinifex CLI (`spx` — AWS-compatible cloud on your own hardware) |
 | `alchemy(args…)` | drive the Alchemy CLI (onchain data, apps, wallets, x402) |
+| `elevenlabs(args…)` | drive the ElevenLabs CLI (Eleven Agents, voices, TTS, dubbing) |
 | `trade(args…)` | look up tickers, inspect markets, preview/place Alpaca orders |
 | `stocks(args…)` | research tickers via advis0r (`stocksRead` returns the data) |
 | `crypto(args…)` | research crypto pairs via advis0r (`cryptoRead` returns the data) |
