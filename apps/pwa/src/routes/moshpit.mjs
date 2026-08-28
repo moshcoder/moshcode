@@ -64,7 +64,9 @@ import {
   countSearchTlds,
   countTldsNotOwnedBy,
   createLink,
+  CHILD_PRICE_USD,
   DEFAULT_TLD_PRICE_USD,
+  ENDING_PRICE_USD,
   deleteContent,
   deleteLink,
   getContent,
@@ -1868,6 +1870,12 @@ const PIT_CSS = `
 .pit-forsale{border-color:color-mix(in srgb,var(--acid) 35%,var(--line))}
 .pit-tab .count{font-size:.68rem;color:var(--faint);margin-left:6px}
 .pit-tab.on .count{color:var(--acid)}
+/* The one claim worth making above the fold, so it reads as a fact about the
+   namespace rather than as a banner. Bordered on one side only — a full box
+   here would sit next to the error and success boxes and be mistaken for one. */
+.pit-forever{border-left:2px solid var(--acid);padding:2px 0 2px 14px;margin:18px 0 0;max-width:62ch}
+.pit-forever b{color:var(--acid);font-weight:600}
+.pit-forever .mono{color:var(--acid)}
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}
@@ -2457,6 +2465,12 @@ moshpitRouter.get("/pit", async (req, res) => {
     <span class="mono">foo.agentic</span> resolve to <span class="mono">foo.agent</span> — while any name
     you exempt stays exactly where it is.
   </p>
+  <p class="pit-forever dim">
+    <b>Bought once. Yours for good.</b><br>
+    <span class="mono">$${ENDING_PRICE_USD}</span> an ending, <span class="mono">$${CHILD_PRICE_USD}</span> a name —
+    paid one time, not every year. Nothing here renews, nothing lapses, and no name you hold can drop
+    because an invoice went to an address you stopped reading.
+  </p>
   ${landingCard(req, landing)}
   ${msg}
   ${req.user ? claimForm(req) + bulkClaimForm(req) : ""}
@@ -2486,7 +2500,8 @@ moshpitRouter.get("/pit", async (req, res) => {
     <p class="dim" style="max-width:62ch;margin:0 0 14px">
       Endings somebody else holds. Where the operator has set a price you can buy a name under it —
       <span class="mono">foo.whatever</span> without owning <span class="mono">.whatever</span>. Paid in crypto
-      through CoinPay; the name lands the moment the payment confirms.
+      through CoinPay; the name lands the moment the payment confirms, and it is yours from then on —
+      there is no renewal and no expiry date.
     </p>
     ${theirsHtml}
     ${pager({
