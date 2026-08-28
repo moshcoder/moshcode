@@ -1426,13 +1426,27 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
   return parts.length ? parts.join(". ") + "." : "nothing to claim — paste one ending per line.";
 }
 
-/* ---- buying and renewing an ending ---- */
+/* ---- buying an ending ---- */
 
-/** A term is a year. Ten is the ceiling PRD 0005 R6 puts on one checkout. */
-export const TERM_MS = 365 * 24 * 60 * 60 * 1000;
-export const MAX_TERM_YEARS = 10;
-
-const TLD_COLS_FULL = `tld, user_id, owner_email, alias_of, price_usd, term_started_at, expires_at, created_at`;
+/**
+ * Endings are sold once and held for good.
+ *
+ * They used to carry a one-year term with renewals, per PRD 0005 §5. That is
+ * withdrawn: $5 buys `.eggs` outright, $2 buys a name under one, and neither
+ * ever comes up for renewal. The prices are unchanged -- what changed is that
+ * they are paid once.
+ *
+ * The reason is not generosity, it is what the namespace is for. A name that
+ * lapses is a name somebody else can catch, and the whole pitch here is that
+ * you can finally have the clean name instead of the hyphenated one you settled
+ * for. An annual invoice with a drop date attached is the thing people are
+ * trying to get away from, and selling it back to them undoes the pitch.
+ *
+ * The term columns are gone (migration 016). The purchase ledger keeps its
+ * `kind` and `years` columns, because those record what was actually sold at
+ * the time and a financial record is not something to rewrite after the fact.
+ */
+const TLD_COLS_FULL = `tld, user_id, owner_email, alias_of, price_usd, created_at`;
 
 export async function getTldWithTerm(tld) {
   return get(`SELECT ${TLD_COLS_FULL} FROM moshpit_tlds WHERE tld = ?`, [tld]);
@@ -1446,17 +1460,12 @@ export async function getTldWithTerm(tld) {
  * reserved, already held, and "you already own it" are three different answers
  * and a single "unavailable" would be none of them.
  */
-export async function quoteTld({ tld: tldInput, buyerId, years = 1, now = Date.now() }) {
+export async function quoteTld({ tld: tldInput, buyerId, now = Date.now() }) {
   const tld = normalizeTld(tldInput);
   if (!tld) return { ok: false, error: "not a valid TLD — letters, digits and dashes only, no dots" };
 
   const why = tldRejection(tld);
   if (why) return { ok: false, error: why };
-
-  const term = Number(years);
-  if (!Number.isInteger(term) || term < 1 || term > MAX_TERM_YEARS) {
-    return { ok: false, error: `a term is 1 to ${MAX_TERM_YEARS} years` };
-  }
 
   const owner = await getTldWithTerm(tld);
   if (owner) {
@@ -1473,46 +1482,40 @@ export async function quoteTld({ tld: tldInput, buyerId, years = 1, now = Date.n
   );
   if (held) return { ok: false, error: `.${tld} is in someone's checkout right now — try again shortly`, taken: true };
 
-  return { ok: true, tld, years: term, priceUsd: Math.round(ENDING_PRICE_USD * term * 100) / 100 };
+  // Not multiplied by anything. There is one price and one purchase, and a
+  // quote that still carried a term would be an offer the checkout cannot make.
+  return { ok: true, tld, priceUsd: ENDING_PRICE_USD };
 }
 
-/** What it costs to keep one you hold. */
-export async function quoteRenewal({ tld: tldInput, userId, years = 1 }) {
-  const tld = normalizeTld(tldInput);
-  if (!tld) return { ok: false, error: "not a valid TLD" };
-
-  const term = Number(years);
-  if (!Number.isInteger(term) || term < 1 || term > MAX_TERM_YEARS) {
-    return { ok: false, error: `a term is 1 to ${MAX_TERM_YEARS} years` };
-  }
-
-  const owner = await getTldWithTerm(tld);
-  if (!owner) return { ok: false, error: `.${tld} is not registered` };
-  if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
-
-  return { ok: true, tld, years: term, priceUsd: Math.round(ENDING_PRICE_USD * term * 100) / 100, expiresAt: owner.expires_at };
-}
-
-export async function openTldPurchase({ paymentId, tld, userId, amountUsd, years = 1, kind = "register", now = Date.now() }) {
+/**
+ * Open a checkout for an ending.
+ *
+ * `kind` and `years` are written as the constants they now always are rather
+ * than dropped from the INSERT: the columns are the ledger's, and a row that
+ * left them NULL would be indistinguishable from one written before they
+ * existed. Every ending sold from here on is one registration, held for good.
+ */
+export async function openTldPurchase({ paymentId, tld, userId, amountUsd, now = Date.now() }) {
   await run(
     `INSERT INTO moshpit_tld_purchases (id, tld, user_id, amount_usd, kind, status, years, created_at, reserved_until)
-     VALUES (?,?,?,?,?, 'pending', ?,?,?)`,
-    [paymentId, tld, userId, amountUsd, kind, years, now, now + RESERVATION_MS],
+     VALUES (?,?,?,?, 'register', 'pending', 1, ?,?)`,
+    [paymentId, tld, userId, amountUsd, now, now + RESERVATION_MS],
   );
 }
 
 /**
- * Hand over a paid-for ending, or extend one. Idempotent on the payment id.
+ * Hand over a paid-for ending. Idempotent on the payment id.
  *
  * The claim is a conditional UPDATE for the same reason every other settlement
  * here uses one: CoinPay retries a webhook it never got an ack for, so two
  * deliveries can be in flight at once and both read 'pending' before either
  * write lands.
  *
- * A renewal never shortens a term. It extends from whichever is later — the
- * current expiry or now — so renewing early adds to what is left rather than
- * throwing it away, and renewing late does not backdate the new term into the
- * past. PRD 0005 R7.
+ * A 'renew' row can no longer be created, but one may still arrive here: a
+ * checkout opened before endings went lifetime can settle after. It is honoured
+ * as what the buyer was actually promised -- they hold the ending, and it now
+ * holds for good -- rather than refused for naming a kind this code no longer
+ * sells. Refusing it would take money for nothing.
  */
 export async function settleTldPurchase(paymentId, now = Date.now()) {
   const p = await get(`SELECT * FROM moshpit_tld_purchases WHERE id = ? AND status = 'pending'`, [paymentId]);
@@ -1522,8 +1525,6 @@ export async function settleTldPurchase(paymentId, now = Date.now()) {
     `UPDATE moshpit_tld_purchases SET status = 'settling' WHERE id = ? AND status = 'pending'`, [paymentId]);
   if (!claimed.rowsAffected) return { ok: false, error: "already settled" };
 
-  const span = TERM_MS * (p.years || 1);
-
   if (p.kind === "renew") {
     const owner = await getTldWithTerm(p.tld);
     if (!owner || owner.user_id !== p.user_id) {
@@ -1531,19 +1532,17 @@ export async function settleTldPurchase(paymentId, now = Date.now()) {
       console.error(`[moshpit] .${p.tld} left ${p.user_id} before renewal ${paymentId} settled — refund due`);
       return { ok: false, error: "ending changed hands before the renewal settled", refundDue: true };
     }
-    const from = Math.max(owner.expires_at || 0, now);
-    await run(`UPDATE moshpit_tlds SET expires_at = ? WHERE tld = ? AND user_id = ?`,
-      [from + span, p.tld, p.user_id]);
+    // Nothing to extend any more. The ending is already theirs for good.
     await run(`UPDATE moshpit_tld_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
-    await logAction(p.tld, p.user_id, `renew:${p.years}y`);
-    return { ok: true, tld: p.tld, userId: p.user_id, expiresAt: from + span, renewed: true };
+    await logAction(p.tld, p.user_id, `renew:lifetime`);
+    return { ok: true, tld: p.tld, userId: p.user_id, renewed: true, lifetime: true };
   }
 
   try {
     await run(
-      `INSERT INTO moshpit_tlds (tld, user_id, owner_email, owner_key, created_at, term_started_at, expires_at)
-       VALUES (?,?,?,?,?,?,?)`,
-      [p.tld, p.user_id, null, null, now, now, now + span],
+      `INSERT INTO moshpit_tlds (tld, user_id, owner_email, owner_key, created_at)
+       VALUES (?,?,?,?,?)`,
+      [p.tld, p.user_id, null, null, now],
     );
   } catch {
     // Claimed by someone else between checkout and confirmation. Real money
@@ -1555,7 +1554,7 @@ export async function settleTldPurchase(paymentId, now = Date.now()) {
 
   await run(`UPDATE moshpit_tld_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
   await logAction(p.tld, p.user_id, `bought:.${p.tld}`);
-  return { ok: true, tld: p.tld, userId: p.user_id, expiresAt: now + span };
+  return { ok: true, tld: p.tld, userId: p.user_id, lifetime: true };
 }
 
 export async function listTldPurchases(userId, limit = 50) {
@@ -1567,14 +1566,16 @@ export async function listTldPurchases(userId, limit = 50) {
 }
 
 /**
- * Is this ending inside its term?
+ * Kept, and it always answers no.
  *
- * A NULL expiry is not expired. Every ending claimed before terms existed has
- * one, and treating "no term recorded" as "term ended" would expire a few
- * hundred namespaces that nobody agreed to put on a clock.
+ * Endings do not expire any more. This stays as a named answer rather than
+ * being deleted because "does this ending still belong to its holder" is a
+ * question callers are entitled to keep asking -- the CLI, the DNS bridge and
+ * the resolvers all reasonably might -- and the honest reply is now a permanent
+ * no rather than a missing export that fails at import time.
  */
-export function isExpired(tld, now = Date.now()) {
-  return Boolean(tld?.expires_at) && tld.expires_at <= now;
+export function isExpired() {
+  return false;
 }
 
 /* ---- short links: /f/<code> ---- */
