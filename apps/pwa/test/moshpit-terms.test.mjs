@@ -32,18 +32,24 @@ test("ending terms", { skip: installed ? false : "pwa dependencies not installed
   const uniq = () => `e${randomBytes(4).toString("hex")}`;
   const pay = () => `pay-${randomBytes(6).toString("hex")}`;
 
-  await t.test("an unclaimed ending quotes at the ending price", async () => {
+  await t.test("an unclaimed ending quotes at the ending price, once", async () => {
     const q = await m.quoteTld({ tld: uniq(), buyerId: ALICE });
     assert.equal(q.ok, true);
     assert.equal(q.priceUsd, 5, "PRD 0005 §10.1, rounded to whole dollars");
-    assert.equal(q.years, 1);
+    assert.equal(q.years, undefined, "there is no term to quote");
   });
 
-  await t.test("multiple years multiply, up to the cap", async () => {
-    assert.equal((await m.quoteTld({ tld: uniq(), buyerId: ALICE, years: 3 })).priceUsd, 15);
-    assert.equal((await m.quoteTld({ tld: uniq(), buyerId: ALICE, years: 11 })).ok, false);
-    assert.equal((await m.quoteTld({ tld: uniq(), buyerId: ALICE, years: 0 })).ok, false);
-    assert.equal((await m.quoteTld({ tld: uniq(), buyerId: ALICE, years: 1.5 })).ok, false);
+  await t.test("there is no term to buy more of", async () => {
+    // A quantity used to multiply the price. Passing one now is not an error
+    // that needs naming, it is a field nothing reads -- what matters is that it
+    // cannot quietly produce a different price.
+    assert.equal((await m.quoteTld({ tld: uniq(), buyerId: ALICE, years: 3 })).priceUsd, 5);
+    assert.equal((await m.quoteTld({ tld: uniq(), buyerId: ALICE, years: 11 })).priceUsd, 5);
+    // And renewing is gone entirely rather than left as a no-op somebody could
+    // still wire a checkout to.
+    assert.equal(typeof m.quoteRenewal, "undefined");
+    assert.equal(typeof m.MAX_TERM_YEARS, "undefined");
+    assert.equal(typeof m.TERM_MS, "undefined");
   });
 
   await t.test("every refusal names itself", async () => {
@@ -72,7 +78,7 @@ test("ending terms", { skip: installed ? false : "pwa dependencies not installed
     assert.equal((await m.quoteTld({ tld, buyerId: BOB })).ok, true);
   });
 
-  await t.test("settling hands it over with a term", async () => {
+  await t.test("settling hands it over for good", async () => {
     const tld = uniq();
     const id = pay();
     const now = Date.now();
@@ -80,11 +86,26 @@ test("ending terms", { skip: installed ? false : "pwa dependencies not installed
 
     const result = await m.settleTldPurchase(id, now);
     assert.equal(result.ok, true);
+    assert.equal(result.lifetime, true);
 
     const row = await m.getTldWithTerm(tld);
     assert.equal(row.user_id, ALICE);
-    assert.equal(row.term_started_at, now);
-    assert.equal(row.expires_at, now + m.TERM_MS, "one year");
+    // The columns are gone, not merely unset: a NULL expiry somebody could
+    // later populate is an annual term waiting to be switched back on.
+    assert.equal("expires_at" in row, false);
+    assert.equal("term_started_at" in row, false);
+  });
+
+  await t.test("the ledger still records what was sold", async () => {
+    const tld = uniq();
+    const id = pay();
+    await m.openTldPurchase({ paymentId: id, tld, userId: ALICE, amountUsd: 5 });
+    await m.settleTldPurchase(id);
+
+    const row = (await m.listTldPurchases(ALICE, 50)).find((r) => r.id === id);
+    assert.equal(row.kind, "register");
+    assert.equal(row.years, 1);
+    assert.equal(row.status, "cleared");
   });
 
   await t.test("a redelivered webhook does not settle twice", async () => {
@@ -113,56 +134,50 @@ test("ending terms", { skip: installed ? false : "pwa dependencies not installed
     assert.ok(row, "the purchase is still on Alice's record");
   });
 
-  await t.test("renewing extends, and never shortens", async () => {
+  await t.test("a renewal opened before the change is honoured, not refunded", async () => {
+    // Nothing can create one of these any more, but a checkout opened before
+    // endings went lifetime may still settle afterwards. The buyer is owed what
+    // they were promised -- they keep the ending, and it now keeps itself.
     const tld = uniq();
-    const now = Date.now();
-    const first = pay();
-    await m.openTldPurchase({ paymentId: first, tld, userId: ALICE, amountUsd: 5, now });
-    await m.settleTldPurchase(first, now);
-
-    // Renewing early adds to what is left rather than throwing it away.
-    const second = pay();
-    await m.openTldPurchase({ paymentId: second, tld, userId: ALICE, amountUsd: 5, kind: "renew", now });
-    await m.settleTldPurchase(second, now + 1000);
-
-    assert.equal((await m.getTldWithTerm(tld)).expires_at, now + m.TERM_MS * 2);
-  });
-
-  await t.test("renewing a lapsed term runs from now, not from the past", async () => {
-    const tld = uniq();
-    const past = Date.now() - m.TERM_MS * 2;
+    await m.registerTld({ tld, userId: ALICE });
+    const id = pay();
     await run(
-      `INSERT INTO moshpit_tlds (tld,user_id,created_at,term_started_at,expires_at) VALUES (?,?,?,?,?)`,
-      [tld, ALICE, past, past, past + m.TERM_MS],
+      `INSERT INTO moshpit_tld_purchases (id,tld,user_id,amount_usd,kind,status,years,created_at,reserved_until)
+       VALUES (?,?,?,?, 'renew', 'pending', 1, ?, ?)`,
+      [id, tld, ALICE, 5, Date.now(), Date.now() + 60_000],
     );
 
+    const result = await m.settleTldPurchase(id);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.renewed, true);
+    assert.equal(result.lifetime, true);
+    assert.equal((await m.getTldWithTerm(tld)).user_id, ALICE);
+    assert.equal((await m.listTldPurchases(ALICE, 50)).find((r) => r.id === id).status, "cleared");
+  });
+
+  await t.test("a renewal for an ending that changed hands is still a refund", async () => {
+    const tld = uniq();
+    await m.registerTld({ tld, userId: BOB });
     const id = pay();
-    const now = Date.now();
-    await m.openTldPurchase({ paymentId: id, tld, userId: ALICE, amountUsd: 5, kind: "renew", now });
-    await m.settleTldPurchase(id, now);
+    await run(
+      `INSERT INTO moshpit_tld_purchases (id,tld,user_id,amount_usd,kind,status,years,created_at,reserved_until)
+       VALUES (?,?,?,?, 'renew', 'pending', 1, ?, ?)`,
+      [id, tld, ALICE, 5, Date.now(), Date.now() + 60_000],
+    );
 
-    assert.equal((await m.getTldWithTerm(tld)).expires_at, now + m.TERM_MS, "not backdated");
+    const result = await m.settleTldPurchase(id);
+    assert.equal(result.ok, false);
+    assert.equal(result.refundDue, true);
   });
 
-  await t.test("only the holder may renew", async () => {
+  await t.test("nothing expires any more", async () => {
     const tld = uniq();
     await m.registerTld({ tld, userId: ALICE });
-    assert.match((await m.quoteRenewal({ tld, userId: BOB })).error, /do not own/);
-    assert.equal((await m.quoteRenewal({ tld, userId: ALICE })).ok, true);
-  });
-
-  await t.test("an ending with no term recorded is not expired", async () => {
-    // Every ending claimed before terms existed has a NULL expiry. Treating
-    // that as expired would put a few hundred namespaces on a clock nobody
-    // agreed to.
-    const tld = uniq();
-    await m.registerTld({ tld, userId: ALICE });
-    const row = await m.getTldWithTerm(tld);
-
-    assert.equal(row.expires_at, null);
-    assert.equal(m.isExpired(row), false);
-    assert.equal(m.isExpired({ expires_at: Date.now() - 1 }), true);
-    assert.equal(m.isExpired({ expires_at: Date.now() + 1000 }), false);
+    assert.equal(m.isExpired(await m.getTldWithTerm(tld)), false);
+    // Including for a row that still carries a date from somewhere. The answer
+    // is a permanent no, not a comparison against a column that no longer runs.
+    assert.equal(m.isExpired({ expires_at: Date.now() - 1 }), false);
+    assert.equal(m.isExpired(), false);
   });
 });
 

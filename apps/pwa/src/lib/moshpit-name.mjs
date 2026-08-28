@@ -226,20 +226,25 @@ export function shortCount(n) {
 }
 
 /**
- * The most a child name should cost per year.
+ * The most a child name should cost. Once, for good.
  *
  * This is the `me.whatever` price — what a buyer pays to mint a name under an
  * ending someone else holds. It is not the price of `.whatever` itself, which
- * is a separate thing the registry does not charge for yet.
+ * is a separate thing.
  *
  * $2 flat. PRD 0005 R3 wrote this as $1.99; the extra cent buys nothing but a
  * price tag that looks like a supermarket shelf, and every number a person has
  * to reason about here — a default, a cap, a per-line override — reads better
  * round. The PRD number is superseded by this one.
  *
- * The ceiling is on the annual registration/renewal price only. A one-time
- * Buy Now resale transfers ownership rather than starting a term, and §10.2.4
- * puts no ceiling on that.
+ * Not an annual price, and never was in practice: `moshpit_names` has never had
+ * an expiry column and nothing has ever renewed a name. The PRD called it a
+ * yearly fee, the schema sold it outright, and this comment used to describe
+ * the PRD. It now describes what the code does, which is the thing buyers were
+ * actually getting.
+ *
+ * A one-time Buy Now resale transfers ownership rather than starting anything,
+ * and §10.2.4 puts no ceiling on that.
  */
 export const MAX_CHILD_PRICE_USD = 2;
 
@@ -247,7 +252,7 @@ export const MAX_CHILD_PRICE_USD = 2;
 export const CHILD_PRICE_USD = MAX_CHILD_PRICE_USD;
 
 /**
- * What a direct ending costs per year: `.whatever` itself.
+ * What a direct ending costs, once: `.whatever` itself.
  *
  * Nothing charges this yet — `registerTld` inserts a row and claiming is free.
  * It lives here anyway so the two prices sit together and the number is settled
@@ -257,6 +262,12 @@ export const CHILD_PRICE_USD = MAX_CHILD_PRICE_USD;
  * $5 flat, for the same reason the child price is $2: PRD 0005 §10.1 wrote
  * these as $4.99 and $1.99, and the trailing cents buy nothing but a price tag
  * shaped like a supermarket shelf.
+ *
+ * Paid once and held for good. §5's one-year term with renewals is withdrawn
+ * (migration 016). A name that lapses is a name somebody else can catch, and
+ * the whole reason to be here is to stop settling for the hyphenated version of
+ * the name you wanted — an annual invoice with a drop date attached is the
+ * thing people are leaving, not something to sell them again.
  */
 export const ENDING_PRICE_USD = 5;
 

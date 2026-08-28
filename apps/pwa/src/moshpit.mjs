@@ -10,6 +10,8 @@
 // without a mirror being able to forge or seize a name, because the order is
 // checkable rather than trusted.
 
+import { randomBytes } from "node:crypto";
+
 import { db, get, all, run } from "./db.mjs";
 import { normalizeFeedKind, normalizeFeedUrl } from "./lib/feed.mjs";
 import { contentOut, MAX_ITEMS_PER_NAME, normalizeContent, normalizeSlug } from "./lib/moshpit-content.mjs";
@@ -38,6 +40,16 @@ import {
   normalizeRecordType,
   recordConflict,
 } from "./lib/moshpit-records.mjs";
+import {
+  TWIN_UNLINK_LEAD_MS,
+  clearnetTwins,
+  moshpitNameForTwin,
+  normalizeDomain,
+  twinIsLive,
+  twinProof,
+  twinProofMatches,
+  twinProofName,
+} from "./lib/moshpit-twin.mjs";
 
 export {
   RESERVED_TLDS, RESOLVE_MODES, MAX_BULK_TLDS, BULK_CHUNK, BULK_TIME_BUDGET_MS, shortCount, DEFAULT_TLD_PRICE_USD, MAX_CHILD_PRICE_USD, CHILD_PRICE_USD, ENDING_PRICE_USD, normalizeLabel, normalizeTld, parseMoshpitName,
@@ -53,6 +65,12 @@ export {
   CONTENT_KINDS, MAX_GALLERY, MAX_ITEMS_PER_NAME, MAX_NAV, NAV_KINDS, POST_KINDS,
   navFor, normalizeContent, normalizeSlug, postsFor,
 } from "./lib/moshpit-content.mjs";
+
+export {
+  TWIN_PRICE_USD, TWIN_PROOF_HOST, TWIN_TLDS, TWIN_UNLINK_LEAD_MS,
+  clearnetTwin, clearnetTwins, moshpitNameForTwin, normalizeDomain, normalizeTwinToken,
+  parseTwinProof, twinIsLive, twinProof, twinProofMatches, twinProofName,
+} from "./lib/moshpit-twin.mjs";
 
 /**
  * The largest number this column will accept.
@@ -456,6 +474,11 @@ export async function releaseName({ tld: tldInput, label: labelInput, userId }) 
   // Records go with the name for the same reason, and it matters more: an
   // inherited MX would route the next holder's mail to the last one's server.
   await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  // And the twin, which matters most of the three. It names a domain the
+  // departing holder registered and still controls, so inheriting one would
+  // point the next holder's visitors at a stranger's website under their own
+  // name — and hand that stranger a proof record they can revoke at will.
+  await run(`DELETE FROM moshpit_twins WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await run(`DELETE FROM moshpit_names WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await logAction(owned.tld, userId, `unname:${owned.label}`);
   return { ok: true };
@@ -1403,13 +1426,27 @@ export function summarizeBulkClaim(result, limit = MAX_BULK_TLDS) {
   return parts.length ? parts.join(". ") + "." : "nothing to claim — paste one ending per line.";
 }
 
-/* ---- buying and renewing an ending ---- */
+/* ---- buying an ending ---- */
 
-/** A term is a year. Ten is the ceiling PRD 0005 R6 puts on one checkout. */
-export const TERM_MS = 365 * 24 * 60 * 60 * 1000;
-export const MAX_TERM_YEARS = 10;
-
-const TLD_COLS_FULL = `tld, user_id, owner_email, alias_of, price_usd, term_started_at, expires_at, created_at`;
+/**
+ * Endings are sold once and held for good.
+ *
+ * They used to carry a one-year term with renewals, per PRD 0005 §5. That is
+ * withdrawn: $5 buys `.eggs` outright, $2 buys a name under one, and neither
+ * ever comes up for renewal. The prices are unchanged -- what changed is that
+ * they are paid once.
+ *
+ * The reason is not generosity, it is what the namespace is for. A name that
+ * lapses is a name somebody else can catch, and the whole pitch here is that
+ * you can finally have the clean name instead of the hyphenated one you settled
+ * for. An annual invoice with a drop date attached is the thing people are
+ * trying to get away from, and selling it back to them undoes the pitch.
+ *
+ * The term columns are gone (migration 016). The purchase ledger keeps its
+ * `kind` and `years` columns, because those record what was actually sold at
+ * the time and a financial record is not something to rewrite after the fact.
+ */
+const TLD_COLS_FULL = `tld, user_id, owner_email, alias_of, price_usd, created_at`;
 
 export async function getTldWithTerm(tld) {
   return get(`SELECT ${TLD_COLS_FULL} FROM moshpit_tlds WHERE tld = ?`, [tld]);
@@ -1423,17 +1460,12 @@ export async function getTldWithTerm(tld) {
  * reserved, already held, and "you already own it" are three different answers
  * and a single "unavailable" would be none of them.
  */
-export async function quoteTld({ tld: tldInput, buyerId, years = 1, now = Date.now() }) {
+export async function quoteTld({ tld: tldInput, buyerId, now = Date.now() }) {
   const tld = normalizeTld(tldInput);
   if (!tld) return { ok: false, error: "not a valid TLD — letters, digits and dashes only, no dots" };
 
   const why = tldRejection(tld);
   if (why) return { ok: false, error: why };
-
-  const term = Number(years);
-  if (!Number.isInteger(term) || term < 1 || term > MAX_TERM_YEARS) {
-    return { ok: false, error: `a term is 1 to ${MAX_TERM_YEARS} years` };
-  }
 
   const owner = await getTldWithTerm(tld);
   if (owner) {
@@ -1450,46 +1482,40 @@ export async function quoteTld({ tld: tldInput, buyerId, years = 1, now = Date.n
   );
   if (held) return { ok: false, error: `.${tld} is in someone's checkout right now — try again shortly`, taken: true };
 
-  return { ok: true, tld, years: term, priceUsd: Math.round(ENDING_PRICE_USD * term * 100) / 100 };
+  // Not multiplied by anything. There is one price and one purchase, and a
+  // quote that still carried a term would be an offer the checkout cannot make.
+  return { ok: true, tld, priceUsd: ENDING_PRICE_USD };
 }
 
-/** What it costs to keep one you hold. */
-export async function quoteRenewal({ tld: tldInput, userId, years = 1 }) {
-  const tld = normalizeTld(tldInput);
-  if (!tld) return { ok: false, error: "not a valid TLD" };
-
-  const term = Number(years);
-  if (!Number.isInteger(term) || term < 1 || term > MAX_TERM_YEARS) {
-    return { ok: false, error: `a term is 1 to ${MAX_TERM_YEARS} years` };
-  }
-
-  const owner = await getTldWithTerm(tld);
-  if (!owner) return { ok: false, error: `.${tld} is not registered` };
-  if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
-
-  return { ok: true, tld, years: term, priceUsd: Math.round(ENDING_PRICE_USD * term * 100) / 100, expiresAt: owner.expires_at };
-}
-
-export async function openTldPurchase({ paymentId, tld, userId, amountUsd, years = 1, kind = "register", now = Date.now() }) {
+/**
+ * Open a checkout for an ending.
+ *
+ * `kind` and `years` are written as the constants they now always are rather
+ * than dropped from the INSERT: the columns are the ledger's, and a row that
+ * left them NULL would be indistinguishable from one written before they
+ * existed. Every ending sold from here on is one registration, held for good.
+ */
+export async function openTldPurchase({ paymentId, tld, userId, amountUsd, now = Date.now() }) {
   await run(
     `INSERT INTO moshpit_tld_purchases (id, tld, user_id, amount_usd, kind, status, years, created_at, reserved_until)
-     VALUES (?,?,?,?,?, 'pending', ?,?,?)`,
-    [paymentId, tld, userId, amountUsd, kind, years, now, now + RESERVATION_MS],
+     VALUES (?,?,?,?, 'register', 'pending', 1, ?,?)`,
+    [paymentId, tld, userId, amountUsd, now, now + RESERVATION_MS],
   );
 }
 
 /**
- * Hand over a paid-for ending, or extend one. Idempotent on the payment id.
+ * Hand over a paid-for ending. Idempotent on the payment id.
  *
  * The claim is a conditional UPDATE for the same reason every other settlement
  * here uses one: CoinPay retries a webhook it never got an ack for, so two
  * deliveries can be in flight at once and both read 'pending' before either
  * write lands.
  *
- * A renewal never shortens a term. It extends from whichever is later — the
- * current expiry or now — so renewing early adds to what is left rather than
- * throwing it away, and renewing late does not backdate the new term into the
- * past. PRD 0005 R7.
+ * A 'renew' row can no longer be created, but one may still arrive here: a
+ * checkout opened before endings went lifetime can settle after. It is honoured
+ * as what the buyer was actually promised -- they hold the ending, and it now
+ * holds for good -- rather than refused for naming a kind this code no longer
+ * sells. Refusing it would take money for nothing.
  */
 export async function settleTldPurchase(paymentId, now = Date.now()) {
   const p = await get(`SELECT * FROM moshpit_tld_purchases WHERE id = ? AND status = 'pending'`, [paymentId]);
@@ -1499,8 +1525,6 @@ export async function settleTldPurchase(paymentId, now = Date.now()) {
     `UPDATE moshpit_tld_purchases SET status = 'settling' WHERE id = ? AND status = 'pending'`, [paymentId]);
   if (!claimed.rowsAffected) return { ok: false, error: "already settled" };
 
-  const span = TERM_MS * (p.years || 1);
-
   if (p.kind === "renew") {
     const owner = await getTldWithTerm(p.tld);
     if (!owner || owner.user_id !== p.user_id) {
@@ -1508,19 +1532,17 @@ export async function settleTldPurchase(paymentId, now = Date.now()) {
       console.error(`[moshpit] .${p.tld} left ${p.user_id} before renewal ${paymentId} settled — refund due`);
       return { ok: false, error: "ending changed hands before the renewal settled", refundDue: true };
     }
-    const from = Math.max(owner.expires_at || 0, now);
-    await run(`UPDATE moshpit_tlds SET expires_at = ? WHERE tld = ? AND user_id = ?`,
-      [from + span, p.tld, p.user_id]);
+    // Nothing to extend any more. The ending is already theirs for good.
     await run(`UPDATE moshpit_tld_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
-    await logAction(p.tld, p.user_id, `renew:${p.years}y`);
-    return { ok: true, tld: p.tld, userId: p.user_id, expiresAt: from + span, renewed: true };
+    await logAction(p.tld, p.user_id, `renew:lifetime`);
+    return { ok: true, tld: p.tld, userId: p.user_id, renewed: true, lifetime: true };
   }
 
   try {
     await run(
-      `INSERT INTO moshpit_tlds (tld, user_id, owner_email, owner_key, created_at, term_started_at, expires_at)
-       VALUES (?,?,?,?,?,?,?)`,
-      [p.tld, p.user_id, null, null, now, now, now + span],
+      `INSERT INTO moshpit_tlds (tld, user_id, owner_email, owner_key, created_at)
+       VALUES (?,?,?,?,?)`,
+      [p.tld, p.user_id, null, null, now],
     );
   } catch {
     // Claimed by someone else between checkout and confirmation. Real money
@@ -1532,7 +1554,7 @@ export async function settleTldPurchase(paymentId, now = Date.now()) {
 
   await run(`UPDATE moshpit_tld_purchases SET status = 'cleared' WHERE id = ?`, [paymentId]);
   await logAction(p.tld, p.user_id, `bought:.${p.tld}`);
-  return { ok: true, tld: p.tld, userId: p.user_id, expiresAt: now + span };
+  return { ok: true, tld: p.tld, userId: p.user_id, lifetime: true };
 }
 
 export async function listTldPurchases(userId, limit = 50) {
@@ -1544,14 +1566,16 @@ export async function listTldPurchases(userId, limit = 50) {
 }
 
 /**
- * Is this ending inside its term?
+ * Kept, and it always answers no.
  *
- * A NULL expiry is not expired. Every ending claimed before terms existed has
- * one, and treating "no term recorded" as "term ended" would expire a few
- * hundred namespaces that nobody agreed to put on a clock.
+ * Endings do not expire any more. This stays as a named answer rather than
+ * being deleted because "does this ending still belong to its holder" is a
+ * question callers are entitled to keep asking -- the CLI, the DNS bridge and
+ * the resolvers all reasonably might -- and the honest reply is now a permanent
+ * no rather than a missing export that fails at import time.
  */
-export function isExpired(tld, now = Date.now()) {
-  return Boolean(tld?.expires_at) && tld.expires_at <= now;
+export function isExpired() {
+  return false;
 }
 
 /* ---- short links: /f/<code> ---- */
@@ -1681,4 +1705,278 @@ export async function deleteLink({ code: codeInput, userId }) {
   if (existing.user_id !== userId) return { ok: false, error: `/f/${code} is not yours` };
   await run(`DELETE FROM moshpit_links WHERE code = ?`, [code]);
   return { ok: true, code };
+}
+
+/* ---- the clearnet twin ---- */
+
+const TWIN_COLS = `tld, label, domain, status, token, expires_at, verified_at, user_id, created_at`;
+
+/**
+ * The longest term a twin's expiry may be set to.
+ *
+ * ICANN caps a domain registration at ten years, so a date beyond that is not a
+ * long registration, it is a typo or a client sending milliseconds where it
+ * meant seconds. Accepting it would park a twin that never lapses on our clock
+ * and defeat the lead time entirely.
+ */
+const MAX_TWIN_TERM_MS = 11 * 365 * 24 * 60 * 60 * 1000;
+
+/** Read TXT records for a name. Replaceable, so verification is testable without DNS. */
+async function resolveTxtRecords(hostname) {
+  const { resolveTxt } = await import("node:dns/promises");
+  return resolveTxt(hostname);
+}
+
+export async function getTwin(tldInput, labelInput) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return null;
+  return get(`SELECT ${TWIN_COLS} FROM moshpit_twins WHERE tld = ? AND label = ?`, [tld, label]);
+}
+
+/**
+ * The clearnet domain a client should send someone to for `scrambled.eggs`.
+ *
+ * Aliases are followed first, for the same reason pins follow them: when
+ * `.agentic` points at `.agent`, whatever serves `foo.agent` is what a visitor
+ * actually reaches, so its twin is the one that leads somewhere. Answering with
+ * the typed name's own twin would hand out a domain nobody is serving.
+ *
+ * Only a live twin is returned -- verified, and not inside the lead time before
+ * its registration lapses. A pending claim is a domain the registry has no
+ * evidence anyone controls, and handing that out would be worse than handing
+ * out nothing: the caller cannot tell an unproven answer from a proven one.
+ */
+export async function twinForName(input, now = Date.now()) {
+  const resolution = await resolveMoshpitName(input);
+  if (!resolution || !resolution.registered) return null;
+  const parsed = parseMoshpitName(resolution.resolved);
+  if (!parsed) return null;
+
+  const twin = await getTwin(parsed.tld, parsed.label);
+  return twinIsLive(twin, now) ? twin : null;
+}
+
+/**
+ * Why this domain cannot stand for this name, or null when it can.
+ *
+ * The interesting rule is the last one. A twin's stem is computable in both
+ * directions without a lookup -- that is the property the whole design leans
+ * on, because it lets a client holding only `blue-eggs.net` name the pit name
+ * it belongs to for free. Letting `red-eggs.net` back `blue.eggs` would break
+ * exactly that: the computation says `red.eggs`, the published proof says
+ * `blue.eggs`, and any client trusting the cheap answer is sent somewhere its
+ * owner never pointed it.
+ *
+ * A domain whose stem is not a twin shape at all is fine, and deliberately so.
+ * Somebody who already owns `financialadvisors.com` should be able to back
+ * `financial.advisors` with it; there is no computation to contradict.
+ */
+function twinDomainRejection(domain, name) {
+  if (!domain) return "not a valid domain";
+  const computed = moshpitNameForTwin(domain);
+  if (computed && computed !== name) {
+    return `${domain} reads as the twin of ${computed}, not ${name} — a client computing the name from the domain would be sent to the wrong one`;
+  }
+  return null;
+}
+
+/**
+ * Start backfilling a name: record the domain and issue the challenge.
+ *
+ * Does not verify. Verification is a second, separate call because the record
+ * has to be published between the two, and an API that made you guess how long
+ * to wait before retrying a single combined call would be a worse version of
+ * the same two steps.
+ *
+ * Replacing a twin that is already live is refused unless asked for
+ * explicitly. One twin per name is the rule that makes a twin worth anything,
+ * so pointing a name at a new domain necessarily takes it off the clearnet
+ * until the new one proves itself -- brief, recoverable, and not something to
+ * do by accident on the way to fixing a typo.
+ */
+export async function claimTwin({ tld: tldInput, label: labelInput, domain: domainInput, userId, expiresAt = null, replace = false, now = Date.now() }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const name = `${owned.label}.${owned.tld}`;
+
+  const domain = normalizeDomain(domainInput);
+  const rejection = twinDomainRejection(domain, name);
+  if (rejection) return { ok: false, error: rejection };
+
+  const expiry = normalizeTwinExpiry(expiresAt, now);
+  if (expiry.error) return { ok: false, error: expiry.error };
+
+  const current = await getTwin(owned.tld, owned.label);
+  if (current && twinIsLive(current, now) && current.domain !== domain && !replace) {
+    return {
+      ok: false,
+      error: `${name} is already backfilled by ${current.domain} — replacing it takes the name off the clearnet until the new domain verifies`,
+      replaceable: true,
+      current: current.domain,
+    };
+  }
+
+  // Checked before the challenge is issued rather than left to the unique index
+  // at verify time. Both stop it, but only this one stops it before the buyer
+  // has published a TXT record that was never going to be accepted.
+  const taken = await get(
+    `SELECT tld, label FROM moshpit_twins WHERE domain = ? AND status = 'verified' AND NOT (tld = ? AND label = ?)`,
+    [domain, owned.tld, owned.label],
+  );
+  if (taken) return { ok: false, error: `${domain} already backfills ${taken.label}.${taken.tld}`, taken: true };
+
+  // A fresh token per claim, including a re-claim of the same domain. Reusing
+  // the old one would let a proof published for a claim that was since given up
+  // silently satisfy a new one.
+  const token = randomBytes(16).toString("hex");
+  await run(
+    `INSERT INTO moshpit_twins (${TWIN_COLS}) VALUES (?,?,?,?,?,?,?,?,?)
+     ON CONFLICT (tld, label) DO UPDATE SET
+       domain = excluded.domain, status = 'pending', token = excluded.token,
+       expires_at = excluded.expires_at, verified_at = NULL, user_id = excluded.user_id`,
+    [owned.tld, owned.label, domain, "pending", token, expiry.value, null, userId, now],
+  );
+  await logAction(owned.tld, userId, `twin:claim:${owned.label}`);
+
+  return {
+    ok: true,
+    name,
+    domain,
+    token,
+    // Everything the owner needs to publish, rather than the pieces to assemble.
+    // The record is one string typed into one registrar form, and handing back
+    // its parts is how it gets typed in wrong.
+    proof: { host: twinProofName(domain), type: "TXT", value: twinProof({ name, token }) },
+  };
+}
+
+/**
+ * Check the proof and, if it is there, start serving the twin.
+ *
+ * The DNS lookup is injectable because the alternative is a test suite that
+ * either talks to the real internet or does not cover the only part of this
+ * worth covering.
+ *
+ * A lookup that fails is reported as a lookup that failed, separately from a
+ * lookup that succeeded and found nothing. They call for opposite responses --
+ * wait and retry, versus go and fix your record -- and collapsing them into one
+ * message is how somebody spends an afternoon re-typing a record that was
+ * always correct.
+ */
+export async function verifyTwin({ tld: tldInput, label: labelInput, userId, resolveTxt = resolveTxtRecords, now = Date.now() }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const name = `${owned.label}.${owned.tld}`;
+
+  const twin = await getTwin(owned.tld, owned.label);
+  if (!twin) return { ok: false, error: `${name} has no twin claimed` };
+
+  const host = twinProofName(twin.domain);
+  let records;
+  try {
+    records = await resolveTxt(host);
+  } catch (e) {
+    // ENODATA/ENOTFOUND mean the lookup worked and there is nothing there,
+    // which is a missing record rather than a broken resolver.
+    if (e?.code === "ENODATA" || e?.code === "ENOTFOUND" || e?.code === "NXDOMAIN") records = [];
+    else return { ok: false, error: `could not read TXT for ${host}: ${e?.code || e?.message || "lookup failed"}`, retryable: true };
+  }
+
+  if (!twinProofMatches(records, { name, token: twin.token })) {
+    return {
+      ok: false,
+      error: `no matching proof at ${host} — DNS changes can take a few minutes to publish`,
+      retryable: true,
+      proof: { host, type: "TXT", value: twinProof({ name, token: twin.token }) },
+    };
+  }
+
+  try {
+    await run(
+      `UPDATE moshpit_twins SET status = 'verified', verified_at = ? WHERE tld = ? AND label = ?`,
+      [now, owned.tld, owned.label],
+    );
+  } catch {
+    // The partial unique index on verified domains. Someone else proved this
+    // domain between the claim and now, which is a race with a real answer
+    // rather than an internal error to log and swallow.
+    return { ok: false, error: `${twin.domain} was verified against another name first`, taken: true };
+  }
+
+  await logAction(owned.tld, userId, `twin:verify:${owned.label}`);
+  return { ok: true, name, domain: twin.domain, verified_at: now, expires_at: twin.expires_at };
+}
+
+/**
+ * Record when the registration lapses, so the link can be dropped ahead of it.
+ *
+ * Null clears it, meaning "serve indefinitely". That is the honest default for
+ * a domain its holder brought and renews elsewhere: the pit cannot learn the
+ * date, and inventing one would take a live twin down on a guess.
+ */
+export async function setTwinExpiry({ tld: tldInput, label: labelInput, userId, expiresAt, now = Date.now() }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const expiry = normalizeTwinExpiry(expiresAt, now);
+  if (expiry.error) return { ok: false, error: expiry.error };
+
+  const result = await run(
+    `UPDATE moshpit_twins SET expires_at = ? WHERE tld = ? AND label = ?`,
+    [expiry.value, owned.tld, owned.label],
+  );
+  if (!result.rowsAffected) return { ok: false, error: `${owned.label}.${owned.tld} has no twin claimed` };
+  return { ok: true, expires_at: expiry.value };
+}
+
+function normalizeTwinExpiry(input, now) {
+  if (input === null || input === undefined || input === "") return { value: null };
+  const at = typeof input === "number" ? input : Date.parse(String(input));
+  if (!Number.isFinite(at)) return { error: "expiry must be a timestamp" };
+  if (at <= now) return { error: "expiry is in the past" };
+  if (at > now + MAX_TWIN_TERM_MS) return { error: "expiry is further out than a domain registration can run" };
+  return { value: Math.round(at) };
+}
+
+/** Stop backfilling a name. */
+export async function removeTwin({ tld: tldInput, label: labelInput, userId }) {
+  const owned = await ownedName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const result = await run(`DELETE FROM moshpit_twins WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  if (!result.rowsAffected) return { ok: false, error: `${owned.label}.${owned.tld} has no twin claimed` };
+  await logAction(owned.tld, userId, `twin:remove:${owned.label}`);
+  return { ok: true };
+}
+
+export async function listTwinsForUser(userId) {
+  return all(`SELECT ${TWIN_COLS} FROM moshpit_twins WHERE user_id = ? ORDER BY created_at DESC`, [userId]);
+}
+
+/**
+ * Verified twins that are about to stop being served, soonest first.
+ *
+ * What a renewal nag reads. The window is measured against the moment the pit
+ * drops the link, not against the registrar's date, because that is when the
+ * owner's name actually goes dark and it is the deadline they need told.
+ */
+export async function expiringTwins({ within = 30 * 24 * 60 * 60 * 1000, now = Date.now(), limit = 500 } = {}) {
+  return all(
+    `SELECT ${TWIN_COLS} FROM moshpit_twins
+     WHERE status = 'verified' AND expires_at IS NOT NULL AND expires_at - ? <= ?
+     ORDER BY expires_at ASC LIMIT ?`,
+    [TWIN_UNLINK_LEAD_MS, now + within, limit],
+  );
+}
+
+/** The twins worth offering for a name that has none, minus any already spoken for. */
+export async function availableTwins(input) {
+  const candidates = clearnetTwins(input);
+  if (!candidates.length) return [];
+  const rows = await all(
+    `SELECT domain FROM moshpit_twins WHERE status = 'verified' AND domain IN (${candidates.map(() => "?").join(",")})`,
+    candidates,
+  );
+  const taken = new Set(rows.map((r) => r.domain));
+  return candidates.filter((d) => !taken.has(d));
 }
