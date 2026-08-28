@@ -28,6 +28,10 @@
 //   GET    /api/moshpit/sites/:name/content/:slug   one item
 //   PUT    /api/moshpit/sites/:name/content/:slug   replace one item
 //   DELETE /api/moshpit/sites/:name/content/:slug   take one down
+//   POST   /api/moshpit/links                 shorten a url — the pit's /shorten
+//   GET    /api/moshpit/links                 the short links you have minted
+//   DELETE /api/moshpit/links/:code           take one down
+//   GET    /f/:code                           follow one
 //   GET    /pit/records                       the DNS records on the names you hold
 //   GET    /pit/dns                           how to reach these names from a machine
 import { createHash } from "node:crypto";
@@ -53,6 +57,7 @@ import {
 import {
   addPin,
   addRecord,
+  bumpLink,
   clearAlias,
   clearExempt,
   countContent,
@@ -64,9 +69,12 @@ import {
   countTldsForUser,
   countSearchTlds,
   countTldsNotOwnedBy,
+  createLink,
   DEFAULT_TLD_PRICE_USD,
   deleteContent,
+  deleteLink,
   getContent,
+  getLink,
   getName,
   getTld,
   getTldWithPrice,
@@ -74,6 +82,7 @@ import {
   listContent,
   listAllNames,
   listExempt,
+  listLinks,
   listNames,
   listNamesForUser,
   listPins,
@@ -134,6 +143,7 @@ import {
   verifyTwin,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
+import { shortLinkUrl } from "../lib/moshpit-links.mjs";
 
 export const moshpitRouter = Router();
 
@@ -667,6 +677,85 @@ moshpitRouter.delete("/api/moshpit/sites/:name/content/:slug", async (req, res) 
   });
   if (!result.ok) return bad(res, result.error || "could not take that down", result.missing ? 404 : 400);
   res.json({ name: site.name, slug: result.slug, deleted: true });
+});
+
+/* ---- short links ---- */
+
+/**
+ * Mint a short link. `/shorten <url>` in the pit is one call to this.
+ *
+ * Authenticated, and authenticated by API key as much as by session: the thing
+ * asking is usually a terminal holding the token `moshcode login` wrote, not a
+ * browser. Anonymous minting is the difference between a shortener and an open
+ * redirector with a database — the second is what phishing kits are built on,
+ * and the only thing standing between the two is an account that can be
+ * suspended.
+ *
+ * Idempotent per account: shortening the same URL twice returns the same code
+ * (see createLink), so a retried request cannot quietly mint a second one.
+ */
+moshpitRouter.post("/api/moshpit/links", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await createLink({
+    url: req.body?.url,
+    name: req.body?.name ?? null,
+    userId: req.user.id,
+    base: config.pitOrigin,
+  });
+  if (!result.ok) return bad(res, result.error || "could not shorten that");
+  res.status(result.created ? 201 : 200).json({
+    ...result.link,
+    created: result.created,
+    short: shortLinkUrl(result.link.code, config.pitOrigin),
+  });
+});
+
+/** What this account has shortened, newest first. */
+moshpitRouter.get("/api/moshpit/links", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const links = await listLinks(req.user.id);
+  res.json({
+    links: links.map((link) => ({ ...link, short: shortLinkUrl(link.code, config.pitOrigin) })),
+  });
+});
+
+/** Take one down. A dead code 404s rather than resolving to whatever replaces it. */
+moshpitRouter.delete("/api/moshpit/links/:code", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await deleteLink({ code: req.params.code, userId: req.user.id });
+  if (!result.ok) return bad(res, result.error || "could not delete that", result.missing ? 404 : 403);
+  res.json({ code: result.code, deleted: true });
+});
+
+/**
+ * Follow one: `GET /f/<code>`.
+ *
+ * 302 rather than 301. A permanent redirect is cached by the browser forever —
+ * past the point where the link is deleted, repointed, or the account it
+ * belonged to is gone — and a shortener whose links cannot be revoked from the
+ * only machine that matters is not one anybody should print on a sticker.
+ *
+ * The hit count is bumped without being awaited. A visitor should not wait a
+ * round trip on a number nobody reads in real time, and a counter that fails is
+ * a counter that is wrong rather than a redirect that is broken.
+ */
+moshpitRouter.get("/f/:code", async (req, res) => {
+  const link = await getLink(req.params.code);
+  if (!link) {
+    return res.status(404).type("html").send(page("no such link", `
+      <h1>No such short link</h1>
+      <p class="faint">Nothing is published at <code>/f/${esc(String(req.params.code || ""))}</code>.
+      It may have been taken down.</p>
+      <p><a href="${config.pitOrigin}/pit">the pit &rarr;</a></p>`));
+  }
+
+  bumpLink(link.code).catch(() => {});
+  // Nothing to index here — a redirect that search engines follow would put the
+  // destination in the index under this URL, which is the one thing a short
+  // link is not for.
+  res.set("cache-control", "no-store");
+  res.set("x-robots-tag", "noindex");
+  res.redirect(302, link.url);
 });
 
 /* ---- the DNS records a name publishes ---- */

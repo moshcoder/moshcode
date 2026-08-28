@@ -376,6 +376,31 @@ export function buildResponse(query, buf, address, ttl = DEFAULT_TTL, exists = B
   ]);
 }
 
+/**
+ * The answer for a name a blocklist says no to.
+ *
+ * Three shapes, because the right one depends on what is asking. See the note
+ * on `BLOCK_MODES` in dns-filter.mjs for which to reach for; the wire detail is
+ * that `zero` only means an address for a question that wanted one — answering
+ * 0.0.0.0 to an MX or an HTTPS query is not a lie a client knows how to read,
+ * so those get NODATA and the name goes on existing.
+ */
+export function blockedReply(query, buf, mode = "nxdomain", ttl = DEFAULT_TTL) {
+  const question = buf.subarray(12, query.questionEnd);
+  const bare = (rcode) => Buffer.concat([
+    header(query.id, { rcode, answers: 0, recursionDesired: query.recursionDesired }),
+    question,
+  ]);
+  if (mode === "refuse") return bare(RCODE_REFUSED);
+  if (mode === "zero") {
+    const wantsAddress = query.class === CLASS_IN && (query.type === TYPE_A || query.type === TYPE_AAAA);
+    return wantsAddress
+      ? buildResponse(query, buf, query.type === TYPE_AAAA ? "::" : "0.0.0.0", ttl, true)
+      : bare(RCODE_OK);
+  }
+  return bare(RCODE_NXDOMAIN);
+}
+
 /* ------------------------------------------------------------------ registry */
 
 /**
@@ -1164,6 +1189,10 @@ export function createServer(options = {}) {
     // Banning is layered on the rate limit rather than replacing it: the limit
     // decides what an offence is, the ban decides how long it costs.
     ban = null,
+    // A handle from dns-filter.mjs, or anything with `decide(name)`. Null means
+    // no filtering at all — not an empty blocklist, which would still cost a
+    // walk up the labels of every name on the machine.
+    filter = null,
   } = options;
   const limiter = rateLimit ? createRateLimiter(rateLimit) : null;
   const bans = ban ? createBanList(ban) : null;
@@ -1222,6 +1251,23 @@ export function createServer(options = {}) {
         refused: earned ? `banned ${Math.round(earned.banMs / 1000)}s (strike ${earned.strikes})` : "rate limit",
       });
       return refuse();
+    }
+
+    // Blocklist filtering, above the fork between "ours" and "forwarded" on
+    // purpose: a name a list says no to is refused whether it is a Moshpit name
+    // or a clearnet one. Below the fork it would only ever cover one of them,
+    // which is a filter with a documented way around it.
+    //
+    // The decision is synchronous by design — it is a walk up the labels of one
+    // name through some Sets — so the ordinary query path gains no await and no
+    // network call from having filtering on.
+    const verdict = filter ? filter.decide(query.name) : null;
+    if (verdict) {
+      onQuery({ name: query.name, type: query.type, address: null, blocked: verdict });
+      try {
+        socket.send(blockedReply(query, msg, verdict.mode, ttl), rinfo.port, rinfo.address);
+      } catch { /* client vanished */ }
+      return;
     }
 
     // Catch-all routing puts every lookup on the machine through here. Anything
@@ -2262,7 +2308,11 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
   moshcode dns start [--port N]  run the resolver in the foreground
                                  also serves parked names over HTTP so \`curl <name>\`
                                  lands on the Pit; --parking-port N, --no-parking-http
+                                 --no-filter runs it with blocklists off
   moshcode dns install [--write] print the resolver config without applying it
+
+  moshcode dns filter            block ads, trackers, malware and phishing at the
+                                 resolver — \`moshcode dns filter help\` for the verbs
 
   --dry-run    with enable/disable: print exactly what would be done
   --force      with enable: proceed past a preflight refusal (a second drop-in
@@ -2349,6 +2399,14 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
   if (port === null) {
     out(`--port needs a decimal integer from 1 to 65535, got ${JSON.stringify(rawPort)}`);
     return 1;
+  }
+
+  // Its own verb, its own file. `dns filter` reads and writes a config the
+  // bridge picks up on its own, so it needs none of the machinery above and
+  // never escalates: nothing it does touches the machine's resolver.
+  if (sub === "filter") {
+    const { filterCommand } = await import("./dns-filter-cli.mjs");
+    return filterCommand(rest, out, deps.filter || {});
   }
 
   if (sub === "tlds") {
@@ -2532,6 +2590,28 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       : null;
     if (autoTrust) out("trusting names as they resolve — only where the registry publishes a matching pin");
 
+    // Read once at start and reloaded by the handle when the config file moves,
+    // so `dns filter` never has to restart the bridge to take effect. A failure
+    // here is reported and then ignored: a resolver that will not start because
+    // a blocklist would not load is a worse outcome than an unfiltered one.
+    let filter = null;
+    if (!rest.includes("--no-filter")) {
+      try {
+        // Imported here rather than at the top: this file is the vendored copy
+        // of @moshcoder/moshpit-dns and a top-level import of a moshcode-only
+        // module is one more hunk to reconcile at every sync.
+        const { openFilter } = await import("./dns-filter.mjs");
+        filter = await openFilter();
+        if (filter.enabled) {
+          const sizes = filter.sizes();
+          const total = Object.values(sizes).reduce((sum, n) => sum + n, 0);
+          out(`filtering ${total.toLocaleString()} names (${Object.keys(sizes).join(", ") || "no lists cached"}) — blocked names answered as ${filter.mode}`);
+        }
+      } catch (err) {
+        out(`! filtering is off — ${err?.message || err}`);
+      }
+    }
+
     let server;
     try {
       server = await createServer({
@@ -2541,7 +2621,9 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         upstreams,
         tldSet,
         proxyAddress,
-        onQuery: ({ name, address, forwarded }) => {
+        filter,
+        onQuery: ({ name, address, forwarded, blocked }) => {
+          if (blocked) return out(`  ${name} ✗ blocked (${blocked.list}: ${blocked.rule})`);
           out(`  ${name} → ${address || "NXDOMAIN"}`);
           // Only a name that actually resolved to something of ours. A forwarded
           // clearnet name is not ours to trust, and NXDOMAIN has no origin to

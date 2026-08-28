@@ -297,6 +297,50 @@ surface with our hostname on it.
 **Precedence for a name:** target (your server) → posts published here → feed →
 the ending's directory.
 
+## Short links
+
+`pit.moshcode.sh/n/blue.eggs/the-post-i-wrote-on-tuesday` is a fine URL for a
+browser and a bad one for a slide, a QR code or a chat line. The registry mints
+short ones:
+
+```
+mosh ▸ /shorten https://pit.moshcode.sh/n/blue.eggs/the-post-i-wrote-on-tuesday
+✓ https://pit.moshcode.sh/f/k7mq2xd → https://pit.moshcode.sh/n/blue.eggs/the-post-i-wrote-on-tuesday
+```
+
+`/f/<code>` answers a `302` to wherever the link points. The same thing from a
+script, with the API key you already have:
+
+```sh
+curl -X POST https://pit.moshcode.sh/api/moshpit/links \
+  -H "authorization: Bearer $MOSHCODE_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://example.com/a-very-long-address","name":"blue.eggs"}'
+```
+
+| | |
+|---|---|
+| `POST /api/moshpit/links` | mint one — `{ url, name? }`, `name` optional |
+| `GET /api/moshpit/links` | every link you have minted, with its hit count |
+| `DELETE /api/moshpit/links/<code>` | take one down; the code stops resolving |
+| `GET /f/<code>` | follow it |
+
+Four things worth knowing:
+
+- **It needs an account.** An anonymous shortener is an open redirector with a
+  database attached, which is what phishing kits are made of. Minting is tied to
+  the account so a link can be revoked and its owner found.
+- **It is idempotent per account.** Shortening the same URL twice hands back the
+  same code, so a retried call cannot quietly mint a second one and split the
+  hit count in half.
+- **`http(s)` only,** the same rule published content follows. A `javascript:`
+  target never reaches the column that `/f/` redirects to.
+- **The redirect is a `302`, and is never cached or indexed.** A `301` would
+  outlive the link — including past a delete — and a shortener whose links cannot
+  be taken back is not one to print on anything.
+
+Hits are counted; who followed them is not.
+
 ## Limits worth knowing before you build
 
 - **No HTTPS, ever.** No CA will issue for an ending outside the DNS root. That

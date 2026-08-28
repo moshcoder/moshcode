@@ -456,6 +456,30 @@ export const CORE_CLI_COMMANDS = [
   },
   { name: "templates", aliasOf: "template", description: "alias for template" },
   {
+    name: "shorten",
+    group: "hosting",
+    description: "mint a short link on the pit — /f/<code> follows to your url",
+    synopsis: [
+      ["moshcode shorten <url>", "mint one and print it"],
+      ["moshcode shorten <url> --name <name>", "file it under a Moshpit name you hold"],
+      ["moshcode shorten list", "every link you have minted, newest first"],
+      ["moshcode shorten rm <code>", "take one down"],
+    ],
+    flags: [
+      ["--name <name>", "file the link under a Moshpit name you hold", "none"],
+      ["--json", "print the link (or the list) as machine-readable JSON", ""],
+    ],
+    examples: [
+      ["moshcode shorten https://pit.moshcode.sh/n/blue.eggs", "→ pit.moshcode.sh/f/k7mq2xd"],
+      ["moshcode shorten list --json", "pipe your links into a script"],
+      ["moshcode shorten rm k7mq2xd", "the code stops resolving"],
+    ],
+    seeAlso: ["login", "name", "site"],
+    note: "needs an account — run `moshcode login` first. Shortening the same url twice returns the same code.",
+  },
+  { name: "short", aliasOf: "shorten", description: "alias for shorten" },
+  { name: "link", aliasOf: "shorten", description: "alias for shorten" },
+  {
     name: "games",
     group: "arcade",
     description: "the moshcode arcade — twenty-two games, no menus",
@@ -815,6 +839,17 @@ export const DNS_VERBS = [
   { name: "tlds", description: "list the endings claimed in the Pit" },
   { name: "resolve", description: "what a name resolves to, and why" },
   { name: "trust", description: "trust one name's certificate, after checking it against the registry pin" },
+  {
+    name: "filter",
+    description: "block ads, trackers, malware and phishing at the resolver",
+    synopsis: [
+      ["moshcode dns filter", "what is on, and what it has blocked"],
+      ["moshcode dns filter on [--mode nxdomain|zero|refuse] [--lists a,b]", ""],
+      ["moshcode dns filter update", "fetch the lists — nothing downloads on its own"],
+      ["moshcode dns filter allow <name>", "never block it, whatever any list says"],
+      ["moshcode dns filter test <name>", "would this be blocked, and by which rule"],
+    ],
+  },
 ];
 
 /**
@@ -1166,6 +1201,8 @@ export const PIT_COMMANDS = [
     description: "install moshcode's slash commands into Claude Code" },
   { name: "games", aliases: ["game", "arcade", "play"], args: "[game]", cli: "games",
     description: "the arcade — tetris, invaders, pac-man, frogger, kong, outrun, chess and more" },
+  { name: "shorten", aliases: ["short", "link"], args: "<url> | list | rm <code>", cli: "shorten",
+    description: "mint a short link on the pit — /f/<code> follows to your url" },
   { name: "socials", aliases: ["social"], pitOnly: true,
     description: "list social networks available for posting" },
   { name: "post", args: '<social> "message"', pitOnly: true,
