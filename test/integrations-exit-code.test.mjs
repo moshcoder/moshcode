@@ -64,7 +64,11 @@ test("mcp add still exits 0 when every engine registered the server", async () =
 });
 
 test("skill install still exits 0 when every engine installed the skill", async () => {
-  const code = await quietly(() => skillCommand(INSTALL, { run: OK, installedSet: ALL }));
+  // `run` is stubbed, so no clone lands and the real settle would correctly
+  // report an empty directory. This test is about the exit code, not about
+  // what the clone contained.
+  const settle = () => ({ kind: "single", installed: ["some-skill"], kept: [] });
+  const code = await quietly(() => skillCommand(INSTALL, { run: OK, installedSet: ALL, settle }));
   assert.equal(code, 0);
 });
 
