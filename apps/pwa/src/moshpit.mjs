@@ -15,6 +15,12 @@ import { normalizeFeedKind, normalizeFeedUrl } from "./lib/feed.mjs";
 import { contentOut, MAX_ITEMS_PER_NAME, normalizeContent, normalizeSlug } from "./lib/moshpit-content.mjs";
 import { normalizeTarget } from "./lib/moshpit-gateway.mjs";
 import {
+  MAX_LINKS_PER_USER,
+  mintCode,
+  normalizeCode,
+  normalizeLinkUrl,
+} from "./lib/moshpit-links.mjs";
+import {
   BULK_CHUNK,
   BULK_TIME_BUDGET_MS,
   ENDING_PRICE_USD,
@@ -1546,4 +1552,133 @@ export async function listTldPurchases(userId, limit = 50) {
  */
 export function isExpired(tld, now = Date.now()) {
   return Boolean(tld?.expires_at) && tld.expires_at <= now;
+}
+
+/* ---- short links: /f/<code> ---- */
+
+const LINK_COLS = `code, url, user_id, name, hits, last_hit_at, created_at`;
+
+function linkOut(row) {
+  if (!row) return null;
+  return {
+    code: row.code,
+    url: row.url,
+    name: row.name ?? null,
+    hits: row.hits ?? 0,
+    last_hit_at: row.last_hit_at ?? null,
+    created_at: row.created_at,
+  };
+}
+
+/** One link, by its code. The read every redirect makes. */
+export async function getLink(codeInput) {
+  const code = normalizeCode(codeInput);
+  if (!code) return null;
+  return linkOut(await get(`SELECT ${LINK_COLS} FROM moshpit_links WHERE code = ?`, [code]));
+}
+
+/** What an account has minted, newest first. */
+export async function listLinks(userId, { limit = 100, offset = 0 } = {}) {
+  const rows = await all(
+    `SELECT ${LINK_COLS} FROM moshpit_links WHERE user_id = ?
+     ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    [userId, limit, offset],
+  );
+  return rows.map(linkOut);
+}
+
+export async function countLinks(userId) {
+  const row = await get(`SELECT COUNT(*) AS n FROM moshpit_links WHERE user_id = ?`, [userId]);
+  return row?.n ?? 0;
+}
+
+/**
+ * Mint a short link, or hand back the one this account already has.
+ *
+ * Idempotent on (user, url) because the caller is a person at a prompt who
+ * cannot see what they minted last week. `/shorten` on a URL twice returning
+ * two codes would mean two sets of hit counts for one destination and a slow
+ * drift where the code on the sticker is not the code in the list. Handing back
+ * the existing one is also what makes the command safe to retry after a
+ * timeout.
+ *
+ * A collision on the code is retried rather than surfaced: 7 characters of a
+ * 31-symbol alphabet collide rarely, and when they do the honest fix is another
+ * draw, not an error the person at the prompt can do anything about.
+ */
+export async function createLink({
+  url: urlInput, userId, name: nameInput = null, base = null, now = Date.now(),
+  attempts = 5, mint = mintCode,
+}) {
+  const normalized = normalizeLinkUrl(urlInput, { base });
+  if (!normalized.ok) return normalized;
+  const url = normalized.url;
+
+  // Scoping to a name is optional, but claiming one you do not hold is not:
+  // a link listed under someone else's name is a link that borrows their
+  // reputation for wherever it points.
+  let name = null;
+  if (nameInput) {
+    const parsed = parseMoshpitName(nameInput);
+    if (!parsed) return { ok: false, error: `not a moshpit name: ${nameInput}` };
+    const owned = await ownedName(parsed.tld, parsed.label, userId);
+    if (!owned.ok) return owned;
+    name = `${owned.label}.${owned.tld}`;
+  }
+
+  const existing = await get(
+    `SELECT ${LINK_COLS} FROM moshpit_links WHERE user_id = ? AND url = ? ORDER BY created_at LIMIT 1`,
+    [userId, url],
+  );
+  if (existing) return { ok: true, created: false, link: linkOut(existing) };
+
+  // Checked here rather than in the route so every caller is bounded, and only
+  // for a URL that is not already shortened -- hitting the cap should not stop
+  // an account from getting back the code it already minted.
+  const count = await countLinks(userId);
+  if (count >= MAX_LINKS_PER_USER) {
+    return { ok: false, error: `this account already holds ${MAX_LINKS_PER_USER} short links` };
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const code = mint();
+    try {
+      await run(
+        `INSERT INTO moshpit_links (code, url, user_id, name, hits, last_hit_at, created_at)
+         VALUES (?,?,?,?,0,NULL,?)`,
+        [code, url, userId, name, now],
+      );
+      return { ok: true, created: true, link: { code, url, name, hits: 0, last_hit_at: null, created_at: now } };
+    } catch (error) {
+      // Only a taken code is worth another draw. Anything else -- a dropped
+      // connection, a missing table -- would loop `attempts` times and report
+      // the wrong cause, so it is rethrown on the first go.
+      if (!/UNIQUE|constraint/i.test(String(error?.message || ""))) throw error;
+    }
+  }
+  return { ok: false, error: "could not mint a free code — try again" };
+}
+
+/**
+ * Follow a code: the URL, or null.
+ *
+ * The hit count is bumped in the same statement that reads nothing back, and
+ * the redirect does not wait on it — see the route. A visitor should not spend
+ * a round trip to the database on a number nobody reads in real time.
+ */
+export async function bumpLink(codeInput, now = Date.now()) {
+  const code = normalizeCode(codeInput);
+  if (!code) return;
+  await run(`UPDATE moshpit_links SET hits = hits + 1, last_hit_at = ? WHERE code = ?`, [now, code]);
+}
+
+/** Take a link down. Only its owner can. */
+export async function deleteLink({ code: codeInput, userId }) {
+  const code = normalizeCode(codeInput);
+  if (!code) return { ok: false, error: "not a valid code", missing: true };
+  const existing = await get(`SELECT ${LINK_COLS} FROM moshpit_links WHERE code = ?`, [code]);
+  if (!existing) return { ok: false, error: `no short link at /f/${code}`, missing: true };
+  if (existing.user_id !== userId) return { ok: false, error: `/f/${code} is not yours` };
+  await run(`DELETE FROM moshpit_links WHERE code = ?`, [code]);
+  return { ok: true, code };
 }

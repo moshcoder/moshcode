@@ -36,6 +36,7 @@ import { dnsCommand } from "../src/dns.mjs";
 import { nameCommand } from "../src/name-link.mjs";
 import { templateCommand } from "../src/templates.mjs";
 import { serveCommand } from "../src/serve.mjs";
+import { shortenCommand } from "../src/shorten.mjs";
 import { createDohServer, nginxDohSite, parseDohPort, parseGuardArgs, DEFAULT_DOH_PORT, DOH_PATH } from "../src/doh-server.mjs";
 import { completionScript } from "../src/completion.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "../src/cli-schema.mjs";
@@ -585,6 +586,10 @@ async function main() {
   }
   if (cmd === "template" || cmd === "templates") {
     process.exitCode = (await templateCommand(rest)) || 0;
+    return;
+  }
+  if (cmd === "shorten" || cmd === "short" || cmd === "link") {
+    process.exitCode = (await shortenCommand(rest, { prefix: `moshcode ${cmd}` })) || 0;
     return;
   }
 

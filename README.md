@@ -52,6 +52,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
 | `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
 | `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |
+| `moshcode shorten` <br>`short` `link` | hosting | mint a short link on the pit — /f/<code> follows to your url |
 | `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — twenty-two games, no menus |
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
 | `moshcode engines` | engines | list engines and installation status |

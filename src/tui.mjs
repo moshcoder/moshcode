@@ -11,6 +11,7 @@ import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } fr
 import { TOOLS, resolveTool, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { postSocial, socialRoster } from "./socials.mjs";
+import { shortenCommand } from "./shorten.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
@@ -1108,6 +1109,12 @@ export async function tui() {
       rl.close();
       await gamesCommand(rest, { prefix: "/games" });
       rl = mkrl();
+      continue;
+    }
+    // `/shorten` renders in the pit rather than handing the terminal over: it
+    // is one call to the registry and one line back, the same as `/stocks`.
+    if (cmd === "shorten" || cmd === "short" || cmd === "link") {
+      await shortenCommand(rest, { prefix: `/${cmd}` });
       continue;
     }
     if (cmd === "socials" || cmd === "social") {
