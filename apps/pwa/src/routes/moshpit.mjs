@@ -12,6 +12,12 @@
 //   DELETE /api/moshpit/tlds/:tld/exempt      let it follow the alias again
 //   GET    /api/moshpit/resolve?name=&mode=   resolve + precedence for a client resolver
 //   GET    /api/moshpit/records?name=         the records a name publishes, no auth
+//   GET    /api/moshpit/twin?name=            the clearnet domain backfilling a name, no auth
+//   GET    /api/moshpit/tlds/:tld/twin        the same, by tld + ?label=
+//   POST   /api/moshpit/tlds/:tld/twin        claim a domain for a name you hold — issues the challenge
+//   POST   /api/moshpit/tlds/:tld/twin/verify check the TXT proof and start serving it
+//   PUT    /api/moshpit/tlds/:tld/twin/expiry when the registration lapses, so we drop it first
+//   DELETE /api/moshpit/tlds/:tld/twin        stop backfilling
 //   GET    /api/moshpit/tlds/:tld/records     the same, by tld + ?label=
 //   POST   /api/moshpit/tlds/:tld/records     publish a record on a name you hold
 //   DELETE /api/moshpit/tlds/:tld/records     withdraw one
@@ -116,6 +122,16 @@ import {
   tldLog,
   tldRejection,
   zoneLine,
+  TWIN_PRICE_USD,
+  availableTwins,
+  claimTwin,
+  clearnetTwins,
+  getTwin,
+  removeTwin,
+  setTwinExpiry,
+  twinForName,
+  twinProofName,
+  verifyTwin,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
 
@@ -724,6 +740,127 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/records", async (req, res) => {
   });
   if (!result.ok) return bad(res, result.error || "could not withdraw that record", 404);
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), removed: true });
+});
+
+/* ---- the clearnet twin ---- */
+
+/**
+ * GET /api/moshpit/twin?name=scrambled.eggs — public.
+ *
+ * Where to send somebody who is not on the pit. Public for the same reason the
+ * records are: the answer exists so that strangers can act on it, and a twin
+ * only a signed-in caller can read is a twin that does not do its job.
+ *
+ * Answers the resolved name, aliases followed, because that is the name a
+ * visitor actually reaches. The challenge token is not in here even for a
+ * pending claim — publishing it would say nothing an attacker can use, since
+ * only the domain's holder can act on it, but it would advertise which domain
+ * somebody is midway through claiming, and that is not this endpoint's business.
+ *
+ * `available` is offered when there is no twin: the candidates are computable
+ * without asking, but knowing which of them somebody else has already proven is
+ * not, and that is the half worth a round trip.
+ */
+moshpitRouter.get("/api/moshpit/twin", async (req, res) => {
+  const resolution = await resolveMoshpitName(req.query.name);
+  if (!resolution || !resolution.registered) {
+    return res.status(404).json({ error: "not a Moshpit name", twin: null });
+  }
+
+  const twin = await twinForName(resolution.resolved);
+  return res.json({
+    name: resolution.name,
+    resolved: resolution.resolved,
+    name_registered: resolution.name_registered,
+    twin: twin?.domain ?? null,
+    verified_at: twin?.verified_at ?? null,
+    expires_at: twin?.expires_at ?? null,
+    // Where the reverse pointer lives, so a client can read the link from the
+    // domain's side rather than taking our word for it.
+    proof: twin ? { host: twinProofName(twin.domain), type: "TXT" } : null,
+    ...(twin ? {} : { available: await availableTwins(resolution.resolved), price_usd: TWIN_PRICE_USD }),
+  });
+});
+
+/** GET /api/moshpit/tlds/:tld/twin?label=blue — public, unresolved and exact. */
+moshpitRouter.get("/api/moshpit/tlds/:tld/twin", async (req, res) => {
+  const tld = normalizeTld(req.params.tld);
+  const label = normalizeLabel(req.query.label);
+  if (!tld) return bad(res, "not a valid TLD");
+  if (!label) return bad(res, "which name? pass ?label=");
+  const twin = await getTwin(tld, label);
+  if (!twin) return res.status(404).json({ tld, label, twin: null, available: await availableTwins(`${label}.${tld}`) });
+  // Status and expiry, but never the token: this is the public view of a claim
+  // that may still be pending.
+  res.json({
+    tld, label, twin: twin.domain, status: twin.status,
+    verified_at: twin.verified_at, expires_at: twin.expires_at,
+  });
+});
+
+/**
+ * POST /api/moshpit/tlds/:tld/twin { label, domain, expires_at?, replace? }
+ *
+ * Issues the challenge. 409 rather than 400 when the domain is spoken for or a
+ * live twin would be replaced: the request was well-formed and the state
+ * refused it, and telling a script to fix input that was never wrong sends it
+ * round a loop it cannot exit.
+ */
+moshpitRouter.post("/api/moshpit/tlds/:tld/twin", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await claimTwin({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id,
+    domain: req.body?.domain, expiresAt: req.body?.expires_at ?? null,
+    replace: Boolean(req.body?.replace),
+  });
+  if (!result.ok) {
+    const conflict = result.taken || result.replaceable;
+    return res.status(conflict ? 409 : 400).json({
+      error: result.error || "could not claim that domain",
+      ...(result.replaceable ? { replaceable: true, current: result.current } : {}),
+    });
+  }
+  res.status(201).json({
+    tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label),
+    domain: result.domain, status: "pending", proof: result.proof,
+  });
+});
+
+/**
+ * POST /api/moshpit/tlds/:tld/twin/verify { label }
+ *
+ * 202 rather than 200 on a retryable miss. The claim is accepted and unfinished
+ * — a TXT record that has not propagated is the ordinary case, not an error the
+ * caller can do anything about except wait — and a 4xx here would have every
+ * client treat "try again in a minute" as "you got it wrong".
+ */
+moshpitRouter.post("/api/moshpit/tlds/:tld/twin/verify", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await verifyTwin({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
+  if (!result.ok) {
+    if (result.retryable) return res.status(202).json({ verified: false, error: result.error, proof: result.proof });
+    return bad(res, result.error || "could not verify that domain", result.taken ? 409 : 400);
+  }
+  res.json({ verified: true, name: result.name, domain: result.domain, verified_at: result.verified_at, expires_at: result.expires_at });
+});
+
+/** PUT /api/moshpit/tlds/:tld/twin/expiry { label, expires_at } — null serves it indefinitely. */
+moshpitRouter.put("/api/moshpit/tlds/:tld/twin/expiry", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await setTwinExpiry({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id,
+    expiresAt: req.body?.expires_at ?? null,
+  });
+  if (!result.ok) return bad(res, result.error || "could not set that expiry");
+  res.json({ expires_at: result.expires_at });
+});
+
+/** DELETE /api/moshpit/tlds/:tld/twin { label } */
+moshpitRouter.delete("/api/moshpit/tlds/:tld/twin", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await removeTwin({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
+  if (!result.ok) return bad(res, result.error || "could not remove that twin", 404);
+  res.json({ removed: true });
 });
 
 /* ---- serving a name over the clearnet ---- */
@@ -1573,9 +1710,26 @@ moshpitRouter.get("/api/moshpit/resolve", async (req, res) => {
     ? await listRecords(resolved.tld, resolved.label)
     : null;
 
+  // `?twin=1`, gated for the same reason records are: a second table, and the
+  // bridge and the DoH server only ever want an address.
+  const twin = req.query.twin && resolution.name_registered && resolved
+    ? await twinForName(resolution.resolved)
+    : null;
+
   res.json({
     ...resolution,
     ...(records ? { records: records.map((r) => ({ type: r.type, value: r.value, ttl: r.ttl, ...(r.priority === null ? {} : { priority: r.priority }) })) } : {}),
+    // A place to reach this name from the legacy internet, and nothing more.
+    //
+    // Deliberately NOT an input to `prefer`, and this is the line to hold. A
+    // twin is a domain that already answers in the legacy root, so folding it
+    // into precedence would have the pit start outranking DNS for names it was
+    // handed by DNS in the first place — which is indistinguishable from the
+    // hijack the clearnet-wins default exists to prevent. The client decides
+    // what to do with a twin; `prefer` still answers only "may the pit outrank
+    // real DNS for this name", and the answer does not change because somebody
+    // bought a domain.
+    ...(twin ? { twin: twin.domain, twin_expires_at: twin.expires_at } : {}),
     mode,
     prefer: resolutionPreference({ registered: resolution.registered, mode }),
   });
