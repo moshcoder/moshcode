@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 
 import { loadBusiness, loadTimers, newId, updateBusiness, updateTimers } from "./business-store.mjs";
 import { clientLabel, parseFields, resolveClient } from "./clients.mjs";
+import { captureSpec } from "./pty.mjs";
 import { GATEWAYS, defaultGateway, gatewayState } from "./payments.mjs";
 import { chargeFor, describeRate, formatMoney, isDollarPegged, isFiat, rateFor } from "./rates.mjs";
 import { humanDuration, selectEntries, windowFrom } from "./timer.mjs";
@@ -289,7 +290,12 @@ function handOff(record, invoice, business, fields, write, run) {
     return 0;
   }
 
-  const result = run("coinpay", args, { stdio: "inherit" });
+  // Mirrored like every other hand-off: sending an invoice is exactly the kind
+  // of thing you want to read back from the session page afterwards.
+  const launch = captureSpec({ cmd: "coinpay", args });
+  let result;
+  try { result = run(launch.cmd, launch.args, { stdio: "inherit" }); }
+  finally { launch.stop(); }
   if (result?.error) { write(err(String(result.error.message || result.error))); return 1; }
   if (result?.status) { write(err(`coinpay exited ${result.status} — invoice ${record.id} is still a local draft`)); return result.status; }
   updateBusiness((data) => {

@@ -9,6 +9,7 @@
 // were already unit-tested individually while the path that matters was not
 // wired to them at all.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { captureSpec, scriptFlavor } from "../src/pty.mjs";
@@ -126,6 +127,24 @@ test("a shell command's stderr survives the whole chain to the session POST", { 
 
   assert.match(posted.join(""), /merge-skipped-because/,
     "stderr from a pit shell command has to reach the session page");
+});
+
+test("a blocking spawn still delivers its output, on stop", { skip: !CAPTURABLE }, async () => {
+  // moshscript's shell() (so `/run`), /billing and /payments connect are all
+  // spawnSync: the event loop is held for the whole command, so the follower's
+  // poll never gets to run and everything arrives in the drain stop() does.
+  // Batched rather than live — but the alternative here was nothing at all.
+  let seen = "";
+  setActiveSink((chunk) => { seen += chunk; });
+  try {
+    const launch = captureSpec({ cmd: "sh", args: ["-c", "printf 'SYNC-STDERR\\n' >&2"] });
+    spawnSync(launch.cmd, launch.args, { stdio: "ignore" });
+    assert.equal(seen, "", "nothing can arrive while the loop is blocked");
+    launch.stop();
+    assert.match(seen, /SYNC-STDERR/, "and all of it arrives on the drain");
+  } finally {
+    setActiveSink(null);
+  }
 });
 
 test("setActiveSink refuses anything that isn't callable", () => {

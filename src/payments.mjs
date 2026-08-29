@@ -22,6 +22,7 @@
 // `/payments connect stripe` records a *reference* — vault and key name — and
 // says out loud where the secret should go.
 import { spawnSync } from "node:child_process";
+import { captureSpec } from "./pty.mjs";
 
 import { loadBusiness, updateBusiness } from "./business-store.mjs";
 import { parseFields } from "./clients.mjs";
@@ -178,7 +179,10 @@ function connectGateway(args, write, run) {
     return 1;
   }
   write(info(`handing you to ${bone(gateway.bin)} — it owns its own session`));
-  const result = run(gateway.bin, gateway.connect, { stdio: "inherit" });
+  const launch = captureSpec({ cmd: gateway.bin, args: gateway.connect });
+  let result;
+  try { result = run(launch.cmd, launch.args, { stdio: "inherit" }); }
+  finally { launch.stop(); }
   if (result?.error) { write(err(String(result.error.message || result.error))); return 1; }
   if (result?.status) {
     write(err(`${gateway.bin} ${gateway.connect.join(" ")} exited ${result.status} — nothing recorded`));

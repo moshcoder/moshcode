@@ -22,6 +22,7 @@ import { capture, killSession, remoteStatus, sendPrompt } from "./herd.mjs";
 import { herdStart, isRemoteMember, roster, waitForMany, waitMember } from "./herd-cli.mjs";
 import { endTask, findTask, readTasks, startTask } from "./herd-tasks.mjs";
 import { shellInvocation } from "./shell.mjs";
+import { captureSpec } from "./pty.mjs";
 import { identity, loginAuto, logout as forgetCreds } from "./auth.mjs";
 import { expandAlias, getAlias, loadAliases, removeAlias, setAlias } from "./aliases.mjs";
 import { CORE_CLI_COMMAND_NAMES, PIT_COMMANDS } from "./cli-schema.mjs";
@@ -116,7 +117,15 @@ const SHELL = {
     // has the reasoning, including why a headless run stays non-interactive.
     const { shell: sh, args: shArgs } = shellInvocation(cmd);
     ctx.out(`  ▶ shell: ${cmd}`);
-    const res = spawnSync(sh, shArgs, { stdio: "inherit" });
+    // Captured for the session mirror like the pit's own `!cmd`. A blocking
+    // spawn holds the event loop, so the follower's poll never runs and the
+    // whole command arrives in the drain stop() does — batched rather than
+    // live, which is still the difference between reading it from a phone and
+    // not.
+    const launch = captureSpec({ cmd: sh, args: shArgs });
+    let res;
+    try { res = spawnSync(launch.cmd, launch.args, { stdio: "inherit" }); }
+    finally { launch.stop(); }
     if (res.error) throw res.error;
     const code = res.status ?? 1;
     if (code !== 0) {
