@@ -74,6 +74,28 @@ export const SYNCED_FILES = [
   // reported as skipped rather than failing the snapshot, which is the right
   // answer for a list that got big by importing somebody else's.
   { path: "news.opml", json: false, label: "news subscriptions" },
+  // Herd's notification preferences — which states nag you and whether they
+  // ask. `rules.json` above has been carried since the first version and this
+  // sat next to it, unsynced, which made "my herd settings came across" true
+  // of half of them.
+  { path: "herd/config.json", json: true, label: "herd notifications" },
+  // Per-model price overrides for `/cost`. Nothing writes this file; a person
+  // types it, once, from a pricing page — which is exactly the kind of work
+  // `/save` exists so you only do once.
+  { path: "pricing.json", json: true, label: "cost model prices" },
+  // The DNS filter's policy: categories, and your own allow and block lists.
+  // A curated decision, not machine state — the blocklists it names are a
+  // cache that re-downloads itself, and `dns-filter/stats.json` next to it is
+  // browsing history and named below as never-synced.
+  { path: "dns-filter/filter.json", json: true, label: "dns filter policy" },
+  // Clients, teams, rates, invoices. The largest single "start from nothing"
+  // on a new machine, and safe to carry because payment gateways are stored
+  // here as references into a vault rather than as keys (see payments.mjs).
+  //
+  // Last on purpose. The total cap is spent in this order, so the file most
+  // likely to grow past it goes after the small ones — otherwise a year of
+  // invoices silently pushes your aliases out of the snapshot.
+  { path: "business.json", json: true, label: "clients, rates and invoices" },
 ];
 
 /**
@@ -91,13 +113,63 @@ export const NEVER_SYNCED = [
   "sync.json",
   "herd/sessions.json",
   "herd/hook.json",
+  // A billing ledger, not a preference. Two machines both appending hours and
+  // then both saving means the later `/save` drops the earlier one's entries,
+  // and it grows without bound — the two properties that make a file wrong for
+  // a last-write-wins sync.
+  "timers.json",
+  // "the numbers you last saw here", so that `add 3` means something. Carrying
+  // them would make `add 3` on another machine refer to a listing it never saw.
+  "news-last.json",
+  "news-found.json",
+  // Counters, and `recent[]` — the last twenty domains this machine was
+  // blocked from reaching. That is browsing history, and it has no business in
+  // a settings snapshot even one belonging to the person who generated it.
+  "dns-filter/stats.json",
+  // One box's daemon.
+  "moshpit-dns.pid",
+  "moshpit-dns.log",
 ];
+
+/**
+ * Whole subtrees that never sync, matched by prefix.
+ *
+ * `NEVER_SYNCED` is an exact-string list, so a directory named there would be
+ * inert — the entries under it would not match it and would fall through. Any
+ * rule about a directory has to live here to have an effect.
+ */
+export const NEVER_SYNCED_PREFIXES = [
+  // The program itself. ~/.moshcode is also the install directory.
+  "pkg/",
+  // Hook reports, remote polls and per-session task ledgers: all pinned to one
+  // runtime, and the task ledgers carry prompt text and output artifacts.
+  "herd/status/",
+  "herd/remote/",
+  "herd/tasks/",
+  // Cached copies of published feed lists, re-fetched on demand.
+  "lists/",
+  // Downloaded blocklists. Megabytes, and self-renewing.
+  "dns-filter/lists/",
+];
+
+/**
+ * The pty substrate, by extension.
+ *
+ * The header comment above has claimed since the first version that `*.sock`
+ * and `*.pid` are excluded "because they describe processes on exactly one
+ * box". That was true of the intent and never of the code: nothing enforced
+ * it, and the allowlist alone happened to be doing the work. Now it is a rule.
+ * A transcript is the one that matters — it is a full screen capture and will
+ * hold whatever was typed into that session.
+ */
+export const NEVER_SYNCED_SUFFIXES = [".transcript", ".stdin", ".exit", ".sock", ".pid", ".log"];
 
 /** True for a path this build is willing to read or write. */
 export function isSyncable(relative) {
   const name = String(relative ?? "");
   if (NEVER_SYNCED.includes(name)) return false;
-  if (name.startsWith("pkg/")) return false;
+  if (NEVER_SYNCED_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
+  if (NEVER_SYNCED_SUFFIXES.some((suffix) => name.endsWith(suffix))) return false;
   return SYNCED_FILES.some((f) => f.path === name);
 }
 

@@ -67,9 +67,17 @@ configuration is already there and already paired with every machine.
 
 - R1 [P0] `/save` (and `moshcode save`) uploads this machine's pit settings to the
   logged-in account. `/load` (`moshcode load`) brings them back down.
-- R2 [P0] What syncs is an allowlist, not a directory walk: `aliases.json` and
-  `herd/rules.json` today. `credentials.json`, `herd/sessions.json`, `sync.json`
-  and `pkg/` are named as never-synced and asserted in tests.
+- R2 [P0] What syncs is an allowlist, not a directory walk: the pit's settings
+  (`aliases.json`), herd's (`herd/rules.json`, `herd/config.json`), the feed and
+  news subscriptions, `pricing.json`, the DNS filter's policy, and
+  `business.json`. `~/.moshcode` is also where moshcode installs itself and
+  where the account token lives, so the allowlist is load-bearing rather than
+  tidy. `credentials.json`, `herd/sessions.json`, `sync.json` and `pkg/` are
+  named as never-synced and asserted in tests, alongside the state that is
+  meaningless or private off its own machine: task ledgers and transcripts,
+  `timers.json`, `dns-filter/stats.json` (a list of blocked domains is browsing
+  history), listing caches, and one box's pidfiles and logs. Directory and
+  extension rules are enforced, not only documented.
 - R3 [P0] Each save is a numbered revision. `/save` sends the revision it last
   agreed on and the app refuses the write if the account has moved past it, so
   two machines cannot silently erase one another.
