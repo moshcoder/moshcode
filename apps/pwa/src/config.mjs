@@ -69,6 +69,18 @@ export const config = {
     apiKey: process.env.RESEND_API_KEY || "",
     from: process.env.RESEND_FROM || "moshcode <notify@moshcoding.com>",
   },
+  // The mail host behind a name's guard address: `<token>@moshcode.sh` forwards
+  // to whatever the holder reads, so the real address is never published.
+  //
+  // The domain is separate from `origin` and `pitOrigin` on purpose. Those two
+  // are where the registry answers HTTP; this is where it answers mail, and the
+  // two need not be the same host -- moving the pit to another origin must not
+  // silently invalidate every contact address already printed on a page.
+  forwardEmail: {
+    apiKey: process.env.FORWARDEMAIL_API_KEY || "",
+    apiBase: (process.env.FORWARDEMAIL_API_BASE || "https://api.forwardemail.net").replace(/\/+$/, ""),
+    domain: (process.env.MOSHPIT_GUARD_DOMAIN || "moshcode.sh").trim().toLowerCase(),
+  },
   push: {
     vapidPublic: process.env.VAPID_PUBLIC || "",
     vapidPrivate: process.env.VAPID_PRIVATE || "",
@@ -88,6 +100,15 @@ export const config = {
       redirectUri: `${origin}/auth/coinpay/callback`,
       scope: process.env.COINPAY_OAUTH_SCOPE || "openid profile",
     },
+  },
+  /**
+   * Whether a guard address can be minted right now.
+   *
+   * False is a working state, not a broken one: contacts are still recorded,
+   * they are simply not published until there is a mail host to forward them.
+   */
+  get guardMailEnabled() {
+    return Boolean(this.forwardEmail.apiKey && this.forwardEmail.domain);
   },
   get coinpayLoginEnabled() {
     return Boolean(this.coinpay.oauth.authorizeUrl && this.coinpay.oauth.clientId);
