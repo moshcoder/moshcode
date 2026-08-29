@@ -43,6 +43,11 @@ import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
 import { FEED_KINDS, loadFeed } from "../lib/feed.mjs";
+import {
+  sendOfferAnswer,
+  sendOfferToHolder,
+  sendOfferVerification,
+} from "../lib/moshpit-offer-mail.mjs";
 import { FEED_CSS, feedPage, feedUnavailable } from "../lib/moshpit-feed-page.mjs";
 import { CONTENT_KINDS, MAX_BATCH } from "../lib/moshpit-content.mjs";
 import {
@@ -55,8 +60,11 @@ import {
   MAX_BODY_BYTES, ORIGIN_TIMEOUT_MS, checkTarget, fetchOrigin, fetchOriginTls, forwardableHeaders, tlsRedirect,
 } from "../lib/moshpit-gateway.mjs";
 import {
+  activeLease,
   addPin,
+  agreedTerms,
   addRecord,
+  answerCounter,
   bumpLink,
   clearAlias,
   clearExempt,
@@ -75,12 +83,15 @@ import {
   DEFAULT_TLD_PRICE_USD,
   DEFAULT_VISIBILITY,
   ENDING_PRICE_USD,
+  describeOffer,
   deleteContent,
   deleteLink,
+  effectiveStatus,
   getContactPrivate,
   getContent,
   getLink,
   getName,
+  getOffer,
   getTld,
   getTldWithPrice,
   guardAddress,
@@ -89,9 +100,11 @@ import {
   listContent,
   listAllNames,
   listExempt,
+  listLeasesForUser,
   listLinks,
   listNames,
   listNamesForUser,
+  listOffersForHolder,
   listPins,
   listRecordNames,
   listRecords,
@@ -103,12 +116,16 @@ import {
   MAX_LISTING_PRICE_USD,
   MAX_TTL,
   MIN_TTL,
+  makeOffer,
   normalizeLabel,
   normalizeMode,
   normalizePinKind,
   normalizeSlug,
   normalizeTld,
+  offerActor,
+  offerIsLive,
   openNamePurchase,
+  openOfferPurchase,
   parseMoshpitName,
   PIN_KINDS,
   pinsForName,
@@ -129,6 +146,7 @@ import {
   resolutionPreference,
   resolveMoshpitName,
   retryContactAlias,
+  respondToOffer,
   searchTlds,
   setAlias,
   setContact,
@@ -141,6 +159,8 @@ import {
   summarizeBulkClaim,
   tldLog,
   tldRejection,
+  userEmail,
+  verifyOffer,
   zoneLine,
   TWIN_PRICE_USD,
   availableTwins,
@@ -1510,6 +1530,8 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], su
   <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>
   <p class="pit-dir-row">${related.map(endingLink).join(" &middot; ")}</p>` : ""}
 
+  ${offerBox({ tld, label: "", holderId: owner.user_id, user, req })}
+
   ${contactCard(contact)}
 
   <p style="margin-top:26px"><a class="btn" href="/pit">the pit &rarr;</a></p>
@@ -1600,6 +1622,20 @@ function directory({ resolution, tld, owner, names, tlds, quote, contact = null,
   ${others.length ? `
   <h2 class="acid" style="font-size:.9rem;margin-top:22px">More endings</h2>
   <p class="pit-dir-row">${others.map(tldLink).join(" · ")}</p>` : ""}
+
+  ${offerBox({
+    tld,
+    label,
+    // Whoever would be selling. A name somebody holds is theirs to sell; one
+    // nobody has minted is the ending operator's to mint and sell, which is the
+    // case the old page turned away with "not for sale".
+    holderId: resolution.name_registered
+      ? names.find((n) => n.label === label)?.user_id ?? null
+      : owner?.user_id ?? null,
+    leasedUntil: resolution.leased_until ?? null,
+    user,
+    req,
+  })}
 
   ${contactCard(contact)}
 
@@ -1888,6 +1924,438 @@ const contactOut = (row) => ({
   alias_status: row.alias_status,
   alias_error: row.alias_error,
   updated_at: row.updated_at,
+});
+
+/* ---- offers on a parked name ---- */
+
+/**
+ * The form on a parked page.
+ *
+ * This is the whole point of the feature, so it is worth being clear about what
+ * it replaces: every branch below used to be a sentence that ended the
+ * conversation. "This name is claimed but does not point anywhere yet."
+ * ".eggs is not for sale." Both are true and both leave a person who wants the
+ * name with nowhere to go, while the holder never hears that anyone asked.
+ *
+ * No account needed. Requiring one first is asking a stranger to sign up before
+ * they may say what they would pay, on the one page whose job is converting
+ * that stranger. The address is confirmed by mail instead, which is also what
+ * keeps the form from being a way to write to every holder in the registry.
+ */
+function offerBox({ tld, label, holderId, user, req, leasedUntil = null }) {
+  if (!holderId) return "";
+  if (user && user.id === holderId) return "";
+
+  const name = label ? `${label}.${tld}` : `.${tld}`;
+  if (leasedUntil && leasedUntil > Date.now()) {
+    return `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">Make an offer</h2>
+  <p class="mono faint" style="font-size:.72rem">
+    <span class="mono">${esc(name)}</span> is leased until
+    <span class="acid">${esc(new Date(leasedUntil).toISOString().slice(0, 10))}</span> — it cannot be sold or
+    re-let until then. Worth asking again after that date.
+  </p>`;
+  }
+
+  // Leases are names only. See the migration: a name minted under a leased
+  // ending would outlive the lease, so an ending is bought rather than rented.
+  const canLease = Boolean(label);
+
+  return `
+  <h2 class="acid" style="font-size:.9rem;margin-top:26px">Make an offer</h2>
+  <p class="mono faint" style="font-size:.72rem">
+    Nobody has put a price on <span class="mono">${esc(name)}</span>, which is not the same as it not being
+    for sale. Say what it is worth to you and the holder decides. Private — only they see it.
+  </p>
+  <form method="post" action="/pit/offer" class="pit-offer">
+    ${csrfInput(req)}
+    <input type="hidden" name="name" value="${esc(name)}">
+    <div class="pit-row">
+      <select name="kind" aria-label="Buy or lease" data-offer-kind>
+        <option value="buy">buy it</option>
+        ${canLease ? `<option value="lease">lease it</option>` : ""}
+      </select>
+      <span class="mono faint">$</span>
+      <input name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" required
+             aria-label="What you are offering, in dollars" style="min-width:110px">
+      ${canLease ? `
+      <span data-offer-months hidden>
+        <span class="mono faint">for</span>
+        <input name="months" inputmode="numeric" placeholder="12" autocomplete="off"
+               aria-label="Lease term in months" style="min-width:70px">
+        <span class="mono faint">months</span>
+      </span>` : ""}
+    </div>
+    <div class="pit-row">
+      <input name="email" type="email" placeholder="your email" autocomplete="off" spellcheck="false" required
+             aria-label="Your email address" style="min-width:220px">
+      <input name="message" placeholder="anything you want to say (optional)" autocomplete="off"
+             aria-label="A message for the holder" style="min-width:240px">
+      <button class="btn acid" type="submit">Send the offer</button>
+    </div>
+    <p class="mono faint" style="font-size:.7rem;margin:6px 0 0">
+      We mail you once to confirm it is really your address. Nothing reaches the holder until you click it.
+      A lease is paid once for the whole term and reverts when it ends.
+    </p>
+  </form>
+  <script>${OFFER_FORM_JS}</script>`;
+}
+
+/**
+ * Show the months box only when the offer is a lease.
+ *
+ * The one script on this form, and it does what the `hidden` attribute cannot
+ * do on its own. With the script blocked the field is simply hidden and a buy
+ * offer still submits correctly, which is the behaviour that matters.
+ */
+const OFFER_FORM_JS = `
+for (const form of document.querySelectorAll("form.pit-offer")) {
+  const kind = form.querySelector("[data-offer-kind]");
+  const months = form.querySelector("[data-offer-months]");
+  if (!kind || !months) continue;
+  const sync = () => { months.hidden = kind.value !== "lease"; };
+  kind.addEventListener("change", sync);
+  sync();
+}`;
+
+/**
+ * POST /pit/offer — a stranger says what a name is worth to them.
+ *
+ * Unauthenticated by design, and CSRF-guarded all the same: the token is a
+ * double-submit cookie that every visitor gets, signed in or not.
+ */
+moshpitRouter.post("/pit/offer", async (req, res) => {
+  const scope = contactScope(req.body?.name);
+  const backTo = scope
+    ? `/n/${encodeURIComponent(scope.label ? `${scope.label}.${scope.tld}` : scope.tld)}`
+    : "/pit";
+  if (!scope) return res.redirect(`/pit?err=${encodeURIComponent("which name? that is not one.")}`);
+
+  const result = await makeOffer({
+    tld: scope.tld, label: scope.label,
+    kind: req.body?.kind, amount: req.body?.amount, months: req.body?.months,
+    email: req.body?.email, message: req.body?.message,
+    userId: req.user?.id ?? null,
+  });
+  if (!result.ok) return res.redirect(`${backTo}?err=${encodeURIComponent(result.error)}`);
+
+  // The confirmation is the only thing standing between this form and the
+  // holder's inbox, so a send that fails has to be visible rather than leaving
+  // the offerer waiting for a mail that is not coming.
+  const url = `${config.pitOrigin}/offers/verify/${result.verifyToken}`;
+  const sent = await sendOfferVerification(result.offer, url);
+  return res.redirect(`${backTo}?${new URLSearchParams(sent.ok
+    ? { ok: `Offer recorded. Check ${result.offer.offerer_email} and click the link — the holder hears nothing until you do.` }
+    : { err: "the offer is saved, but the confirmation mail would not send — try again shortly" }).toString()}`);
+});
+
+/** GET /offers/verify/:token — the click that lets the holder see it. */
+moshpitRouter.get("/offers/verify/:token", async (req, res) => {
+  const result = await verifyOffer(req.params.token);
+  if (!result.ok) {
+    return res.status(400).send(page({
+      title: "moshpit ▸ offer",
+      head: `<style>${PIT_CSS}</style>`,
+      body: `${appBar(req.user, 0, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px"><section class="pit-panel">
+  <h1 class="acid">That link did not work</h1>
+  <p class="dim">${esc(result.error)}</p>
+  <p><a class="btn" href="/pit">the pit →</a></p>
+</section></main>${footer}`,
+    }));
+  }
+
+  const offer = result.offer;
+  // Told once, on the first confirmation. A second click is a person checking
+  // the link worked, not a reason to mail the holder again.
+  if (!result.already) {
+    const holderEmail = await userEmail(offer.holder_user_id);
+    if (holderEmail) {
+      await sendOfferToHolder(offer, holderEmail, `${config.pitOrigin}/pit/offers`);
+    } else {
+      console.error(`[moshpit] offer ${offer.id} verified but holder ${offer.holder_user_id} has no address`);
+    }
+  }
+
+  const name = offer.label ? `${offer.label}.${offer.tld}` : `.${offer.tld}`;
+  res.status(200).send(page({
+    title: "moshpit ▸ offer sent",
+    head: `<style>${PIT_CSS}</style>`,
+    body: `${appBar(req.user, 0, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px"><section class="pit-panel">
+  <h1 class="acid">It is with the holder</h1>
+  <p class="dim">${esc(describeOffer(offer))}.</p>
+  <p class="mono faint" style="font-size:.72rem">
+    They can accept, refuse, or name a different number. You will hear either way at
+    <span class="acid">${esc(offer.offerer_email)}</span>. Nothing is charged unless you agree on something.
+  </p>
+  <p style="margin-top:22px">
+    <a class="btn acid" href="/offers/${esc(offer.id)}?t=${encodeURIComponent(offer.verify_token)}">Track this offer →</a>
+    <a class="btn" href="/n/${esc(name.replace(/^\./, ""))}">${esc(name)} →</a>
+  </p>
+</section></main>${footer}`,
+  }));
+});
+
+/**
+ * GET /offers/:id — the offerer's side of the conversation.
+ *
+ * Reached by the link mailed to them, which carries the token that stands in
+ * for an account they may not have. The holder never lands here; their view is
+ * /pit/offers, because these are two different jobs -- one person is deciding,
+ * the other is waiting and occasionally paying.
+ */
+moshpitRouter.get("/offers/:id", async (req, res) => {
+  const offer = await getOffer(req.params.id);
+  const token = req.query.t ? String(req.query.t) : null;
+  if (!offer || offerActor(offer, { userId: req.user?.id ?? null, token }) !== "offerer") {
+    return res.status(404).send(page({
+      title: "moshpit ▸ offer",
+      head: `<style>${PIT_CSS}</style>`,
+      body: `${appBar(req.user, 0, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px"><section class="pit-panel">
+  <h1 class="acid">No such offer</h1>
+  <p class="dim">That link is not one of ours, or the offer is gone.</p>
+  <p><a class="btn" href="/pit">the pit →</a></p>
+</section></main>${footer}`,
+    }));
+  }
+
+  const bal = req.user ? await balance(req.user.id) : 0;
+  const status = effectiveStatus(offer);
+  const terms = agreedTerms(offer);
+  const name = offer.label ? `${offer.label}.${offer.tld}` : `.${offer.tld}`;
+  const hidden = `${csrfInput(req)}<input type="hidden" name="t" value="${esc(token ?? "")}">`;
+
+  const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
+    : req.query.ok ? `<p class="pit-msg ok">${esc(req.query.ok)}</p>` : "";
+
+  const body =
+    status === "countered" ? `
+    <p class="dim">The holder countered at <span class="mono acid">$${esc(String(terms.amountUsd))}</span>${
+      terms.months ? ` for <span class="mono acid">${esc(String(terms.months))} months</span>` : ""}.</p>
+    <p class="mono faint" style="font-size:.72rem">You offered ${esc(describeOffer({ ...offer, counter_amount_usd: null, counter_months: null }))}.</p>
+    <form method="post" action="/offers/${esc(offer.id)}/answer" class="pit-row">
+      ${hidden}
+      <button class="btn acid" type="submit" name="action" value="accept">Take the counter</button>
+      <button class="btn" type="submit" name="action" value="reject">Leave it</button>
+    </form>`
+      : status === "accepted" ? `
+    <p class="dim">Accepted at <span class="mono acid">$${esc(String(terms.amountUsd))}</span>. Nothing has moved yet.</p>
+    ${req.user ? `
+    <form method="post" action="/offers/${esc(offer.id)}/pay" class="pit-row">
+      ${hidden}
+      <button class="btn acid" type="submit">Pay $${esc(String(terms.amountUsd))} and take it</button>
+      <span class="mono faint" style="font-size:.7rem">paid in crypto via CoinPay</span>
+    </form>`
+        : `
+    <p class="mono faint" style="font-size:.72rem">
+      Sign in with <span class="acid">${esc(offer.offerer_email)}</span> to pay — a name has to belong to an
+      account, which is the one thing an offer did not need.
+    </p>
+    <p><a class="btn acid" href="/">Sign in →</a></p>`}`
+        : status === "paid" ? `
+    <p class="dim">Settled. <span class="mono acid">${esc(name)}</span> is ${offer.kind === "lease" ? "yours for the term" : "yours"}.</p>
+    <p><a class="btn acid" href="/pit">the pit →</a></p>`
+          : status === "open" ? `
+    <p class="dim">With the holder. Nothing to do but wait — you will hear at
+      <span class="mono acid">${esc(offer.offerer_email)}</span>.</p>
+    <form method="post" action="/offers/${esc(offer.id)}/answer" class="pit-row">
+      ${hidden}
+      <button class="btn" type="submit" name="action" value="withdraw">Withdraw it</button>
+    </form>`
+            : status === "unverified" ? `
+    <p class="dim">Not confirmed yet. Check <span class="mono acid">${esc(offer.offerer_email)}</span> —
+      the holder hears nothing until you click the link.</p>`
+              : `<p class="dim">This offer is over: <span class="mono">${esc(status)}</span>.</p>`;
+
+  res.status(200).send(page({
+    title: `moshpit ▸ offer on ${name}`,
+    head: `<style>${PIT_CSS}</style>`,
+    body: `${appBar(req.user, bal, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px">
+  <p class="label">your offer</p>
+  <h1 style="font-size:clamp(1.6rem,5vw,2.6rem)"><a class="acid" href="/n/${esc(name.replace(/^\./, ""))}">${esc(name)}</a></h1>
+  ${msg}
+  <section class="pit-panel">${body}</section>
+</main>${footer}`,
+  }));
+});
+
+/** POST /offers/:id/answer — the offerer takes a counter, leaves it, or withdraws. */
+moshpitRouter.post("/offers/:id/answer", async (req, res) => {
+  const token = req.body?.t ? String(req.body.t) : null;
+  const result = await answerCounter({
+    id: req.params.id, userId: req.user?.id ?? null, token, action: req.body?.action,
+  });
+  const qs = new URLSearchParams(result.ok
+    ? { ok: result.offer.status === "accepted" ? "Agreed. Sign in and pay to take it." : "Done." }
+    : { err: result.error }).toString();
+  const t = token ? `t=${encodeURIComponent(token)}&` : "";
+  res.redirect(`/offers/${encodeURIComponent(req.params.id)}?${t}${qs}`);
+});
+
+/**
+ * POST /offers/:id/pay — turn an agreed offer into a CoinPay checkout.
+ *
+ * The agreed amount is read from the row here rather than trusted from the form
+ * the buyer was looking at, for the same reason startCheckout re-quotes: the
+ * page they clicked may be minutes old and a counter may have landed since.
+ */
+moshpitRouter.post("/offers/:id/pay", requireAuth, async (req, res) => {
+  const offer = await getOffer(req.params.id);
+  const token = req.body?.t ? String(req.body.t) : null;
+  const backTo = `/offers/${encodeURIComponent(req.params.id)}${token ? `?t=${encodeURIComponent(token)}` : ""}`;
+  const fail = (err) => res.redirect(`${backTo}${token ? "&" : "?"}err=${encodeURIComponent(err)}`);
+
+  if (!offer || offerActor(offer, { userId: req.user.id, token }) !== "offerer") return fail("that offer is not yours");
+  if (effectiveStatus(offer) !== "accepted") return fail("that offer is not agreed yet");
+  if (!config.coinpay.businessId) return fail("payments are not configured yet");
+
+  const terms = agreedTerms(offer);
+  const name = offer.label ? `${offer.label}.${offer.tld}` : `.${offer.tld}`;
+  try {
+    const r = await fetch(`${config.coinpay.apiBase}/api/payments/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        business_id: config.coinpay.businessId,
+        amount: terms.amountUsd,
+        currency: "USD",
+        payment_method: "both",
+        metadata: {
+          app: "moshcode", kind: `moshpit_offer_${offer.kind}`, user_id: req.user.id,
+          offer_id: offer.id, tld: offer.tld, label: offer.label,
+        },
+        redirect_url: `${config.origin}/offers/${offer.id}${token ? `?t=${encodeURIComponent(token)}` : ""}`,
+      }),
+    });
+    const pay = await r.json();
+    const payId = pay.id || pay.payment_id;
+    if (!payId) throw new Error("no payment id in response");
+
+    // Recorded before the buyer leaves, because the webhook can arrive before
+    // they are redirected back and with no payment id on the row it has nothing
+    // to settle.
+    await openOfferPurchase({ offerId: offer.id, paymentId: payId, userId: req.user.id });
+    return res.redirect(pay.hosted_url || pay.url || `${config.coinpay.apiBase}/pay/${payId}`);
+  } catch (e) {
+    console.error(`[moshpit] offer checkout failed for ${name}:`, e.message);
+    return fail("could not start checkout");
+  }
+});
+
+/* ---------- the Offers tab ---------- */
+
+/** One offer as its holder sees it, with the three answers they can give. */
+function offerCard(req, offer) {
+  const status = effectiveStatus(offer);
+  const terms = agreedTerms(offer);
+  const name = offer.label ? `${offer.label}.${offer.tld}` : `.${offer.tld}`;
+  const open = status === "open";
+
+  return `
+<div class="pit-tld">
+  <div class="pit-row" style="margin:0;justify-content:space-between">
+    <h3 class="acid" style="font-family:var(--mono);font-size:1.05rem;text-transform:none">
+      <a class="acid" href="/n/${esc(name.replace(/^\./, ""))}">${esc(name)}</a>
+    </h3>
+    <span class="pill${open ? " on" : ""}">${esc(status)}</span>
+  </div>
+  <p class="mono" style="font-size:.82rem;margin:8px 0 0">${esc(describeOffer(offer))}</p>
+  ${offer.message ? `<p class="dim" style="font-size:.78rem;margin:6px 0 0">“${esc(offer.message)}”</p>` : ""}
+  ${terms.countered ? `
+  <p class="mono faint" style="font-size:.72rem;margin:6px 0 0">You countered — waiting on them.</p>` : ""}
+
+  ${open ? `
+  <form method="post" action="/pit/offers/${esc(offer.id)}" class="pit-row">
+    ${csrfInput(req)}
+    <button class="btn acid" type="submit" name="action" value="accept">Accept</button>
+    <button class="btn" type="submit" name="action" value="reject">Refuse</button>
+    <span class="mono faint" style="font-size:.7rem">or counter at $</span>
+    <input name="counter_amount" inputmode="decimal" placeholder="0.00" autocomplete="off"
+           aria-label="Counter amount" style="min-width:100px">
+    ${offer.kind === "lease" ? `
+    <span class="mono faint" style="font-size:.7rem">for</span>
+    <input name="counter_months" inputmode="numeric" placeholder="${esc(String(offer.lease_months ?? ""))}"
+           autocomplete="off" aria-label="Counter term in months" style="min-width:70px">
+    <span class="mono faint" style="font-size:.7rem">months</span>` : ""}
+    <button class="btn" type="submit" name="action" value="counter">Counter</button>
+  </form>
+  <p class="mono faint" style="font-size:.7rem;margin:6px 0 0">
+    Accepting does not move the name — they pay first, and it transfers when the payment confirms.
+  </p>` : ""}
+</div>`;
+}
+
+moshpitRouter.get("/pit/offers", async (req, res) => {
+  const bal = req.user ? await balance(req.user.id) : 0;
+  const offers = req.user ? await listOffersForHolder(req.user.id) : [];
+  const leases = req.user ? await listLeasesForUser(req.user.id) : [];
+
+  const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
+    : req.query.ok ? `<p class="pit-msg ok">${esc(req.query.ok)}</p>` : "";
+
+  // Sorted so the ones needing an answer are the ones you see. A page that
+  // leads with six months of rejections buries the one that is waiting.
+  const live = offers.filter((o) => offerIsLive(o));
+  const done = offers.filter((o) => !offerIsLive(o)).slice(0, 25);
+
+  const body = !req.user
+    ? `<p class="dim">Sign in to see what people have offered for your names.</p>
+       <p><a class="btn acid" href="/">Sign in →</a></p>`
+    : `
+    ${live.length
+      ? live.map((o) => offerCard(req, o)).join("")
+      : `<p class="dim">Nothing on the table. Offers land here when somebody asks about a name you hold —
+         they arrive by mail too, so you do not have to watch this page.</p>`}
+    ${done.length ? `
+    <h2 class="acid" style="font-size:.9rem;margin-top:26px">Settled</h2>
+    ${done.map((o) => offerCard(req, o)).join("")}` : ""}
+    ${leases.length ? `
+    <h2 class="acid" style="font-size:.9rem;margin-top:26px">Names you are renting</h2>
+    <ul class="pit-dir">${leases.map((l) => `<li>
+      <a class="mono acid" href="/n/${esc(l.label)}.${esc(l.tld)}">${esc(l.label)}.${esc(l.tld)}</a>
+      <span class="faint mono"> &rarr; ${l.expires_at > Date.now()
+        ? `yours until ${esc(new Date(l.expires_at).toISOString().slice(0, 10))}`
+        : `ended ${esc(new Date(l.expires_at).toISOString().slice(0, 10))}`}</span></li>`).join("")}</ul>` : ""}`;
+
+  res.type("html").send(page({
+    title: "moshcode ▸ the pit ▸ offers",
+    head: `<style>${PIT_CSS}</style>`,
+    body: `${appBar(req.user, bal, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px">
+  <p class="label">what people will pay</p>
+  <h1 style="font-size:clamp(1.6rem,5vw,2.6rem)">Offers on <span class="acid">your names</span></h1>
+  <p class="dim" style="max-width:62ch">
+    Anyone can offer on a name you hold, whether or not you put a price on it. Only you see them.
+    Accept, refuse, or name a different number — nothing moves until the money confirms.
+  </p>
+  ${pitTabs("offers")}
+  ${msg}
+  <section class="pit-panel">${body}</section>
+</main>${footer}`,
+  }));
+});
+
+/** POST /pit/offers/:id — the holder answers. */
+moshpitRouter.post("/pit/offers/:id", requireAuth, async (req, res) => {
+  const action = String(req.body?.action ?? "");
+  const result = await respondToOffer({
+    id: req.params.id, userId: req.user.id, action,
+    counterAmount: req.body?.counter_amount, counterMonths: req.body?.counter_months,
+  });
+  if (!result.ok) return res.redirect(`/pit/offers?err=${encodeURIComponent(result.error)}`);
+
+  // The offerer is told by mail, because they may have no account here at all
+  // and this page is the only place the answer exists otherwise.
+  const url = `${config.pitOrigin}/offers/${result.offer.id}?t=${encodeURIComponent(result.offer.verify_token)}`;
+  await sendOfferAnswer(result.offer, url);
+
+  const said = action === "accept" ? "Accepted. They have been sent a bill — the name moves when it confirms."
+    : action === "counter" ? "Countered. They have been told."
+      : "Refused. They have been told.";
+  res.redirect(`/pit/offers?ok=${encodeURIComponent(said)}`);
 });
 
 /* ---- the market ---- */
@@ -2237,6 +2705,10 @@ const PIT_CSS = `
 /* A failure stated inline, next to the thing that failed, rather than in the
    banner at the top — the contact tab can have one row broken and the rest fine. */
 .pit-fail{color:var(--danger)}
+/* The offer form stacks its two rows rather than wrapping into one long line:
+   it carries six fields on a page that is mostly read on a phone. */
+.pit-offer{margin:10px 0 0}
+.pit-offer .pit-row{margin:8px 0 0;flex-wrap:wrap}
 .pit-defaults{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 4px}
 .pit-defaults label{display:flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:.72rem;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
@@ -2341,6 +2813,8 @@ const pitTabs = (active, counts = null, query = "") => {
     counts?.theirs === undefined ? "" : `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>`}</a>
   <a class="pit-tab${active === "records" ? " on" : ""}" href="/pit/records${query ? `?q=${encodeURIComponent(query)}` : ""}">DNS Records${
     counts?.records === undefined ? "" : `<span class="count">${counts.records}</span>`}</a>
+  <a class="pit-tab${active === "offers" ? " on" : ""}" href="/pit/offers">Offers${
+    counts?.offers === undefined ? "" : `<span class="count">${counts.offers}</span>`}</a>
   <a class="pit-tab${active === "contact" ? " on" : ""}" href="/pit/contact">Contact</a>
   <a class="pit-tab${active === "publish" ? " on" : ""}" href="/pit/publish">Bulk publish</a>
   <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>

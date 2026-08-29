@@ -50,6 +50,25 @@ import {
   tldRejection,
 } from "./lib/moshpit-name.mjs";
 import {
+  agreedTerms,
+  effectiveStatus,
+  leaseEndsAt,
+  leaseIsActive,
+  MAX_LEASE_MONTHS,
+  MAX_OFFER_USD,
+  MIN_LEASE_MONTHS,
+  MIN_OFFER_USD,
+  mintOfferId,
+  mintVerifyToken,
+  normalizeLeaseMonths,
+  normalizeOfferAmount,
+  normalizeOfferKind,
+  normalizeOfferMessage,
+  OFFER_KINDS,
+  OFFER_TTL_MS,
+  offerIsLive,
+} from "./lib/moshpit-offer.mjs";
+import {
   effectiveTarget,
   normalizeRecord,
   normalizeRecordType,
@@ -91,6 +110,13 @@ export {
   CONTACT_VISIBILITY, DEFAULT_VISIBILITY,
   guardAddress, isGuardToken, mintGuardToken, normalizeContactEmail, normalizeVisibility, publishedContact,
 } from "./lib/moshpit-contact.mjs";
+
+export {
+  MAX_LEASE_MONTHS, MAX_OFFER_MESSAGE, MAX_OFFER_USD, MIN_LEASE_MONTHS, MIN_OFFER_USD,
+  OFFER_KINDS, OFFER_STATUSES, OFFER_TTL_MS,
+  agreedTerms, awaitingHolder, awaitingOfferer, describeOffer, effectiveStatus, leaseEndsAt, leaseIsActive,
+  normalizeLeaseMonths, normalizeOfferAmount, normalizeOfferKind, normalizeOfferMessage, offerIsLive,
+} from "./lib/moshpit-offer.mjs";
 
 /**
  * The largest number this column will accept.
@@ -333,7 +359,7 @@ async function ownedTldAndLabel(tldInput, labelInput, userId) {
 
 /* ---- names under a TLD ---- */
 
-const NAME_COLS = `tld, label, user_id, target, feed_url, feed_kind, created_at`;
+const NAME_COLS = `tld, label, user_id, target, feed_url, feed_kind, leased_to, leased_until, created_at`;
 
 export async function getName(tld, label) {
   return get(`SELECT ${NAME_COLS} FROM moshpit_names WHERE tld = ? AND label = ?`, [tld, label]);
@@ -442,7 +468,7 @@ export async function registerName({ tld: tldInput, label: labelInput, userId, t
 
 /** Point an existing name somewhere else. */
 export async function setNameTarget({ tld: tldInput, label: labelInput, userId, target }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
   const dest = normalizeTarget(target);
   if (!dest.ok) return { ok: false, error: dest.error };
@@ -467,7 +493,7 @@ export async function setNameTarget({ tld: tldInput, label: labelInput, userId, 
  * longer exists, and it would silently apply to whatever feed came next.
  */
 export async function setNameFeed({ tld: tldInput, label: labelInput, userId, feed, kind = null }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const stream = normalizeFeedUrl(feed);
@@ -482,9 +508,20 @@ export async function setNameFeed({ tld: tldInput, label: labelInput, userId, fe
 }
 
 /** Give the name back. */
-export async function releaseName({ tld: tldInput, label: labelInput, userId }) {
+export async function releaseName({ tld: tldInput, label: labelInput, userId, now = Date.now() }) {
   const owned = await ownedName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
+
+  // Not while somebody is renting it. Releasing would drop the name back into
+  // the pool for anyone to mint, mid-tenancy, taking a paid-for term with it --
+  // and the tenant would find out when their site stopped answering.
+  const lease = await activeLease(owned.tld, owned.label, now);
+  if (lease) {
+    return {
+      ok: false,
+      error: `${owned.label}.${owned.tld} is leased until ${new Date(lease.expires_at).toISOString().slice(0, 10)} — you cannot give it up mid-term`,
+    };
+  }
   // Keys go with the name. Deleted explicitly rather than left to the foreign
   // key, because SQLite only enforces those with `PRAGMA foreign_keys = ON`
   // and nothing here sets it — so a cascade that looks declared would not fire,
@@ -758,6 +795,16 @@ export async function resolveMoshpitName(input) {
   // legitimately come from.
   const entry = await getName(resolvedTld, label);
 
+  // A tenancy that has run out but not yet been swept up. The row still carries
+  // the tenant's target because nothing has been round to clear it, and serving
+  // it would keep a former tenant's site answering under a name they no longer
+  // rent -- for however long the sweep is behind, which on a registry that has
+  // just restarted is "since the restart".
+  //
+  // Read-time, so the lease ends when it ends. endExpiredLeases() makes the row
+  // agree afterwards; it is not what makes this true.
+  const lapsed = Boolean(entry?.leased_until) && entry.leased_until <= Date.now();
+
   return {
     name,
     resolved,
@@ -768,12 +815,17 @@ export async function resolveMoshpitName(input) {
     registered: true,
     ...(Boolean(owner.alias_of) && !aliased ? { exempt: true } : {}),
     name_registered: Boolean(entry),
-    target: entry?.target ?? null,
+    target: lapsed ? null : (entry?.target ?? null),
     // Carried alongside the target rather than folded into it. A resolver
     // answering AAAA has no use for a feed and ignores these; /n/ is the caller
     // that turns them into a page, and it needs both to decide which it serves.
-    feed: entry?.feed_url ?? null,
-    feed_kind: entry?.feed_kind ?? null,
+    feed: lapsed ? null : (entry?.feed_url ?? null),
+    feed_kind: lapsed ? null : (entry?.feed_kind ?? null),
+    // Who is renting it, and until when. Null for almost every name. A resolver
+    // ignores both; the name's own page uses them to say why a name that is
+    // plainly somebody's is not answering as theirs.
+    leased_to: lapsed ? null : (entry?.leased_to ?? null),
+    leased_until: lapsed ? null : (entry?.leased_until ?? null),
   };
 }
 
@@ -842,7 +894,7 @@ export async function pinsForName(input, kind = null) {
 
 /** Publish a key for a name you hold. */
 export async function addPin({ tld: tldInput, label: labelInput, pin, kind: kindInput, note = null, userId }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   if (!isPin(pin)) {
@@ -881,7 +933,7 @@ export async function addPin({ tld: tldInput, label: labelInput, pin, kind: kind
  * grounds that it breaks connections would be refusing the point.
  */
 export async function removePin({ tld: tldInput, label: labelInput, pin, userId }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const result = await run(
@@ -957,7 +1009,7 @@ export async function recordsForName(input) {
  * what they wanted.
  */
 export async function addRecord({ tld: tldInput, label: labelInput, type, value, ttl, priority, userId }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const name = `${owned.label}.${owned.tld}`;
@@ -1009,7 +1061,7 @@ export async function addRecord({ tld: tldInput, label: labelInput, type, value,
  * that already knows exactly which record it means.
  */
 export async function removeRecord({ tld: tldInput, label: labelInput, type, value, userId }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const wanted = normalizeRecordType(type);
@@ -1164,7 +1216,7 @@ export async function contentForName(input) {
  * which is not something a later edit gets to rewrite.
  */
 export async function putContent({ tld: tldInput, label: labelInput, userId, item: input, now = Date.now() }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
 
   const normalized = normalizeContent(input, { now });
@@ -1207,7 +1259,7 @@ export async function putContent({ tld: tldInput, label: labelInput, userId, ite
 
 /** Take one item back down. */
 export async function deleteContent({ tld: tldInput, label: labelInput, userId, slug: slugInput }) {
-  const owned = await ownedName(tldInput, labelInput, userId);
+  const owned = await controlledName(tldInput, labelInput, userId);
   if (!owned.ok) return owned;
   const slug = normalizeSlug(slugInput);
   if (!slug) return { ok: false, error: "not a valid slug" };
@@ -1674,7 +1726,7 @@ export async function createLink({
   if (nameInput) {
     const parsed = parseMoshpitName(nameInput);
     if (!parsed) return { ok: false, error: `not a moshpit name: ${nameInput}` };
-    const owned = await ownedName(parsed.tld, parsed.label, userId);
+    const owned = await controlledName(parsed.tld, parsed.label, userId);
     if (!owned.ok) return owned;
     name = `${owned.label}.${owned.tld}`;
   }
@@ -2251,4 +2303,578 @@ export async function unsyncedContacts(limit = 200) {
     `SELECT ${CONTACT_COLS} FROM moshpit_contacts WHERE alias_status IN ('pending','failed') ORDER BY updated_at LIMIT ?`,
     [limit],
   );
+}
+
+/* ---- offers, and the leases some of them become ---- */
+
+const OFFER_COLS = `id, tld, label, kind, amount_usd, lease_months, offerer_email, offerer_user_id, message,
+  holder_user_id, status, verify_token, verified_at, counter_amount_usd, counter_months, countered_at,
+  payment_id, created_at, updated_at, expires_at`;
+
+const LEASE_COLS = `tld, label, lessee_user_id, holder_user_id, offer_id, months, amount_usd, starts_at, expires_at, created_at`;
+
+/**
+ * How many offers one address may make in a day, across the whole registry.
+ *
+ * The verification step is what stops the form being a way to mail strangers;
+ * this is what stops it being a way to mail one holder two hundred times. Both
+ * are needed -- a verified address can still be a determined nuisance.
+ */
+export const MAX_OFFERS_PER_DAY = 20;
+
+/** And one live offer per address per name. A second is a counter, not a new offer. */
+const OFFERS_PER_NAME = 1;
+
+export async function getOffer(id) {
+  return get(`SELECT ${OFFER_COLS} FROM moshpit_offers WHERE id = ?`, [String(id ?? "")]);
+}
+
+export async function offerByVerifyToken(token) {
+  const raw = String(token ?? "");
+  if (!raw) return null;
+  return get(`SELECT ${OFFER_COLS} FROM moshpit_offers WHERE verify_token = ?`, [raw]);
+}
+
+export async function getLease(tld, label) {
+  return get(`SELECT ${LEASE_COLS} FROM moshpit_leases WHERE tld = ? AND label = ?`, [tld, label]);
+}
+
+/** The lease running right now, or null. Read-time, so it ends exactly when it ends. */
+export async function activeLease(tld, label, now = Date.now()) {
+  const lease = await getLease(tld, label);
+  return leaseIsActive(lease, now) ? lease : null;
+}
+
+export async function listLeasesForUser(userId) {
+  return all(`SELECT ${LEASE_COLS} FROM moshpit_leases WHERE lessee_user_id = ? ORDER BY expires_at DESC`, [userId]);
+}
+
+/**
+ * May this account act on the name -- as its holder, or as the tenant renting it?
+ *
+ * The distinction the whole lease feature turns on. A lessee can point the
+ * name, publish under it, put records and keys on it: everything that makes the
+ * name usable for the term they paid for. What they cannot do is anything that
+ * outlives the lease -- give the name up, sell it, bind a clearnet twin to it,
+ * or change who is contacted about buying it. Those stay with the holder, and
+ * they stay on `ownedName`.
+ */
+async function controlledName(tldInput, labelInput, userId, now = Date.now()) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return { ok: false, error: "not a valid name" };
+
+  const existing = await getName(tld, label);
+  if (!existing) return { ok: false, error: `${label}.${tld} is not registered` };
+
+  // The holder, unless somebody is renting it. A holder who has let the name
+  // out does not get to keep pointing it somewhere else for the term -- that
+  // is what the tenant paid for, and two people editing one name is the state
+  // a lease has to rule out rather than race on.
+  const tenanted = existing.leased_to && existing.leased_until > now;
+  if (tenanted) {
+    return existing.leased_to === userId
+      ? { ok: true, tld, label, leased: true }
+      : { ok: false, error: `${label}.${tld} is leased until ${new Date(existing.leased_until).toISOString().slice(0, 10)}` };
+  }
+
+  // The same wording ownedName uses, deliberately. Somebody refused here owns
+  // nothing and rents nothing, so ownership is still the honest reason -- and
+  // the one case where control and ownership genuinely differ, an active lease,
+  // has its own message above that says so with the date.
+  if (existing.user_id !== userId) return { ok: false, error: `you do not own ${label}.${tld}` };
+  return { ok: true, tld, label };
+}
+
+/**
+ * Who an offer for this name or ending would be put to.
+ *
+ * An unregistered name under an ending somebody holds is a legitimate subject:
+ * the operator can mint it and sell it, so they are the one to ask. That is the
+ * case the old page turned away with ".eggs is not for sale", which was true
+ * and unhelpful -- not for sale at a fixed price is not the same as not for
+ * sale.
+ */
+export async function offerTarget(tldInput, labelInput) {
+  const tld = normalizeTld(tldInput);
+  if (!tld) return { ok: false, error: "not a valid ending" };
+
+  const ending = await getTld(tld);
+  // Nobody holds the ending, so there is nobody to offer to -- and no need.
+  if (!ending) return { ok: false, error: `nobody holds .${tld} — claim it instead`, claimable: true };
+
+  const raw = String(labelInput ?? "").trim();
+  if (!raw) return { ok: true, tld, label: "", holderId: ending.user_id, registered: true };
+
+  const label = normalizeLabel(raw);
+  if (!label) return { ok: false, error: "not a valid name" };
+
+  const name = await getName(tld, label);
+  return {
+    ok: true, tld, label,
+    holderId: name ? name.user_id : ending.user_id,
+    registered: Boolean(name),
+  };
+}
+
+/**
+ * Put an offer to whoever holds a name.
+ *
+ * Recorded `unverified` and not mentioned to the holder until the address
+ * proves it wants to be here. Everything about the ordering is that: the offer
+ * exists first so a click can find it, and the holder learns about it second so
+ * that a form submission alone cannot reach them.
+ */
+export async function makeOffer({
+  tld: tldInput, label: labelInput, kind, amount, months, email, message, userId = null, now = Date.now(),
+}) {
+  const target = await offerTarget(tldInput, labelInput);
+  if (!target.ok) return target;
+
+  const offerKind = normalizeOfferKind(kind);
+  if (!offerKind) return { ok: false, error: `an offer is to ${OFFER_KINDS.join(" or ")}` };
+  // See the migration: a name minted during an ending's lease would outlive the
+  // lease, so an ending is bought rather than rented.
+  if (offerKind === "lease" && !target.label) return { ok: false, error: "an ending can be bought, not leased" };
+
+  const amountUsd = normalizeOfferAmount(amount);
+  if (amountUsd === null) {
+    return { ok: false, error: `an offer has to be a number between $${MIN_OFFER_USD} and $${MAX_OFFER_USD}` };
+  }
+
+  const leaseMonths = offerKind === "lease" ? normalizeLeaseMonths(months) : null;
+  if (offerKind === "lease" && leaseMonths === null) {
+    return { ok: false, error: `a lease runs ${MIN_LEASE_MONTHS} to ${MAX_LEASE_MONTHS} months` };
+  }
+
+  const address = normalizeContactEmail(email);
+  if (!address) return { ok: false, error: "that does not look like an email address" };
+
+  if (userId && userId === target.holderId) {
+    return { ok: false, error: target.label ? "you hold this name already" : "you hold this ending already" };
+  }
+
+  // A name that is out on lease cannot cleanly be sold or re-let: the tenancy
+  // would either be broken by the sale or silently inherited by a buyer who
+  // never agreed to it. Said plainly, with the date, so the asker knows when to
+  // come back rather than thinking the name is unavailable outright.
+  if (target.label) {
+    const lease = await activeLease(target.tld, target.label, now);
+    if (lease) {
+      return {
+        ok: false,
+        error: `${target.label}.${target.tld} is leased until ${new Date(lease.expires_at).toISOString().slice(0, 10)}`,
+      };
+    }
+  }
+
+  const recent = await get(
+    `SELECT COUNT(*) AS n FROM moshpit_offers WHERE offerer_email = ? AND created_at > ?`,
+    [address, now - 24 * 60 * 60 * 1000],
+  );
+  if (Number(recent?.n ?? 0) >= MAX_OFFERS_PER_DAY) {
+    return { ok: false, error: "that is a lot of offers for one day — try again tomorrow" };
+  }
+
+  const standing = await all(
+    `SELECT ${OFFER_COLS} FROM moshpit_offers
+     WHERE offerer_email = ? AND tld = ? AND label = ? AND status IN ('unverified','open','countered','accepted')`,
+    [address, target.tld, target.label],
+  );
+  if (standing.filter((o) => offerIsLive(o, now)).length >= OFFERS_PER_NAME) {
+    return { ok: false, error: "you already have an offer standing on this — wait for an answer, or withdraw it" };
+  }
+
+  const id = mintOfferId();
+  const token = mintVerifyToken();
+  await run(
+    `INSERT INTO moshpit_offers
+       (id, tld, label, kind, amount_usd, lease_months, offerer_email, offerer_user_id, message,
+        holder_user_id, status, verify_token, created_at, updated_at, expires_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?, 'unverified', ?,?,?,?)`,
+    [
+      id, target.tld, target.label, offerKind, amountUsd, leaseMonths,
+      address, userId, normalizeOfferMessage(message),
+      target.holderId, token, now, now, now + OFFER_TTL_MS,
+    ],
+  );
+
+  return { ok: true, offer: await getOffer(id), verifyToken: token };
+}
+
+/**
+ * The click in the confirmation mail: the offer becomes one the holder can see.
+ *
+ * Idempotent, because people click links twice and mail clients fetch them
+ * once before the person does. A second click on an already-verified offer is
+ * a success that changes nothing, not an error about a token being used up.
+ */
+export async function verifyOffer(token, now = Date.now()) {
+  const offer = await offerByVerifyToken(token);
+  if (!offer) return { ok: false, error: "that confirmation link is not one of ours" };
+  if (offer.status !== "unverified") {
+    return offerIsLive(offer, now)
+      ? { ok: true, offer, already: true }
+      : { ok: false, error: "that offer is no longer open", offer };
+  }
+  if (offer.expires_at <= now) return { ok: false, error: "that offer expired before it was confirmed", offer };
+
+  await run(
+    `UPDATE moshpit_offers SET status = 'open', verified_at = ?, updated_at = ? WHERE id = ? AND status = 'unverified'`,
+    [now, now, offer.id],
+  );
+  return { ok: true, offer: await getOffer(offer.id) };
+}
+
+/**
+ * Which side of the conversation an actor is on, or neither.
+ *
+ * The offerer may have no account at all, so possession of the token they were
+ * mailed stands in for one. It is the same proof the verification step already
+ * accepted -- if it is good enough to confirm the address, it is good enough to
+ * answer a counter from it.
+ */
+export function offerActor(offer, { userId = null, token = null } = {}) {
+  if (!offer) return null;
+  if (userId && offer.holder_user_id === userId) return "holder";
+  if (token && offer.verify_token === token) return "offerer";
+  if (userId && offer.offerer_user_id && offer.offerer_user_id === userId) return "offerer";
+  return null;
+}
+
+/**
+ * The holder's answer: take it, refuse it, or name a different number.
+ *
+ * Ownership is checked twice -- against the row, which says who it was put to,
+ * and against the registry, which says who holds the name now. A name that
+ * changed hands between the offer and the answer must not be sold by the
+ * person who used to have it.
+ */
+export async function respondToOffer({ id, userId, action, counterAmount, counterMonths, now = Date.now() }) {
+  const offer = await getOffer(id);
+  if (!offer) return { ok: false, error: "no such offer" };
+  if (offerActor(offer, { userId }) !== "holder") return { ok: false, error: "that offer was not made to you" };
+  if (effectiveStatus(offer, now) !== "open") return { ok: false, error: "that offer is not open" };
+
+  const target = await offerTarget(offer.tld, offer.label);
+  if (!target.ok || target.holderId !== userId) {
+    return { ok: false, error: "you no longer hold this, so it is not yours to answer" };
+  }
+
+  if (action === "reject") {
+    await run(`UPDATE moshpit_offers SET status = 'rejected', updated_at = ? WHERE id = ? AND status = 'open'`, [now, id]);
+    return { ok: true, offer: await getOffer(id) };
+  }
+
+  if (action === "accept") {
+    await run(`UPDATE moshpit_offers SET status = 'accepted', updated_at = ? WHERE id = ? AND status = 'open'`, [now, id]);
+    return { ok: true, offer: await getOffer(id) };
+  }
+
+  if (action === "counter") {
+    const amountUsd = normalizeOfferAmount(counterAmount);
+    if (amountUsd === null) {
+      return { ok: false, error: `a counter has to be a number between $${MIN_OFFER_USD} and $${MAX_OFFER_USD}` };
+    }
+    // Months may be countered too: "not for three months, but I would do a
+    // year" is a real answer, and without it the only reply to a term you do
+    // not like is no.
+    const months = offer.kind === "lease"
+      ? (counterMonths === undefined || counterMonths === null || counterMonths === ""
+        ? offer.lease_months
+        : normalizeLeaseMonths(counterMonths))
+      : null;
+    if (offer.kind === "lease" && months === null) {
+      return { ok: false, error: `a lease runs ${MIN_LEASE_MONTHS} to ${MAX_LEASE_MONTHS} months` };
+    }
+    await run(
+      `UPDATE moshpit_offers SET status = 'countered', counter_amount_usd = ?, counter_months = ?, countered_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'open'`,
+      [amountUsd, months, now, now, id],
+    );
+    return { ok: true, offer: await getOffer(id) };
+  }
+
+  return { ok: false, error: "an answer is accept, reject or counter" };
+}
+
+/** The offerer's answer to a counter, and their way out of an offer they no longer want. */
+export async function answerCounter({ id, userId = null, token = null, action, now = Date.now() }) {
+  const offer = await getOffer(id);
+  if (!offer) return { ok: false, error: "no such offer" };
+  if (offerActor(offer, { userId, token }) !== "offerer") return { ok: false, error: "that offer is not yours" };
+
+  const status = effectiveStatus(offer, now);
+  if (action === "withdraw") {
+    if (!["unverified", "open", "countered"].includes(status)) {
+      return { ok: false, error: "that offer is not open" };
+    }
+    await run(`UPDATE moshpit_offers SET status = 'withdrawn', updated_at = ? WHERE id = ?`, [now, id]);
+    return { ok: true, offer: await getOffer(id) };
+  }
+
+  if (status !== "countered") return { ok: false, error: "there is no counter to answer" };
+  if (action === "accept") {
+    await run(
+      `UPDATE moshpit_offers SET status = 'accepted', updated_at = ? WHERE id = ? AND status = 'countered'`, [now, id]);
+    return { ok: true, offer: await getOffer(id) };
+  }
+  if (action === "reject") {
+    await run(
+      `UPDATE moshpit_offers SET status = 'rejected', updated_at = ? WHERE id = ? AND status = 'countered'`, [now, id]);
+    return { ok: true, offer: await getOffer(id) };
+  }
+  return { ok: false, error: "an answer to a counter is accept or reject" };
+}
+
+export async function listOffersForHolder(userId, { limit = 200 } = {}) {
+  return all(
+    `SELECT ${OFFER_COLS} FROM moshpit_offers
+     WHERE holder_user_id = ? AND status != 'unverified' ORDER BY created_at DESC LIMIT ?`,
+    [userId, limit],
+  );
+}
+
+export async function listOffersForEmail(email, { limit = 200 } = {}) {
+  return all(
+    `SELECT ${OFFER_COLS} FROM moshpit_offers WHERE offerer_email = ? ORDER BY created_at DESC LIMIT ?`,
+    [String(email ?? "").toLowerCase(), limit],
+  );
+}
+
+/** Live offers on one name, for the holder's own page. Never shown to a visitor. */
+export async function listOffersForName(tld, label = "", { now = Date.now() } = {}) {
+  const rows = await all(
+    `SELECT ${OFFER_COLS} FROM moshpit_offers WHERE tld = ? AND label = ? ORDER BY created_at DESC`, [tld, label]);
+  return rows.filter((o) => offerIsLive(o, now));
+}
+
+/**
+ * Record the checkout for an accepted offer.
+ *
+ * The buyer needs an account by now even though they did not need one to ask:
+ * a name has to belong to somebody, and a lease has to be controllable by
+ * somebody. Their id is written onto the offer here, which is the moment an
+ * address becomes an account.
+ */
+export async function openOfferPurchase({ offerId, paymentId, userId, now = Date.now() }) {
+  await run(
+    `UPDATE moshpit_offers SET payment_id = ?, offerer_user_id = ?, updated_at = ? WHERE id = ? AND status = 'accepted'`,
+    [paymentId, userId, now, offerId],
+  );
+  return getOffer(offerId);
+}
+
+/**
+ * Money confirmed: move the name, or start the lease. Idempotent on the payment id.
+ *
+ * Claimed with a conditional UPDATE for the reason settleNamePurchase gives --
+ * CoinPay retries a webhook it never got an ack for, so two deliveries can be
+ * in flight and both read 'accepted' before either write lands. Only the first
+ * claim moves anything.
+ */
+export async function settleOfferPurchase(paymentId, now = Date.now()) {
+  const offer = await get(
+    `SELECT ${OFFER_COLS} FROM moshpit_offers WHERE payment_id = ? AND status = 'accepted'`, [paymentId]);
+  if (!offer) return { ok: false, error: "no accepted offer for that payment" };
+
+  const claimed = await run(
+    `UPDATE moshpit_offers SET status = 'settling', updated_at = ? WHERE id = ? AND status = 'accepted'`,
+    [now, offer.id],
+  );
+  if (!claimed.rowsAffected) return { ok: false, error: "already settled" };
+
+  const terms = agreedTerms(offer);
+  const buyerId = offer.offerer_user_id;
+  if (!buyerId) {
+    await run(`UPDATE moshpit_offers SET status = 'refund_due', updated_at = ? WHERE id = ?`, [now, offer.id]);
+    console.error(`[moshpit] offer ${offer.id} was paid with no buyer account — refund due`);
+    return { ok: false, error: "no account to give it to", refundDue: true };
+  }
+
+  const failed = async (why) => {
+    await run(`UPDATE moshpit_offers SET status = 'refund_due', updated_at = ? WHERE id = ?`, [now, offer.id]);
+    console.error(`[moshpit] offer ${offer.id} paid but not delivered — ${why}. Refund due to ${buyerId}`);
+    return { ok: false, error: why, refundDue: true };
+  };
+
+  if (offer.kind === "lease") {
+    // Checked again here rather than trusted from acceptance: a lease could
+    // have been granted to somebody else in between, and two tenancies on one
+    // name is the state the primary key exists to refuse.
+    if (await activeLease(offer.tld, offer.label, now)) return failed("the name was leased to someone else first");
+    const expiresAt = leaseEndsAt(now, terms.months);
+
+    // A lease can be taken on a name nobody has minted yet -- the operator of
+    // the ending is the one who was asked, and they mint it to let it. The row
+    // has to exist before it can carry a tenant, and it belongs to the holder,
+    // not the tenant: a lease is the one transaction here that does not move
+    // ownership.
+    const existing = await getName(offer.tld, offer.label);
+    if (!existing) {
+      try {
+        await run(`INSERT INTO moshpit_names (tld, label, user_id, target, created_at) VALUES (?,?,?,?,?)`,
+          [offer.tld, offer.label, offer.holder_user_id, null, now]);
+      } catch {
+        return failed("the name was taken before payment settled");
+      }
+    } else if (existing.user_id !== offer.holder_user_id) {
+      return failed("the name changed hands before payment settled");
+    }
+
+    await run(
+      `INSERT OR REPLACE INTO moshpit_leases
+         (tld, label, lessee_user_id, holder_user_id, offer_id, months, amount_usd, starts_at, expires_at, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [offer.tld, offer.label, buyerId, offer.holder_user_id, offer.id, terms.months, terms.amountUsd, now, expiresAt, now],
+    );
+    // The cache the hot path reads. Written in the same breath as the record
+    // above, because a lease that exists in one and not the other is a tenancy
+    // that has been paid for and grants nothing.
+    await run(`UPDATE moshpit_names SET leased_to = ?, leased_until = ? WHERE tld = ? AND label = ?`,
+      [buyerId, expiresAt, offer.tld, offer.label]);
+    await run(`UPDATE moshpit_offers SET status = 'paid', updated_at = ? WHERE id = ?`, [now, offer.id]);
+    await logAction(offer.tld, buyerId, `leased:${offer.label}`);
+    return { ok: true, kind: "lease", tld: offer.tld, label: offer.label, userId: buyerId, expiresAt };
+  }
+
+  if (offer.label) {
+    const existing = await getName(offer.tld, offer.label);
+    if (existing) {
+      // The seller must still be the seller. If the name moved between
+      // acceptance and confirmation, this buyer is paying its previous holder
+      // for something that is no longer theirs.
+      if (existing.user_id !== offer.holder_user_id) return failed("the name changed hands before payment settled");
+      await handOverName(offer.tld, offer.label, buyerId);
+    } else {
+      try {
+        await run(`INSERT INTO moshpit_names (tld, label, user_id, target, created_at) VALUES (?,?,?,?,?)`,
+          [offer.tld, offer.label, buyerId, null, now]);
+      } catch {
+        return failed("the name was taken before payment settled");
+      }
+    }
+    await run(`UPDATE moshpit_offers SET status = 'paid', updated_at = ? WHERE id = ?`, [now, offer.id]);
+    await logAction(offer.tld, buyerId, `bought:${offer.label}`);
+    await closeOtherOffers(offer, now);
+    return { ok: true, kind: "buy", tld: offer.tld, label: offer.label, userId: buyerId };
+  }
+
+  // An ending changing hands. Conditional on the seller still holding it, for
+  // the same reason as above.
+  const moved = await run(
+    `UPDATE moshpit_tlds SET user_id = ?, owner_email = NULL WHERE tld = ? AND user_id = ?`,
+    [buyerId, offer.tld, offer.holder_user_id],
+  );
+  if (!moved.rowsAffected) return failed("the ending changed hands before payment settled");
+
+  await run(`UPDATE moshpit_offers SET status = 'paid', updated_at = ? WHERE id = ?`, [now, offer.id]);
+  await logAction(offer.tld, buyerId, "bought");
+  await closeOtherOffers(offer, now);
+  return { ok: true, kind: "buy", tld: offer.tld, label: "", userId: buyerId };
+}
+
+/**
+ * Move a name to its buyer, and leave nothing of the seller's on it.
+ *
+ * The same list releaseName clears, and for the same reason: a pin, a record,
+ * a twin or a contact that survives a sale belongs to the person who just sold
+ * the name. The contact is the one with a consequence outside this database --
+ * its guard address forwards mail at our domain, so an inherited one would
+ * deliver the buyer's mail to the seller.
+ */
+async function handOverName(tld, label, buyerId) {
+  await revokeContactAlias(await getContactPrivate(tld, label));
+  await run(`DELETE FROM moshpit_contacts WHERE tld = ? AND label = ?`, [tld, label]);
+  await run(`DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ?`, [tld, label]);
+  await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ?`, [tld, label]);
+  await run(`DELETE FROM moshpit_twins WHERE tld = ? AND label = ?`, [tld, label]);
+  // The target goes too. It names a server the seller runs, and leaving it
+  // would point the buyer's new name at the seller's machine.
+  await run(
+    `UPDATE moshpit_names SET user_id = ?, target = NULL, feed_url = NULL, feed_kind = NULL,
+       leased_to = NULL, leased_until = NULL WHERE tld = ? AND label = ?`,
+    [buyerId, tld, label],
+  );
+}
+
+/**
+ * Give a name back at the end of its term.
+ *
+ * effectiveStatus and the `leased_until` check are what make a lease end on
+ * time; this is what makes the name look like it. The tenant's target, feed,
+ * records and keys go with them, because the alternative is the holder getting
+ * their name back still serving somebody else's site under it -- for as long as
+ * they do not happen to look.
+ *
+ * Content is left alone deliberately. It is the one thing here that is written
+ * rather than pointed at, and deleting a tenant's posts because their lease
+ * lapsed destroys work rather than unlinking it. It stops being served the
+ * moment the target does, and the holder can clear it.
+ */
+export async function endExpiredLeases(now = Date.now(), limit = 200) {
+  const due = await all(
+    `SELECT ${LEASE_COLS} FROM moshpit_leases WHERE reverted_at IS NULL AND expires_at <= ? LIMIT ?`,
+    [now, limit],
+  );
+
+  for (const lease of due) {
+    await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ?`, [lease.tld, lease.label]);
+    await run(`DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ?`, [lease.tld, lease.label]);
+    await run(
+      `UPDATE moshpit_names SET target = NULL, feed_url = NULL, feed_kind = NULL, leased_to = NULL, leased_until = NULL
+       WHERE tld = ? AND label = ?`,
+      [lease.tld, lease.label],
+    );
+    await run(`UPDATE moshpit_leases SET reverted_at = ? WHERE tld = ? AND label = ?`, [now, lease.tld, lease.label]);
+    await logAction(lease.tld, lease.holder_user_id, `unleased:${lease.label}`);
+  }
+
+  return { reverted: due.length };
+}
+
+/**
+ * Everyone else who was still asking about this is asking about something sold.
+ *
+ * Closed rather than left open, because an offer that cannot be accepted is
+ * worse than no offer: the holder would be looking at numbers for a name they
+ * no longer have, and the people who made them would be waiting on an answer
+ * that can never come.
+ */
+async function closeOtherOffers(sold, now) {
+  await run(
+    `UPDATE moshpit_offers SET status = 'rejected', updated_at = ?
+     WHERE tld = ? AND label = ? AND id != ? AND status IN ('unverified','open','countered')`,
+    [now, sold.tld, sold.label, sold.id],
+  );
+}
+
+/**
+ * Write down what the clock already decided.
+ *
+ * effectiveStatus() is what makes an offer expired; this only makes the column
+ * agree, so a listing query can filter on it. Nothing depends on it running.
+ */
+/**
+ * Where to mail the holder about an offer.
+ *
+ * Their account address, not the guard address a contact publishes. The two are
+ * for opposite directions: a guard address is how a stranger reaches them
+ * without learning who they are, and this is the registry telling its own user
+ * something about their account. Routing our own mail through the forwarder
+ * would make it undeliverable exactly when it matters -- for a holder who has
+ * no contact set, which is most of them.
+ */
+export async function userEmail(userId) {
+  const row = await get(`SELECT email FROM users WHERE id = ?`, [userId]);
+  return row?.email ?? null;
+}
+
+export async function expireOffers(now = Date.now()) {
+  const result = await run(
+    `UPDATE moshpit_offers SET status = 'expired', updated_at = ?
+     WHERE expires_at <= ? AND status IN ('unverified','open','countered')`,
+    [now, now],
+  );
+  return { expired: Number(result.rowsAffected ?? 0) };
 }
