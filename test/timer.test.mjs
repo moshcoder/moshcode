@@ -42,6 +42,13 @@ test("a duration is written short, and stays exact enough", () => {
   assert.equal(humanDuration(5400), "1h 30m");
   assert.equal(humanDuration(7200), "2h");
   assert.equal(humanDuration(0), "0s");
+  // A sub-hour remainder that rounds up to 60 minutes carries into the hour,
+  // rather than printing "60m" or "1h 60m".
+  assert.equal(humanDuration(3599), "1h");
+  assert.equal(humanDuration(3570), "1h");
+  assert.equal(humanDuration(3569), "59m");
+  assert.equal(humanDuration(7199), "2h");
+  assert.equal(humanDuration(86399), "24h");
 });
 
 test("on writes an active timer and off turns it into an entry", async (t) => {

@@ -45,8 +45,12 @@ export function parseDuration(text) {
 export function humanDuration(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
   if (total < 60) return `${total}s`;
-  const h = Math.floor(total / 3600);
-  const m = Math.round((total % 3600) / 60);
+  // Round to whole minutes first, then split — computing hours and minutes off
+  // the raw seconds lets a remainder that rounds up to 60 (59m30s..59m59s) print
+  // as "60m"/"1h 60m" instead of carrying into the hour it belongs in.
+  const minutes = Math.round(total / 60);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
   if (!h) return `${m}m`;
   return m ? `${h}h ${m}m` : `${h}h`;
 }
