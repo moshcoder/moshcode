@@ -56,6 +56,28 @@ export function pressKey(name, rl = null, stdin = process.stdin) {
 const FLUSH_MS = 150;      // batch writes so a busy render is one request, not fifty
 const MAX_BUFFER = 16000;  // flush early once a batch gets big
 
+// Where a child process's output should be copied while a mirror is watching.
+//
+// Module-level rather than threaded through every call, because "is anyone
+// watching this pit" is one fact about the process and the launchers that need
+// it are scattered: the shell, the installers, the upgrader, the plugin/skill/
+// MCP hand-offs. Passing it down by hand is what left most of them writing
+// straight to the tty with the session page showing nothing — each new launcher
+// had to remember, and none of them did. src/pty.mjs reads this as its default,
+// so capture is what a launcher gets for free and opting out is the deliberate
+// act.
+let activeSink = null;
+
+/** Point child capture at this mirror (or null when the pit stops mirroring). */
+export function setActiveSink(sink) {
+  activeSink = typeof sink === "function" ? sink : null;
+}
+
+/** The sink a child's output should be copied to, or null when unmirrored. */
+export function activeChildSink() {
+  return activeSink;
+}
+
 export function createMirror({
   version = "",
   cwd = process.cwd(),
