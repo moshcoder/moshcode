@@ -418,6 +418,40 @@ async function main() {
     if (code) process.exitCode = code;
     return;
   }
+  // The business layer. Imported where they are dispatched rather than at the
+  // top of the file: six modules that read two JSON files are dead weight in
+  // the startup path of `moshcode claude`, which is what this binary is mostly
+  // asked to do.
+  if (cmd === "timer") {
+    const { timerCommand } = await import("../src/timer.mjs");
+    process.exitCode = (await timerCommand(rest)) || 0;
+    return;
+  }
+  if (cmd === "client" || cmd === "business" || cmd === "merchant" || cmd === "customer") {
+    const { clientCommand } = await import("../src/clients.mjs");
+    process.exitCode = clientCommand(rest) || 0;
+    return;
+  }
+  if (cmd === "team" || cmd === "teams") {
+    const { teamCommand } = await import("../src/teams.mjs");
+    process.exitCode = teamCommand(rest) || 0;
+    return;
+  }
+  if (cmd === "rate" || cmd === "rates") {
+    const { rateCommand } = await import("../src/rates.mjs");
+    process.exitCode = rateCommand(rest) || 0;
+    return;
+  }
+  if (cmd === "billing" || cmd === "invoice") {
+    const { billingCommand } = await import("../src/billing.mjs");
+    process.exitCode = billingCommand(rest) || 0;
+    return;
+  }
+  if (cmd === "payments") {
+    const { paymentsCommand } = await import("../src/payments.mjs");
+    process.exitCode = paymentsCommand(rest) || 0;
+    return;
+  }
   if (cmd === "games" || cmd === "game" || cmd === "arcade") {
     const code = await gamesCommand(rest);
     if (code) process.exitCode = code;

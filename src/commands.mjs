@@ -696,6 +696,15 @@ const COMMANDS = [
   cliVerb("rss", "manage RSS subscriptions and reading lists"),
 
   // Extending moshcode from a script — the same fan-out `mcp`/`skill` do.
+  // The business layer. Scriptable because that is where it earns its keep: a
+  // .mosh that starts a timer, runs the herd, stops the timer and drafts the
+  // invoice is the whole workflow in six lines.
+  cliVerb("timer", "track time (timer(\"on\", client) … timer(\"off\"))"),
+  cliVerb("client", "clients/businesses/merchants — create, list, set, payee"),
+  cliVerb("team", "who may do what (create, add, grant, revoke, can)"),
+  cliVerb("rate", "what agent time costs (rate(\"set\", \"acme\", \"$100/hour/agent/upto:4\"))"),
+  cliVerb("billing", "turn tracked time into an invoice (--mark claims it, --send hands it over)"),
+  cliVerb("payments", "the rail invoices go out on (connect, default, disconnect)"),
   cliVerb("plugin", "install/manage moshcode plugins from the marketplace"),
   cliVerb("engines", "list coding engines and whether they're installed"),
   cliVerb("tools", "list the adjacent workflow CLIs and whether they're installed"),

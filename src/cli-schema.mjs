@@ -22,6 +22,7 @@ export const COMMAND_GROUPS = [
   { key: "engines", title: "engines" },
   { key: "runtime", title: "runtime" },
   { key: "tools", title: "tools" },
+  { key: "business", title: "business" },
   { key: "extend", title: "extend" },
   { key: "script", title: "script" },
   { key: "arcade", title: "arcade" },
@@ -650,6 +651,179 @@ export const CORE_CLI_COMMANDS = [
       + "tab the feed list · / search · r refresh · q quit.",
   },
   {
+    name: "timer",
+    group: "business",
+    description: "track time — on, off, and what it added up to",
+    synopsis: [
+      ["moshcode timer on [client] [--task …]", "start the clock"],
+      ["moshcode timer off", "stop it and write the entry"],
+      ["moshcode timer status", "what is running, and what it is worth so far"],
+      ["moshcode timer log [--week] [--json]", "the entries behind an invoice"],
+    ],
+    verbs: "TIMER_VERBS",
+    flags: [
+      ["--task <what>", "what this stretch of work is", "the words after the client"],
+      ["--agents <n|auto>", "how many engines are working; auto counts the herd", "1"],
+      ["--note <text>", "anything else worth keeping", ""],
+      ["--client <id>", "filter the log to one client", "all of them"],
+      ["--today, --week, --month", "window the log", "everything"],
+      ["--since <date>", "window the log from a date", ""],
+      ["--unbilled", "only entries no invoice has claimed", ""],
+      ["--limit <n>", "how many entries to print", "50"],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode timer on acme --task \"batch payments\" --agents auto", "clock in, counting the herd"],
+      ["moshcode timer off", "clock out — prints the time and what it earned"],
+      ["moshcode timer add acme 2h30m --task \"code review\"", "log time you forgot to track"],
+      ["moshcode timer log --week", "this week's timesheet"],
+    ],
+    seeAlso: ["billing", "rate", "client"],
+    note: "the ledger is ~/.moshcode/timers.json and knows nothing about money — a rate is applied later, "
+      + "by `moshcode billing`, so the timer is useful with no client, no rate and no gateway.",
+  },
+  {
+    name: "client",
+    group: "business",
+    description: "who the work is for — clients, businesses, merchants",
+    synopsis: [
+      ["moshcode client create <name>[, url][, phone]", "the comma form, as pasted"],
+      ["moshcode client create <name> --contact.telephone <n>", "the dotted form, for scripts"],
+      ["moshcode client list | show <id> | set <id> --field <v>", ""],
+      ["moshcode client payee <id> <chain:address>", "where their payments land"],
+    ],
+    verbs: "CLIENT_VERBS",
+    flags: [
+      ["--url, --email, --phone <v>", "the fields with obvious names", ""],
+      ["--<a>.<b> <value>", "any dotted path — --contact.telephone, --billing.po", ""],
+      ["--payee <chain:address>", "settlement address for this client", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ['moshcode client create "Acme Inc", https://acme.com, +1-555-0100', "one line, three fields"],
+      ["moshcode client create globex --contact.name Jane --contact.telephone +1-555-0200", "nested fields"],
+      ["moshcode client payee acme solana:9xQe…", "so an invoice has somewhere to settle"],
+    ],
+    seeAlso: ["rate", "billing", "team"],
+    note: "`business`, `merchant` and `customer` are the same command — one room, three doors.",
+  },
+  {
+    name: "team",
+    group: "business",
+    description: "who may do what on this machine",
+    synopsis: [
+      ["moshcode team create <name>", ""],
+      ["moshcode team add <team> <handle> [--role …]", "owner, admin, member or client"],
+      ["moshcode team grant <team> <handle> <permission…>", "tools:coinpay, agents:*, billing:read"],
+      ["moshcode team can <team>/<handle> <permission>", "answer it without running anything"],
+    ],
+    verbs: "TEAM_VERBS",
+    flags: [
+      ["--role <name>", "owner, admin, member or client", "member"],
+      ["--rate <spec>", "what this person costs, as a rate", ""],
+      ["--grant <a,b>", "permissions at the same time as the invite", ""],
+      ["--email, --name <v>", "how to reach them", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode team create Profullstack", ""],
+      ["moshcode team add profullstack preshy --role member --rate $80/hour", ""],
+      ["moshcode team grant profullstack preshy tools:coinpay", "one tool, not the rest"],
+      ["moshcode team whoami", "who this pit is acting as"],
+    ],
+    seeAlso: ["client", "rate"],
+    note: "a pit gates itself only when MOSHCODE_MEMBER=<team>/<handle> is set; with it unset the owner "
+      + "is at the keyboard and nothing is checked. This is a guardrail against the wrong command, not a "
+      + "security boundary — anyone who can type /team can also edit ~/.moshcode/business.json.",
+  },
+  {
+    name: "rate",
+    group: "business",
+    description: "what an hour of agent time costs",
+    synopsis: [
+      ["moshcode rate set <client|default> <spec>", "$100/hour/agent/upto:4"],
+      ["moshcode rate [list] | show <client> | rm <client>", ""],
+    ],
+    verbs: "RATE_VERBS",
+    flags: [
+      ["--prefer <a,b>", "settlement currencies you would rather have", ""],
+      ["--accept <a,b>", "what you will take as well", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode rate set default $100/hour/agent/upto:4", "four agents cost four hundred; six also cost four hundred"],
+      ["moshcode rate set acme 0.5 SOL/day --prefer SOL,USDC --accept fiat", ""],
+      ["moshcode rate set acme $5000/project", "a flat fee, added once per invoice"],
+    ],
+    seeAlso: ["billing", "timer", "client"],
+    note: "spec grammar: <price>/<period>/<unit>[/upto:N][/min:N]. Periods are hour, day, week, month, "
+      + "project or task; units are agent, seat, person or team. Order after the price does not matter.",
+  },
+  {
+    name: "billing",
+    group: "business",
+    description: "turn tracked time into an invoice",
+    synopsis: [
+      ["moshcode billing <client>", "a preview — writes nothing"],
+      ["moshcode billing <client> --mark", "claim the time and record the invoice"],
+      ["moshcode billing <client> --send [--yes]", "hand it to the connected gateway"],
+      ["moshcode billing list | show <id> | void <id>", ""],
+    ],
+    verbs: "BILLING_VERBS",
+    flags: [
+      ["--mark", "mark the entries billed and record an invoice", ""],
+      ["--send", "claim the time and compose the gateway command; --yes runs it", ""],
+      ["--yes", "run the gateway command instead of printing it", ""],
+      ["--all", "include time already billed", ""],
+      ["--today, --week, --month, --since <date>", "window the time", "everything unbilled"],
+      ["--gateway <name>", "override the default rail", ""],
+      ["--due <YYYY-MM-DD>", "due date to put on the invoice", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode billing acme", "what you would invoice, and from which entries"],
+      ["moshcode billing acme --month --mark", "close the month"],
+      ["moshcode billing acme --send", "print the CoinPay command line for review"],
+      ["moshcode billing void inv-abc123", "un-claim the time; the record stays"],
+    ],
+    seeAlso: ["timer", "rate", "payments"],
+    note: "an invoice never settles to a guess: with no client payee and no wallet rail it refuses. "
+      + "`--send` implies `--mark`. moshcode composes; CoinPay (or Stripe, or a wallet) delivers — and a "
+      + "rate priced in SOL or BTC is refused rather than converted, because a CoinPay invoice carries a "
+      + "fiat amount and nobody computed that number.",
+  },
+  {
+    name: "payments",
+    group: "business",
+    description: "the rail invoices go out on",
+    synopsis: [
+      ["moshcode payments [list]", "gateways, and which one is chosen"],
+      ["moshcode payments connect <gateway>", "coinpay, stripe, paypal, coinbase, wallet"],
+      ["moshcode payments default <gateway> | disconnect <gateway>", ""],
+    ],
+    verbs: "PAYMENT_VERBS",
+    flags: [
+      ["--chain <name>", "for a bare wallet: solana, ethereum, …", ""],
+      ["--address <addr>", "for a bare wallet: where money lands", ""],
+      ["--vault <name>", "for an OAuth gateway: which vault holds the keys", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode payments connect coinpay", "runs `coinpay login` — the CLI keeps the credential"],
+      ["moshcode payments connect wallet --chain solana --address 9xQe…", "no gateway at all"],
+      ["moshcode payments", "what is connected, and what settles in what"],
+    ],
+    seeAlso: ["billing", "client"],
+    note: "no secret is stored here. A CLI gateway holds its own session; an OAuth gateway gets a "
+      + "reference to the vault its keys live in (`moshcode tools secrets`), never the keys.",
+  },
+  { name: "business", aliasOf: "client", description: "alias for client" },
+  { name: "merchant", aliasOf: "client", description: "alias for client" },
+  { name: "customer", aliasOf: "client", description: "alias for client" },
+  { name: "teams", aliasOf: "team", description: "alias for team" },
+  { name: "rates", aliasOf: "rate", description: "alias for rate" },
+  { name: "invoice", aliasOf: "billing", description: "alias for billing" },
+  {
     name: "plugin",
     group: "extend",
     description: "install moshcode's slash commands into Claude Code",
@@ -1138,8 +1312,67 @@ export const HERD_VERBS = [
       + "CI has to tell a worse agent from a broken box." },
 ];
 
+// The business layer's verbs. Flatter than the herd's on purpose: these are
+// commands somebody types between other work, and a verb that needs a paragraph
+// to explain itself is a verb in the wrong place.
+export const TIMER_VERBS = [
+  { name: "on", description: "start the clock", synopsis: [["moshcode timer on [client] [--task …] [--agents N|auto]", ""]] },
+  { name: "off", description: "stop it and write the entry", synopsis: [["moshcode timer off [--note …]", ""]] },
+  { name: "switch", description: "stop one and start another in a breath", synopsis: [["moshcode timer switch <client>", ""]] },
+  { name: "status", description: "what is running, and what it is worth so far", synopsis: [["moshcode timer status [--json]", ""]] },
+  { name: "log", description: "the entries behind an invoice", synopsis: [["moshcode timer log [--client <id>] [--week] [--unbilled] [--json]", ""]] },
+  { name: "add", description: "log time you forgot to track", synopsis: [["moshcode timer add <client> <2h30m> [--task …] [--at <date>]", ""]] },
+  { name: "rm", description: "drop an entry", synopsis: [["moshcode timer rm <id>", ""]] },
+];
+
+export const CLIENT_VERBS = [
+  { name: "create", description: "add one", synopsis: [['moshcode client create "Acme Inc", https://acme.com, +1-555-0100', ""]] },
+  { name: "list", description: "all of them", synopsis: [["moshcode client list [--json]", ""]] },
+  { name: "show", description: "one in full", synopsis: [["moshcode client show <id> [--json]", ""]] },
+  { name: "set", description: "change a field", synopsis: [["moshcode client set <id> --url https://… --contact.telephone …", ""]] },
+  { name: "payee", description: "where their payments land", synopsis: [["moshcode client payee <id> <chain:address>", ""]] },
+  { name: "rm", description: "forget one (tracked time is kept)", synopsis: [["moshcode client rm <id>", ""]] },
+];
+
+export const TEAM_VERBS = [
+  { name: "create", description: "start a team", synopsis: [["moshcode team create <name> [--client <id>]", ""]] },
+  { name: "add", description: "put somebody on it", synopsis: [["moshcode team add <team> <handle> [--role …] [--rate …]", ""]] },
+  { name: "grant", description: "widen what they may do", synopsis: [["moshcode team grant <team> <handle> <permission…>", ""]] },
+  { name: "revoke", description: "narrow it again", synopsis: [["moshcode team revoke <team> <handle> <permission…>", ""]] },
+  { name: "show", description: "the roster and what each may do", synopsis: [["moshcode team show <team> [--json]", ""]] },
+  { name: "can", description: "answer a permission question without running anything", synopsis: [["moshcode team can <team>/<handle> <permission>", ""]] },
+  { name: "whoami", description: "who this pit is acting as", synopsis: [["moshcode team whoami", ""]] },
+  { name: "rm", description: "drop a member, or the whole team", synopsis: [["moshcode team rm <team> [handle]", ""]] },
+];
+
+export const RATE_VERBS = [
+  { name: "set", description: "write a rate down", synopsis: [["moshcode rate set <client|default> <spec> [--prefer SOL,USDC]", ""]] },
+  { name: "list", description: "every rate you have set", synopsis: [["moshcode rate list [--json]", ""]] },
+  { name: "show", description: "the one that applies to a client", synopsis: [["moshcode rate show <client>", ""]] },
+  { name: "rm", description: "drop one", synopsis: [["moshcode rate rm <client|default>", ""]] },
+];
+
+export const BILLING_VERBS = [
+  { name: "list", description: "invoices you have recorded", synopsis: [["moshcode billing list [--json]", ""]] },
+  { name: "show", description: "one invoice, with its lines", synopsis: [["moshcode billing show <id> [--json]", ""]] },
+  { name: "void", description: "un-claim the time; the record stays", synopsis: [["moshcode billing void <id>", ""]] },
+];
+
+export const PAYMENT_VERBS = [
+  { name: "list", description: "gateways, and which one is chosen", synopsis: [["moshcode payments list [--json]", ""]] },
+  { name: "connect", description: "choose a rail and log into it", synopsis: [["moshcode payments connect <gateway> [--chain … --address …] [--vault …]", ""]] },
+  { name: "default", description: "which rail invoices go out on", synopsis: [["moshcode payments default <gateway>", ""]] },
+  { name: "disconnect", description: "forget a rail (the CLI stays logged in)", synopsis: [["moshcode payments disconnect <gateway>", ""]] },
+];
+
 export const VERB_TABLES = {
   HERD_VERBS,
+  TIMER_VERBS,
+  CLIENT_VERBS,
+  TEAM_VERBS,
+  RATE_VERBS,
+  BILLING_VERBS,
+  PAYMENT_VERBS,
   MCP_VERBS,
   SKILL_VERBS,
   UPGRADE_TARGETS,
@@ -1197,6 +1430,18 @@ export const PIT_COMMANDS = [
     description: "headlines from your feeds, or a search" },
   { name: "rss", aliases: ["reader"], cli: "rss",
     description: "read the same headlines in a full-screen reader" },
+  { name: "timer", args: "on|off|status|log|add|rm [args…]", cli: "timer",
+    description: "track time — on, off, and what it added up to" },
+  { name: "client", aliases: ["business", "merchant", "customer"], args: "<verb> [args…]", cli: "client",
+    description: "who the work is for" },
+  { name: "team", aliases: ["teams"], args: "<verb> [args…]", cli: "team",
+    description: "who may do what on this machine" },
+  { name: "rate", aliases: ["rates"], args: "set <client|default> <spec>", cli: "rate",
+    description: "what an hour of agent time costs" },
+  { name: "billing", aliases: ["invoice"], args: "<client> [--mark] [--send]", cli: "billing",
+    description: "turn tracked time into an invoice" },
+  { name: "payments", args: "[connect <gateway>]", cli: "payments",
+    description: "the rail invoices go out on" },
   { name: "plugin", aliases: ["plugins"], args: "<verb> [name]", cli: "plugin",
     description: "install moshcode's slash commands into Claude Code" },
   { name: "games", aliases: ["game", "arcade", "play"], args: "[game]", cli: "games",

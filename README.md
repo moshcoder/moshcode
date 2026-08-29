@@ -62,6 +62,12 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode crypto` <br>`coins` | tools | crypto market data from advis0r.com |
 | `moshcode news` | tools | headlines from your feeds, or a search |
 | `moshcode rss` | tools | read the same headlines in a full-screen reader |
+| `moshcode timer` | business | track time — on, off, and what it added up to |
+| `moshcode client` <br>`business` `merchant` `customer` | business | who the work is for — clients, businesses, merchants |
+| `moshcode team` <br>`teams` | business | who may do what on this machine |
+| `moshcode rate` <br>`rates` | business | what an hour of agent time costs |
+| `moshcode billing` <br>`invoice` | business | turn tracked time into an invoice |
+| `moshcode payments` | business | the rail invoices go out on |
 | `moshcode plugin` <br>`plugins` | extend | install moshcode's slash commands into Claude Code |
 | `moshcode commands` | script | list built-in moshscript commands |
 | `moshcode completion` | extend | print a shell completion script |
@@ -936,6 +942,88 @@ connects to a NIP-07 browser signer (or a NIP-46 bunker through
 event, and publishes it to the displayed relays. Both flows leave the final
 confirmation in the browser. If the pit is remote or headless, `/post` prints
 the composer URL instead.
+
+## Getting paid (`/timer`, `/client`, `/rate`, `/billing`, `/payments`)
+
+Every agentic CLI helps you do the work. This one also bills for it. Six words,
+each useful on its own — the timer needs no client, the rate needs no gateway
+(PRD [0012](prd/0012-billing-baked-into-the-agent-cli.md)).
+
+```sh
+moshcode timer on acme --task "batch payments" --agents auto   # auto counts the herd
+moshcode timer off                                             # → 1h 12m, $480.00
+moshcode timer log --week                                      # this week's timesheet
+```
+
+The timer is a stopwatch and a ledger in `~/.moshcode/timers.json`, and it knows
+nothing about money. It does know about **agents**, which is what makes it
+different from every other stopwatch: an hour of moshcode is an hour times
+however many engines ran in it.
+
+```sh
+moshcode client create "Acme Inc", https://acme.com, +1-555-0100
+moshcode client create globex --contact.telephone +1-555-0200 --contact.name Jane
+moshcode client payee acme-inc solana:9xQe…        # where their payments land
+```
+
+Contact details are written the way they arrive: the comma form for what you
+pasted out of a signature, `--a.b` dotted flags for anything else. There is no
+fixed field list — `--billing.po` works because it says what it means.
+`/business`, `/merchant` and `/customer` are the same command.
+
+```sh
+moshcode rate set default $100/hour/agent/upto:4
+moshcode rate set acme-inc 0.5 SOL/day --prefer SOL,USDC --accept fiat
+moshcode rate set initech $5000/project
+```
+
+`$100/hour/agent/upto:4` is the sentence from the contract, parsed: price,
+period, unit, and the cap that made the client sign. Four agents cost four
+hundred an hour and **so do six**. Order after the price does not matter.
+
+```sh
+moshcode billing acme-inc                 # a preview — writes nothing
+moshcode billing acme-inc --month --mark  # claim the time, record the invoice
+moshcode billing acme-inc --send          # compose the gateway command
+moshcode billing acme-inc --send --yes    # …and run it
+```
+
+Two rules the shape enforces: time is never billed twice (an entry carries the
+invoice that claimed it, and `--mark` is the only verb that writes), and nothing
+settles to an address nobody chose — no payee and no wallet rail is a refusal,
+not a guess.
+
+```sh
+moshcode payments connect coinpay                                   # runs `coinpay login`
+moshcode payments connect wallet --chain solana --address 9xQe…     # no gateway at all
+moshcode payments connect paypal --vault profullstack--prod         # keys live in the vault
+```
+
+moshcode composes an invoice; a gateway delivers it. No secret is stored here: a
+CLI gateway keeps its own session, and an OAuth gateway gets a reference to the
+vault its keys live in (`moshcode secrets`), never the keys.
+
+### Teams and grants (`/team`)
+
+For a machine you handed to somebody else:
+
+```sh
+moshcode team create Profullstack
+moshcode team add profullstack preshy --role member --rate '$80/hour'
+moshcode team grant profullstack preshy tools:coinpay
+moshcode team can profullstack/preshy payments:write     # → no
+```
+
+A permission is `surface:target`, written however you say it — `tools:coinpay`,
+`tools/coinpay` and `allow(tools/coinpay)` are one grant. Roles (`owner`,
+`admin`, `member`, `client`) are a starting set; grants add to them.
+
+The pit gates itself only when `MOSHCODE_MEMBER=<team>/<handle>` is set — with
+it unset the owner is at the keyboard and nothing is checked. **This is a
+guardrail, not a security boundary.** moshcode runs as the person at the
+keyboard, and anyone who can type `/team` can also edit
+`~/.moshcode/business.json`. A boundary that has to hold against somebody is an
+OS account, a container, or a scoped credential.
 
 ## The arcade (`/games`)
 

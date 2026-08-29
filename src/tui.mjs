@@ -877,6 +877,19 @@ export async function tui() {
       printHelp(cmd);
       continue;
     }
+    // The team gate (src/teams.mjs). After --help, because asking what a
+    // command does is not doing it, and before everything else, because a
+    // check that some commands skip is a check nobody can reason about. Costs
+    // one small JSON read, and only when MOSHCODE_MEMBER is set.
+    if (process.env.MOSHCODE_MEMBER) {
+      const { checkAccess } = await import("./teams.mjs");
+      const gate = checkAccess(cmd, rest);
+      if (!gate.allowed) {
+        console.log(err(gate.reason));
+        console.log(`  ${ash("ask an owner for")} ${acid(`/team grant ${gate.acting?.teamId || "<team>"} ${gate.acting?.handle || "<you>"} ${gate.permission}`)}`);
+        continue;
+      }
+    }
     if (cmd === "new") {
       if (rest.length) { console.log(err("usage: /new")); continue; }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -1092,6 +1105,47 @@ export async function tui() {
       const { rssUi } = await import("./rss-ui.mjs");
       rl.close();
       await rssUi(rest, { openUrl: (url) => canOpenBrowser() && openBrowser(url) });
+      rl = mkrl();
+      continue;
+    }
+    // The business layer. Lazily imported for the same reason the CLI does it,
+    // and none of these close the readline interface: they print and return,
+    // like /ps and /cost, so the prompt never moves.
+    if (cmd === "timer") {
+      const { timerCommand } = await import("./timer.mjs");
+      await timerCommand(rest, { write: (l) => console.log(l) });
+      continue;
+    }
+    if (cmd === "client" || cmd === "business" || cmd === "merchant" || cmd === "customer") {
+      const { clientCommand } = await import("./clients.mjs");
+      clientCommand(rest, { write: (l) => console.log(l) });
+      continue;
+    }
+    if (cmd === "team" || cmd === "teams") {
+      const { teamCommand } = await import("./teams.mjs");
+      teamCommand(rest, { write: (l) => console.log(l) });
+      continue;
+    }
+    if (cmd === "rate" || cmd === "rates") {
+      const { rateCommand } = await import("./rates.mjs");
+      rateCommand(rest, { write: (l) => console.log(l) });
+      continue;
+    }
+    if (cmd === "billing" || cmd === "invoice") {
+      const { billingCommand } = await import("./billing.mjs");
+      // Closed and reopened around the call: `--send --yes` hands the terminal
+      // to the gateway's own CLI, which may prompt.
+      rl.close();
+      billingCommand(rest, { write: (l) => console.log(l) });
+      rl = mkrl();
+      continue;
+    }
+    if (cmd === "payments") {
+      const { paymentsCommand } = await import("./payments.mjs");
+      // Same reason: `/payments connect coinpay` runs `coinpay login`, which is
+      // an interactive session of somebody else's.
+      rl.close();
+      paymentsCommand(rest, { write: (l) => console.log(l) });
       rl = mkrl();
       continue;
     }
