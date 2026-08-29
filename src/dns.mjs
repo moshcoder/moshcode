@@ -2274,7 +2274,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
-import { applyTrust, createAutoTrust, trustName, verifyStockTls } from "./trust.mjs";
+import { applyTrust, applyUntrust, createAutoTrust, trustName, verifyStockTls } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2326,6 +2326,9 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
   --no-trust   with enable: route names but skip the local CA. They will
                resolve and then fail TLS, which is the state this flag exists
                to leave you in deliberately.
+  --keep-trust with disable: put the routing back but leave the local CA in
+               your trust store. For turning resolution off for an afternoon
+               without paying to install the root again afterwards.
   --no-proxy   with enable: answer each name's origin rather than the local
                pinned-TLS proxy. Only the proxy can hand a stock client a
                certificate it will accept, so this is the other half of the
@@ -2956,6 +2959,14 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         const cleared2 = await applyPlan({ steps: [{ kind: "remove", path: manifestFile, why: "the restore point has been used" }] });
         if (cleared2.ok) out(`  ok   remove ${manifestFile}`);
       }
+
+      // The routing is back, which leaves the trust anchor as the last thing
+      // `enable` did that is still on this machine — and it was the one change
+      // the restore point never covered, because it is not a file in /etc.
+      // Removing it by default is what makes `disable` mean "as it was".
+      // `--keep-trust` is for turning resolution off for an afternoon without
+      // paying for a re-install of the root afterwards.
+      if (!rest.includes("--keep-trust")) await applyUntrust(out, deps);
       out("");
 
       // The line the old implementation printed unconditionally, now only when
