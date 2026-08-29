@@ -5,9 +5,9 @@
 // been wrong in this codebase before for the same reason: a command that works
 // when imported is not yet a command anybody can type.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,38 @@ test("a client, a rate and a timer, typed at the prompt", async () => {
   assert.equal(timers.entries.length, 1);
   assert.equal(timers.entries[0].task, "shipping");
   assert.match(result.stdout, /timer off/);
+});
+
+test("an installed timer CLI does not quietly take the pit's records away", async () => {
+  // The regression: /timer and /billing gained standalone CLIs, and delegating
+  // to them the moment they appeared on PATH split one person's records in
+  // half. /client and /rate have no outside home, so they kept writing
+  // ~/.moshcode/business.json while /billing read the package's own ledger —
+  // and the invoice for a client you had just created did not exist.
+  //
+  // A fake `timer` on PATH is enough to reproduce it: the check is only
+  // "is this name executable". Without the opt-in the pit must ignore it.
+  const dir = mkdtempSync(join(tmpdir(), "moshcode-fake-bin-"));
+  const isWindows = process.platform === "win32";
+  const shim = join(dir, isWindows ? "timer.cmd" : "timer");
+  writeFileSync(shim, isWindows ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+  if (!isWindows) chmodSync(shim, 0o755);
+
+  try {
+    const result = await runTui(
+      ["/client create Acme", "/timer on acme --task shipping", "/timer off"],
+      { env: { PATH: `${dir}${delimiter}${process.env.PATH}` } },
+    );
+    assert.equal(result.status, 0);
+    // Had it delegated, the shim would have exited 0 having written nothing
+    // and this file would not exist.
+    const timers = timersOf(result.home);
+    assert.equal(timers.entries.length, 1, "the pit kept its own ledger");
+    assert.equal(timers.entries[0].task, "shipping");
+    assert.ok(businessOf(result.home).clients.acme, "and the client is in the same place");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("/business and /merchant are the same door as /client", async () => {

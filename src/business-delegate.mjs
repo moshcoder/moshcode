@@ -5,34 +5,49 @@
 // neither is a moshcode idea: tracking time and sending an invoice are things
 // you want under any agentic CLI, and on Windows, where moshcode does not go.
 //
-// So the rule here is: if the real CLI is installed, moshcode conducts it, the
-// same way /gh conducts gh. The built-in implementation stays as the fallback
-// for a machine that has not installed it yet, so nothing breaks on upgrade and
-// nobody has to install anything to keep working.
+// So the rule here is: when asked, moshcode conducts them the way /gh conducts
+// gh. The two are NOT kept in sync, and that is the point of preferring the
+// external one where it is wanted: a second copy of a billing model is a copy
+// that drifts, and the published package is the one that gets the fixes.
 //
-// The two are NOT kept in sync, and that is the point of preferring the
-// external one: a second copy of a billing model is a copy that drifts, and the
-// published package is the one that gets the fixes.
+// ---------------------------------------------------------------------------
+// Why this is opt-in rather than "delegate whenever the CLI is on PATH", which
+// is what it did when it first landed:
+//
+// Only half the business layer has somewhere to go. /timer and /billing have
+// standalone equivalents; /client, /rate, /payments and /team do not — the
+// rails and the permission model are moshcode's, and /client's freeform dotted
+// fields have no shape in the package's typed client model, so moving it would
+// lose data rather than relocate it.
+//
+// Delegating that half by default splits one person's records across two
+// stores. /client and /rate keep writing ~/.moshcode/business.json while
+// /billing reads ~/.profullstack/billing/ledger.json, so:
+//
+//   /client create "Acme Inc"      → written to moshcode
+//   /rate set acme-inc $100/hour   → written to moshcode
+//   /billing acme-inc              → "no client acme-inc"
+//
+// That is not a missing feature, it is somebody's invoice failing to exist. And
+// it only happens on a machine that installed the CLIs, so CI — which has not —
+// stays green while every developer box that took the install goes red.
+//
+// Hence: opt in, knowing that `billing import` is how the existing ledger comes
+// across. When the whole layer has an outside home, this becomes the default.
 import { isInstalled } from "./engines.mjs";
 import { TOOLS, openTool } from "./tools.mjs";
 
 /** Commands that have an external CLI, and the TOOLS key that owns it. */
 export const DELEGATED = { timer: "timer", billing: "billing", invoice: "billing" };
 
-/**
- * Force the in-process implementation.
- *
- * An escape hatch rather than a setting: somebody debugging a difference
- * between the two needs to run the built-in one on a box where the CLI is
- * installed, and that is the whole reason this exists.
- */
-export function builtinForced() {
-  return /^(1|true|yes)$/i.test(String(process.env.MOSHCODE_BUILTIN_BILLING || ""));
+/** Whether this machine has asked for the standalone CLIs to be used. */
+export function externalEnabled() {
+  return /^(1|true|yes)$/i.test(String(process.env.MOSHCODE_EXTERNAL_BILLING || ""));
 }
 
-/** The external CLI for a command, if this machine has it. */
+/** The external CLI for a command, if it is enabled and this machine has it. */
 export function externalFor(cmd) {
-  if (builtinForced()) return null;
+  if (!externalEnabled()) return null;
   const key = DELEGATED[String(cmd || "").toLowerCase()];
   if (!key) return null;
   const tool = TOOLS[key];
@@ -75,11 +90,16 @@ export function exitCodeOf(result) {
 /**
  * The one-line nudge shown after the built-in runs.
  *
- * Written to stderr, and only when the CLI is missing, so it never lands in the
- * middle of `--json` output that something is parsing.
+ * Written to stderr, and only when the CLI is actually installed and simply not
+ * switched on, so it never lands in the middle of `--json` output and never
+ * advertises a tool that is not there. Someone who has installed the package is
+ * the only person for whom the variable is worth mentioning.
  */
 export function installHint(cmd) {
   const key = DELEGATED[String(cmd || "").toLowerCase()];
-  if (!key || externalFor(cmd) || builtinForced()) return null;
-  return `tip: moshcode install ${key} — runs @profullstack/${key}, which also works outside moshcode`;
+  if (!key || externalEnabled()) return null;
+  const tool = TOOLS[key];
+  if (!tool || !isInstalled(tool.bin, tool.binDirs)) return null;
+  return `tip: @profullstack/${key} is installed — set MOSHCODE_EXTERNAL_BILLING=1 to use it`
+    + " (move your records first with: billing import)";
 }
