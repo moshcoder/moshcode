@@ -16,6 +16,7 @@ import { runUpgrade } from "./upgrade.mjs";
 import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
+import { startAutoSync } from "./autosync.mjs";
 import { loadCommand, saveCommand } from "./settings-sync.mjs";
 import { createMirror, pressKey, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
@@ -822,6 +823,14 @@ export async function tui() {
 
   const { restoreTee, drainRemote, atPrompt } = await startMirror();
 
+  // Settings sync, unattended. Started per `tui()` call and stopped in the
+  // teardown below, because the pit is re-entered after an engine session
+  // (`backToPit`) and a timer left behind would be joined by another one.
+  // Deliberately holds no reference to `rl`: the loop closes and rebuilds it
+  // around a dozen commands, so a tick that captured it would be writing to a
+  // readline that no longer exists.
+  const stopAutoSync = startAutoSync();
+
   let rl = mkrl();
   // An alias expands into a line that is dispatched exactly as if it had been
   // typed, so it goes back through the top of this loop instead of through a
@@ -1252,6 +1261,7 @@ export async function tui() {
       : `unknown command "${line}". /help for the list.`));
   }
 
+  stopAutoSync();
   try { rl.close(); } catch { /* noop */ }
   saveHistory();
   console.log("\n" + ash("code hard, mosh harder. 🤘"));

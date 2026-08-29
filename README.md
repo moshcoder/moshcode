@@ -1179,12 +1179,35 @@ What syncs is an allowlist, not a directory walk:
 |---|---|
 | `~/.moshcode/aliases.json` | your pit aliases (`/alias`) |
 | `~/.moshcode/herd/rules.json` | herd state-detection overrides |
+| `~/.moshcode/herd/config.json` | herd notification preferences |
+| `~/.moshcode/feeds.opml` | your `tcfeed` rss feeds |
+| `~/.moshcode/news.opml` | `/news` and `/rss` subscriptions |
+| `~/.moshcode/pricing.json` | per-model price overrides for `/cost` |
+| `~/.moshcode/dns-filter/filter.json` | dns filter categories and your allow/block lists |
+| `~/.moshcode/business.json` | clients, teams, rates and invoices |
 
-What never syncs, by name: `credentials.json` (the account token this very
-feature authenticates with), `herd/sessions.json` (live state pinned to one tmux
-server), `sync.json`, and the `pkg/` binary cache. Engine configuration
-(`~/.claude.json` and friends) is deliberately left alone — those files carry
-provider API keys.
+What never syncs, and why:
+
+| not carried | because |
+|---|---|
+| `credentials.json` | the account token this very feature authenticates with |
+| `herd/sessions.json`, `herd/tasks/`, `*.transcript` | live state, prompt text and full screen captures of your sessions |
+| `dns-filter/stats.json` | it records the last domains you were blocked from reaching |
+| `timers.json` | a running work ledger; two machines appending would lose entries |
+| `news-last.json`, `news-found.json`, `lists/`, `dns-filter/lists/` | caches that refill themselves |
+| `moshpit-dns.pid`, `*.log`, `*.sock` | one box's daemon |
+| `sync.json`, `pkg/` | this feature's own bookkeeping, and moshcode itself |
+
+Engine configuration (`~/.claude.json` and friends) is deliberately left alone —
+those files carry provider API keys. So is `~/.moshcode_history`, which holds
+whatever you typed at the prompt.
+
+Two things worth knowing about the caps. A file over 64 KiB is reported as
+skipped rather than failing the save, so a `business.json` that grew a year of
+invoices stops being carried and says so. And the 256 KiB total is spent in the
+order of the table above, which is why the file most likely to grow is last —
+otherwise it would push your aliases out of the snapshot rather than being
+skipped itself.
 
 Nothing is overwritten quietly:
 
@@ -1198,6 +1221,29 @@ Nothing is overwritten quietly:
   you can also promote an older revision or delete the lot.
 
 Both verbs take `--json`, so a provisioning script can act on the result.
+
+### It also syncs on its own
+
+An open pit runs `/load` then `/save` every five minutes, so the aliases you
+made on the desktop are on the laptop by the time you sit down at it. It is on
+by default and there is nothing to configure.
+
+What makes that safe is that it is never allowed to force. Both refusals above
+still apply to it: a tick that finds a settings file you edited locally leaves
+it alone and pushes it instead, and a tick that finds another machine got there
+first stops and tells you, rather than picking a winner. The order matters —
+loading first is what keeps the ordinary two-machine case from ever becoming a
+conflict you have to resolve by hand.
+
+It is quiet on purpose. Nothing is printed when nothing changed, when you are
+not logged in, or when the network is down. Four things get a line: settings
+arriving from another machine (your aliases just changed under you), a revision
+this machine pushed, a conflict, and a credential the app rejected.
+
+```sh
+MOSHCODE_NO_AUTOSYNC=1 moshcode      # turn it off for this pit
+MOSHCODE_AUTOSYNC_MS=900000 moshcode # every fifteen minutes instead
+```
 
 ## Browser terminal (`moshcode console`)
 

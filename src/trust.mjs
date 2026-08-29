@@ -189,6 +189,15 @@ export function trustStores({ platform = process.platform, home = os.homedir(), 
       needsRoot: true,
       command: "security",
       args: ["add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", file],
+      // The one store that can only be told with the certificate in hand:
+      // `remove-trusted-cert` takes a file, not a nickname. `needsFile` is what
+      // lets the undo say so out loud instead of leaving an anchor behind and
+      // reporting success.
+      remove: {
+        needsFile: true,
+        command: "security",
+        args: ["remove-trusted-cert", "-d", file],
+      },
     });
     return stores;
   }
@@ -207,6 +216,13 @@ export function trustStores({ platform = process.platform, home = os.homedir(), 
       ownedDir: path.join(home, ".pki", "nssdb"),
       command: "certutil",
       args: ["-d", `sql:${path.join(home, ".pki", "nssdb")}`, "-A", "-t", "C,,", "-n", "Moshpit Local CA", "-i", file],
+      // By nickname, so the anchor can still be withdrawn after the root file
+      // itself is gone — which is the ordinary case, since a person who wants
+      // rid of this deletes the certificate first and asks questions after.
+      remove: {
+        command: "certutil",
+        args: ["-d", `sql:${path.join(home, ".pki", "nssdb")}`, "-D", "-n", "Moshpit Local CA"],
+      },
     });
     stores.push({
       id: "system",
@@ -218,6 +234,14 @@ export function trustStores({ platform = process.platform, home = os.homedir(), 
       copyTo: "/usr/local/share/ca-certificates/moshpit-local-ca.crt",
       command: "update-ca-certificates",
       args: [],
+      // Delete the copy, then rebuild. `--fresh` rather than a bare refresh:
+      // the bare form adds what is new, and it is the rebuild that drops the
+      // symlink for a source file that is no longer there.
+      remove: {
+        removeFile: "/usr/local/share/ca-certificates/moshpit-local-ca.crt",
+        command: "update-ca-certificates",
+        args: ["--fresh"],
+      },
     });
     return stores;
   }
@@ -276,6 +300,130 @@ export function trustPlan({
   }
 
   return { ok: true, steps, skipped, file, why: constrained.why };
+}
+
+/**
+ * What `dns disable` should do about trust.
+ *
+ * Deliberately not `trustPlan(...).steps.reverse()`. Installing is gated on the
+ * root being safe to install — name constraints, a certificate that parses —
+ * and none of that has any bearing on taking it back out: a root that should
+ * never have been trusted is the *most* important one to be able to withdraw.
+ * So this plan asks two questions only, whether the store can be reached and
+ * whether the undo needs the certificate file, and never refuses.
+ *
+ * Pure, like trustPlan, so `dns disable` can be tested without a trust store.
+ */
+export function untrustPlan({
+  platform = process.platform,
+  home = os.homedir(),
+  caFile = null,
+  isRoot = false,
+  haveCertutil = true,
+  haveFile = true,
+} = {}) {
+  const file = caFile || caPath({ home });
+  const steps = [];
+  const skipped = [];
+
+  for (const store of trustStores({ platform, home, caFile: file })) {
+    if (!store.remove) {
+      skipped.push({ ...store, why: "this build knows how to install it but not how to remove it" });
+      continue;
+    }
+    if (store.id === "nss" && !haveCertutil) {
+      skipped.push({ ...store, why: "certutil is not installed (Debian/Ubuntu: libnss3-tools)" });
+      continue;
+    }
+    if (store.needsRoot && !isRoot) {
+      skipped.push({ ...store, why: "needs root" });
+      continue;
+    }
+    // The macOS case. Saying "the root is gone, so the anchor cannot be named"
+    // is worth a line, because the alternative is a machine that keeps trusting
+    // a certificate nobody can produce any more.
+    if (store.remove.needsFile && !haveFile) {
+      skipped.push({ ...store, why: `the root at ${file} is gone, and this store can only be told with it` });
+      continue;
+    }
+    steps.push(store);
+  }
+
+  return { ok: true, steps, skipped, file };
+}
+
+/**
+ * The trust half of `dns disable` — take back what `applyTrust` installed.
+ *
+ * Non-fatal throughout, for the same reason its counterpart is: resolution has
+ * already been put back by the time this runs, and failing the whole command
+ * over a trust store would undo working DNS to fix a certificate. What it must
+ * not do is report a removal it did not achieve, since a trust anchor believed
+ * gone is worse than one known to be present.
+ */
+export async function applyUntrust(out, deps = {}) {
+  const {
+    readFile = async (f) => (await import("node:fs/promises")).readFile(f, "utf8"),
+    runner = run,
+    env = process.env,
+    home = operatorHome({ env }),
+    platform = process.platform,
+    uid = typeof process.getuid === "function" ? process.getuid() : 0,
+  } = deps;
+  const owner = env.SUDO_USER || env.DOAS_USER || null;
+
+  const file = caPath({ home });
+  const haveFile = await readFile(file).then(() => true, () => false);
+  const plan = untrustPlan({
+    platform, home, caFile: file, isRoot: uid === 0,
+    haveCertutil: (await runner("which", ["certutil"])).ok,
+    haveFile,
+  });
+
+  if (!plan.steps.length && !plan.skipped.length) return { ok: true, removed: 0, skipped: 0 };
+
+  out("");
+  out("trust  (taking the local root back out)");
+
+  let removed = 0;
+  for (const step of plan.steps) {
+    const undo = step.remove;
+    if (undo.removeFile) {
+      // `rm -f`: the copy not being there is the state we are trying to reach,
+      // so its absence is success rather than something to report.
+      const gone = await runner("rm", ["-f", undo.removeFile]);
+      if (!gone.ok) {
+        out(`  FAIL ${step.label} — ${gone.stderr.split("\n")[0] || `could not remove ${undo.removeFile}`}`);
+        continue;
+      }
+    }
+    const done = await runner(undo.command, undo.args);
+    if (!done.ok) {
+      const first = done.stderr.split("\n")[0] || "";
+      // certutil says this when the nickname is not in the database, which is
+      // the same end state as a successful removal and must not read as a
+      // failure — most often it means `dns disable` is being run twice.
+      if (/SEC_ERROR_BAD_DATA|not found|PR_FILE_NOT_FOUND/i.test(first)) {
+        out(`  ok   ${step.label} — was not there`);
+        continue;
+      }
+      out(`  FAIL ${step.label} — ${first || `${undo.command} failed`}`);
+      continue;
+    }
+    if (step.ownedDir && owner && uid === 0) {
+      const owned = await runner("chown", ["-R", `${owner}:`, step.ownedDir]);
+      if (!owned.ok) out(`  --   ${step.ownedDir} is left owned by root — chown -R ${owner}: ${step.ownedDir}`);
+    }
+    removed++;
+    out(`  ok   removed from ${step.label}`);
+  }
+
+  for (const step of plan.skipped) {
+    out(`  --   ${step.label} — ${step.why}`);
+    if (step.needsRoot && uid !== 0) out("       re-run with root to cover it: sudo moshcode dns disable");
+  }
+
+  return { ok: true, removed, skipped: plan.skipped.length };
 }
 
 /**

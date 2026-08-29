@@ -41,8 +41,13 @@ configuration is already there and already paired with every machine.
 
 ## Non-Goals
 
-- Continuous or background sync. Settings are edited by a person at a moment they
-  can name; a daemon that pushes silently is a daemon that overwrites silently.
+- Background sync that can *overwrite*. This line used to rule out background
+  sync altogether — "a daemon that pushes silently is a daemon that overwrites
+  silently" — and the reasoning was right about the daemon it imagined. R10
+  narrows it rather than dropping it: the pit does sync on its own, and is
+  allowed to because it is never permitted to force. Every refusal in R3 and R4
+  is what makes an unattended tick safe, and a background sync that could pass
+  `--force` would be exactly the thing this line was written to prevent.
 - Syncing engine configuration (`~/.claude.json`, `~/.codex`, MCP registrations).
   Those files carry provider API keys and are owned by other tools' schemas.
 - Syncing machine state: live herd sessions, the package cache, shell history.
@@ -62,9 +67,17 @@ configuration is already there and already paired with every machine.
 
 - R1 [P0] `/save` (and `moshcode save`) uploads this machine's pit settings to the
   logged-in account. `/load` (`moshcode load`) brings them back down.
-- R2 [P0] What syncs is an allowlist, not a directory walk: `aliases.json` and
-  `herd/rules.json` today. `credentials.json`, `herd/sessions.json`, `sync.json`
-  and `pkg/` are named as never-synced and asserted in tests.
+- R2 [P0] What syncs is an allowlist, not a directory walk: the pit's settings
+  (`aliases.json`), herd's (`herd/rules.json`, `herd/config.json`), the feed and
+  news subscriptions, `pricing.json`, the DNS filter's policy, and
+  `business.json`. `~/.moshcode` is also where moshcode installs itself and
+  where the account token lives, so the allowlist is load-bearing rather than
+  tidy. `credentials.json`, `herd/sessions.json`, `sync.json` and `pkg/` are
+  named as never-synced and asserted in tests, alongside the state that is
+  meaningless or private off its own machine: task ledgers and transcripts,
+  `timers.json`, `dns-filter/stats.json` (a list of blocked domains is browsing
+  history), listing caches, and one box's pidfiles and logs. Directory and
+  extension rules are enforced, not only documented.
 - R3 [P0] Each save is a numbered revision. `/save` sends the revision it last
   agreed on and the app refuses the write if the account has moved past it, so
   two machines cannot silently erase one another.
@@ -83,6 +96,16 @@ configuration is already there and already paired with every machine.
 - R9 [P2] Not logged in, session expired, nothing saved yet, conflict: each is a
   sentence naming the command that resolves it (`/login`, `/save`, `/load`,
   `--force`).
+- R10 [P1] The pit syncs on its own every five minutes: `/load` then `/save`, in
+  that order, never with `--force`. Loading first means the ordinary
+  two-machine case settles itself; when `/load` declines because of unsaved
+  local edits, the `/save` behind it carries exactly those edits up, which is
+  the resolution R4 already recommends. It is silent when logged out, silent
+  when nothing changed, and silent about network failure; it speaks only for
+  settings that arrived from another machine, a revision it pushed, and the two
+  states that need a person — a conflict and a rejected credential. On by
+  default. `MOSHCODE_NO_AUTOSYNC` turns it off, `MOSHCODE_AUTOSYNC_MS` retimes
+  it.
 
 ## UX Notes
 
