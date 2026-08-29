@@ -108,10 +108,19 @@ test("a missing target's plan is a command that could actually install it", () =
   // Guards the fix's intent rather than its shape: an installer fetches
   // something, so the planned command line mentions a fetcher or a package
   // manager. A bare `doppler update` satisfies neither.
+  //
+  // Our own two installers count as fetchers, and have to: release-install.mjs
+  // downloads a release asset with node's fetch and pkg-install.mjs shells into
+  // whichever package manager the box has, so neither spells "curl" on the
+  // command line while both do exactly what this test is asking about.
   for (const [key] of withNativeUpdater) {
     const { spec } = specOf(key);
     const line = [spec.cmd, ...(spec.args ?? [])].join(" ");
-    assert.match(line, /curl|wget|npm|pip|brew/, `${key} plan is not an install command: ${line}`);
+    assert.match(
+      line,
+      /curl|wget|npm|pip|brew|release-install\.mjs|pkg-install\.mjs/,
+      `${key} plan is not an install command: ${line}`,
+    );
   }
 });
 

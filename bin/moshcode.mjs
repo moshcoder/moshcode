@@ -10,6 +10,7 @@ import {
   ENGINES,
   engineStatus,
   openSession,
+  primaryBin,
   resolveEngine,
   resolveExecutable,
   runCmd,
@@ -109,13 +110,15 @@ function printStatus(entries, json = false) {
     console.log(JSON.stringify(entries.map(({ key, desc, bin, installed }) => ({
       name: key,
       description: desc,
-      binary: bin,
+      // One name, even for an entry that answers to several: `binary` is a
+      // documented string in this JSON and something is parsing it.
+      binary: primaryBin(bin),
       installed,
     })), null, 2));
     return;
   }
   for (const entry of entries) {
-    console.log(`${entry.installed ? "●" : "○"} ${entry.key.padEnd(10)} ${entry.desc}`);
+    console.log(`${entry.installed ? "●" : "○"} ${entry.key.padEnd(11)} ${entry.desc}`);
   }
 }
 
@@ -375,7 +378,7 @@ async function main() {
     const r = await openTool(tool, translated.args);
     if (!r.ok) {
       console.error(r.error?.code === "ENOENT"
-        ? `alpaca isn't installed (\`${tool.bin}\`). run: moshcode install alpaca`
+        ? `alpaca isn't installed (\`${primaryBin(tool.bin)}\`). run: moshcode install alpaca`
         : `launch failed: ${r.error?.message || r.error}`);
       process.exitCode = 1;
       return;
@@ -806,7 +809,7 @@ async function main() {
     const r = await openTool(tool, rest);
     if (!r.ok) {
       console.error(r.error?.code === "ENOENT"
-        ? `${key} isn't installed (\`${tool.bin}\`). run: moshcode install ${key}`
+        ? `${key} isn't installed (\`${primaryBin(tool.bin)}\`). run: moshcode install ${key}`
         : `launch failed: ${r.error?.message || r.error}`);
       process.exitCode = 1;
       return;

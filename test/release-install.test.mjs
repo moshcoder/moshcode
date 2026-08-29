@@ -94,3 +94,37 @@ test("installDir honours MOSHCODE_BIN, matching install.sh", () => {
     else process.env.MOSHCODE_BIN = previous;
   }
 });
+
+test("yt-dlp downloads the executable itself, with no archive around it", () => {
+  const spec = RELEASES["yt-dlp"];
+  // `bare` is what tells installRelease to skip the unpack; without it the
+  // installer would hand a PyInstaller binary to tar.
+  assert.equal(spec.bare, true);
+  // Tagged by date with no leading "v" (2025.08.11), so the versioned URL this
+  // builds otherwise — /download/v2025.08.11/ — is a 404 on every release.
+  assert.equal(spec.unversioned, true);
+  assert.equal(
+    assetUrl(spec, { platform: "linux", arch: "amd64" }),
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux",
+  );
+  // Linux names arm64 "aarch64" here; every other vendor in this file does not.
+  assert.equal(
+    assetUrl(spec, { platform: "linux", arch: "arm64" }),
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64",
+  );
+  // One universal2 build serves both Mac architectures.
+  assert.equal(
+    assetUrl(spec, { platform: "darwin", arch: "arm64" }),
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+  );
+  assert.equal(
+    assetUrl(spec, { platform: "darwin", arch: "amd64" }),
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+  );
+});
+
+test("only yt-dlp is bare — the rest still have an archive to unpack", () => {
+  for (const [key, spec] of Object.entries(RELEASES)) {
+    assert.equal(Boolean(spec.bare), key === "yt-dlp", `${key} has the wrong bare flag`);
+  }
+});

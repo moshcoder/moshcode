@@ -283,20 +283,36 @@ export function resolveEngine(token) {
 // script unpacks to $HOME/.turso and only appends it to your shell profile).
 // Searching them after PATH keeps a real `turso` on PATH winning, while still
 // finding the one we just installed.
+/**
+ * The name to print when talking about a `bin` that may be several.
+ *
+ * A `bin` is normally one string. ImageMagick is why it can be a list: the
+ * command is `magick` on ImageMagick 7 and `convert` on 6, both are current on
+ * supported distros at the same time, and picking either one alone makes a
+ * successful install report as missing on half of them. The first name is the
+ * one we prefer and the one worth naming in a message.
+ */
+export function primaryBin(bin) {
+  return Array.isArray(bin) ? bin[0] : bin;
+}
+
 function executableCandidates(bin, extraDirs = []) {
   const exts = process.platform === "win32" ? ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";")] : [""];
-  const dirs = path.isAbsolute(bin) || bin.includes(path.sep)
-    ? [""]
-    : [...(process.env.PATH || "").split(path.delimiter).filter(Boolean), ...extraDirs.filter(Boolean)];
+  const names = (Array.isArray(bin) ? bin : [bin]).filter(Boolean);
   const seen = new Set();
   const candidates = [];
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const candidate = dir ? path.join(dir, bin + ext) : bin + ext;
-      const key = candidate.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        candidates.push(candidate);
+  for (const name of names) {
+    const dirs = path.isAbsolute(name) || name.includes(path.sep)
+      ? [""]
+      : [...(process.env.PATH || "").split(path.delimiter).filter(Boolean), ...extraDirs.filter(Boolean)];
+    for (const dir of dirs) {
+      for (const ext of exts) {
+        const candidate = dir ? path.join(dir, name + ext) : name + ext;
+        const key = candidate.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          candidates.push(candidate);
+        }
       }
     }
   }
@@ -323,7 +339,9 @@ function nodeShebang(file) {
 
 function spawnSpec(bin, args = [], extraDirs = []) {
   const resolved = resolveExecutable(bin, extraDirs);
-  if (!resolved) return { cmd: bin, args };
+  // Unresolved, so hand the spawn the preferred name and let it produce the
+  // ENOENT — a list would be spawned as a single nonsense filename.
+  if (!resolved) return { cmd: primaryBin(bin), args };
   if (process.platform === "win32" && path.extname(resolved) === "" && nodeShebang(resolved)) {
     return { cmd: process.execPath, args: [resolved, ...args] };
   }

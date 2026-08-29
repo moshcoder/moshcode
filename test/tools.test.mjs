@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { isInstalled, resolveEngine } from "../src/engines.mjs";
+import { isInstalled, primaryBin, resolveEngine } from "../src/engines.mjs";
+import { needsRootHere } from "../src/escalate.mjs";
 import { TOOLS, resolveTool, retry, toolList, toolUpgradeSpec } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
@@ -592,4 +593,61 @@ test("retry retries until a later attempt succeeds", async () => {
 
   assert.equal(result, "ok");
   assert.equal(calls, 2);
+});
+
+test("the media toolchain installs through the right mechanism for each tool", () => {
+  // yt-dlp ships a static binary on its own releases; ffmpeg and ImageMagick
+  // only exist as distro packages. Getting these crossed means an install that
+  // 404s or one that asks for a password it never needed.
+  assert.equal(TOOLS["yt-dlp"].install.args.at(-1), "yt-dlp");
+  assert.ok(TOOLS["yt-dlp"].install.args.some((a) => a.endsWith("release-install.mjs")));
+  for (const key of ["ffmpeg", "imagemagick"]) {
+    assert.ok(TOOLS[key].install.args.some((a) => a.endsWith("pkg-install.mjs")), key);
+  }
+});
+
+test("the package-manager tools ask for root everywhere but macOS", () => {
+  // Homebrew refuses to run as root, so a mac must not be prompted for a
+  // password by a step that never escalates.
+  for (const key of ["ffmpeg", "imagemagick"]) {
+    assert.equal(needsRootHere(TOOLS[key], "linux"), true, key);
+    assert.equal(needsRootHere(TOOLS[key], "darwin"), false, key);
+  }
+  // yt-dlp lands in ~/.local/bin, so it never escalates at all.
+  assert.equal(needsRootHere(TOOLS["yt-dlp"], "linux"), false);
+});
+
+test("yt-dlp upgrades with its own -U rather than a re-download", () => {
+  // Extractors break whenever a site changes and upstream ships a fix within
+  // days, so the update path has to be the one that actually gets used.
+  assert.deepEqual(toolUpgradeSpec(TOOLS["yt-dlp"]), { cmd: "yt-dlp", args: ["-U"] });
+  // ffmpeg has no updater of its own; re-running the package install upgrades
+  // it, which is what toolUpgradeSpec falls back to.
+  assert.equal(toolUpgradeSpec(TOOLS.ffmpeg), TOOLS.ffmpeg.install);
+});
+
+test("imagemagick is found under either of the names it ships as", () => {
+  // `magick` on ImageMagick 7, `convert` on 6, and both are current: Ubuntu
+  // 24.04 and earlier ship 6, 25.04 and later ship 7, under the same package
+  // name. A single `bin` reports a good install as missing on half the fleet.
+  assert.deepEqual(TOOLS.imagemagick.bin, ["magick", "convert"]);
+
+  const dir = tempDir("moshcode-magick-");
+  const PATH = `${dir}${path.delimiter}${process.env.PATH}`;
+  const withPath = (fn) => {
+    const before = process.env.PATH;
+    process.env.PATH = PATH;
+    try { return fn(); } finally { process.env.PATH = before; }
+  };
+
+  assert.equal(withPath(() => isInstalled(TOOLS.imagemagick.bin)), false);
+  writeExecutable(dir, "convert", "process.exit(0)");
+  assert.equal(withPath(() => isInstalled(TOOLS.imagemagick.bin)), true, "ImageMagick 6");
+  writeExecutable(dir, "magick", "process.exit(0)");
+  assert.equal(withPath(() => isInstalled(TOOLS.imagemagick.bin)), true, "ImageMagick 7");
+});
+
+test("primaryBin names one command, so a list never reaches a message or a spawn", () => {
+  assert.equal(primaryBin(["magick", "convert"]), "magick");
+  assert.equal(primaryBin("ffmpeg"), "ffmpeg");
 });

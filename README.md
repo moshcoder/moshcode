@@ -762,15 +762,50 @@ newer, and re-running `moshcode install alchemy` is its upgrade path.
 Where CoinPay is the payments product MoshCode ships alongside, Alchemy is the
 read side of the same world — the chain itself rather than one wallet's ledger.
 
+### yt-dlp, ffmpeg, ImageMagick — the media toolchain
+
+```sh
+moshcode install yt-dlp           # static binary → ~/.local/bin
+moshcode install ffmpeg           # your distro's package manager (needs sudo)
+moshcode install imagemagick      # likewise
+
+moshcode yt-dlp https://…         # or `dl https://…` from cli-tools
+moshcode ffmpeg -i in.mkv out.mp4
+```
+
+The odd three out: not workflow CLIs, but the media toolchain the rest of the
+roster is built on. `cli-tools` fronts all three — `dl` for yt-dlp, `vid` for
+ffmpeg, `img` for ImageMagick — and every one of them used to answer a missing
+binary by telling you to go and install a system package by hand. Now the
+registry that installs `cli-tools` installs what it runs on.
+
+**yt-dlp** comes from its own releases as a self-contained binary, so it needs
+no python and no package manager. That is deliberate rather than convenient:
+extractors break whenever a site changes its markup, upstream ships a fix within
+days, and a distro package of yt-dlp is frozen for the life of a release. Its
+upgrade is `yt-dlp -U`, the project's own updater.
+
+**ffmpeg** and **ImageMagick** exist only as distro packages — no vendor script,
+and the static rebuilds floating around are unsigned third-party redistributions
+of somebody else's codec stack, on the two tools most likely to be pointed at a
+file from the internet. So they go through `apt`/`dnf`/`zypper`/`pacman`/`apk`,
+or Homebrew on macOS, and ask for sudo everywhere but a Mac (see below).
+Re-running the install upgrades them.
+
+ImageMagick answers to two names: `magick` on version 7, `convert` on 6, both
+current across supported distros under the same package name. MoshCode looks for
+either, so a good install is never reported missing.
+
 `gh`, `supabase`, and `doctl` publish no cross-platform install script, so
 MoshCode resolves the latest GitHub release and drops the binary in
 `$MOSHCODE_BIN` (default `~/.local/bin`) — no sudo, no package manager. Set
 `MOSHCODE_BIN` to install elsewhere.
 
-`tailscale` and `spinifex` are the exceptions: both install system services
-rather than a user-local binary, so their official installers go through the
-distro's package manager and will ask for sudo (tailscale on macOS delegates to
-the App Store instead; Spinifex has no macOS build at all).
+`tailscale`, `spinifex`, `ffmpeg` and `imagemagick` are the exceptions: none of
+them is a user-local binary, so they go through the distro's package manager and
+will ask for sudo (tailscale on macOS delegates to the App Store, and `ffmpeg`
+and `imagemagick` to Homebrew, which refuses to run as root — so neither is
+prompted for a password on a Mac; Spinifex has no macOS build at all).
 
 MoshCode asks for that password **before** starting the work rather than letting
 the installer stop for it partway through — which matters most in `moshcode
