@@ -216,18 +216,39 @@ test("sessions: an empty chunk writes no output row", skip, async () => {
   assert.deepEqual(await rowsFor(sid), [], "no row for an empty chunk");
 });
 
-test("sessions: a long chunk is still truncated to the stored limit", skip, async () => {
+test("sessions: an ordinary chunk is one row, at the stored limit", skip, async () => {
   const { one, rowsFor } = await app();
 
-  const reg = await one("/api/sessions", { name: "truncate" });
+  const reg = await one("/api/sessions", { name: "at-cap" });
   const sid = reg.body.id;
 
-  await one(`/api/sessions/${sid}/output`, { chunk: "x".repeat(20050) });
+  await one(`/api/sessions/${sid}/output`, { chunk: "x".repeat(20000) });
 
   const rows = await rowsFor(sid);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].chunk.length, 20000, "chunk is capped at 20000 chars");
+  assert.equal(rows[0].chunk.length, 20000, "a row is still capped at 20000 chars");
   assert.equal(Number(rows[0].seq), 1);
+});
+
+test("sessions: a chunk past the row limit is split, not truncated", skip, async () => {
+  const { one, rowsFor } = await app();
+
+  // The row cap keeps one flush from writing an unbounded string. It used to be
+  // applied with slice(), so the overflow was published live to every watcher
+  // and then thrown away — the same session read one way while you watched it
+  // and another way after a reload, with no sign anything was missing. A build
+  // that dumps a wall of output inside one 150ms flush is exactly that case.
+  const chunk = `${"x".repeat(20000)}TAIL-MUST-SURVIVE\n`;
+  const reg = await one("/api/sessions", { name: "oversized" });
+  const sid = reg.body.id;
+
+  await one(`/api/sessions/${sid}/output`, { chunk });
+
+  const rows = await rowsFor(sid);
+  assert.equal(rows.length, 2, "the overflow becomes another row");
+  assert.ok(rows.every((r) => r.chunk.length <= 20000), "each row still respects the cap");
+  assert.equal(rows.map((r) => r.chunk).join(""), chunk, "every byte posted must be stored");
+  assert.deepEqual(rows.map((r) => Number(r.seq)), [1, 2], "and in order, so a replay reassembles it");
 });
 
 test("sessions: a foreign key still cannot append output", skip, async () => {

@@ -19,8 +19,11 @@
 // `script` disagree on both flag names and argument order, and anything we
 // cannot positively identify falls back to today's plain `inherit`.
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { activeChildSink } from "./mirror.mjs";
 
 /**
  * POSIX single-quote escaping, for argv that has to survive being flattened
@@ -177,4 +180,58 @@ export function ptyEnabled(sink, flavor = scriptFlavor()) {
   if (typeof sink !== "function") return false;
   if (process.env.MOSHCODE_MIRROR_PTY === "0") return false;
   return Boolean(flavor);
+}
+
+/**
+ * Wrap a spawn spec so a copy of everything the child prints reaches `onOutput`
+ * while the child still owns the real terminal.
+ *
+ * The whole capture dance in one place — temp transcript, the flavour-specific
+ * `script` argv, the follower, the banner strip, the cleanup — because every
+ * launcher in the pit needs it, and each one growing its own copy is how a
+ * shell command ended up invisible in the mirror while `/agents claude` was
+ * captured: both spawn `inherit`, and only one of them had been taught this.
+ *
+ * `onOutput` defaults to whatever the live mirror is (src/mirror.mjs), so a
+ * launcher gets capture without having to know the mirror exists — the reverse
+ * of how this started, where each launcher had to be taught separately and only
+ * two ever were. Pass `null` to opt a launch out.
+ *
+ * Returns `{ cmd, args, stop }`. With nothing watching, or on a box with no
+ * `script(1)` we can drive, `cmd`/`args` come back exactly as passed in and
+ * `stop` is a no-op — the caller spawns what it always spawned. `stop()` must
+ * be called once the child exits: it drains the tail of the transcript (the
+ * last lines of a command are usually the ones you were waiting for) and
+ * removes the temp dir.
+ */
+export function captureSpec({ cmd, args = [] }, onOutput = activeChildSink(), { flavor = scriptFlavor() } = {}) {
+  const plain = { cmd, args, stop: () => {} };
+  if (!ptyEnabled(onOutput, flavor)) return plain;
+  let workDir = null;
+  try {
+    workDir = mkdtempSync(path.join(tmpdir(), "moshcode-pty-"));
+    const transcript = path.join(workDir, "transcript");
+    writeFileSync(transcript, "");
+    const wrapped = ptySpec(cmd, args, transcript, flavor);
+    if (!wrapped) throw new Error("no script(1) spec for this flavour");
+    let first = true;
+    const stopFollow = followFile(transcript, (chunk) => {
+      const clean = stripScriptBanner(chunk, first);
+      first = false;
+      if (clean) onOutput(clean);
+    });
+    const dir = workDir;
+    return {
+      cmd: wrapped.cmd,
+      args: wrapped.args,
+      stop() {
+        try { stopFollow(); } catch { /* nothing left to drain */ }
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp dir */ }
+      },
+    };
+  } catch {
+    // Capture is a nicety; never let it stop a command from running.
+    if (workDir) { try { rmSync(workDir, { recursive: true, force: true }); } catch { /* temp dir */ } }
+    return plain;
+  }
 }

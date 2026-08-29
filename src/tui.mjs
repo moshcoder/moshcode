@@ -18,7 +18,7 @@ import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
 import { startAutoSync } from "./autosync.mjs";
 import { loadCommand, saveCommand } from "./settings-sync.mjs";
-import { createMirror, pressKey, teeOutput } from "./mirror.mjs";
+import { createMirror, pressKey, setActiveSink, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
@@ -28,6 +28,7 @@ import { cryptoCommand } from "./crypto.mjs";
 import { gamesCommand } from "./games.mjs";
 import { canOpenBrowser, openBrowser } from "./open-url.mjs";
 import { shellInvocation } from "./shell.mjs";
+import { captureSpec } from "./pty.mjs";
 import { needsRootHere, primeEscalation } from "./escalate.mjs";
 import { banner, hr, acid, ash, bone, dim, ok, err, warn, info, moshcodeVersion } from "./ui.mjs";
 import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
@@ -678,14 +679,23 @@ async function openWorkflowTool(key, tool, args) {
 // command string → `$SHELL +m -ic "<cmd>"` (one-off). Interactive so the command
 // can see the aliases and functions in ~/.zshrc — see src/shell.mjs for why
 // that is not optional. Resolves { ok, code, signal }.
-function runShell(rawCmd) {
+//
+// Captured through a pty when the mirror is watching, for the same reason an
+// engine is: a shell command is where most of what a pit does actually happens
+// — `!cmd`, /shell, and every shell-valued /alias land here — and with plain
+// `inherit` none of its bytes, on stdout or stderr, ever pass through this
+// process. The session page was showing the echoed command line and the exit
+// note with nothing in between.
+export function runShell(rawCmd, { onOutput } = {}) {
   return new Promise((resolve) => {
     const { shell, args } = shellInvocation(rawCmd);
+    const launch = captureSpec({ cmd: shell, args }, onOutput);
+    const done = (result) => { try { launch.stop(); } catch { /* already drained */ } resolve(result); };
     let child;
-    try { child = spawn(shell, args, { stdio: "inherit" }); }
-    catch (e) { resolve({ ok: false, error: e }); return; }
-    child.on("error", (e) => resolve({ ok: false, error: e }));
-    child.on("exit", (code, signal) => resolve({ ok: true, code, signal }));
+    try { child = spawn(launch.cmd, launch.args, { stdio: "inherit" }); }
+    catch (e) { done({ ok: false, error: e }); return; }
+    child.on("error", (e) => done({ ok: false, error: e }));
+    child.on("exit", (code, signal) => done({ ok: true, code, signal }));
   });
 }
 
@@ -700,7 +710,7 @@ async function openShell(rawCmd) {
     ? `${bone(shellName)} ${ash(flags)} ${ash(rawCmd)}`
     : `dropping to ${bone(shellName)} — ${ash("`exit` or Ctrl-D brings you back to the pit")}`));
   console.log(hr());
-  const r = await runShell(rawCmd);
+  const r = await runShell(rawCmd, { onOutput: childSink() });
   console.log(hr());
   if (!r.ok) {
     console.log(err(`couldn't start shell: ${r.error?.message || r.error}`));
@@ -720,14 +730,22 @@ function installTarget(key) {
     // something the installer's output scrolled into view.
     if (needsRootHere(target)) primeEscalation({ what: key, out: (s) => console.log(info(s.replace(/^· /, ""))) });
     console.log(hr());
-    const child = spawn(target.install.cmd, target.install.args, { stdio: "inherit" });
+    // Installers are long, chatty, and the thing you most want to read from a
+    // phone — so they go through the mirror's pty like everything else.
+    const launch = captureSpec(
+      { cmd: target.install.cmd, args: target.install.args },
+      childSink(),
+    );
+    const child = spawn(launch.cmd, launch.args, { stdio: "inherit" });
     child.on("error", (e) => {
+      launch.stop();
       console.log(hr());
       console.log(err(`install failed: ${e.message}`));
       if (e.code === "ENOENT" && target.installHelp) console.log(info(target.installHelp));
       resolve();
     });
     child.on("exit", (code) => {
+      launch.stop();
       console.log(hr());
       if (code !== 0) { console.log(err(`install exited ${code}`)); return resolve(); }
       console.log(ok(`${key} installed. 🤘`));
@@ -1292,6 +1310,10 @@ async function startMirror() {
   if (!started) return noop;
 
   activeMirror = mirror;
+  // Every launcher that spawns a child reads this rather than being handed a
+  // sink, so a command run from the pit is captured whether or not whoever
+  // wrote that launcher knew the mirror existed.
+  setActiveSink((chunk) => activeMirror?.write(chunk));
   const restoreTee = teeOutput((chunk) => mirror.write(chunk));
 
   // Commands arrive whenever; the prompt is only ready between engine
@@ -1326,6 +1348,7 @@ async function startMirror() {
 async function stopMirror(restoreTee) {
   const mirror = activeMirror;
   activeMirror = null;
+  setActiveSink(null);
   try { restoreTee?.(); } catch { /* noop */ }
   try { await mirror?.stop(); } catch { /* best effort */ }
 }

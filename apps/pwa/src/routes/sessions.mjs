@@ -43,6 +43,26 @@ const LONG_POLL_MS = readLongPollMs();
 // enough that a mis-paste of a whole file can't queue thousands of lines
 // against a prompt that runs them one at a time.
 const MAX_PASTED_LINES = 50;
+// The most output one scrollback row may hold. The CLI flushes at ~16k, so a
+// normal chunk is one row; a burst bigger than this becomes several rows in
+// order rather than one truncated one.
+export const MAX_CHUNK = 20000;
+
+/**
+ * One posted chunk as the rows it will be stored in, in order.
+ *
+ * Every byte survives: nothing is dropped for being past the cap, which is
+ * what the old `slice(0, MAX_CHUNK)` did — quietly, and only to the copy the
+ * scrollback kept, so it showed up as a session that read differently after a
+ * reload than it had live.
+ */
+export function splitChunk(text, max = MAX_CHUNK) {
+  const s = String(text ?? "");
+  if (!s) return [];
+  const parts = [];
+  for (let i = 0; i < s.length; i += max) parts.push(s.slice(i, i + max));
+  return parts;
+}
 
 // Arrow keys pressed on the session page. The command queue carries opaque
 // strings, so a key rides it as a sentinel the CLI decodes — ESC leads it
@@ -172,7 +192,13 @@ sessionsRouter.post("/api/sessions/:id/output", cliAuth, async (req, res) => {
   // at the old column and stays wrong in the scrollback for good.
   if (resized) publish(session.id, { type: "size", cols, rows });
 
-  if (chunk) {
+  // Split rather than truncate. A row is capped so one flush can't put an
+  // unbounded string in the table, but a chunk that overran the cap used to be
+  // stored short while the live watchers got all of it — so the same session
+  // read two different ways (watching, or reloading the page) disagreed, and
+  // the bytes past the cap were gone for good. A build that prints a wall of
+  // output in one 150ms window is exactly when that happens.
+  for (const part of splitChunk(chunk)) {
     // seq is per-session and monotonic so a reconnecting browser can ask for
     // "everything after N" instead of replaying the whole scrollback.
     //
@@ -187,14 +213,14 @@ sessionsRouter.post("/api/sessions/:id/output", cliAuth, async (req, res) => {
       `INSERT INTO session_output (session_id,seq,chunk,created_at)
        SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? FROM session_output WHERE session_id = ?
        RETURNING seq`,
-      [session.id, chunk.slice(0, 20000), now, session.id]
+      [session.id, part, now, session.id]
     );
     const seq = Number(inserted.seq);
     await run(
       `DELETE FROM session_output WHERE session_id = ? AND seq <= ?`,
       [session.id, seq - SCROLLBACK]
     );
-    publish(session.id, { type: "out", seq, chunk });
+    publish(session.id, { type: "out", seq, chunk: part });
   }
   if (engine !== session.engine) publish(session.id, { type: "engine", engine });
   res.json({ ok: true });

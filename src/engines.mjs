@@ -32,11 +32,11 @@
 // a session that starts fresh is a small disappointment, and one that starts
 // with a flag the engine does not have is a crash.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 
-import { followFile, ptyEnabled, ptySpec, scriptFlavor, stripScriptBanner } from "./pty.mjs";
+import { captureSpec } from "./pty.mjs";
 
 export const ENGINES = {
   opencode: {
@@ -439,21 +439,29 @@ export function runCmd(cmd, args = [], { capture = false } = {}) {
     let child;
     const spec = spawnSpec(cmd, args);
     const stdio = capture ? ["inherit", "pipe", "pipe"] : "inherit";
-    try { child = spawn(spec.cmd, spec.args, { stdio }); }
-    catch (e) { resolve({ ok: false, error: e }); return; }
+    // The `capture` branch already reaches a watching browser: it re-writes
+    // every byte through this process's own stdout/stderr, which the mirror
+    // tees. The inherited branch does not — those bytes go to the tty and
+    // nowhere else — so it goes under a pty when a mirror is live. This is what
+    // an upgrade, a plugin install and an `mcp add` all run through, and all
+    // three used to be a rule, a blank stretch, and a result line.
+    const launch = capture ? { ...spec, stop: () => {} } : captureSpec(spec);
+    const finish = (result) => { try { launch.stop(); } catch { /* already drained */ } resolve(result); };
+    try { child = spawn(launch.cmd, launch.args, { stdio }); }
+    catch (e) { finish({ ok: false, error: e }); return; }
     let output = "";
     if (capture) {
       for (const [stream, sink] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
         stream?.on("data", (chunk) => { output += chunk.toString(); sink.write(chunk); });
       }
     }
-    child.on("error", (e) => resolve({ ok: false, error: e, output }));
+    child.on("error", (e) => finish({ ok: false, error: e, output }));
     // "exit" fires as soon as the process is gone, which with pipes can leave
     // the last chunk still queued — the one line we are trying to read. "close"
     // waits for the streams too. With stdio inherited there are no streams, so
     // the two are the same moment and existing callers are unaffected; the
     // distinction is kept explicit so neither branch changes by accident.
-    child.on(capture ? "close" : "exit", (code, signal) => resolve({ ok: true, code, signal, output }));
+    child.on(capture ? "close" : "exit", (code, signal) => finish({ ok: true, code, signal, output }));
   });
 }
 
@@ -501,35 +509,8 @@ export function openPassthrough(target, args = [], { onOutput } = {}) {
     // the child the tty's own file descriptors, so none of its bytes ever pass
     // through this process. See src/pty.mjs for why this is script(1) and not
     // a pipe or node-pty.
-    let transcript = null;
-    let workDir = null;
-    let stopFollow = null;
-    let launch = { ...spec, stdio: "inherit" };
-    if (ptyEnabled(onOutput)) {
-      try {
-        workDir = mkdtempSync(path.join(tmpdir(), "moshcode-pty-"));
-        transcript = path.join(workDir, "transcript");
-        writeFileSync(transcript, "");
-        const wrapped = ptySpec(spec.cmd, spec.args, transcript, scriptFlavor());
-        if (wrapped) {
-          launch = { ...wrapped, stdio: "inherit" };
-          let first = true;
-          stopFollow = followFile(transcript, (chunk) => {
-            const clean = stripScriptBanner(chunk, first);
-            first = false;
-            if (clean) onOutput(clean);
-          });
-        }
-      } catch {
-        // Capture is a nicety; never let it stop the session from opening.
-        transcript = null;
-      }
-    }
-
-    const cleanup = () => {
-      try { stopFollow?.(); } catch { /* nothing left to drain */ }
-      if (workDir) { try { rmSync(workDir, { recursive: true, force: true }); } catch { /* temp dir */ } }
-    };
+    const launch = captureSpec(spec, onOutput);
+    const cleanup = () => launch.stop();
 
     let child;
     try { child = spawn(launch.cmd, launch.args, { stdio: "inherit", env }); }
