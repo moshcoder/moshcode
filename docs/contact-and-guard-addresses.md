@@ -2,7 +2,7 @@
 
 A Moshpit name can now say how to reach whoever holds it, without saying who
 that is. The holder gives an address they read; the registry publishes
-`k7m2xqbn3f@moshcode.sh`, which forwards to it. The real address is never in a
+`k7m2xqbn3f@names.moshcode.sh`, which forwards to it. The real address is never in a
 page, an API response, or the allocation log.
 
 This is opt-in and off by default. A name with no contact publishes nothing,
@@ -29,7 +29,7 @@ A holder picks one per name or ending, on `/pit/contact`:
 
 | visibility | what a visitor sees |
 |---|---|
-| `guard` | `<token>@moshcode.sh`, forwarding to them. The default. |
+| `guard` | `<token>@names.moshcode.sh`, forwarding to them. The default. |
 | `public` | the address they typed, as typed. For a role address they are happy to expose. |
 | `none` | nothing — but the token is kept, so switching back on restores the *same* address. |
 
@@ -52,36 +52,49 @@ for the name, an abuse report about it) goes to a stranger.
 
 ## Standing the mail host up
 
-Nothing is published until an alias exists at the mail host, and no alias can
-exist until `moshcode.sh` receives mail. As of this being written it does not:
-the domain has no MX and no SPF record at all.
+Nothing is published until an alias exists at the mail host. Guard addresses
+live at **`names.moshcode.sh`** — its own subdomain, for two separate reasons:
 
-Three steps, in order. The first is a hand-off — `moshcode.sh` is on Porkbun and
-there are no Porkbun credentials on the dev box.
+- `pit.moshcode.sh` is a **CNAME** to Railway, and a CNAME cannot coexist with
+  an MX at the same name. Mail there is impossible, not merely unconfigured.
+- The apex would work (Porkbun's ALIAS is a flattened A, not a CNAME) but it
+  would put the reputation of forwarded stranger mail on the same name as any
+  staff mail `moshcode.sh` ever carries. Forwarding is the hardest
+  deliverability case there is, so it gets a name of its own to damage.
 
-**1. DNS on `moshcode.sh`.** MX is independent of the A record, so this does not
-disturb `pit.` or `app.`:
+**1. DNS — done (2026-08-29).** Added via the Porkbun API and verified
+authoritative. `pit.` and `app.` are untouched.
 
 ```
-moshcode.sh.  MX   10  mx1.forwardemail.net.
-moshcode.sh.  MX   10  mx2.forwardemail.net.
-moshcode.sh.  TXT  "v=spf1 include:spf.forwardemail.net -all"
+names.moshcode.sh.         MX   10  mx1.forwardemail.net.
+names.moshcode.sh.         MX   10  mx2.forwardemail.net.
+names.moshcode.sh.         TXT  "v=spf1 include:spf.forwardemail.net -all"
+_dmarc.names.moshcode.sh.  TXT  "v=DMARC1; p=none;"
 ```
 
-Forward Email also issues a `forward-email-site-verification=…` TXT record when
-the domain is added to the account; add it with the rest. A `_dmarc` TXT of
-`v=DMARC1; p=none;` is worth having and is not required for forwarding.
+DMARC is `p=none` on purpose: report only, because an aggressive policy bites a
+forwarder first and nothing should be quarantined while the setup is unproven.
 
-**2. The domain on the Forward Email account.** Add `moshcode.sh` there and
-confirm the plan covers API alias management — the free tier forwards mail but
-programmatic alias creation is a paid feature, and every mint fails without it.
+The Porkbun credentials are `PORKBUN_API_KEY` / `PORKBUN_SECRET_API_KEY` in the
+logicsrc vault `profullstack-sharable-keys--prod`.
 
-**3. The key, in the vault.** `FORWARDEMAIL_API_KEY` on the `moshcode` Railway
-service, set from the logicsrc vault rather than committed to a `.env`.
-`MOSHPIT_GUARD_DOMAIN` defaults to `moshcode.sh` and only needs setting to move
-the addresses somewhere else.
+> **Checking these from the dev box:** always `dig ... @1.1.1.1`. The box's
+> resolver is the Moshpit DNS bridge, which answers for every `*.moshcode.sh`
+> name with a synthesised record — so a bare `dig` will happily tell you a
+> host exists when public DNS has never heard of it.
 
-Until all three are done the feature is inert rather than broken: a contact is
+**2. The domain on the Forward Email account — outstanding.** Add
+`names.moshcode.sh` there, add the `forward-email-site-verification=…` TXT it
+issues, and confirm the plan covers **API alias management**. Every mint fails
+without API access; which tier that needs is worth checking at signup rather
+than assumed.
+
+**3. The key — outstanding.** `FORWARDEMAIL_API_KEY` on the `moshcode` Railway
+service, from the logicsrc vault rather than a committed `.env`.
+`MOSHPIT_GUARD_DOMAIN` already defaults to `names.moshcode.sh`, so it only needs
+setting to move the addresses somewhere else.
+
+Until 2 and 3 are done the feature is inert rather than broken: a contact is
 recorded, `alias_status` stays `pending`, `/pit/contact` says plainly that no
 mail host is configured, and nothing is published on any name.
 

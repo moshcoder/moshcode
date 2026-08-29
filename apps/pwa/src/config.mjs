@@ -69,17 +69,30 @@ export const config = {
     apiKey: process.env.RESEND_API_KEY || "",
     from: process.env.RESEND_FROM || "moshcode <notify@moshcoding.com>",
   },
-  // The mail host behind a name's guard address: `<token>@moshcode.sh` forwards
-  // to whatever the holder reads, so the real address is never published.
+  // The mail host behind a name's guard address: `<token>@names.moshcode.sh`
+  // forwards to whatever the holder reads, so the real address is never
+  // published.
   //
   // The domain is separate from `origin` and `pitOrigin` on purpose. Those two
   // are where the registry answers HTTP; this is where it answers mail, and the
   // two need not be the same host -- moving the pit to another origin must not
   // silently invalidate every contact address already printed on a page.
+  //
+  // Its own subdomain rather than the apex, and rather than `pit.` -- two
+  // separate reasons, both worth writing down:
+  //
+  //   `pit.moshcode.sh` is a CNAME to Railway, and a CNAME cannot coexist with
+  //   an MX record at the same name. Mail there is not a configuration choice,
+  //   it is impossible.
+  //
+  //   The apex would work -- Porkbun's ALIAS is a flattened A, not a CNAME --
+  //   but it would put the reputation of forwarded stranger mail on the same
+  //   name as any staff mail moshcode.sh ever carries. Forwarding is the
+  //   hardest deliverability case there is, so it gets its own name to damage.
   forwardEmail: {
     apiKey: process.env.FORWARDEMAIL_API_KEY || "",
     apiBase: (process.env.FORWARDEMAIL_API_BASE || "https://api.forwardemail.net").replace(/\/+$/, ""),
-    domain: (process.env.MOSHPIT_GUARD_DOMAIN || "moshcode.sh").trim().toLowerCase(),
+    domain: (process.env.MOSHPIT_GUARD_DOMAIN || "names.moshcode.sh").trim().toLowerCase(),
   },
   push: {
     vapidPublic: process.env.VAPID_PUBLIC || "",
