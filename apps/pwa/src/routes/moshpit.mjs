@@ -70,17 +70,22 @@ import {
   countSearchTlds,
   countTldsNotOwnedBy,
   createLink,
+  CONTACT_VISIBILITY,
   CHILD_PRICE_USD,
   DEFAULT_TLD_PRICE_USD,
+  DEFAULT_VISIBILITY,
   ENDING_PRICE_USD,
   deleteContent,
   deleteLink,
+  getContactPrivate,
   getContent,
   getLink,
   getName,
   getTld,
   getTldWithPrice,
+  guardAddress,
   listAliasesTo,
+  listContactsForUser,
   listContent,
   listAllNames,
   listExempt,
@@ -108,6 +113,7 @@ import {
   PIN_KINDS,
   pinsForName,
   popularLabels,
+  publicContactFor,
   putContent,
   quoteName,
   RECORD_HELP,
@@ -117,12 +123,15 @@ import {
   registerTld,
   registerTlds,
   releaseName,
+  removeContact,
   removePin,
   removeRecord,
   resolutionPreference,
   resolveMoshpitName,
+  retryContactAlias,
   searchTlds,
   setAlias,
+  setContact,
   setExempt,
   setNameFeed,
   setNameTarget,
@@ -235,7 +244,36 @@ moshpitRouter.get("/api/moshpit/tlds", async (req, res) => {
   // callers see no change in what arrives, only in being told there is more.
   const applied = limit ?? DEFAULT_PAGE;
   const tlds = await listTlds({ limit: applied, offset });
-  res.json({ total: await countTlds(), limit: applied, offset, tlds });
+  res.json({ total: await countTlds(), limit: applied, offset, tlds: tlds.map(publicTld) });
+});
+
+/**
+ * One ending as a stranger may see it.
+ *
+ * This endpoint used to return the row as it sits in the table, which meant
+ * `owner_email` in cleartext for every ending in the registry — thousands of
+ * real addresses, other people's included, to anyone who could count to 200 in
+ * an `?offset=`. Nobody consented to that and nothing read it: not
+ * moshpit-registry, not the DNS bridge, not a single page in this app. It was a
+ * SELECT that grew a route.
+ *
+ * The policy it now follows is the one /api/moshpit/log already wrote down —
+ * ownership is public, the account behind it is not. Everything a mirror
+ * legitimately needs is still here: which ending, where it points, what a name
+ * under it costs, when it was claimed.
+ *
+ * `owner` is the same digest the log publishes, and it is the reason this is a
+ * redaction rather than a deletion. Two endings held by one person still
+ * visibly share a holder, so "who holds how much of the namespace" — the
+ * question that made the email field useful — is still answerable, by the same
+ * value, from either endpoint. Reaching the holder is what a contact is for.
+ */
+const publicTld = (t) => ({
+  tld: t.tld,
+  owner: ownerDigest(t.user_id),
+  alias_of: t.alias_of,
+  price_usd: t.price_usd,
+  created_at: t.created_at,
 });
 
 /**
@@ -1072,11 +1110,14 @@ moshpitRouter.get("/n/:name", async (req, res) => {
     const ending = normalizeTld(String(req.params.name || "").replace(/^\.+/, ""));
     const owner = ending ? await getTldWithPrice(ending) : null;
     if (owner) {
-      const [names, aliasesTo, sameOwner, popular] = await Promise.all([
+      const [names, aliasesTo, sameOwner, popular, contact] = await Promise.all([
         listNames(ending),
         listAliasesTo(ending),
         listTldsForUser(owner.user_id, { limit: 50 }),
         popularLabels(),
+        // The operator of an ending is exactly who a would-be buyer of a name
+        // under it has to reach, and until now there was no way to.
+        publicContactFor(ending),
       ]);
       const publishing = await countContentForNames(names);
       // What could go under it next — the third question, after what is under
@@ -1089,7 +1130,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
       return res.status(200).send(page({
         title: `.${ending}`,
         head: endingHead(ending, owner),
-        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, suggestions, publishing, user: req.user, req }),
+        body: endingDirectory({ tld: ending, owner, names, aliasesTo, sameOwner, suggestions, contact, publishing, user: req.user, req }),
       }));
     }
     // Still 400 for an ending nobody holds: otherwise every typo under /n/
@@ -1142,9 +1183,13 @@ moshpitRouter.get("/n/:name", async (req, res) => {
   }
 
   // Neither: the directory.
-  const [names, tlds] = await Promise.all([
+  const [names, tlds, contact] = await Promise.all([
     tld ? listNames(tld) : Promise.resolve([]),
     listTlds({ limit: 200 }),
+    // Only on the directory. A name that serves a site, a feed or an origin is
+    // showing its holder's own page, and the registry has no business printing
+    // an address into it -- /api/moshpit/contact is the answer there.
+    tld && parsed ? publicContactFor(tld, parsed.label) : Promise.resolve(null),
   ]);
   const owner = tld ? await getTldWithPrice(tld) : null;
   const publishing = await countContentForNames(names);
@@ -1165,7 +1210,7 @@ moshpitRouter.get("/n/:name", async (req, res) => {
   res.status(200).send(page({
     title: resolution.name,
     head: nameHead(resolution),
-    body: directory({ resolution, tld, owner, names, tlds, quote, publishing, user: req.user, req }),
+    body: directory({ resolution, tld, owner, names, tlds, quote, contact, publishing, user: req.user, req }),
   }));
 });
 
@@ -1374,7 +1419,7 @@ function endingHead(tld, owner) {
  * ending's price and a box to pick a name under it — and the listing is the
  * whole ending rather than "what else lives near the name you asked for".
  */
-function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], publishing = new Map(), user, req }) {
+function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], suggestions = [], contact = null, publishing = new Map(), user, req }) {
   // A name with a feed, or with something published here, is as live as one
   // with a server: it draws a page when you visit it, which is the only thing
   // this list sorts on.
@@ -1465,6 +1510,8 @@ function endingDirectory({ tld, owner, names, aliasesTo = [], sameOwner = [], su
   <h2 class="acid" style="font-size:.9rem;margin-top:22px">Related endings</h2>
   <p class="pit-dir-row">${related.map(endingLink).join(" &middot; ")}</p>` : ""}
 
+  ${contactCard(contact)}
+
   <p style="margin-top:26px"><a class="btn" href="/pit">the pit &rarr;</a></p>
 </section>`;
 }
@@ -1492,7 +1539,7 @@ const unreachable = (resolution, why) => `
  * answer is what does. Live sites first — they are the only entries that go
  * anywhere real — then the rest of the ending, then other endings.
  */
-function directory({ resolution, tld, owner, names, tlds, quote, publishing = new Map(), user, req }) {
+function directory({ resolution, tld, owner, names, tlds, quote, contact = null, publishing = new Map(), user, req }) {
   // As in endingDirectory: a feed, or a post published here, makes a name a
   // site, so it belongs in the list of entries that go somewhere real.
   const drawn = (n) => Boolean(n.target || n.feed_url || publishing.get(`${n.label}.${n.tld}`));
@@ -1554,8 +1601,36 @@ function directory({ resolution, tld, owner, names, tlds, quote, publishing = ne
   <h2 class="acid" style="font-size:.9rem;margin-top:22px">More endings</h2>
   <p class="pit-dir-row">${others.map(tldLink).join(" · ")}</p>` : ""}
 
+  ${contactCard(contact)}
+
   <p style="margin-top:26px"><a class="btn acid" href="/pit">the pit →</a></p>
 </section>`;
+}
+
+/**
+ * How to reach whoever holds this, when they have said they want to be reached.
+ *
+ * Nothing at all when they have not, which is the default and will stay the
+ * common case. An empty slot is better than the alternative this replaces: the
+ * registry used to answer "who holds .eggs" with a real email address whether
+ * or not its holder had ever been asked.
+ *
+ * The guard line says the address forwards. That is not decoration -- someone
+ * writing to `k7m2xqbn3f@moshcode.sh` should know they are writing to a person
+ * and not to a support desk at moshcode, and the holder should be able to see
+ * from the public page that their own address is not on it.
+ */
+function contactCard(contact) {
+  if (!contact) return "";
+  const address = esc(contact.address);
+  return `
+  <h2 class="acid" style="font-size:.9rem;margin-top:22px">Contact</h2>
+  <p class="mono" style="font-size:.78rem">
+    <a class="acid" href="mailto:${address}">${address}</a>
+    ${contact.kind === "guard"
+      ? `<span class="faint"> &mdash; forwards to the holder, whose own address stays private.</span>`
+      : `<span class="faint"> &mdash; published by the holder.</span>`}
+  </p>`;
 }
 
 /**
@@ -1687,6 +1762,132 @@ moshpitRouter.delete("/api/moshpit/tlds/:tld/pins", async (req, res) => {
   });
   if (!result.ok) return bad(res, result.error || "could not withdraw that pin", 404);
   res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label), withdrawn: true });
+});
+
+/* ---- how to reach the holder ---- */
+
+/**
+ * GET /api/moshpit/contact?name=blue.eggs — public, and public means guarded.
+ *
+ * The answer is an address or nothing, and never the holder's own address
+ * unless they explicitly chose to publish it. A `guard` contact answers with
+ * `k7m2xqbn3f@moshcode.sh`, which forwards; nothing in this response, or in any
+ * other, says where it forwards to.
+ *
+ * 404 rather than 200-with-null when there is no contact, for the reason the
+ * pins route gives: a client caches on the status, and "this name has nobody to
+ * write to" is a definite answer worth caching, distinct from an outage.
+ *
+ * `?name=` takes an ending too — `.eggs` or `eggs` — because the operator of an
+ * ending is exactly who a would-be buyer of a name under it needs to reach.
+ */
+moshpitRouter.get("/api/moshpit/contact", async (req, res) => {
+  const raw = String(req.query.name ?? "").trim().replace(/^\.+/, "");
+  if (!raw) return bad(res, "name is required");
+
+  const parsed = parseMoshpitName(raw);
+  // An ending on its own is not a name and parseMoshpitName rightly refuses it;
+  // here it is a legitimate subject, so it is tried second rather than treated
+  // as a malformed name.
+  const scope = parsed
+    ? { tld: parsed.tld, label: parsed.label }
+    : (normalizeTld(raw) ? { tld: normalizeTld(raw), label: "" } : null);
+  if (!scope) return bad(res, "not a Moshpit name or ending");
+
+  const contact = await publicContactFor(scope.tld, scope.label);
+  const body = {
+    name: scope.label ? `${scope.label}.${scope.tld}` : `.${scope.tld}`,
+    tld: scope.tld,
+    label: scope.label || null,
+    contact,
+  };
+  return contact ? res.json(body) : res.status(404).json(body);
+});
+
+/**
+ * GET /api/moshpit/tlds/:tld/contact[?label=blue] — the holder's own view.
+ *
+ * The one route that returns the real address, and only ever to the account
+ * that owns the name. It exists because a holder editing their contact has to
+ * see what is currently recorded, and because `alias_status` is the only place
+ * that explains why a guard address they set up is not showing yet.
+ */
+moshpitRouter.get("/api/moshpit/tlds/:tld/contact", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const tld = normalizeTld(req.params.tld);
+  if (!tld) return bad(res, "not a valid ending");
+  const label = req.query.label ? normalizeLabel(req.query.label) : "";
+  if (req.query.label && !label) return bad(res, "not a valid name");
+
+  const row = await getContactPrivate(tld, label);
+  if (!row) return res.status(404).json({ tld, label: label || null, contact: null });
+  if (row.user_id !== req.user.id) return unauthorized(res);
+  res.json({ tld, label: label || null, contact: contactOut(row) });
+});
+
+/**
+ * PUT /api/moshpit/tlds/:tld/contact { label?, email, visibility? } — opt in.
+ *
+ * Absent `label` means the ending itself. `visibility` defaults to `guard`,
+ * because a holder who fills in a contact form on a registry is asking to be
+ * reachable, not to be published — and if the safer of the two has to be typed
+ * out explicitly, someone will eventually not type it.
+ *
+ * 202 rather than 201 when the mail host did not answer. The contact is saved
+ * either way and the response says so; what is not yet true is that the address
+ * works, and a flat 200 would tell the caller it does.
+ */
+moshpitRouter.put("/api/moshpit/tlds/:tld/contact", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await setContact({
+    tld: req.params.tld,
+    label: req.body?.label,
+    userId: req.user.id,
+    email: req.body?.email,
+    visibility: req.body?.visibility ?? DEFAULT_VISIBILITY,
+  });
+  if (!result.ok) return bad(res, result.error || "could not save that contact");
+
+  const contact = contactOut(result.contact);
+  return contact.alias_status === "live"
+    ? res.json({ contact })
+    : res.status(202).json({ contact, pending: result.sync?.error ?? "the mail host has not confirmed the address yet" });
+});
+
+/** DELETE /api/moshpit/tlds/:tld/contact { label? } — opt back out, alias and all. */
+moshpitRouter.delete("/api/moshpit/tlds/:tld/contact", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await removeContact({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
+  if (!result.ok) return bad(res, result.error || "could not remove that contact", 404);
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label) || null, removed: true });
+});
+
+/** POST /api/moshpit/tlds/:tld/contact/retry { label? } — after the mail host was down. */
+moshpitRouter.post("/api/moshpit/tlds/:tld/contact/retry", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await retryContactAlias({ tld: req.params.tld, label: req.body?.label, userId: req.user.id });
+  if (!result.ok) return bad(res, result.error || "could not reach the mail host", 502);
+  res.json({ tld: normalizeTld(req.params.tld), label: normalizeLabel(req.body?.label) || null, alias_status: "live" });
+});
+
+/**
+ * A contact as its own holder may see it: everything except where mail goes.
+ *
+ * The real address is withheld even here, from the person who typed it. It is
+ * not needed to manage the contact — the page shows the guard address, the
+ * status and the error — and a management route that returns it is one
+ * misplaced `console.log`, one over-eager cache header, or one screenshot away
+ * from being the leak this whole change exists to close. Changing where mail
+ * goes is a write, not a read of the old value.
+ */
+const contactOut = (row) => ({
+  tld: row.tld,
+  label: row.label || null,
+  visibility: row.visibility,
+  guard_address: guardAddress(row.guard_token, config.forwardEmail.domain),
+  alias_status: row.alias_status,
+  alias_error: row.alias_error,
+  updated_at: row.updated_at,
 });
 
 /* ---- the market ---- */
@@ -2033,6 +2234,9 @@ const PIT_CSS = `
 .pit-msg{border-radius:8px;padding:10px 14px;margin:14px 0;font-family:var(--mono);font-size:.84rem}
 .pit-msg.err{border:1px solid var(--danger);color:var(--danger)}
 .pit-msg.ok{border:1px solid var(--acid);color:var(--acid)}
+/* A failure stated inline, next to the thing that failed, rather than in the
+   banner at the top — the contact tab can have one row broken and the rest fine. */
+.pit-fail{color:var(--danger)}
 .pit-defaults{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 4px}
 .pit-defaults label{display:flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:.72rem;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
@@ -2137,6 +2341,7 @@ const pitTabs = (active, counts = null, query = "") => {
     counts?.theirs === undefined ? "" : `<span class="count">${counts.theirs}${counts.forSale ? ` · ${counts.forSale} for sale` : ""}</span>`}</a>
   <a class="pit-tab${active === "records" ? " on" : ""}" href="/pit/records${query ? `?q=${encodeURIComponent(query)}` : ""}">DNS Records${
     counts?.records === undefined ? "" : `<span class="count">${counts.records}</span>`}</a>
+  <a class="pit-tab${active === "contact" ? " on" : ""}" href="/pit/contact">Contact</a>
   <a class="pit-tab${active === "publish" ? " on" : ""}" href="/pit/publish">Bulk publish</a>
   <a class="pit-tab${active === "dns" ? " on" : ""}" href="/pit/dns">Use it (DNS)</a>
 </nav>`;
@@ -3024,6 +3229,193 @@ moshpitRouter.post("/pit/records/delete", requireAuth, async (req, res) => {
  * arrives, which is the whole reason the endpoint speaks NDJSON rather than
  * answering once at the end.
  */
+/* ---------- the Contact tab ---------- */
+
+/**
+ * Where a holder opts in to being reachable.
+ *
+ * Deliberately not a form drawn next to every name, which is how the DNS
+ * records tab works and would be wrong here. One account on this registry holds
+ * over five thousand endings; drawing a contact form under each of them would
+ * be five thousand forms to say what almost all of them will keep saying, which
+ * is nothing. A contact is sparse by nature, so the page is shaped around the
+ * few that exist: one form to add or change one, and a list of the ones you
+ * have.
+ */
+const backToContact = (req, res, params) => {
+  const qs = new URLSearchParams(params).toString();
+  res.redirect(`/pit/contact${qs ? `?${qs}` : ""}`);
+};
+
+/**
+ * `blue.eggs` or `.eggs` -- a name or the ending itself.
+ *
+ * Both are legitimate subjects and they are typed into the same box, because
+ * asking someone to pick "name" or "ending" from a dropdown first is asking
+ * them to classify a string they already know how to write.
+ */
+function contactScope(input) {
+  const raw = String(input ?? "").trim().replace(/^\.+/, "");
+  if (!raw) return null;
+  const parsed = parseMoshpitName(raw);
+  if (parsed) return { tld: parsed.tld, label: parsed.label };
+  const tld = normalizeTld(raw);
+  return tld ? { tld, label: "" } : null;
+}
+
+const scopeName = (row) => (row.label ? `${row.label}.${row.tld}` : `.${row.tld}`);
+
+/** One contact you hold, and what can be done to it. */
+function contactRow(req, row) {
+  const name = scopeName(row);
+  const address = guardAddress(row.guard_token, config.forwardEmail.domain);
+  const live = row.alias_status === "live";
+  const showing = row.visibility === "guard" ? address
+    : row.visibility === "public" ? "your own address, as you typed it"
+      : "nothing";
+
+  // The status line is the only place a holder can find out why an address they
+  // set up is not on their name's page, so it says the reason rather than the
+  // state name.
+  const status = row.visibility === "none"
+    ? `<span class="mono faint">Hidden. The address is held and can be switched back on.</span>`
+    : live
+      ? `<span class="mono acid">Live.</span> <span class="mono faint">Mail sent here reaches you and nothing published says where.</span>`
+      : row.alias_status === "failed"
+        ? `<span class="mono pit-fail">The mail host refused: ${esc(row.alias_error || "no reason given")}</span>`
+        : `<span class="mono faint">Waiting on the mail host. Nothing is published until it answers.</span>`;
+
+  return `
+<div class="pit-tld">
+  <div class="pit-row" style="margin:0;justify-content:space-between">
+    <h3 class="acid" style="font-family:var(--mono);font-size:1.05rem;text-transform:none">
+      <a class="acid" href="/n/${esc(name.replace(/^\./, ""))}">${esc(name)}</a>
+    </h3>
+    <span class="pill${live && row.visibility !== "none" ? " on" : ""}">${esc(row.visibility)}</span>
+  </div>
+  <p class="mono faint" style="font-size:.72rem;margin:8px 0 0">Shows: <span class="acid">${esc(showing)}</span></p>
+  <p style="font-size:.72rem;margin:6px 0 0">${status}</p>
+
+  <form method="post" action="/pit/contact" class="pit-row">
+    ${csrfInput(req)}
+    <input type="hidden" name="name" value="${esc(name)}">
+    <input name="email" type="email" placeholder="where you read mail" autocomplete="off" spellcheck="false" required
+           aria-label="Where mail to ${esc(name)} should go">
+    ${visibilitySelect(row.visibility)}
+    <button class="btn" type="submit">Update</button>
+  </form>
+
+  <form method="post" action="/pit/contact/remove" class="pit-row">
+    ${csrfInput(req)}
+    <input type="hidden" name="name" value="${esc(name)}">
+    ${row.alias_status === "failed" || row.alias_status === "pending" ? `
+    <button class="btn" type="submit" formaction="/pit/contact/retry">Try the mail host again</button>` : ""}
+    <button class="btn" type="submit">Remove contact</button>
+    <span class="mono faint" style="font-size:.7rem">removing destroys the forwarding address for good</span>
+  </form>
+</div>`;
+}
+
+const visibilitySelect = (selected = DEFAULT_VISIBILITY) => `
+<select name="visibility" aria-label="What to publish">
+  ${CONTACT_VISIBILITY.map((v) => `<option value="${v}"${v === selected ? " selected" : ""}>${
+    v === "guard" ? "forwarding address" : v === "public" ? "my real address" : "nothing (keep the address)"
+  }</option>`).join("")}
+</select>`;
+
+moshpitRouter.get("/pit/contact", async (req, res) => {
+  const bal = req.user ? await balance(req.user.id) : 0;
+  const contacts = req.user ? await listContactsForUser(req.user.id) : [];
+
+  const msg = req.query.err ? `<p class="pit-msg err">${esc(req.query.err)}</p>`
+    : req.query.ok ? `<p class="pit-msg ok">${esc(req.query.ok)}</p>` : "";
+
+  const body = !req.user
+    ? `<p class="dim">Sign in to say how you can be reached — the same login the CLI uses.</p>
+       <p><a class="btn acid" href="/">Sign in →</a></p>`
+    : `
+  <form method="post" action="/pit/contact" class="pit-row" style="margin-bottom:22px">
+    ${csrfInput(req)}
+    <input name="name" placeholder="blue.eggs — or .eggs for the ending" autocomplete="off" spellcheck="false" required
+           aria-label="The name or ending this contact is for">
+    <input name="email" type="email" placeholder="where you read mail" autocomplete="off" spellcheck="false" required
+           aria-label="Where mail should go">
+    ${visibilitySelect()}
+    <button class="btn acid" type="submit">Add contact</button>
+  </form>
+  ${contacts.length
+    ? contacts.map((row) => contactRow(req, row)).join("")
+    : `<p class="dim">Nothing of yours publishes a contact. That is the default, and it stays that way until you add one above.</p>`}`;
+
+  res.type("html").send(page({
+    title: "moshcode ▸ the pit ▸ contact",
+    head: `<style>${PIT_CSS}</style>`,
+    body: `${appBar(req.user, bal, req.csrfToken)}
+<main class="wrap" style="padding:38px 24px 64px">
+  <p class="label">how people reach you</p>
+  <h1 style="font-size:clamp(1.6rem,5vw,2.6rem)">A contact, <span class="acid">without a WHOIS</span></h1>
+  <p class="dim" style="max-width:62ch">
+    Say where you read mail and the registry publishes
+    <span class="mono acid">something@${esc(config.forwardEmail.domain)}</span> on your name instead — an address
+    that forwards to you. Your own address is never in a page, an API response, or the log.
+    Nothing is published for a name until you add one here.
+  </p>
+  <p class="mono faint" style="font-size:.72rem;max-width:62ch">
+    The mail host sends one confirmation link to the address you give, and forwards nothing until you click it.
+    That is what stops anyone typing a stranger's address in here and pointing our domain at them.
+  </p>
+  ${config.guardMailEnabled ? "" : `
+  <p class="pit-msg err">No mail host is configured on this deployment yet, so forwarding addresses cannot be
+  minted. A contact you add is recorded and stays unpublished until one is.</p>`}
+  ${pitTabs("contact")}
+  ${msg}
+  <section class="pit-panel">${body}</section>
+</main>${footer}`,
+  }));
+});
+
+moshpitRouter.post("/pit/contact", requireAuth, async (req, res) => {
+  const scope = contactScope(req.body?.name);
+  if (!scope) return backToContact(req, res, { err: "which name? that is not one, and not an ending either." });
+
+  const result = await setContact({
+    tld: scope.tld, label: scope.label, userId: req.user.id,
+    email: req.body?.email, visibility: req.body?.visibility ?? DEFAULT_VISIBILITY,
+  });
+  if (!result.ok) return backToContact(req, res, { err: result.error || "could not save that contact" });
+
+  const name = scopeName(result.contact);
+  const address = guardAddress(result.contact.guard_token, config.forwardEmail.domain);
+  // Told plainly when the address is not live yet, because the holder is about
+  // to go and look at their name's page for an address that is not on it.
+  return backToContact(req, res, {
+    ok: result.contact.alias_status === "live"
+      ? `${name} now publishes ${address}. Mail to it reaches you.`
+      : `${name} is saved. ${address} is not published yet — the mail host has not confirmed it.`,
+  });
+});
+
+moshpitRouter.post("/pit/contact/remove", requireAuth, async (req, res) => {
+  const scope = contactScope(req.body?.name);
+  if (!scope) return backToContact(req, res, { err: "which name? that is not one, and not an ending either." });
+
+  const result = await removeContact({ tld: scope.tld, label: scope.label, userId: req.user.id });
+  if (!result.ok) return backToContact(req, res, { err: result.error || "could not remove that contact" });
+  return backToContact(req, res, {
+    ok: `${scope.label ? `${scope.label}.${scope.tld}` : `.${scope.tld}`} no longer publishes a contact, and its forwarding address is gone.`,
+  });
+});
+
+moshpitRouter.post("/pit/contact/retry", requireAuth, async (req, res) => {
+  const scope = contactScope(req.body?.name);
+  if (!scope) return backToContact(req, res, { err: "which name? that is not one, and not an ending either." });
+
+  const result = await retryContactAlias({ tld: scope.tld, label: scope.label, userId: req.user.id });
+  return result.ok
+    ? backToContact(req, res, { ok: "The mail host has the address. It is live." })
+    : backToContact(req, res, { err: result.error || "the mail host still did not answer" });
+});
+
 moshpitRouter.get("/pit/publish", async (req, res) => {
   const bal = req.user ? await balance(req.user.id) : 0;
   const names = req.user ? await listNamesForUser(req.user.id) : [];

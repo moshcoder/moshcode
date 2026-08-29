@@ -12,8 +12,23 @@
 
 import { randomBytes } from "node:crypto";
 
+import { config } from "./config.mjs";
 import { db, get, all, run } from "./db.mjs";
 import { normalizeFeedKind, normalizeFeedUrl } from "./lib/feed.mjs";
+import {
+  createGuardAlias,
+  deleteGuardAlias,
+  guardMailConfigured,
+  updateGuardAlias,
+} from "./lib/forwardemail.mjs";
+import {
+  CONTACT_VISIBILITY,
+  DEFAULT_VISIBILITY,
+  mintGuardToken,
+  normalizeContactEmail,
+  normalizeVisibility,
+  publishedContact,
+} from "./lib/moshpit-contact.mjs";
 import { contentOut, MAX_ITEMS_PER_NAME, normalizeContent, normalizeSlug } from "./lib/moshpit-content.mjs";
 import { normalizeTarget } from "./lib/moshpit-gateway.mjs";
 import {
@@ -71,6 +86,11 @@ export {
   clearnetTwin, clearnetTwins, moshpitNameForTwin, normalizeDomain, normalizeTwinToken,
   parseTwinProof, twinIsLive, twinProof, twinProofMatches, twinProofName,
 } from "./lib/moshpit-twin.mjs";
+
+export {
+  CONTACT_VISIBILITY, DEFAULT_VISIBILITY,
+  guardAddress, isGuardToken, mintGuardToken, normalizeContactEmail, normalizeVisibility, publishedContact,
+} from "./lib/moshpit-contact.mjs";
 
 /**
  * The largest number this column will accept.
@@ -479,6 +499,15 @@ export async function releaseName({ tld: tldInput, label: labelInput, userId }) 
   // point the next holder's visitors at a stranger's website under their own
   // name — and hand that stranger a proof record they can revoke at will.
   await run(`DELETE FROM moshpit_twins WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  // And the contact, which is the one with a live consequence outside this
+  // database. Its guard address forwards mail at our domain to the person
+  // giving the name up; inheriting it would deliver the next holder's mail --
+  // an offer for the name, an abuse report about it -- to the last one. The
+  // alias is torn down at the mail host first, because deleting only the row
+  // would leave that forwarding in place with nothing left that knows how to
+  // stop it.
+  await revokeContactAlias(await getContactPrivate(owned.tld, owned.label));
+  await run(`DELETE FROM moshpit_contacts WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await run(`DELETE FROM moshpit_names WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
   await logAction(owned.tld, userId, `unname:${owned.label}`);
   return { ok: true };
@@ -1979,4 +2008,247 @@ export async function availableTwins(input) {
   );
   const taken = new Set(rows.map((r) => r.domain));
   return candidates.filter((d) => !taken.has(d));
+}
+
+/* ---- how to reach the holder ---- */
+
+/**
+ * A contact is the consented half of a WHOIS.
+ *
+ * The registry used to publish `owner_email` for every ending to anyone who
+ * asked, which gave holders no say and still left most names unreachable. This
+ * replaces it with something the holder opts into: they say where they read
+ * mail, the registry publishes `<token>@moshcode.sh`, and the real address
+ * never appears in a response, a page or the log.
+ *
+ * Storage only. The rules live in lib/moshpit-contact.mjs and the mail host in
+ * lib/forwardemail.mjs; what this file owns is the order things happen in --
+ * which matters, because two of the three steps can fail independently.
+ */
+const CONTACT_COLS =
+  `tld, label, user_id, email, visibility, guard_token, alias_status, alias_id, alias_error, alias_synced_at, created_at, updated_at`;
+
+/**
+ * The raw row, real address included. Never hand this to a route that renders.
+ *
+ * Named `getContactPrivate` rather than `getContact` so that reaching for the
+ * one that leaks is a deliberate act with the word in front of you. What a
+ * visitor may see comes from publishedContact(), which takes this row and
+ * returns an address or nothing.
+ */
+export async function getContactPrivate(tld, label = "") {
+  return get(`SELECT ${CONTACT_COLS} FROM moshpit_contacts WHERE tld = ? AND label = ?`, [tld, label]);
+}
+
+/**
+ * What to show a visitor asking how to reach `label.tld`, or null.
+ *
+ * No fallback to the ending's contact when a name has none, and that is the
+ * whole point rather than an omission. Names under a priced ending are sold to
+ * other people -- showing the ending operator's address on a name they do not
+ * hold would route a buyer's mail, a bug report, or an abuse complaint to the
+ * wrong person entirely, and do it while looking authoritative.
+ */
+export async function publicContactFor(tld, label = "") {
+  return publishedContact(await getContactPrivate(tld, label), config.forwardEmail.domain);
+}
+
+/** Ownership for both shapes a contact comes in: a name, or the ending itself. */
+async function ownedContactScope(tldInput, labelInput, userId) {
+  const raw = String(labelInput ?? "").trim();
+  if (raw) return ownedName(tldInput, raw, userId);
+
+  const tld = normalizeTld(tldInput);
+  if (!tld) return { ok: false, error: "not a valid ending" };
+  const owner = await getTld(tld);
+  if (!owner) return { ok: false, error: `.${tld} is not registered` };
+  if (owner.user_id !== userId) return { ok: false, error: `you do not own .${tld}` };
+  return { ok: true, tld, label: "" };
+}
+
+/** How a contact reads in the allocation log -- the ending, never the address. */
+const contactLogLabel = (label) => (label ? `contact:${label}` : "contact");
+
+/**
+ * The alias is enabled at the mail host exactly when the guard address is the
+ * thing being published.
+ *
+ * A `public` or `none` contact keeps its token -- see the migration on why the
+ * address has to survive being taken down -- but the address stops forwarding,
+ * and a sender gets a 550 rather than silence. Keeping it live while the
+ * registry advertises something else would leave a forwarding address in
+ * service that the holder believes they have turned off.
+ */
+const aliasWanted = (visibility) => visibility === "guard";
+
+/**
+ * Record where a holder reads mail, and make the guard address match.
+ *
+ * Written first, synced second, and deliberately in that order. The holder's
+ * intent is the durable fact; the alias at the mail host is a copy of it that
+ * can fail, time out, or not exist yet because no API key is configured. If the
+ * sync loses, the row still says what they asked for and `alias_status` says
+ * the address is not ready -- which publishes nothing and can be retried. The
+ * reverse order would lose the intent on a network blip.
+ */
+export async function setContact({ tld: tldInput, label: labelInput, userId, email, visibility = DEFAULT_VISIBILITY }) {
+  const owned = await ownedContactScope(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+
+  const address = normalizeContactEmail(email);
+  if (!address) return { ok: false, error: "that does not look like an email address" };
+  const shown = normalizeVisibility(visibility);
+  if (!shown) return { ok: false, error: `visibility must be one of ${CONTACT_VISIBILITY.join(", ")}` };
+
+  const existing = await getContactPrivate(owned.tld, owned.label);
+  // Reused when there is one. Minting a fresh token on every edit would change
+  // the published address every time a holder corrected a typo in their own.
+  const token = existing?.guard_token ?? mintGuardToken();
+  const now = Date.now();
+
+  await run(
+    `INSERT INTO moshpit_contacts
+       (tld, label, user_id, email, visibility, guard_token, alias_status, alias_id, alias_error, alias_synced_at, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT (tld, label) DO UPDATE SET
+       email = excluded.email,
+       visibility = excluded.visibility,
+       -- Rewritten, not left alone. ownedContactScope has already established
+       -- that the caller holds this name, so if the stored owner disagrees the
+       -- row is stale and the caller is right -- and leaving it would list
+       -- somebody else's contact on the previous holder's /pit/contact page.
+       user_id = excluded.user_id,
+       updated_at = excluded.updated_at`,
+    [
+      owned.tld, owned.label, userId, address, shown, token,
+      existing?.alias_status ?? "pending",
+      existing?.alias_id ?? null,
+      existing?.alias_error ?? null,
+      existing?.alias_synced_at ?? null,
+      existing?.created_at ?? now,
+      now,
+    ],
+  );
+
+  await logAction(owned.tld, userId, contactLogLabel(owned.label));
+  const sync = await syncContactAlias(owned.tld, owned.label);
+  return { ok: true, contact: await getContactPrivate(owned.tld, owned.label), sync };
+}
+
+/**
+ * Make the mail host agree with the row.
+ *
+ * Idempotent and safe to call again, because it is called from three places
+ * that cannot coordinate: an edit, a retry the holder asks for, and the sweep.
+ * Everything it learns goes back onto the row, including failure -- an error
+ * nobody records is one the holder cannot see the reason for.
+ */
+export async function syncContactAlias(tld, label = "") {
+  const row = await getContactPrivate(tld, label);
+  if (!row) return { ok: false, error: "no contact recorded" };
+
+  // Nothing to sync against. The row keeps whatever status it had rather than
+  // being marked failed: "no mail host configured" is a fact about this
+  // deployment, not about the holder's contact, and writing `failed` would show
+  // them an error for something they cannot fix.
+  if (!guardMailConfigured()) return { ok: false, skipped: true, error: "mail host not configured" };
+
+  const wanted = aliasWanted(row.visibility);
+  const result = row.alias_id
+    ? await updateGuardAlias({ id: row.alias_id, recipient: row.email, isEnabled: wanted })
+    // Created even when the holder chose `public` or `none`, then immediately
+    // disabled. The token is already published as this contact's identity, and
+    // minting the alias lazily would mean the address does not exist on the day
+    // they switch to `guard` and expect it to work.
+    : await createGuardAlias({
+        token: row.guard_token,
+        recipient: row.email,
+        isEnabled: wanted,
+        description: `moshpit contact for ${label ? `${label}.${tld}` : `.${tld}`}`,
+      });
+
+  const now = Date.now();
+  if (!result.ok) {
+    await run(
+      `UPDATE moshpit_contacts SET alias_status = 'failed', alias_error = ?, alias_synced_at = ? WHERE tld = ? AND label = ?`,
+      [result.error ?? "mail host refused", now, tld, label],
+    );
+    return result;
+  }
+
+  await run(
+    `UPDATE moshpit_contacts SET alias_status = 'live', alias_id = ?, alias_error = NULL, alias_synced_at = ? WHERE tld = ? AND label = ?`,
+    [result.id ?? row.alias_id, now, tld, label],
+  );
+  return { ok: true };
+}
+
+/** The retry a holder reaches for after the mail host was down. */
+export async function retryContactAlias({ tld: tldInput, label: labelInput, userId }) {
+  const owned = await ownedContactScope(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const sync = await syncContactAlias(owned.tld, owned.label);
+  return sync.ok ? { ok: true } : { ok: false, error: sync.error ?? "could not reach the mail host" };
+}
+
+/**
+ * Take the contact off the name entirely.
+ *
+ * The alias is destroyed at the host before the row goes, and the row goes
+ * either way. An alias left behind is the failure that matters here: it is a
+ * live forwarding address at our domain, pointing at a person who has asked to
+ * stop being contacted, that nothing left in the database remembers how to
+ * revoke. Keeping the row on a failed delete would be worse -- the holder asked
+ * to be gone -- so it is logged loudly instead.
+ */
+export async function removeContact({ tld: tldInput, label: labelInput, userId }) {
+  const owned = await ownedContactScope(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const row = await getContactPrivate(owned.tld, owned.label);
+  if (!row) return { ok: false, error: "no contact to remove" };
+
+  await revokeContactAlias(row);
+  await run(`DELETE FROM moshpit_contacts WHERE tld = ? AND label = ?`, [owned.tld, owned.label]);
+  await logAction(owned.tld, userId, `un${contactLogLabel(owned.label)}`);
+  return { ok: true };
+}
+
+/**
+ * Destroy one contact's alias at the mail host.
+ *
+ * Shared by removal and by a name changing hands, because they are the same
+ * requirement seen from two directions: after this, mail to that address must
+ * reach nobody. Never throws -- both callers are deleting a row whatever
+ * happens, and an exception here would leave the row and the alias both alive.
+ */
+async function revokeContactAlias(row) {
+  if (!row?.alias_id || !guardMailConfigured()) return;
+  try {
+    const result = await deleteGuardAlias({ id: row.alias_id });
+    if (!result.ok) {
+      console.error(`moshpit contact: alias ${row.alias_id} not revoked — ${result.error}`);
+    }
+  } catch (e) {
+    console.error(`moshpit contact: alias ${row.alias_id} not revoked — ${e?.message ?? e}`);
+  }
+}
+
+/** Every contact a holder has, for the /pit page to draw. */
+export async function listContactsForUser(userId) {
+  return all(`SELECT ${CONTACT_COLS} FROM moshpit_contacts WHERE user_id = ? ORDER BY tld, label`, [userId]);
+}
+
+/**
+ * Contacts whose alias never made it to the mail host.
+ *
+ * What a reconcile sweep reads. `pending` is mostly the window between this
+ * shipping and an API key being set; `failed` is the mail host having been down
+ * at the wrong moment. Both are fixed by calling syncContactAlias again, and
+ * neither fixes itself.
+ */
+export async function unsyncedContacts(limit = 200) {
+  return all(
+    `SELECT ${CONTACT_COLS} FROM moshpit_contacts WHERE alias_status IN ('pending','failed') ORDER BY updated_at LIMIT ?`,
+    [limit],
+  );
 }
