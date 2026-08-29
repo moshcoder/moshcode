@@ -82,6 +82,24 @@ export const TOOLS = {
     // where those words mean something else entirely.
     aliases: { cmd: "cli-tools", args: ["aliases", "--json"] },
   },
+  timer: {
+    desc: "Profullstack timer - track time against projects, for people and for agents",
+    bin: "timer",
+    // The standalone half of what /timer used to do entirely in-process. It
+    // lives outside moshcode because tracking time is not a moshcode idea: it
+    // works under any agentic CLI, on Linux, macOS and Windows, and
+    // @profullstack/billing reads its timesheet directly. `npm install -g` is
+    // idempotent, so it doubles as the upgrade path.
+    install: { cmd: "npm", args: ["install", "-g", "@profullstack/timer"] },
+  },
+  billing: {
+    desc: "Profullstack billing - clients, rates and invoices from tracked hours",
+    bin: "billing",
+    // The other half. It carries the rate model /rate parses ($100/hour/agent/
+    // upto:4) and bills agent-hours from the timer's entries. `billing import`
+    // brings across a ledger that started in ~/.moshcode/business.json.
+    install: { cmd: "npm", args: ["install", "-g", "@profullstack/billing"] },
+  },
   bo: {
     desc: "BufferOverride — capture a failing command, redact it, and find the answer that already exists",
     // The product is BufferOverride and the binary is `bo`, the same split

@@ -30,6 +30,30 @@
       },
       "homepage": "https://github.com/moshcoder/moshcode#crypto",
       "keywords": ["crypto", "bitcoin", "markets", "prices", "advis0r"]
+    },
+    {
+      "name": "timer",
+      "description": "Track time against projects from inside your engine, backed by @profullstack/timer: start and stop a clock, log time you forgot, and report billable hours with the agent count that priced them.",
+      "source": "./plugins/timer",
+      "category": "productivity",
+      "author": {
+        "name": "moshcoder",
+        "url": "https://moshcode.sh"
+      },
+      "homepage": "https://github.com/profullstack/timer#readme",
+      "keywords": ["timer", "time-tracking", "billable", "hours", "profullstack"]
+    },
+    {
+      "name": "billing",
+      "description": "Turn tracked hours into an invoice, backed by @profullstack/billing: clients, rate cards written as contract sentences, agent-hour arithmetic, and invoices rendered to HTML you can print to PDF.",
+      "source": "./plugins/billing",
+      "category": "productivity",
+      "author": {
+        "name": "moshcoder",
+        "url": "https://moshcode.sh"
+      },
+      "homepage": "https://github.com/profullstack/billing#readme",
+      "keywords": ["billing", "invoice", "clients", "rates", "profullstack"]
     }
   ]
 }

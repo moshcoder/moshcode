@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "billing",
+  "description": "Turn tracked hours into an invoice, backed by @profullstack/billing: clients, rate cards written as contract sentences, agent-hour arithmetic, and invoices rendered to HTML you can print to PDF.",
+  "version": "0.1.0",
+  "author": {
+    "name": "moshcoder",
+    "url": "https://moshcode.sh"
+  },
+  "homepage": "https://github.com/profullstack/billing#readme",
+  "license": "MIT",
+  "keywords": ["billing", "invoice", "clients", "rates", "profullstack"]
+}

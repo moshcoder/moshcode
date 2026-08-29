@@ -423,8 +423,15 @@ async function main() {
   // the startup path of `moshcode claude`, which is what this binary is mostly
   // asked to do.
   if (cmd === "timer") {
+    // @profullstack/timer when it is installed, the built-in otherwise. See
+    // src/business-delegate.mjs for why the external one wins.
+    const { delegate, installHint } = await import("../src/business-delegate.mjs");
+    const handed = await delegate("timer", rest, {});
+    if (handed.delegated) { process.exitCode = handed.code; return; }
     const { timerCommand } = await import("../src/timer.mjs");
     process.exitCode = (await timerCommand(rest)) || 0;
+    const hint = installHint("timer");
+    if (hint) process.stderr.write(`${hint}\n`);
     return;
   }
   if (cmd === "client" || cmd === "business" || cmd === "merchant" || cmd === "customer") {
@@ -443,8 +450,13 @@ async function main() {
     return;
   }
   if (cmd === "billing" || cmd === "invoice") {
+    const { delegate, installHint } = await import("../src/business-delegate.mjs");
+    const handed = await delegate(cmd, rest, {});
+    if (handed.delegated) { process.exitCode = handed.code; return; }
     const { billingCommand } = await import("../src/billing.mjs");
     process.exitCode = billingCommand(rest) || 0;
+    const hint = installHint(cmd);
+    if (hint) process.stderr.write(`${hint}\n`);
     return;
   }
   if (cmd === "payments") {

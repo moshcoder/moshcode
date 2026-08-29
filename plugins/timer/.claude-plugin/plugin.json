@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "timer",
+  "description": "Track time against projects from inside your engine, backed by @profullstack/timer: start and stop a clock, log time you forgot, and report billable hours with the agent count that priced them.",
+  "version": "0.1.0",
+  "author": {
+    "name": "moshcoder",
+    "url": "https://moshcode.sh"
+  },
+  "homepage": "https://github.com/profullstack/timer#readme",
+  "license": "MIT",
+  "keywords": ["timer", "time-tracking", "billable", "hours", "profullstack"]
+}

@@ -949,6 +949,26 @@ Every agentic CLI helps you do the work. This one also bills for it. Six words,
 each useful on its own — the timer needs no client, the rate needs no gateway
 (PRD [0012](prd/0012-billing-baked-into-the-agent-cli.md)).
 
+> **`/timer` and `/billing` now prefer their own CLIs.** Tracking time and
+> sending an invoice are not moshcode ideas — they are useful under any agentic
+> CLI, and on Windows, where moshcode does not go. So they also ship standalone:
+> [`@profullstack/timer`](https://github.com/profullstack/timer) and
+> [`@profullstack/billing`](https://github.com/profullstack/billing).
+>
+> ```sh
+> moshcode install timer billing   # or: npm install -g @profullstack/timer @profullstack/billing
+> ```
+>
+> With them installed, `/timer` and `/billing` hand the command straight to the
+> CLI, the way `/gh` conducts `gh`. Without them, the in-process implementation
+> below runs exactly as it always has, so upgrading changes nothing until you
+> choose to install. `MOSHCODE_BUILTIN_BILLING=1` pins the built-in either way.
+>
+> The standalone billing carries the same rate model (`$100/hour/agent/upto:4`)
+> and bills **agent-hours**, and `billing import` brings across a ledger that
+> started in `~/.moshcode/`. `/client`, `/rate`, `/payments` and `/team` stay
+> here: the rails and the permission model are moshcode integration.
+
 ```sh
 moshcode timer on acme --task "batch payments" --agents auto   # auto counts the herd
 moshcode timer off                                             # → 1h 12m, $480.00
