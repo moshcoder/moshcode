@@ -1112,8 +1112,21 @@ export async function tui() {
     // and none of these close the readline interface: they print and return,
     // like /ps and /cost, so the prompt never moves.
     if (cmd === "timer") {
+      // @profullstack/timer when it is installed, the built-in otherwise. The
+      // readline interface is closed around the external one the way /secrets
+      // and /payments do it: the CLI prints its own tables and has to own
+      // stdout while it runs.
+      const { delegate, externalFor, installHint } = await import("./business-delegate.mjs");
+      if (externalFor("timer")) {
+        rl.close();
+        await delegate("timer", rest, {});
+        rl = mkrl();
+        continue;
+      }
       const { timerCommand } = await import("./timer.mjs");
       await timerCommand(rest, { write: (l) => console.log(l) });
+      const hint = installHint("timer");
+      if (hint) console.log(hint);
       continue;
     }
     if (cmd === "client" || cmd === "business" || cmd === "merchant" || cmd === "customer") {
@@ -1132,12 +1145,22 @@ export async function tui() {
       continue;
     }
     if (cmd === "billing" || cmd === "invoice") {
+      // Closed and reopened around the call either way: the external CLI owns
+      // stdout while it runs, and the built-in's `--send --yes` hands the
+      // terminal to the gateway's own CLI, which may prompt.
+      const { delegate, externalFor, installHint } = await import("./business-delegate.mjs");
+      if (externalFor(cmd)) {
+        rl.close();
+        await delegate(cmd, rest, {});
+        rl = mkrl();
+        continue;
+      }
       const { billingCommand } = await import("./billing.mjs");
-      // Closed and reopened around the call: `--send --yes` hands the terminal
-      // to the gateway's own CLI, which may prompt.
       rl.close();
       billingCommand(rest, { write: (l) => console.log(l) });
       rl = mkrl();
+      const hint = installHint(cmd);
+      if (hint) console.log(hint);
       continue;
     }
     if (cmd === "payments") {

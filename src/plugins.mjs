@@ -53,6 +53,7 @@ export function marketplaceSource(env = process.env) {
 export const PLUGINS = [
   {
     name: "stocks",
+    family: "markets",
     version: "0.4.0",
     description: "equity research slash commands backed by advis0r.com",
     // `list` rather than `reports`: one letter from `report` is a coin-flip at
@@ -67,6 +68,7 @@ export const PLUGINS = [
   },
   {
     name: "crypto",
+    family: "markets",
     version: "0.4.0",
     description: "crypto market data slash commands backed by advis0r.com",
     commands: [
@@ -75,18 +77,48 @@ export const PLUGINS = [
     ],
     example: "/crypto:report BTC",
   },
+  // The two business plugins front CLIs that live outside this repo
+  // (@profullstack/timer, @profullstack/billing), which is why their commands
+  // are thin: the rules that matter — never stop somebody else's clock, never
+  // issue an invoice unprompted — belong in the command files, and the
+  // arithmetic belongs in the package.
+  {
+    name: "timer",
+    family: "business",
+    version: "0.1.0",
+    description: "track time against projects, backed by @profullstack/timer",
+    commands: ["/timer:start", "/timer:stop", "/timer:status", "/timer:report"],
+    example: "/timer:start acme fix the login redirect",
+  },
+  {
+    name: "billing",
+    family: "business",
+    version: "0.1.0",
+    description: "clients, rates and invoices, backed by @profullstack/billing",
+    commands: ["/billing:hours", "/billing:invoice", "/billing:rate", "/billing:report"],
+    example: "/billing:hours --client acme --month",
+  },
 ];
 
 /**
- * Command names both plugins are expected to share.
+ * Command names the plugins in a family are expected to share.
  *
- * The two cover different markets, so they can never ship the same *set* — a
- * crypto pair has no earnings transcript and an equity has no order book. What
- * they can share is vocabulary: the same question is spelled the same way on
- * both sides, so knowing one plugin means knowing half the other. A test holds
- * this, because the natural drift is for one side to grow a synonym.
+ * Two plugins in a family can never ship the same *set* — a crypto pair has no
+ * earnings transcript and an equity has no order book, and a timer has no
+ * clients. What they can share is vocabulary: the same question is spelled the
+ * same way on both sides, so knowing one plugin means knowing half the other.
+ * A test holds this, because the natural drift is for one side to grow a
+ * synonym (`coin` for `lookup`, `stocks` for `report`). Both market plugins
+ * did, for two releases.
+ *
+ * Keyed by family rather than one flat list, because the list only ever made
+ * sense for the pair it was written for: `quote` and `lookup` are market words,
+ * and requiring them of a timer would force two commands nobody would run.
  */
-export const SHARED_COMMANDS = ["help", "report", "quote", "lookup"];
+export const SHARED_COMMANDS = {
+  markets: ["help", "report", "quote", "lookup"],
+  business: ["report"],
+};
 
 /** How Claude Code namespaces a plugin's command. */
 export function pluginCommandName(plugin, file) {

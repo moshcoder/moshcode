@@ -103,19 +103,34 @@ test("the default plugin resolves from nothing, and an unknown one does not", ()
   assert.equal(resolvePlugin("nonsense"), null);
 });
 
-test("both plugins spell the shared questions the same way", () => {
-  // They cover different markets and can never ship the same set — a pair has
-  // no earnings transcript, an equity has no order book. What they share is
-  // vocabulary, and the natural drift is for one side to grow a synonym:
-  // `coin` for `lookup`, `stocks` for `report`. Both did, for two releases.
+test("plugins in a family spell the shared questions the same way", () => {
+  // Within a family they can never ship the same set — a pair has no earnings
+  // transcript, an equity has no order book, a timer has no clients. What they
+  // share is vocabulary, and the natural drift is for one side to grow a
+  // synonym: `coin` for `lookup`, `stocks` for `report`. Both market plugins
+  // did, for two releases.
   for (const plugin of PLUGINS) {
-    for (const shared of SHARED_COMMANDS) {
+    assert.ok(plugin.family, `${plugin.name} declares no family`);
+    const shared = SHARED_COMMANDS[plugin.family];
+    assert.ok(shared, `no shared vocabulary defined for the "${plugin.family}" family`);
+    for (const command of shared) {
       assert.ok(
-        plugin.commands.includes(`/${plugin.name}:${shared}`),
-        `${plugin.name} is missing the shared command "${shared}"`,
+        plugin.commands.includes(`/${plugin.name}:${command}`),
+        `${plugin.name} is missing the shared command "${command}"`,
       );
     }
   }
+});
+
+test("every family has more than one plugin in it", () => {
+  // A family of one is a shared vocabulary nobody shares, which is how the rule
+  // above quietly stops testing anything.
+  const counts = new Map();
+  for (const plugin of PLUGINS) counts.set(plugin.family, (counts.get(plugin.family) || 0) + 1);
+  for (const [family, count] of counts) {
+    assert.ok(count > 1, `the "${family}" family has only ${count} plugin`);
+  }
+  assert.deepEqual([...counts.keys()].sort(), Object.keys(SHARED_COMMANDS).sort());
 });
 
 test("no plugin command repeats its own plugin's name", () => {
