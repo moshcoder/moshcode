@@ -1,8 +1,8 @@
 {
   "name": "moshcode",
-  "version": "0.73.0",
+  "version": "0.74.0",
   "type": "module",
-  "description": "moshcode — a metal wrapper for coding engines and native UGig/CoinPay workflow CLIs, with OpenPRD and moshscript",
+  "description": "moshcode \u2014 a metal wrapper for coding engines and native UGig/CoinPay workflow CLIs, with OpenPRD and moshscript",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/moshcoder/moshcode.git"
