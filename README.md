@@ -959,15 +959,27 @@ each useful on its own — the timer needs no client, the rate needs no gateway
 > moshcode install timer billing   # or: npm install -g @profullstack/timer @profullstack/billing
 > ```
 >
-> With them installed, `/timer` and `/billing` hand the command straight to the
-> CLI, the way `/gh` conducts `gh`. Without them, the in-process implementation
-> below runs exactly as it always has, so upgrading changes nothing until you
-> choose to install. `MOSHCODE_BUILTIN_BILLING=1` pins the built-in either way.
+> Installing them changes nothing on its own. Switch the hand-over on when you
+> are ready to move:
+>
+> ```sh
+> billing import                       # look at what would come across
+> billing import --apply               # move it
+> export MOSHCODE_EXTERNAL_BILLING=1   # /timer and /billing now run the CLIs
+> ```
+>
+> **It is opt-in for a reason.** Only half this layer has an outside home:
+> `/client`, `/rate`, `/payments` and `/team` stay here, because the rails and
+> the permission model are moshcode's and `/client`'s freeform dotted fields
+> have no shape in the package's typed client model. Handing over the other
+> half automatically would split your records across two stores — `/client` and
+> `/rate` writing `~/.moshcode/business.json` while `/billing` reads the
+> package's own ledger, so the invoice for a client you had just created would
+> not exist. `billing import` is what closes that gap, which is why it comes
+> first.
 >
 > The standalone billing carries the same rate model (`$100/hour/agent/upto:4`)
-> and bills **agent-hours**, and `billing import` brings across a ledger that
-> started in `~/.moshcode/`. `/client`, `/rate`, `/payments` and `/team` stay
-> here: the rails and the permission model are moshcode integration.
+> and bills **agent-hours**.
 
 ```sh
 moshcode timer on acme --task "batch payments" --agents auto   # auto counts the herd

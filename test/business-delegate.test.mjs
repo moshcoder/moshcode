@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { DELEGATED, builtinForced, exitCodeOf, externalFor, installHint } from "../src/business-delegate.mjs";
+import { DELEGATED, exitCodeOf, externalEnabled, externalFor, installHint } from "../src/business-delegate.mjs";
 import { TOOLS } from "../src/tools.mjs";
 
 /** A directory on PATH holding an executable of the given name. */
@@ -48,46 +48,86 @@ test("with the CLI absent, nothing is delegated and the built-in runs", (t) => {
   assert.equal(externalFor("billing"), null);
 });
 
-test("with the CLI on PATH, the command is handed to it", (t) => {
-  const saved = process.env.PATH;
+test("an installed CLI is NOT used until it is switched on", (t) => {
+  // The bug this pins. Only half the business layer has an outside home:
+  // /client and /rate keep writing ~/.moshcode/business.json, so delegating
+  // /billing the moment the package appears on PATH splits one person's
+  // records across two stores and their invoice stops existing. It also only
+  // breaks on a machine that took the install, so CI stays green while every
+  // developer box that installed the tools goes red.
+  const savedPath = process.env.PATH;
+  const savedFlag = process.env.MOSHCODE_EXTERNAL_BILLING;
   const bin = fakeBin("timer");
   process.env.PATH = bin.dir;
-  t.after(() => { process.env.PATH = saved; bin.cleanup(); });
+  delete process.env.MOSHCODE_EXTERNAL_BILLING;
+  t.after(() => {
+    process.env.PATH = savedPath;
+    if (savedFlag === undefined) delete process.env.MOSHCODE_EXTERNAL_BILLING;
+    else process.env.MOSHCODE_EXTERNAL_BILLING = savedFlag;
+    bin.cleanup();
+  });
+  assert.equal(externalEnabled(), false);
+  assert.equal(externalFor("timer"), null, "installed is not the same as chosen");
+});
+
+test("MOSHCODE_EXTERNAL_BILLING switches the delegation on", (t) => {
+  const savedPath = process.env.PATH;
+  const savedFlag = process.env.MOSHCODE_EXTERNAL_BILLING;
+  const bin = fakeBin("timer");
+  process.env.PATH = bin.dir;
+  process.env.MOSHCODE_EXTERNAL_BILLING = "1";
+  t.after(() => {
+    process.env.PATH = savedPath;
+    if (savedFlag === undefined) delete process.env.MOSHCODE_EXTERNAL_BILLING;
+    else process.env.MOSHCODE_EXTERNAL_BILLING = savedFlag;
+    bin.cleanup();
+  });
+  assert.equal(externalEnabled(), true);
   const found = externalFor("timer");
-  assert.ok(found, "an installed timer should win");
+  assert.ok(found, "an installed timer should win once asked for");
   assert.equal(found.key, "timer");
 });
 
-test("MOSHCODE_BUILTIN_BILLING pins the in-process implementation", (t) => {
+test("switching it on cannot conjure a CLI that is not installed", (t) => {
   const savedPath = process.env.PATH;
-  const savedFlag = process.env.MOSHCODE_BUILTIN_BILLING;
-  const bin = fakeBin("timer");
-  process.env.PATH = bin.dir;
-  process.env.MOSHCODE_BUILTIN_BILLING = "1";
-  t.after(() => {
-    process.env.PATH = savedPath;
-    if (savedFlag === undefined) delete process.env.MOSHCODE_BUILTIN_BILLING;
-    else process.env.MOSHCODE_BUILTIN_BILLING = savedFlag;
-    bin.cleanup();
-  });
-  assert.equal(builtinForced(), true);
-  assert.equal(externalFor("timer"), null, "the escape hatch beats an installed CLI");
-});
-
-test("the install tip appears only when there is something to install", (t) => {
-  const saved = process.env.PATH;
+  const savedFlag = process.env.MOSHCODE_EXTERNAL_BILLING;
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-empty-"));
   process.env.PATH = empty;
+  process.env.MOSHCODE_EXTERNAL_BILLING = "1";
   t.after(() => {
-    process.env.PATH = saved;
+    process.env.PATH = savedPath;
+    if (savedFlag === undefined) delete process.env.MOSHCODE_EXTERNAL_BILLING;
+    else process.env.MOSHCODE_EXTERNAL_BILLING = savedFlag;
     fs.rmSync(empty, { recursive: true, force: true });
   });
-  assert.match(installHint("timer"), /moshcode install timer/);
+  assert.equal(externalFor("timer"), null, "the built-in still has to run");
+});
+
+test("the tip is shown only to somebody who could act on it", (t) => {
+  const savedPath = process.env.PATH;
+  const savedFlag = process.env.MOSHCODE_EXTERNAL_BILLING;
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-empty-"));
+  process.env.PATH = empty;
+  delete process.env.MOSHCODE_EXTERNAL_BILLING;
+  t.after(() => {
+    process.env.PATH = savedPath;
+    if (savedFlag === undefined) delete process.env.MOSHCODE_EXTERNAL_BILLING;
+    else process.env.MOSHCODE_EXTERNAL_BILLING = savedFlag;
+    fs.rmSync(empty, { recursive: true, force: true });
+  });
+  // Not installed: nothing to say. Advertising a variable that would do
+  // nothing is worse than silence.
+  assert.equal(installHint("timer"), null);
 
   const bin = fakeBin("timer");
   process.env.PATH = bin.dir;
   t.after(bin.cleanup);
-  assert.equal(installHint("timer"), null, "no nagging once it is installed");
+  const hint = installHint("timer");
+  assert.match(hint, /MOSHCODE_EXTERNAL_BILLING/);
+  assert.match(hint, /billing import/, "it has to name how the records come across");
+
+  process.env.MOSHCODE_EXTERNAL_BILLING = "1";
+  assert.equal(installHint("timer"), null, "no nagging once it is on");
 });
 
 test("a passthrough result becomes one exit code", () => {
