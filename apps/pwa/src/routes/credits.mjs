@@ -6,7 +6,7 @@ import { id } from "../lib/crypto.mjs";
 import { grant } from "../lib/credits.mjs";
 import { verifySignature } from "../lib/signature.mjs";
 import { requireAuth } from "../lib/session.mjs";
-import { settleNamePurchase, settleTldPurchase } from "../moshpit.mjs";
+import { settleNamePurchase, settleOfferPurchase, settleTldPurchase } from "../moshpit.mjs";
 
 export const creditsRouter = Router();
 
@@ -75,6 +75,10 @@ creditsRouter.post("/webhooks/coinpay", async (req, res) => {
     // An ending is a different table from a name, and this is the one webhook
     // URL CoinPay is configured with — whichever row the id belongs to settles.
     await settleTldPurchase(payId).catch((e) => console.error("[moshpit] tld settle failed:", e.message));
+    // And an accepted offer, which is a third table again — a negotiated sale
+    // or a lease rather than a listed price. Same reasoning: one webhook URL,
+    // and whichever row owns this id is the one that settles.
+    await settleOfferPurchase(payId).catch((e) => console.error("[moshpit] offer settle failed:", e.message));
 
     const p = await get(`SELECT * FROM credit_purchases WHERE id = ? AND status = 'pending'`, [payId]);
     if (p) {

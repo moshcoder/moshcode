@@ -17,6 +17,7 @@ import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
 import { socialsRouter } from "./routes/socials.mjs";
 import { MAX_BATCH, MAX_PUBLISH_BYTES } from "./lib/moshpit-content.mjs";
+import { endExpiredLeases, expireOffers } from "./moshpit.mjs";
 
 const app = express();
 app.disable("x-powered-by");
@@ -97,8 +98,38 @@ app.use((err, req, res, _next) => {
   res.status(500).type("html").send(`<body style="background:#070806;color:#ff0050;font-family:monospace;padding:14vh 24px;text-align:center"><h1>500</h1><p>a bug got in. (there are no bugs, only features.)</p></body>`);
 });
 
+/**
+ * How often the clock's decisions get written down.
+ *
+ * Both sweeps are tidy-up: an offer is expired because its date passed and a
+ * lease is over because its term ran out, and every reader works that out for
+ * itself. What the sweep adds is the part a reader cannot do, because it is a
+ * write -- taking the tenant's target, records and keys back off a name whose
+ * lease has ended, so the name stops serving their site rather than merely
+ * stopping resolving as theirs.
+ *
+ * Hourly, and once at boot. Nothing here is time-critical to the minute, and a
+ * lease that ends at 3am should not need somebody awake.
+ */
+const SWEEP_MS = 60 * 60 * 1000;
+
+async function sweep() {
+  try {
+    const { expired } = await expireOffers();
+    const { reverted } = await endExpiredLeases();
+    if (expired || reverted) console.log(`🧹 moshpit: ${expired} offers expired, ${reverted} leases reverted`);
+  } catch (e) {
+    // Logged and swallowed. A sweep that throws must not take the process with
+    // it -- everything it does, the read-time checks already do correctly.
+    console.error("moshpit sweep failed:", e?.message ?? e);
+  }
+}
+
 async function main() {
   await migrate();
+  await sweep();
+  // Unref'd so it never holds the process open on its own.
+  setInterval(sweep, SWEEP_MS).unref();
   app.listen(config.port, () => console.log(`🤘 app.moshcode.sh on :${config.port} (${config.env}) — ${config.origin}`));
 }
 main().catch((e) => { console.error("boot failed:", e); process.exit(1); });
