@@ -12,6 +12,47 @@
 import os from "node:os";
 import { loadCreds } from "./auth.mjs";
 
+// A key pressed on the session page travels through the same queue as a typed
+// line, tagged with this sentinel. ESC leads it because it is a byte you cannot
+// put in the send box by typing, so a key can never collide with a real command
+// — and the app refuses to queue one for a mosh too old to decode it, rather
+// than letting the sentinel get typed at somebody's prompt as text.
+export const KEY_PREFIX = "\u001bmoshkey:";
+/** Keys the page can send. Anything else is ignored on both ends. */
+export const KEY_NAMES = ["up", "down", "left", "right", "enter"];
+
+/** The name of the key this command carries, or null if it is an ordinary line. */
+export function decodeKey(body) {
+  if (typeof body !== "string" || !body.startsWith(KEY_PREFIX)) return null;
+  const name = body.slice(KEY_PREFIX.length);
+  return KEY_NAMES.includes(name) ? name : null;
+}
+
+// What each key looks like to a program reading the tty in raw mode, and the
+// keypress readline wants when it is the one holding the line.
+const KEY_BYTES = { up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D", enter: "\r" };
+const KEY_PRESS = {
+  up: { name: "up" }, down: { name: "down" }, right: { name: "right" },
+  left: { name: "left" }, enter: { name: "return" },
+};
+
+/**
+ * Deliver one key to whatever is reading this terminal. Returns false for a key
+ * we don't know, so a newer app can never make an older CLI do something odd.
+ */
+export function pressKey(name, rl = null, stdin = process.stdin) {
+  const bytes = KEY_BYTES[name];
+  if (!bytes) return false;
+  // At the prompt readline owns the line editor, so hand it a keypress rather
+  // than bytes: ↑/↓ walk the history, ←/→ move within the line, enter runs it.
+  if (rl) {
+    try { rl.write(null, KEY_PRESS[name]); return true; } catch { /* fall through to the tty */ }
+  }
+  // Otherwise something has the tty in raw mode — a herd bar, the reader, a
+  // menu — and it is waiting on the real escape sequence, not on readline.
+  try { stdin.emit("data", Buffer.from(bytes, "latin1")); return true; } catch { return false; }
+}
+
 const FLUSH_MS = 150;      // batch writes so a busy render is one request, not fifty
 const MAX_BUFFER = 16000;  // flush early once a batch gets big
 
@@ -32,6 +73,7 @@ export function createMirror({
   // process alive for up to a full poll window after the pit closes.
   let poll = null;
   const onCommand = new Set();
+  const onKey = new Set();
 
   const api = (creds?.api || "https://app.moshcode.sh").replace(/\/+$/, "");
   const headers = { "content-type": "application/json", authorization: `Bearer ${creds?.token}` };
@@ -114,7 +156,13 @@ export function createMirror({
       if (stopped) return;
       if (!got) { await sleep(5000); continue; }
       for (const c of got.commands || []) {
-        for (const fn of onCommand) { try { fn(c.body); } catch { /* handler's problem */ } }
+        // A key is a navigation action, not a line, so it goes to its own
+        // handlers: the pit presses it the moment it lands instead of parking
+        // it behind whatever text is still waiting for the prompt. A "down"
+        // delivered a command later would land on a different row.
+        const key = decodeKey(c.body);
+        if (key) { for (const fn of onKey) { try { fn(key); } catch { /* handler's problem */ } } }
+        else { for (const fn of onCommand) { try { fn(c.body); } catch { /* handler's problem */ } } }
         post(`/api/sessions/${sessionId}/commands/${c.id}`, {});
       }
     }
@@ -131,6 +179,10 @@ export function createMirror({
         host: os.hostname(),
         version,
         cwd,
+        // What this build can be asked to do. The page arms its arrow pad on
+        // the strength of this: a mosh that never says "keys" is one that would
+        // type the sentinel at the prompt instead of pressing it.
+        features: ["keys"],
         ...size(),
       });
       if (!r?.id) return false;
@@ -146,6 +198,8 @@ export function createMirror({
     setEngine,
     /** Subscribe to commands sent from the web. Returns an unsubscribe fn. */
     onCommand(fn) { onCommand.add(fn); return () => onCommand.delete(fn); },
+    /** Subscribe to keys pressed on the web. Returns an unsubscribe fn. */
+    onKey(fn) { onKey.add(fn); return () => onKey.delete(fn); },
     async stop() {
       if (!sessionId || stopped) return;
       stopped = true;

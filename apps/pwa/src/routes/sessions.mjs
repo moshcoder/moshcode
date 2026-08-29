@@ -9,7 +9,7 @@
 //   GET  /sessions                          human: connected instances
 //   GET  /sessions/:id                      human: the mirror + a send box
 //   GET  /sessions/:id/stream               human: SSE (scrollback, then live)
-//   POST /sessions/:id/commands             human: queue a command
+//   POST /sessions/:id/commands             human: queue a command, or one key
 import { Router } from "express";
 import { get, all, run } from "../db.mjs";
 import { id } from "../lib/crypto.mjs";
@@ -43,6 +43,30 @@ const LONG_POLL_MS = readLongPollMs();
 // enough that a mis-paste of a whole file can't queue thousands of lines
 // against a prompt that runs them one at a time.
 const MAX_PASTED_LINES = 50;
+
+// Arrow keys pressed on the session page. The command queue carries opaque
+// strings, so a key rides it as a sentinel the CLI decodes — ESC leads it
+// because it is a byte nobody can put in the send box by typing, which is what
+// keeps a key from ever colliding with a real command. Kept in step with
+// `src/mirror.mjs` (the CLI half) by sessions-keys.test.mjs.
+const KEY_PREFIX = "\u001bmoshkey:";
+const KEY_NAMES = new Set(["up", "down", "left", "right", "enter"]);
+export const keyCommand = (name) => KEY_PREFIX + name;
+
+// Capabilities a CLI is allowed to claim when it registers. Anything else is
+// dropped, so a session row can never carry whatever a client felt like sending.
+const FEATURES = new Set(["keys"]);
+export function readFeatures(value) {
+  const list = Array.isArray(value) ? value : [];
+  return [...new Set(list.filter((f) => FEATURES.has(f)))];
+}
+// Keys are refused unless the CLI said it can press them. An older mosh, which
+// says nothing, hands whatever it is given to readline — sending it a key would
+// type the sentinel at the prompt of a live machine instead.
+export const supportsKeys = (session) => {
+  try { return JSON.parse(session.features || "[]").includes("keys"); }
+  catch { return false; }
+};
 
 const isLive = (s) => s.status === "live" && Date.now() - Number(s.last_seen_at) < STALE_MS;
 
@@ -118,11 +142,12 @@ sessionsRouter.post("/api/sessions", cliAuth, async (req, res) => {
     cwd: req.body?.cwd ? String(req.body.cwd).slice(0, 200) : null,
     cols: dim(req.body?.cols),
     rows: dim(req.body?.rows),
+    features: JSON.stringify(readFeatures(req.body?.features)),
   };
   await run(
-    `INSERT INTO cli_sessions (id,user_id,name,host,version,cwd,cols,rows,status,created_at,last_seen_at)
-     VALUES (?,?,?,?,?,?,?,?,'live',?,?)`,
-    [row.id, row.user_id, row.name, row.host, row.version, row.cwd, row.cols, row.rows, now, now]
+    `INSERT INTO cli_sessions (id,user_id,name,host,version,cwd,cols,rows,features,status,created_at,last_seen_at)
+     VALUES (?,?,?,?,?,?,?,?,?,'live',?,?)`,
+    [row.id, row.user_id, row.name, row.host, row.version, row.cwd, row.cols, row.rows, row.features, now, now]
   );
   res.json({ id: row.id, url: `/sessions/${row.id}` });
 });
@@ -289,6 +314,18 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
   if (!s) return res.status(404).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>No such session</h1></main>` }));
   const live = isLive(s);
   const geo = dim(s.cols) && dim(s.rows) ? `${dim(s.cols)}×${dim(s.rows)}` : "";
+  // The pad is only live against a mosh that decodes the keys. Say so on the
+  // page rather than leaving five buttons that quietly do nothing.
+  const keys = supportsKeys(s);
+  const padOn = live && keys;
+  const padNote = !live
+    ? "offline"
+    : keys
+      ? "navigate the remote screen · ⏎ selects"
+      : "this mosh is too old for keys — update it";
+  const padKey = (name, glyph, label, area) =>
+    `<button type="button" class="padkey" data-key="${esc(name)}" style="grid-area:${area}"
+      aria-label="${esc(label)}" title="${esc(label)}"${padOn ? "" : " disabled"}>${glyph}</button>`;
   res.type("html").send(page({
     title: `moshcode ▸ ${s.name}`,
     head: `<link rel="stylesheet" href="/vendor/xterm.css">${SESSION_CSS}`,
@@ -303,6 +340,16 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
       <div class="term ${live ? "" : "off"}" id="frame">
         <div id="term"></div>
       </div>
+      <div class="padbar">
+        <div class="pad" id="pad" role="group" aria-label="Send arrow keys to the terminal">
+          ${padKey("up", "↑", "Up", "u")}
+          ${padKey("left", "←", "Left — back out", "l")}
+          ${padKey("enter", "⏎", "Enter — select", "c")}
+          ${padKey("right", "→", "Right — drill in", "r")}
+          ${padKey("down", "↓", "Down", "d")}
+        </div>
+        <span class="faint mono padnote">${esc(padNote)}</span>
+      </div>
       <form id="send" method="post" action="/sessions/${esc(s.id)}/commands" class="sendbar">
         ${csrfInput(req)}
         <span class="prompt acid mono" aria-hidden="true">❯</span>
@@ -315,6 +362,8 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
       </div>
       <p class="faint mono" style="font-size:.72rem;margin-top:8px">
         Type anywhere on the terminal to reach the prompt. Commands run in the live mosh prompt.
+        Arrow keys don't queue as text — they're pressed on the far end as they land, from the pad
+        or from your own arrow keys with the terminal focused.
         Output from an engine that has taken over the terminal (<span class="acid">/agents</span>)
         stays on that machine — you'll see the hand-off, not the engine's own screen.
       </p>
@@ -322,7 +371,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script>${MIRROR_JS}</script>
-    <script>mirror(${JSON.stringify({ id: s.id, cols: dim(s.cols), rows: dim(s.rows), live })});</script>
+    <script>mirror(${JSON.stringify({ id: s.id, cols: dim(s.cols), rows: dim(s.rows), live, keys: padOn })});</script>
     ${footer}`,
   }));
 });
@@ -391,9 +440,28 @@ sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
   ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* gone */ } }, 25000);
 });
 
+// Queue one key. Always answers JSON: keys come from the pad, which is script,
+// never from a plain form post the way a typed line can be.
+async function queueKey(res, s, name) {
+  if (!KEY_NAMES.has(name)) return res.status(400).json({ error: "unknown key" });
+  if (!isLive(s)) return res.status(409).json({ error: "session offline" });
+  if (!supportsKeys(s)) return res.status(409).json({ error: "this mosh is too old for keys — update it" });
+  const cid = id();
+  const body = keyCommand(name);
+  await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,?,'queued',?)`,
+    [cid, s.id, body, Date.now()]);
+  // `key` rides the event so the page can report "▸ ↑" instead of the sentinel.
+  publish(s.id, { type: "queued", id: cid, body, key: name });
+  wake(s.id);
+  return res.json({ ok: true, id: cid, key: name });
+}
+
 sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {
   const s = await ownedSession(req.params.id, req.user.id);
   if (!s) return res.status(404).json({ error: "no such session" });
+  // A key is one keypress rather than text, so it takes its own path: the
+  // splitting below is for lines, and a key has no line to split.
+  if (req.body?.key) return queueKey(res, s, String(req.body.key).toLowerCase());
   // A pasted block is queued a line at a time. The CLI hands exactly one line
   // to the prompt per turn — readline resolves on the first line it sees and
   // would swallow the rest — so splitting here is what makes paste work, and it
@@ -402,6 +470,10 @@ sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {
     .split(/\r\n|\r|\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    // The sentinel stays a channel only the key path can open. Nobody can type
+    // one, but a hand-rolled post could, and it would reach a prompt as a
+    // keypress that never met the capability check above.
+    .filter((line) => !line.startsWith(KEY_PREFIX))
     .slice(0, MAX_PASTED_LINES)
     .map((line) => line.slice(0, 500));
   if (!lines.length) return wantsJson(req) ? res.status(400).json({ error: "empty command" }) : res.redirect(`/sessions/${s.id}`);
@@ -462,6 +534,24 @@ const SESSION_CSS = `<style>
   .sendbar textarea:disabled, .sendbar button:disabled { opacity:.45; cursor:not-allowed; }
   .sendbar button { line-height:1.45; padding:11px 16px; }
   .termbar { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:.72rem; min-height:1.2em; }
+  /* The pad sits between the screen and the prompt, in that reading order: it
+     acts on what's above it, not on what you're about to type below it. */
+  .padbar { display:flex; align-items:center; gap:12px; margin-top:10px; }
+  .pad {
+    display:grid; flex:none;
+    grid-template-areas:". u ." "l c r" ". d .";
+    grid-template-columns:repeat(3, 30px); gap:3px;
+  }
+  .padkey {
+    width:30px; height:30px; padding:0; line-height:1; font-size:.9rem;
+    display:flex; align-items:center; justify-content:center;
+    background:#0b0d09; color:#edf2e4; border:1px solid #1d2418; border-radius:6px;
+    cursor:pointer; -webkit-user-select:none; user-select:none; touch-action:manipulation;
+  }
+  .padkey:hover:not(:disabled) { border-color:#a6ff1a; color:#a6ff1a; }
+  .padkey:active:not(:disabled) { background:#a6ff1a; color:#070806; border-color:#a6ff1a; }
+  .padkey:disabled { opacity:.35; cursor:not-allowed; }
+  .padnote { font-size:.72rem; }
 </style>`;
 
 // The CLI ships raw ANSI, so the browser runs a real terminal emulator over it
@@ -476,6 +566,9 @@ function mirror(opts) {
   var dot = document.getElementById("dot"), geo = document.getElementById("geo");
   var form = document.getElementById("send"), input = document.getElementById("body");
   var status = document.getElementById("sendstatus");
+  var pad = document.getElementById("pad"), padnote = document.querySelector(".padnote");
+  var keysOn = !!opts.keys;
+  var GLYPH = { up: "↑", down: "↓", left: "←", right: "→", enter: "⏎" };
   var seq = 0;
   // Whether the CLI told us its tty size. If it did we run the emulator at
   // exactly that geometry and size the font to fit; if it didn't (older mosh)
@@ -555,9 +648,38 @@ function mirror(opts) {
     frame.classList.add("off");
     if (input) input.disabled = true;
     if (form) { var b = form.querySelector("button"); if (b) b.disabled = true; }
+    keysOn = false;
+    if (pad) {
+      var pk = pad.querySelectorAll("button");
+      for (var i = 0; i < pk.length; i++) pk[i].disabled = true;
+    }
+    if (padnote) padnote.textContent = "offline";
   }
 
   function flash(msg) { if (status) status.textContent = msg; }
+
+  // A key is not a command: it goes out on its own and the far end presses it
+  // straight away, so there is nothing to echo here — what comes back is the
+  // remote screen redrawing.
+  function sendKey(name) {
+    if (!keysOn || !form) return;
+    fetch(form.action, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ key: name, _csrf: form._csrf.value }),
+    }).then(function (r) {
+      if (r.ok) return;
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        flash(d && d.error ? "✗ " + d.error : "could not send " + (GLYPH[name] || name));
+      });
+    }).catch(function () { flash("could not send — network"); });
+  }
+
+  if (pad) pad.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest("button[data-key]") : null;
+    if (!btn || btn.disabled) return;
+    sendKey(btn.getAttribute("data-key"));
+  });
 
   function connect() {
     var es = new EventSource("/sessions/" + sessionId + "/stream?since=" + seq);
@@ -568,7 +690,7 @@ function mirror(opts) {
       // Queued commands are reported beside the terminal, never written into
       // it: the pit echoes the command itself when it runs, and injecting our
       // own text would shift whatever the CLI is redrawing out of place.
-      else if (d.type === "queued") { flash("▸ queued: " + d.body); }
+      else if (d.type === "queued") { flash(d.key ? "▸ " + (GLYPH[d.key] || d.key) : "▸ queued: " + d.body); }
       else if (d.type === "command-done") { flash(""); }
       else if (d.type === "end" || d.type === "offline") { offline(); }
     };
@@ -578,9 +700,23 @@ function mirror(opts) {
   // Typing on the terminal reaches the prompt below it. The emulator is a
   // faithful mirror, not a keyboard: the CLI takes whole command lines, so
   // keystrokes have nowhere to go until you press enter.
+  //
+  // Arrows are the exception: they act on the screen you're looking at rather
+  // than on the box below it, so they leave as a keypress instead of as text.
+  // Enter stays with the box — it is how you run what you just typed.
+  var ARROW = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
   term.attachCustomKeyEventHandler(function (ev) {
-    if (ev.type !== "keydown" || !input || input.disabled) return true;
+    if (ev.type !== "keydown") return true;
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return true; // leave copy/paste alone
+    // Auto-repeat is dropped: holding a key down would put thirty presses a
+    // second on a queue that crosses a network before anything moves, so the
+    // screen would still be catching up long after you let go.
+    if (keysOn && ARROW[ev.key]) {
+      ev.preventDefault();
+      if (!ev.repeat) sendKey(ARROW[ev.key]);
+      return false;
+    }
+    if (!input || input.disabled) return true;
     if (ev.key === "Enter" || ev.key === "Backspace") { input.focus(); return false; }
     if (ev.key.length === 1) { input.focus(); input.value += ev.key; ev.preventDefault(); return false; }
     return true;
