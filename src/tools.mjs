@@ -18,6 +18,12 @@ import { isInstalled, openPassthrough } from "./engines.mjs";
 const RELEASE_INSTALLER = path.join(path.dirname(fileURLToPath(import.meta.url)), "release-install.mjs");
 const releaseInstall = (tool) => ({ cmd: process.execPath, args: [RELEASE_INSTALLER, tool] });
 
+// ffmpeg and ImageMagick ship as distro packages and nothing else — no vendor
+// installer, no release binary we would trust. See src/pkg-install.mjs for why
+// the static rebuilds floating around are not an option here.
+const PACKAGE_INSTALLER = path.join(path.dirname(fileURLToPath(import.meta.url)), "pkg-install.mjs");
+const packageInstall = (tool) => ({ cmd: process.execPath, args: [PACKAGE_INSTALLER, tool] });
+
 export const TOOLS = {
   ugig: {
     desc: "UGig — freelance marketplace CLI for humans and agents",
@@ -354,6 +360,55 @@ export const TOOLS = {
     // there is deliberately no `upgrade` key.
     install: { cmd: "npm", args: ["install", "-g", "@elevenlabs/cli"] },
   },
+  "yt-dlp": {
+    desc: "yt-dlp — download video and audio from a URL (a thousand sites, not just YouTube)",
+    bin: "yt-dlp",
+    // The three tools below are not workflow CLIs like everything above: they
+    // are the media toolchain `cli-tools` builds on. `dl` is a front for
+    // yt-dlp, `vid` for ffmpeg and `img` for ImageMagick, and all three used to
+    // tell you to go and install a system package by hand. Now the same
+    // registry that installs cli-tools can install what it runs on.
+    //
+    // A PyInstaller bundle from the project's own releases, so it needs no
+    // python and no package manager, and it lands in ~/.local/bin like
+    // gh/supabase/doctl. Distro packages of yt-dlp are the one thing worth
+    // avoiding here: extractors break whenever a site changes, upstream ships a
+    // fix within days, and a distro package is frozen for the life of a release.
+    install: releaseInstall("yt-dlp"),
+    // Which is also why the upgrade is yt-dlp's own `-U` rather than a
+    // re-download: it is the update path the project documents, it checks
+    // before it fetches, and it is the one an operator will reach for anyway.
+    // On a yt-dlp that came from a package manager instead, `-U` declines and
+    // says so, which is the correct answer rather than a failure.
+    upgrade: { cmd: "yt-dlp", args: ["-U"] },
+    // Same gap turso, gradient and kimi have: nothing appends to PATH.
+    binDirs: [path.join(homedir(), ".local", "bin")],
+  },
+  ffmpeg: {
+    desc: "ffmpeg — convert, cut, scale and inspect audio and video",
+    bin: "ffmpeg",
+    // Through the distro package manager, which means root everywhere but
+    // macOS, where Homebrew refuses to run as root at all. Same shape as
+    // tailscale, and for the same reason: get the password prompt out of the
+    // way before a sweep starts rather than partway through one.
+    needsRoot: { except: ["darwin"] },
+    install: packageInstall("ffmpeg"),
+    // No upgrade key: `apt-get install` / `brew install` on a package that is
+    // already there upgrades it, so re-running the install IS the upgrade —
+    // the same reasoning as mcpjam and railway, and toolUpgradeSpec falls back
+    // to install on its own.
+  },
+  imagemagick: {
+    desc: "ImageMagick — resize, convert and composite images from the command line",
+    // Two names, deliberately. The command is `magick` on ImageMagick 7 and
+    // `convert` on 6, and both are current: Ubuntu 24.04 and earlier ship 6,
+    // 25.04 and later ship 7, and the package is called `imagemagick` on both.
+    // A single name would report a perfectly good install as missing on
+    // whichever half of the fleet has the other one.
+    bin: ["magick", "convert"],
+    needsRoot: { except: ["darwin"] },
+    install: packageInstall("imagemagick"),
+  },
 };
 
 /** Resolve a name to `[key, tool]`, or null. */
@@ -377,7 +432,7 @@ export function toolStatus() {
 
 export function toolList() {
   return Object.entries(TOOLS)
-    .map(([key, tool]) => `  ${key.padEnd(10)} ${tool.desc}`)
+    .map(([key, tool]) => `  ${key.padEnd(11)} ${tool.desc}`)
     .join("\n");
 }
 

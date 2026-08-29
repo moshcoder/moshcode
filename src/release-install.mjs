@@ -29,6 +29,8 @@ import { fileURLToPath } from "node:url";
  *   - supabase also publishes version-less asset aliases, so `latest/download`
  *     resolves without asking the API for a tag first.
  *   - doctl separates its asset fields with "-" instead of "_".
+ *   - yt-dlp publishes the executable itself rather than an archive, so there
+ *     is nothing to unpack; `bare` is what says so.
  */
 export const RELEASES = {
   gh: {
@@ -53,6 +55,27 @@ export const RELEASES = {
     binary: "doctl",
     asset: ({ version, platform, arch }) => `doctl-${version}-${platform}-${arch}.tar.gz`,
     binPath: () => "doctl",
+  },
+  "yt-dlp": {
+    repo: "yt-dlp/yt-dlp",
+    binary: "yt-dlp",
+    // The asset IS the executable — a PyInstaller bundle, so it needs no
+    // python on the box, and there is no archive around it to unpack.
+    bare: true,
+    // `unversioned` is not a convenience here, it is required: yt-dlp tags
+    // releases by date with no leading "v" (2025.08.11), so the versioned URL
+    // this builds otherwise — /download/v2025.08.11/ — is a 404. The
+    // /releases/latest/download/ alias sidesteps the tag spelling entirely.
+    unversioned: true,
+    // macOS gets one universal2 build for both architectures; Linux names arm64
+    // "aarch64" while every other vendor here calls it arm64.
+    asset: ({ platform, arch }) =>
+      platform === "darwin"
+        ? "yt-dlp_macos"
+        : arch === "arm64"
+          ? "yt-dlp_linux_aarch64"
+          : "yt-dlp_linux",
+    binPath: () => "yt-dlp",
   },
 };
 
@@ -151,14 +174,18 @@ export async function installRelease(tool, { fetchImpl = fetch } = {}) {
   try {
     const archive = path.join(work, path.posix.basename(new URL(url).pathname));
     writeFileSync(archive, Buffer.from(await res.arrayBuffer()));
-    const unpacked = path.join(work, "unpacked");
-    mkdirSync(unpacked);
-    extract(archive, unpacked);
 
-    const relative = spec.binPath(target);
-    const from = path.join(unpacked, relative);
-    if (!existsSync(from)) {
-      throw new Error(`${spec.binary} was not at ${relative} inside ${path.basename(archive)} — the vendor's archive layout changed`);
+    let from = archive;
+    if (!spec.bare) {
+      const unpacked = path.join(work, "unpacked");
+      mkdirSync(unpacked);
+      extract(archive, unpacked);
+
+      const relative = spec.binPath(target);
+      from = path.join(unpacked, relative);
+      if (!existsSync(from)) {
+        throw new Error(`${spec.binary} was not at ${relative} inside ${path.basename(archive)} — the vendor's archive layout changed`);
+      }
     }
 
     const dir = installDir();
