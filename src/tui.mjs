@@ -17,7 +17,7 @@ import { locate, tilde } from "./pwd.mjs";
 import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
 import { loadCommand, saveCommand } from "./settings-sync.mjs";
-import { createMirror, teeOutput } from "./mirror.mjs";
+import { createMirror, pressKey, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
@@ -1301,6 +1301,13 @@ async function startMirror() {
     }
   };
   mirror.onCommand((body) => { queue.push(body); drainRemote(); });
+
+  // Keys skip the queue: they are pressed the instant they arrive, whether the
+  // prompt is armed or something else has the tty (a herd bar, the reader, a
+  // menu). Nothing is echoed for them either — a line gets a `▸ (web)` note
+  // because it would otherwise appear from nowhere, but a key's effect is the
+  // redraw it causes, and printing over that would shift it out of place.
+  mirror.onKey((name) => { pressKey(name, promptRl); });
 
   console.log(info(`mirroring this session → ${acid(mirror.url)}`));
   return { restoreTee, drainRemote, atPrompt: (rl) => { promptRl = rl; } };
