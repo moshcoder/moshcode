@@ -151,8 +151,24 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
   const permits = (tld) => constraints.permitted.some((entry) => bare(entry) === String(tld).toLowerCase());
 
   const missing = tlds.filter((tld) => !permits(tld));
-  if (missing.length) {
-    return { ok: false, kind: "out-of-step", why: `the root does not permit ${missing.join(", ")}` };
+  // Not a refusal, and this was the single most damaging line in the file.
+  //
+  // The root is minted by moshpit-proxy for the endings it was configured to
+  // serve — a handful. `tlds` is every ending the registry has sold, which is
+  // 18224 and climbing. So this could never pass on a real machine: it refused
+  // to install a perfectly good root because it did not also cover 18000
+  // endings nobody on that machine was trying to reach, and printed all of them
+  // as evidence. The advice it gave — regenerate the root — cannot help,
+  // because the new root is scoped to the same handful.
+  //
+  // A root that covers some of what you resolve is worth exactly what it
+  // covers. So it goes in, and the shortfall is a count rather than a wall.
+  if (missing.length === tlds.length) {
+    return {
+      ok: false,
+      kind: "out-of-step",
+      why: `the root permits none of the endings claimed (${summarise(missing)}) — it is for a different namespace`,
+    };
   }
   // And nothing beyond them. One `DNS:.com` in the permitted subtree is the
   // whole hole this gate exists to close, and it would otherwise sail through
@@ -163,10 +179,32 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
     return {
       ok: false,
       kind: "out-of-step",
-      why: `the root also permits ${foreign.join(", ")}, which is not an ending we resolve — it reaches past Moshpit`,
+      why: `the root also permits ${summarise(foreign)}, which is not an ending we resolve — it reaches past Moshpit`,
     };
   }
-  return { ok: true, why: "constrained to Moshpit endings" };
+  // Carried, not printed here: the caller decides how loud a partial root is,
+  // and it is the only place that knows whether the person asked about a name
+  // the root actually covers.
+  return missing.length
+    ? {
+      ok: true,
+      why: `constrained to Moshpit endings — covers ${tlds.length - missing.length} of ${tlds.length}`,
+      missing,
+    }
+    : { ok: true, why: "constrained to Moshpit endings" };
+}
+
+/**
+ * A list a person can read, rather than one that fills the terminal.
+ *
+ * A registry with 18224 endings turns any "these are wrong" message into
+ * several screens of text, which is not a diagnostic — it is the reason nobody
+ * reads the line above it.
+ */
+export function summarise(items, show = 8) {
+  const list = [...items];
+  if (list.length <= show) return list.join(", ");
+  return `${list.slice(0, show).join(", ")} and ${list.length - show} more`;
 }
 
 /**
