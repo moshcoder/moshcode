@@ -87,6 +87,21 @@ test("periods convert, and a floor rounds up before the multiply", () => {
   assert.equal(chargeFor({ seconds: 15 * 60 }, floored).hours, 0.25, "the tracked time is still the truth");
 });
 
+test("a bare flat fee is a project fee, not an hourly one", () => {
+  // A lone price with no period stated ("$5000 for the project") must not fall
+  // through to the per-hour default: chargeFor would then multiply it by every
+  // tracked hour, turning a $5,000 project fee into a $50,000 invoice over a
+  // 10-hour job. It is charged once, like any other project fee.
+  const bare = parseRate("$5000");
+  assert.equal(bare.per, "project", "a bare flat fee defaults to a project fee");
+  const charge = chargeFor({ seconds: 10 * 3600 }, bare);
+  assert.equal(charge.flat, true, "billed once, not per hour");
+  assert.equal(charge.amount, null, "the invoice adds the fee, chargeFor does not scale it");
+  // A crypto flat fee reads the same way, and an explicit period still wins.
+  assert.equal(parseRate("250 USDC").per, "project");
+  assert.equal(parseRate("$100/hour").per, "hour", "a stated period is untouched");
+});
+
 test("a flat project fee is not earned per entry", () => {
   const project = parseRate("$5000/project");
   const charge = chargeFor({ seconds: 3600 }, project);
