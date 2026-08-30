@@ -49,6 +49,7 @@ import {
   parseTldList,
   tldRejection,
 } from "./lib/moshpit-name.mjs";
+import { isRealTld } from "./lib/iana-tlds.mjs";
 import {
   agreedTerms,
   effectiveStatus,
@@ -200,6 +201,13 @@ export async function registerTld({ tld: input, userId, ownerEmail = null, owner
   const tld = normalizeTld(input);
   if (!tld) return { ok: false, error: "not a valid TLD — letters, digits and dashes only, no dots" };
 
+  // Refused even for callers allowed to take reserved names. Reserving `.bank`
+  // is policy and policy has exceptions; answering for `.sh` is a machine that
+  // has lost a chunk of the internet, and there is no caller for whom that is
+  // the intended outcome.
+  if (isRealTld(tld)) {
+    return { ok: false, error: `.${tld} is a real top-level domain — claiming it would stop Moshpit resolvers from reaching the rest of it` };
+  }
   const rejected = tldRejection(tld);
   if (rejected && !allowReserved) return { ok: false, error: rejected };
 

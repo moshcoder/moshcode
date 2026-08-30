@@ -52,7 +52,12 @@ test("reserved names cannot be claimed", () => {
 
 test("a TLD needs at least two characters", () => {
   assert.equal(tldRejection("a"), "a TLD needs at least 2 characters");
-  assert.equal(tldRejection("ai"), null);
+  // Was `ai`, which reads as a two-character ending and is also Anguilla's
+  // ccTLD. Selling it stops every Moshpit resolver forwarding the real one, so
+  // it is refused now and the length rule needs an example that is only about
+  // length.
+  assert.equal(tldRejection("42"), null);
+  assert.match(tldRejection("ai") || "", /real top-level domain/);
 });
 
 test("parseMoshpitName splits exactly one dot", () => {
