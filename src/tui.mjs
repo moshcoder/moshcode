@@ -18,7 +18,7 @@ import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
 import { startAutoSync } from "./autosync.mjs";
 import { loadCommand, saveCommand } from "./settings-sync.mjs";
-import { createMirror, pressKey, setActiveSink, teeOutput } from "./mirror.mjs";
+import { activeChildInput, createMirror, pressKey, setActiveSink, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
@@ -1332,7 +1332,18 @@ async function startMirror() {
       promptRl.write(`${body}\n`);
     }
   };
-  mirror.onCommand((body) => { queue.push(body); drainRemote(); });
+  mirror.onCommand((body) => {
+    // An engine has the terminal: send the line to it rather than parking it
+    // for a prompt that will not come back until the engine exits. Without this
+    // the arrow keys could answer a menu but nothing could answer a question,
+    // which is half a session page. Typed straight in, so it arrives the way
+    // the keyboard would deliver it — no `▸ (web)` note, because the engine
+    // echoes it itself and printing over an engine's screen shifts it.
+    const toChild = activeChildInput();
+    if (toChild && toChild(`${body}\r`)) return;
+    queue.push(body);
+    drainRemote();
+  });
 
   // Keys skip the queue: they are pressed the instant they arrive, whether the
   // prompt is armed or something else has the tty (a herd bar, the reader, a

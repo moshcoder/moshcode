@@ -6,9 +6,12 @@
 // every network call is swallowed, because a flaky link must never take down
 // the terminal you're actually working in.
 //
-// What it can't see: once an engine takes the terminal (`/agents claude`), the
-// child writes straight to the tty on its own fd — those bytes never pass
-// through this process. The mirror shows the hand-off, not the engine's screen.
+// A child that takes the terminal (`/agents claude`) writes straight to the tty
+// on its own fd, so none of its bytes pass through this process on their own.
+// Both directions are handled in src/pty.mjs instead: its output is copied out
+// of a pty transcript, and its stdin is a fifo we hold, which is what lets a key
+// pressed on the session page answer an engine's prompt rather than land in the
+// pit behind it.
 import os from "node:os";
 import { loadCreds } from "./auth.mjs";
 
@@ -30,7 +33,7 @@ export function decodeKey(body) {
 
 // What each key looks like to a program reading the tty in raw mode, and the
 // keypress readline wants when it is the one holding the line.
-const KEY_BYTES = { up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D", enter: "\r" };
+export const KEY_BYTES = { up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D", enter: "\r" };
 const KEY_PRESS = {
   up: { name: "up" }, down: { name: "down" }, right: { name: "right" },
   left: { name: "left" }, enter: { name: "return" },
@@ -43,6 +46,14 @@ const KEY_PRESS = {
 export function pressKey(name, rl = null, stdin = process.stdin) {
   const bytes = KEY_BYTES[name];
   if (!bytes) return false;
+  // A child engine takes precedence over everything below, because when one is
+  // running it is the thing the person on the session page can see. It reads a
+  // real file descriptor rather than this process's stdin object, so the bytes
+  // have to be *written* — the synthesised event further down reaches readline
+  // and the pit's own raw-mode readers, and nothing that was spawned. This is
+  // the line that decides whether an arrow key lands on Claude's trust prompt.
+  const toChild = activeChildInput();
+  if (toChild && toChild(bytes)) return true;
   // At the prompt readline owns the line editor, so hand it a keypress rather
   // than bytes: ↑/↓ walk the history, ←/→ move within the line, enter runs it.
   if (rl) {
@@ -76,6 +87,26 @@ export function setActiveSink(sink) {
 /** The sink a child's output should be copied to, or null when unmirrored. */
 export function activeChildSink() {
   return activeSink;
+}
+
+// The other direction: where to put bytes so the program currently holding the
+// terminal reads them.
+//
+// Null almost always, and set only while a child owns the tty under a pty we
+// opened (src/pty.mjs captureWithInput). It has to be module-level for the same
+// reason the sink does — pressKey is called from the mirror's poll loop, which
+// has no idea which launcher is mid-flight — and it is what makes a key pressed
+// on the session page land in an engine rather than in the pit behind it.
+let activeInput = null;
+
+/** Point web keystrokes at a running child (or null when it exits). */
+export function setActiveChildInput(write) {
+  activeInput = typeof write === "function" ? write : null;
+}
+
+/** How to type into whatever child owns the terminal, or null for the pit. */
+export function activeChildInput() {
+  return activeInput;
 }
 
 export function createMirror({
