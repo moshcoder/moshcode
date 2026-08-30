@@ -205,12 +205,20 @@ test("the proxy dir is the operator's, never root's", () => {
   assert.match(px(), /^Environment=MOSHPIT_PROXY_DIR=\/home\/x\/\.moshpit$/m);
 });
 
-test("it serves the endings it is given, and says nothing when given none", () => {
-  assert.match(px({ tlds: ["moshpit", "eggs", "2600"] }), /^Environment=MOSHPIT_PROXY_TLDS=moshpit,eggs,2600$/m);
-  // Unset means the proxy's own default of `.moshpit` alone — which is why a
-  // healthy proxy can still fail to present a certificate for the name someone
-  // is actually trying to reach.
+test("the unit never names endings — the proxy serves all of them", () => {
+  // This used to write MOSHPIT_PROXY_TLDS from the registry's ending list,
+  // which is 18224 names: a ~150 KB environment variable in a unit file, for a
+  // list stale the next time one is sold.
+  //
+  // moshpit-proxy now reads an unset value as "every Moshpit ending" — its root
+  // excludes the real internet rather than enumerating what Moshpit owns — so
+  // there is nothing to pass and no size to worry about.
+  assert.doesNotMatch(px({ tlds: ["moshpit", "eggs", "2600"] }), /MOSHPIT_PROXY_TLDS/);
   assert.doesNotMatch(px({ tlds: [] }), /MOSHPIT_PROXY_TLDS/);
+  assert.ok(
+    px({ tlds: Array.from({ length: 18224 }, (_, i) => `e${i}`) }).length < 2000,
+    "a unit must not grow with the registry",
+  );
 });
 
 test("a unit it cannot pin is refused rather than written half-formed", () => {

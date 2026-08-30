@@ -20,6 +20,7 @@
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { IANA_TLDS } from "./iana-tlds.mjs";
 
 /** Where moshpit-proxy generates its root on first run. */
 export function caPath({ home = os.homedir(), dir = null } = {}) {
@@ -139,15 +140,53 @@ export function requireNameConstraints(text, { tlds = [] } = {}) {
   // `excluded;DNS:.hacker` alone is an unconstrained root wearing the word
   // "constraints". Requiring a permitted DNS subtree is what makes the rest of
   // this check mean anything.
+  const bare = (entry) => entry.replace(/^\./, "");
+
+  // Two shapes are acceptable, and they make the same promise a different way.
+  //
+  // The old one permits a list of Moshpit endings and is bounded by what it
+  // names. It cannot scale: there are 18224 endings, a permitted subtree each
+  // is roughly 214 KB of constraints on every handshake, and the list is stale
+  // the next time the registry sells one — which is why a machine could reach
+  // `.2600` over HTTPS and not `.hacker`.
+  //
+  // The new one names nothing and excludes the real internet instead: all 1438
+  // delegated top-level domains, about 15 KB, covering every Moshpit ending
+  // that exists or ever will. RFC 5280 4.2.1.10 leaves a name type unrestricted
+  // when no permitted subtree names it, which is what makes that work — and is
+  // also exactly what an unconstrained root looks like, so the difference has
+  // to be established rather than assumed.
+  //
+  // It is established against the same IANA list this tool refuses to sell
+  // endings from. A root that excludes the internet cannot forge your bank,
+  // which is the whole property the old shape bought by enumeration.
   if (!constraints.permitted.length) {
-    return {
-      ok: false,
-      kind: "unconstrained",
-      why: "the root permits no DNS subtree, so every name it does not exclude is allowed — it could vouch for any name",
-    };
+    const excluded = new Set(constraints.excluded.map(bare));
+    const covered = [...IANA_TLDS].filter((tld) => excluded.has(tld));
+    const uncovered = [...IANA_TLDS].filter((tld) => !excluded.has(tld));
+
+    // A handful of exclusions is not this shape; it is an unconstrained root
+    // with a few names crossed out, which is the thing this gate exists to
+    // refuse. The threshold sits far below the real count on purpose: the
+    // question is "is the internet excluded", not "is this list current".
+    if (covered.length < 1000) {
+      return {
+        ok: false,
+        kind: "unconstrained",
+        why: covered.length
+          ? `the root excludes only ${covered.length} real top-level domains — it could still vouch for the rest of the internet`
+          : "the root permits no DNS subtree and excludes no real domains, so it could vouch for any name",
+      };
+    }
+
+    // A root minted before a TLD was delegated does not exclude it. A real gap,
+    // and a small one, so it is reported rather than made fatal: refusing here
+    // would mean refusing every root the day IANA adds a name.
+    return uncovered.length
+      ? { ok: true, why: `excludes ${covered.length} real top-level domains`, uncovered }
+      : { ok: true, why: `excludes all ${covered.length} real top-level domains` };
   }
 
-  const bare = (entry) => entry.replace(/^\./, "");
   const permits = (tld) => constraints.permitted.some((entry) => bare(entry) === String(tld).toLowerCase());
 
   const missing = tlds.filter((tld) => !permits(tld));

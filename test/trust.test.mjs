@@ -60,6 +60,13 @@ function makeRoot({ constraints }) {
 const MOSHPIT_ONLY = "critical,permitted;DNS:.hacker,permitted;DNS:.rank";
 
 /**
+ * The shape moshpit-proxy mints now: nothing permitted, the whole of IANA
+ * excluded. Built from the same list the registry refuses to sell from, so a
+ * drift between the two would fail here rather than in someone's browser.
+ */
+const EXCLUDES_THE_INTERNET = ["critical", ...[...IANA_TLDS].map((t) => `excluded;DNS:.${t}`)].join(",");
+
+/**
  * Skip loudly, never silently.
  *
  * These tests are the only thing standing between a regression upstream and an
@@ -472,6 +479,7 @@ test("the refusal a session prints carries its remedy", async () => {
 /* ---------------------------------------- trusting one name on the strength of its pin */
 
 import { fetchCertificateCommand, leafPath, leafTrustPlan, pinAccepted, pinFromCertificate, trustName } from "../src/trust.mjs";
+import { IANA_TLDS } from "../src/iana-tlds.mjs";
 
 /**
  * A real self-signed leaf, the shape a Moshpit origin serves.
@@ -673,4 +681,45 @@ test("no name asks for one rather than guessing", async () => {
   const lines = [];
   assert.equal(await trustName("", (l) => lines.push(l), {}), 1);
   assert.match(lines.join("\n"), /which name/);
+});
+
+/* ------------------------------ the root that excludes the internet instead */
+
+// Permitting every Moshpit ending does not scale — 18224 of them is roughly
+// 214 KB of constraints on every handshake, and stale the next time one is
+// sold, which is why a machine could reach `.2600` over HTTPS and not
+// `.hacker`. Excluding the 1438 real TLDs costs ~15 KB and covers the whole
+// namespace forever. The catch is that it looks exactly like an unconstrained
+// root to anything that only asks "is there a permitted subtree", so the
+// difference has to be established rather than assumed.
+
+test("a root that excludes the whole real internet is accepted", (t) => {
+  const text = needRoot(t, EXCLUDES_THE_INTERNET);
+  if (!text) return;
+  // No `tlds` need be passed: that is the entire point of this shape.
+  const verdict = requireNameConstraints(text, { tlds: ["hacker", "2600", "eggs", "soldtomorrow"] });
+  assert.equal(verdict.ok, true, verdict.why);
+  assert.match(verdict.why, /excludes all 1438 real top-level domains/);
+});
+
+test("a root with a few exclusions is not that shape — it is unconstrained", (t) => {
+  // The attack this refuses: cross out `.com` and `.net`, permit nothing, and
+  // an "excluded" root can still forge every other real domain.
+  const text = needRoot(t, "critical,excluded;DNS:.com,excluded;DNS:.net");
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.why, /excludes only 2/);
+});
+
+test("a root missing a newly delegated TLD is reported, not refused", (t) => {
+  // IANA adds names. A root minted last month does not exclude one added this
+  // month, which is a real gap and a small one — refusing would mean refusing
+  // every root on the day the list moves.
+  const shortOne = [...IANA_TLDS].slice(0, -3);
+  const text = needRoot(t, ["critical", ...shortOne.map((x) => `excluded;DNS:.${x}`)].join(","));
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.ok, true, verdict.why);
+  assert.equal(verdict.uncovered.length, 3);
 });
