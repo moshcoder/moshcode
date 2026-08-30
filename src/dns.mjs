@@ -2788,7 +2788,33 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const upstreams = upstreamsFromArgs(rest).servers.length
       ? upstreamsFromArgs(rest).servers
       : await discoverUpstreams();
-    const unit = serviceUnit({ system, entry: cliEntry(), port, registryBase, upstreams });
+    // Probed the same way `enable` probes it, and for the same reason: a name
+    // that resolves but cannot complete a TLS handshake reads as broken to the
+    // person who typed the URL. Asked now, while this command can ask; the unit
+    // it writes runs at boot and has no way to find out later.
+    let proxy = null;
+    if (!rest.includes("--no-proxy")) {
+      const claimed = await fetchTlds({ registryBase }).catch(() => []);
+      const probeName = claimed[0] ? `a.${claimed[0]}` : null;
+      if (probeName) {
+        const local = await findLocalProxyImpl(probeName).catch(() => ({ found: false }));
+        if (local.found) proxy = local.address.v4 || local.address.v6;
+      }
+    }
+
+    const unit = serviceUnit({ system, entry: cliEntry(), port, registryBase, upstreams, proxy });
+
+    if (proxy) {
+      out(`ok pinned-TLS proxy on ${proxy}:${PROXY_PORT} — names will answer there, so https:// verifies`);
+      out("");
+    } else if (!rest.includes("--no-proxy")) {
+      out("!  no pinned-TLS proxy found on this machine");
+      out("   names will answer their origin, and a stock client cannot verify those —");
+      out("   https:// will fail even though the name resolves. Install it with:");
+      out("     curl -fsSL https://raw.githubusercontent.com/profullstack/moshpit-proxy/main/install.sh | sh");
+      out("   then re-run this command so the unit points names at it.");
+      out("");
+    }
 
     if (!upstreams.length) {
       out("!  no upstream nameservers found, and none given");

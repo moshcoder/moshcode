@@ -99,3 +99,32 @@ test("remove takes the unit away even when it was never enabled", async () => {
   assert.equal(result.ok, true);
   assert.equal(existsSync(join(home, ".config/systemd/user", UNIT_NAME)), false);
 });
+
+/* ------------------------------------------------- pointing at the proxy */
+
+// A supervised bridge that answers with the origin gives every name a
+// certificate no CA signed, so `https://` fails on a machine where the
+// pinned-TLS proxy is installed, trusted and running. `dns enable` has always
+// probed for the proxy and passed it to the daemon; `dns service` did not,
+// which made a service-managed bridge the one way to run Moshpit where HTTPS
+// could not work at all.
+
+test("the unit points names at the local proxy when there is one", () => {
+  assert.match(unit({ proxy: "127.0.0.1" }), /ExecStart=.* --proxy 127\.0\.0\.1$/m);
+});
+
+test("a v6 proxy address survives into the unit", () => {
+  assert.match(unit({ proxy: "::1" }), /--proxy ::1$/m);
+});
+
+test("no proxy means no flag, not an empty one", () => {
+  // `--proxy` with nothing after it would make the daemon read the next token
+  // as an address, and there is no next token.
+  assert.doesNotMatch(unit({ proxy: null }), /--proxy/);
+  assert.doesNotMatch(unit(), /--proxy/);
+});
+
+test("upstreams and proxy coexist without eating each other's values", () => {
+  const text = unit({ upstreams: ["1.1.1.1", "1.0.0.1"], proxy: "127.0.0.1" });
+  assert.match(text, /--upstream 1\.1\.1\.1,1\.0\.0\.1 --proxy 127\.0\.0\.1$/m);
+});
