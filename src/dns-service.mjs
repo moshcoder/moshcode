@@ -130,10 +130,12 @@ export function serviceUnit({
 function run(command, args) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
     let err = "";
+    child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (error) => resolve({ ok: false, error: error.message }));
-    child.on("exit", (code) => resolve({ ok: code === 0, error: err.trim() }));
+    child.on("exit", (code) => resolve({ ok: code === 0, stdout: out, error: err.trim() }));
   });
 }
 
@@ -277,6 +279,38 @@ export function proxyServiceUnit({
   return lines.join("\n");
 }
 
+/**
+ * Is the local root the old shape, minted for a list of endings?
+ *
+ * moshpit-proxy used to constrain its root by naming what it could certify.
+ * That root works only for the endings it happened to name, which is why a
+ * machine could reach `.2600` over HTTPS and not `.hacker` — and why the list
+ * could never be right, since the registry keeps selling more.
+ *
+ * The root it mints now excludes the real internet instead and covers the whole
+ * namespace. But a machine that ran the old proxy still has the old root on
+ * disk, and moshpit-proxy will not replace a root that already exists — so
+ * without this, upgrading leaves the narrow root in place and `.hacker` keeps
+ * failing with nothing to explain why.
+ *
+ * A permitted DNS subtree is the tell. The new root has none by design.
+ */
+export async function rootIsNarrow({
+  home = operatorHome(),
+  exec = run,
+  exists = existsSync,
+} = {}) {
+  const file = join(home, ".moshpit", "ca", "ca.crt");
+  if (!exists(file)) return { narrow: false, reason: "no root yet", file };
+  const described = await exec("openssl", ["x509", "-noout", "-text", "-in", file]);
+  // Unreadable is not narrow. Deleting a root because openssl was missing would
+  // throw away a working setup to fix a problem nobody had.
+  if (!described.ok) return { narrow: false, reason: "could not read it", file };
+  return described.stdout && /Permitted:/i.test(described.stdout)
+    ? { narrow: true, reason: "constrained to a list of endings", file }
+    : { narrow: false, reason: "already covers the namespace", file };
+}
+
 /** Where moshpit-proxy's installer puts its wrapper, if it ran. */
 export function proxyWrapperPath({ home = operatorHome(), exists = existsSync } = {}) {
   const candidate = join(home, ".local/bin/moshpit-proxy");
@@ -304,6 +338,8 @@ export async function ensureProxyService({
   tlds = [],
   port = 443,
   exec = run,
+  narrowRoot = rootIsNarrow,
+  paths = proxyServicePaths,
   read = async (f) => (await import("node:fs/promises")).readFile(f, "utf8"),
   listening = defaultPortHeld,
   waitMs = 30000,
@@ -311,7 +347,7 @@ export async function ensureProxyService({
   const wrapper = proxyWrapperPath({ home });
   if (!wrapper) return { ok: false, reason: "not-installed", steps: [] };
 
-  const { path, systemctl } = proxyServicePaths();
+  const { path, systemctl } = paths();
   const unit = proxyServiceUnit({ wrapper, nodeDir, home, user, port, tlds });
   // Read before writing so the manifest can put back whatever was here — which
   // is usually nothing, and "nothing" has to be recorded as precisely as
@@ -319,6 +355,22 @@ export async function ensureProxyService({
   const before = await read(path).catch(() => null);
 
   const steps = [];
+
+  // A root minted by the old proxy names the endings it may certify, and
+  // moshpit-proxy will not replace a root that already exists. Left alone, an
+  // upgraded machine keeps the narrow root and `.hacker` keeps failing — so it
+  // goes, and the proxy mints the current shape on its next start.
+  //
+  // Safe to remove: it is a local root, regenerated in seconds, and `dns enable`
+  // installs the replacement into the trust stores in the same run. Removing it
+  // without that would be the destructive half on its own, which is why this
+  // lives here and not in the installer.
+  const narrow = await narrowRoot({ home, exec });
+  if (narrow.narrow) {
+    await rm(join(home, ".moshpit", "ca"), { recursive: true, force: true }).catch(() => {});
+    steps.push({ step: `reminted the local root — the old one was ${narrow.reason}`, ok: true });
+  }
+
   try {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, unit);
@@ -328,7 +380,14 @@ export async function ensureProxyService({
   }
 
   const [cmd, ...flags] = systemctl;
-  for (const args of [[...flags, "daemon-reload"], [...flags, "enable", "--now", PROXY_UNIT_NAME]]) {
+  // `enable --now` starts a stopped unit and does nothing to a running one, so
+  // an upgrade would leave the previous process — and the previous root, and
+  // the previous namespace — in place. Restart is what makes an upgrade take.
+  for (const args of [
+    [...flags, "daemon-reload"],
+    [...flags, "enable", PROXY_UNIT_NAME],
+    [...flags, "restart", PROXY_UNIT_NAME],
+  ]) {
     const result = await exec(cmd, args);
     steps.push({ step: `${cmd} ${args.join(" ")}`, ok: result.ok, error: result.error });
     if (!result.ok) return { ok: false, reason: "systemctl-failed", before, steps, path, unit };
