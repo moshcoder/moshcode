@@ -19,7 +19,7 @@
 // that looks plausible and dies at 203/EXEC with nothing useful in the journal.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "../src/dns-service.mjs";
 import { proxyProbeFromArgs, captureRestorePoint } from "../src/dns.mjs";
 import { proxyServiceUnit, proxyServicePaths, PROXY_UNIT_NAME } from "../src/dns-service.mjs";
+import { rootIsNarrow, ensureProxyService } from "../src/dns-service.mjs";
 
 const scratch = () => mkdtemp(join(tmpdir(), "moshcode-service-"));
 const unit = (opts = {}) => serviceUnit({ entry: "/opt/moshcode/bin/moshcode.mjs", port: 5354, execPath: "/opt/node/bin/node", ...opts });
@@ -250,4 +251,99 @@ test("the restore point records the units, including that they were absent", asy
   const byPath = Object.fromEntries(point.files.map((f) => [f.path, f.content]));
   assert.equal(byPath["/etc/systemd/system/moshpit-proxy.service"], "theirs, from before\n");
   assert.equal(byPath["/home/x/.config/systemd/user/moshcode-dns.service"], null);
+});
+
+/** A scratch home with moshpit-proxy installed in it, as a real machine has. */
+async function homeWithProxy() {
+  const home = await scratch();
+  await mkdir(join(home, ".local/bin"), { recursive: true });
+  await writeFile(join(home, ".local/bin/moshpit-proxy"), "#!/bin/sh\nexec node x\n");
+  return home;
+}
+
+/* ---------------------------------------------- the root that stopped scaling */
+
+// moshpit-proxy used to constrain its root by naming the endings it could
+// certify, and it will not replace a root that already exists. So an upgraded
+// machine keeps the narrow root, `.hacker` keeps failing, and nothing says why.
+// `dns enable` has to notice and remint, or the upgrade is a no-op for anyone
+// who ran the old proxy.
+
+const described = (stdout) => async () => ({ ok: true, stdout });
+
+test("a root naming endings is narrow — it only works for what it named", async () => {
+  const r = await rootIsNarrow({
+    home: "/anywhere",
+    exists: () => true,
+    exec: described("X509v3 Name Constraints: critical\n  Permitted:\n    DNS:.hacker\n"),
+  });
+  assert.equal(r.narrow, true);
+});
+
+test("a root excluding the internet is current — it covers everything", async () => {
+  const r = await rootIsNarrow({
+    home: "/anywhere",
+    exists: () => true,
+    exec: described("X509v3 Name Constraints: critical\n  Excluded:\n    DNS:.com\n"),
+  });
+  assert.equal(r.narrow, false);
+  assert.match(r.reason, /covers the namespace/);
+});
+
+test("no root is not a narrow root", async () => {
+  const r = await rootIsNarrow({ home: "/anywhere", exists: () => false });
+  assert.equal(r.narrow, false);
+});
+
+test("an unreadable root is left alone rather than deleted", async () => {
+  // Throwing away a working root because openssl was missing would break a
+  // machine to fix a problem it did not have.
+  const r = await rootIsNarrow({
+    home: "/anywhere",
+    exists: () => true,
+    exec: async () => ({ ok: false, error: "openssl: not found" }),
+  });
+  assert.equal(r.narrow, false);
+  assert.match(r.reason, /could not read/);
+});
+
+/* ------------------------------------------------- an upgrade that takes */
+
+test("the proxy is restarted, not merely enabled", async () => {
+  // `enable --now` starts a stopped unit and does nothing to a running one, so
+  // an upgrade would leave the old process serving the old root from the old
+  // namespace — and report success.
+  const home = await homeWithProxy();
+  const calls = [];
+  await ensureProxyService({
+    home,
+    user: "x",
+    nodeDir: "/opt/node/bin",
+    listening: async () => true,
+    paths: () => ({ path: join(home, "moshpit-proxy.service"), systemctl: ["systemctl"], scope: "system" }),
+    narrowRoot: async () => ({ narrow: false, reason: "current" }),
+    exec: async (cmd, args) => { calls.push(args.join(" ")); return { ok: true, error: "" }; },
+  }).catch(() => {});
+
+  assert.ok(calls.some((c) => c.startsWith("restart")), `expected a restart, got ${JSON.stringify(calls)}`);
+});
+
+test("a narrow root is reminted as part of bringing the proxy up", async () => {
+  const home = await homeWithProxy();
+  let removed = false;
+  const result = await ensureProxyService({
+    home,
+    user: "x",
+    nodeDir: "/opt/node/bin",
+    listening: async () => true,
+    paths: () => ({ path: join(home, "moshpit-proxy.service"), systemctl: ["systemctl"], scope: "system" }),
+    narrowRoot: async () => { removed = true; return { narrow: true, reason: "constrained to a list of endings" }; },
+    exec: async () => ({ ok: true, error: "" }),
+  }).catch(() => null);
+
+  assert.ok(removed, "the root's shape is checked before the proxy is started");
+  assert.ok(
+    (result?.steps || []).some((s) => /reminted the local root/.test(s.step)),
+    "and the remint is reported, because it invalidates the trust the machine already has",
+  );
 });
