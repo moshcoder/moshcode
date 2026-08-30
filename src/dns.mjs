@@ -1664,6 +1664,37 @@ export function dnsmasqCatchAllConf({ host = DEFAULT_HOST, port = DEFAULT_PORT }
  * Repeatable and comma-separated both work. `address#port` matches resolv.conf
  * and dnsmasq rather than inventing a third spelling.
  */
+/**
+ * Which name to detect the pinned-TLS proxy with.
+ *
+ * The probe is a TLS handshake with the name in SNI, and the proxy can only
+ * present a certificate for a name that really exists — it fetches the
+ * registry pin to mint one. A synthesised `a.<ending>` is never real, so the
+ * handshake yields no certificate and a proxy that is installed, trusted and
+ * listening reports as absent. Measured against a running proxy:
+ *
+ *     a.moshpit  -> no certificate
+ *     a.2600     -> no certificate
+ *     alt.2600   -> issuer=CN=Moshpit Local CA
+ *
+ * No registry endpoint lists names, so a real one cannot be discovered here.
+ * `--proxy-probe <name>` supplies it. A bare flag is a typo rather than a
+ * request to probe with nothing, and is reported instead of silently falling
+ * back to the synthetic name that cannot work.
+ */
+export function proxyProbeFromArgs(args = [], claimed = []) {
+  const at = args.indexOf("--proxy-probe");
+  if (at >= 0) {
+    const value = args[at + 1];
+    if (value === undefined || value.startsWith("--")) return { name: null, invalid: true };
+    return { name: value, invalid: false };
+  }
+  // The historical default. Kept because it is right on a machine whose proxy
+  // serves every ending, and because removing it would turn "detected nothing"
+  // into "refused to look".
+  return { name: claimed[0] ? `a.${claimed[0]}` : null, invalid: false };
+}
+
 export function upstreamsFromArgs(args = []) {
   const servers = [];
   const invalid = [];
@@ -2377,6 +2408,8 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
                                  running across reboots; --write installs and
                                  starts it, --system for a system unit rather
                                  than this user's, --remove takes it away
+                                 --proxy-probe NAME  a real Moshpit name to detect
+                                 the pinned-TLS proxy with (it cannot serve a made-up one)
 
   moshcode dns filter            block ads, trackers, malware and phishing at the
                                  resolver — \`moshcode dns filter help\` for the verbs
@@ -2792,10 +2825,31 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // that resolves but cannot complete a TLS handshake reads as broken to the
     // person who typed the URL. Asked now, while this command can ask; the unit
     // it writes runs at boot and has no way to find out later.
+    // The probe is a TLS handshake with the name in SNI, and the proxy can only
+    // present a certificate for a name that actually exists — it fetches the
+    // registry pin to make one. A synthesised `a.<ending>` is never a real name,
+    // so the handshake yields no certificate and a proxy that is installed,
+    // trusted and listening reports as absent. Measured on a running proxy:
+    //
+    //   a.moshpit  -> no certificate
+    //   a.2600     -> no certificate
+    //   alt.2600   -> issuer=CN=Moshpit Local CA
+    //
+    // There is no registry endpoint that lists names, so the tool cannot find a
+    // real one by itself. `--proxy-probe <name>` supplies one. The issuer check
+    // still runs against it: naming a probe says which name to ask about, never
+    // that a proxy is there.
     let proxy = null;
     if (!rest.includes("--no-proxy")) {
-      const claimed = await fetchTlds({ registryBase }).catch(() => []);
-      const probeName = claimed[0] ? `a.${claimed[0]}` : null;
+      const explicit = proxyProbeFromArgs(rest);
+      if (explicit.invalid) {
+        out("!  --proxy-probe needs a Moshpit name, e.g. --proxy-probe blue.eggs");
+        out("");
+      }
+      // The registry is only consulted when no name was given: fetching 18000
+      // endings to build a probe that cannot work is pure cost.
+      const claimed = explicit.name ? [] : await fetchTlds({ registryBase }).catch(() => []);
+      const probeName = proxyProbeFromArgs(rest, claimed).name;
       if (probeName) {
         const local = await findLocalProxyImpl(probeName).catch(() => ({ found: false }));
         if (local.found) proxy = local.address.v4 || local.address.v6;
@@ -2810,9 +2864,14 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     } else if (!rest.includes("--no-proxy")) {
       out("!  no pinned-TLS proxy found on this machine");
       out("   names will answer their origin, and a stock client cannot verify those —");
-      out("   https:// will fail even though the name resolves. Install it with:");
+      out("   https:// will fail even though the name resolves.");
+      out("");
+      out("   If it is not installed:");
       out("     curl -fsSL https://raw.githubusercontent.com/profullstack/moshpit-proxy/main/install.sh | sh");
-      out("   then re-run this command so the unit points names at it.");
+      out("");
+      out("   If it IS installed and listening, the probe used a name that does not");
+      out("   exist — the proxy can only serve a certificate for a real one. Name one:");
+      out("     moshcode dns service --proxy-probe <a.real.name> --write");
       out("");
     }
 

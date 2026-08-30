@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "../src/dns-service.mjs";
+import { proxyProbeFromArgs } from "../src/dns.mjs";
 
 const scratch = () => mkdtemp(join(tmpdir(), "moshcode-service-"));
 const unit = (opts = {}) => serviceUnit({ entry: "/opt/moshcode/bin/moshcode.mjs", port: 5354, execPath: "/opt/node/bin/node", ...opts });
@@ -127,4 +128,41 @@ test("no proxy means no flag, not an empty one", () => {
 test("upstreams and proxy coexist without eating each other's values", () => {
   const text = unit({ upstreams: ["1.1.1.1", "1.0.0.1"], proxy: "127.0.0.1" });
   assert.match(text, /--upstream 1\.1\.1\.1,1\.0\.0\.1 --proxy 127\.0\.0\.1$/m);
+});
+
+/* ----------------------------------------- which name detects the proxy */
+
+// The probe is a TLS handshake with the name in SNI, and the proxy can only
+// present a certificate for a name that exists — it fetches the registry pin to
+// mint one. Measured against a proxy that was installed, trusted and listening
+// on 127.0.0.1:443:
+//
+//     a.moshpit  -> no certificate
+//     a.2600     -> no certificate
+//     alt.2600   -> issuer=CN=Moshpit Local CA
+//
+// So the synthesised `a.<ending>` default reports "no proxy found" on a machine
+// where the proxy is working perfectly, and every https:// URL then fails with
+// a self-signed certificate that nothing explains.
+
+test("a named probe is used exactly as given", () => {
+  assert.deepEqual(proxyProbeFromArgs(["--proxy-probe", "alt.2600"]), { name: "alt.2600", invalid: false });
+});
+
+test("a named probe does not need the registry", () => {
+  // The name wins over the ending list, so the 18000-ending fetch is skipped.
+  assert.equal(proxyProbeFromArgs(["--proxy-probe", "blue.eggs"], ["aaa", "abb"]).name, "blue.eggs");
+});
+
+test("a bare --proxy-probe is a typo, not a request to probe with nothing", () => {
+  assert.deepEqual(proxyProbeFromArgs(["--proxy-probe"]), { name: null, invalid: true });
+  assert.deepEqual(proxyProbeFromArgs(["--proxy-probe", "--write"]), { name: null, invalid: true });
+});
+
+test("without the flag it falls back to the historical synthetic name", () => {
+  // Right on a machine whose proxy serves every ending; wrong on one that only
+  // serves real names — which is why the flag exists rather than replacing it.
+  assert.equal(proxyProbeFromArgs([], ["eggs", "hacker"]).name, "a.eggs");
+  assert.equal(proxyProbeFromArgs([]).name, null);
+  assert.equal(proxyProbeFromArgs([], []).name, null);
 });
