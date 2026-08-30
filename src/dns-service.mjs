@@ -67,6 +67,7 @@ export function serviceUnit({
   port,
   registryBase = null,
   upstreams = [],
+  proxy = null,
   user = process.env.USER || process.env.LOGNAME,
 } = {}) {
   if (!entry) throw new Error("serviceUnit needs the entry script to run");
@@ -80,6 +81,13 @@ export function serviceUnit({
   // registry. Recorded here, while a working resolver is still around to be
   // asked, rather than rediscovered at boot when it cannot be.
   if (upstreams.length) args.push("--upstream", upstreams.join(","));
+  // Without this the supervised bridge answers every name with its origin, and
+  // the origin serves a certificate no CA signed — so `https://` fails on a
+  // machine where the pinned-TLS proxy is installed, trusted and running.
+  // `dns enable` has always probed for the proxy and passed it through;
+  // `dns service` did not, which made a service-managed bridge the one way to
+  // run Moshpit where HTTPS could never work.
+  if (proxy) args.push("--proxy", proxy);
   const exec = [execPath, ...args].map((part) => (/\s/.test(part) ? JSON.stringify(part) : part)).join(" ");
 
   const lines = [
