@@ -362,14 +362,32 @@ export async function readPid(path = pidfilePath()) {
   }
 }
 
-/** Is that pid actually ours and alive? A stale pidfile must not read as running. */
-export function isAlive(pid) {
+/**
+ * Is that pid alive? A stale pidfile must not read as running.
+ *
+ * "Alive" and "ours" are different questions, and answering the first with the
+ * second cost a machine its resolver. `process.kill(pid, 0)` fails two ways:
+ * ESRCH for a pid that is gone, and EPERM for one that is there but belongs to
+ * another user. Catching both as "dead" was wrong in precisely the case this
+ * tool manufactures — `dns enable` escalates, so the bridge is root's while
+ * every later `status` asking after it is not.
+ *
+ * A live root-owned bridge therefore read as a stale pidfile for the rest of
+ * its life: `stop` deleted the file and reported it cleared while the daemon
+ * kept running, and `start` saw nothing there and put a second bridge on
+ * 127.0.0.1 underneath the working one on 0.0.0.0 — the shadowing outage
+ * `bridgePresence` describes, arrived at by believing our own liveness check.
+ *
+ * So only ESRCH is dead. EPERM is alive and someone else's, which the caller
+ * needs told rather than papered over.
+ */
+export function isAlive(pid, kill = (target) => process.kill(target, 0)) {
   if (!pid) return false;
   try {
-    process.kill(pid, 0);
+    kill(pid);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error?.code === "EPERM";
   }
 }
 

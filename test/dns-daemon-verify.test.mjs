@@ -305,3 +305,45 @@ test("an already-running daemon still short-circuits without spawning", async ()
   });
   assert.deepEqual(result, { started: false, pid: process.pid, alreadyRunning: true });
 });
+
+/* ----------------------------------------------- alive, but not ours */
+
+// `process.kill(pid, 0)` has two failure modes and they mean opposite things.
+// Collapsing them is not academic: `dns enable` escalates, so the bridge it
+// starts is root's and every unprivileged `status` afterwards got EPERM,
+// called it dead, and advised a fix that starts a second bridge on top of the
+// live one. Observed as `moshcode dns status` reporting "stale pidfile for
+// 641911" on a Kubuntu desktop whose bridge was running the whole time.
+
+const errno = (code) => Object.assign(new Error(code), { code });
+
+test("EPERM means alive and someone else's, not dead", () => {
+  const denied = () => {
+    throw errno("EPERM");
+  };
+  assert.equal(isAlive(4242, denied), true, "a pid we may not signal is still a pid that exists");
+});
+
+test("ESRCH is the only failure that means dead", () => {
+  const gone = () => {
+    throw errno("ESRCH");
+  };
+  assert.equal(isAlive(4242, gone), false);
+});
+
+test("a real process this test cannot signal reads as alive", () => {
+  // pid 1 always exists and, unprivileged, cannot be signalled — the exact
+  // shape of a root-owned bridge. Running as root it simply succeeds, so this
+  // holds either way rather than depending on who runs the suite.
+  assert.equal(isAlive(1), true);
+});
+
+test("a pidfile naming another user's live process is running, not stale", async () => {
+  const dir = await scratch();
+  const path = join(dir, "moshpit-dns.pid");
+  await writeFile(path, "1\n");
+
+  // The whole bug in one assertion: `stale: true` here is what sent people to
+  // `dns enable` and took their resolver down.
+  assert.deepEqual(await daemonStatus(path), { running: true, pid: 1, stale: false });
+});
