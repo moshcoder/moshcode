@@ -2278,6 +2278,7 @@ import { applyTrust, applyUntrust, createAutoTrust, trustName, verifyStockTls } 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "./dns-service.mjs";
 import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
   probeResolver, requiredPort, startDaemon, stopDaemon,
@@ -2310,6 +2311,10 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
                                  lands on the Pit; --parking-port N, --no-parking-http
                                  --no-filter runs it with blocklists off
   moshcode dns install [--write] print the resolver config without applying it
+  moshcode dns service           print a systemd unit that keeps the bridge
+                                 running across reboots; --write installs and
+                                 starts it, --system for a system unit rather
+                                 than this user's, --remove takes it away
 
   moshcode dns filter            block ads, trackers, malware and phishing at the
                                  resolver — \`moshcode dns filter help\` for the verbs
@@ -2681,6 +2686,53 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     out(conf);
     out("# ...or, for dnsmasq:");
     out(dnsmasqConf(tlds, { port }));
+    return 0;
+  }
+
+  // The half of `enable` that a reboot takes away. Kept a separate verb rather
+  // than folded into `enable`, because installing a service is exactly the kind
+  // of thing that must stay something a person asked for.
+  if (sub === "service") {
+    const system = rest.includes("--system");
+    const { path: unitPath, systemctl, scope } = servicePaths({ system });
+
+    const report = (steps) => {
+      for (const s of steps) out(`${s.ok ? "ok" : "!!"} ${s.step}${s.error ? ` — ${s.error}` : ""}`);
+    };
+
+    if (rest.includes("--remove")) {
+      report((await removeService({ system })).steps);
+      out("");
+      out("the routing is untouched — `moshcode dns disable` is what removes that");
+      return 0;
+    }
+
+    const unit = serviceUnit({ system, entry: cliEntry(), port, registryBase });
+
+    if (rest.includes("--write")) {
+      const result = await installService(unit, { system });
+      report(result.steps);
+      if (!result.ok) {
+        out("");
+        out(system
+          ? `(writing ${unitPath} needs root — pipe it instead: moshcode dns service --system | sudo tee ${unitPath})`
+          : "(the user scope needs no privileges — this failure is something else)");
+        return 1;
+      }
+      out("");
+      out(`the bridge now starts with the machine (${scope} scope)`);
+      if (!system) {
+        const who = process.env.USER || process.env.LOGNAME || "$USER";
+        out(`  a user service stops at logout — to survive one: loginctl enable-linger ${who}`);
+      }
+      out("  check it: moshcode dns status");
+      return 0;
+    }
+
+    out(`# ${unitPath}`);
+    out(unit);
+    out(`# install it with: moshcode dns service --write${system ? " --system" : ""}`);
+    out(`# then: ${systemctl.join(" ")} status ${UNIT_NAME}`);
     return 0;
   }
 

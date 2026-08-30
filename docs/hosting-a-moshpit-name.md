@@ -98,20 +98,60 @@ anyone scanning the box the app with the name stripped off the front.
 On every machine that should see the name:
 
 ```sh
-sudo moshcode dns enable
+moshcode dns enable
 ```
+
+Do not prefix it with `sudo`. The command escalates the one step that needs
+root and re-runs only that; `sudo moshcode` takes every path from the wrong
+`$HOME`.
 
 That does two things: writes a `systemd-resolved` drop-in routing Moshpit
 endings at the bridge, and starts the bridge. The drop-in is a file and survives
 a reboot. **The bridge process does not** — so after a restart the routing
 points at a port with nothing behind it, and every Moshpit name stops resolving
-with no obvious cause. The bundled `deploy/moshcode-dns.service` is the missing
-half:
+with no obvious cause. This is the whole reason Moshpit DNS holds on servers,
+which got a unit installed by hand, and quietly falls over on desktops, which
+never did.
+
+`dns service` is the missing half:
 
 ```sh
-sudo cp deploy/moshcode-dns.service /etc/systemd/system/
+moshcode dns service            # print the unit, change nothing
+moshcode dns service --write    # install and start it, no root needed
+```
+
+That installs a **user** service, which is the right scope for a per-user
+install: it runs as you, so `$HOME` and the mise/nvm shims are reachable, and
+the pidfile lands where an unprivileged `dns status` looks for it. A user
+service stops at logout unless you allow it to linger:
+
+```sh
+loginctl enable-linger "$USER"
+```
+
+For a box with moshcode installed system-wide, a system unit is available and
+does need root to place:
+
+```sh
+moshcode dns service --system | sudo tee /etc/systemd/system/moshcode-dns.service
 sudo systemctl enable --now moshcode-dns
 ```
+
+Either way the unit is **generated from the running process**, so `ExecStart`
+names the interpreter that is demonstrably working and the install that is
+really there. Do not hand-write one or copy another machine's: moshcode lives
+under `$HOME` and its wrapper execs whatever `node` is first on `PATH`, and
+systemd has neither on its own `PATH`. A unit that guesses fails at `203/EXEC`
+with nothing useful in the journal. Regenerate it after moving or reinstalling
+either program.
+
+Removing it again:
+
+```sh
+moshcode dns service --remove
+```
+
+That takes away the service only. The routing is `dns disable`.
 
 ## Verifying, one layer at a time
 

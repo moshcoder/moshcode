@@ -390,7 +390,7 @@ export const CORE_CLI_COMMANDS = [
       ["--no-proxy", "with enable: answer origins rather than the local proxy", ""],
     ],
     examples: [
-      ["sudo moshcode dns enable", "route Moshpit endings here"],
+      ["moshcode dns enable", "route Moshpit endings here (it escalates itself)"],
       ["moshcode dns resolve blue.eggs", "what a machine actually gets"],
     ],
     seeAlso: ["doh", "site"],
@@ -1009,7 +1009,16 @@ export const DNS_VERBS = [
   { name: "refresh", description: "re-apply routing for endings claimed since" },
   { name: "start", description: "run the bridge in the foreground" },
   { name: "install", description: "print the resolver config without applying it" },
-  { name: "service", description: "install or remove the background service" },
+  {
+    name: "service",
+    description: "keep the bridge running across reboots — the half `enable` does not survive",
+    synopsis: [
+      ["moshcode dns service", "print the unit for this install, change nothing"],
+      ["moshcode dns service --write", "install and start it as this user; needs no root"],
+      ["moshcode dns service --system", "a system unit instead — place it with sudo tee"],
+      ["moshcode dns service --remove", "stop it and take the unit away"],
+    ],
+  },
   { name: "tlds", description: "list the endings claimed in the Pit" },
   { name: "resolve", description: "what a name resolves to, and why" },
   { name: "trust", description: "trust one name's certificate, after checking it against the registry pin" },

@@ -7,8 +7,22 @@
 # and every Moshpit name stops resolving with no obvious cause. This unit is
 # the missing half.
 #
-#   sudo cp deploy/moshcode-dns.service /etc/systemd/system/
-#   sudo systemctl enable --now moshcode-dns
+# GENERATE IT, DO NOT COPY THIS ONE:
+#
+#   moshcode dns service --write     # this user's own service, needs no root
+#   moshcode dns service --system | sudo tee /etc/systemd/system/moshcode-dns.service
+#
+# `dns service` writes ExecStart from the running process, so it names the node
+# that demonstrably works and the install that is actually on the box. A static
+# file cannot: moshcode installs under $HOME, and its wrapper execs whatever
+# `node` is first on PATH — which on any mise, nvm or asdf machine is another
+# shim under $HOME. systemd has neither on its PATH and, with ProtectHome or
+# DynamicUser set, could not read them if it did. A unit that gets this wrong
+# fails at 203/EXEC with nothing useful in the journal.
+#
+# What is left below therefore assumes the one case it can safely assume: both
+# moshcode and node installed system-wide, service running as root. Check
+# `systemctl status moshcode-dns` before believing it.
 #
 # Install this on machines that need to REACH Moshpit names. A box that only
 # serves one does not need it — Caddy answers whatever Host header arrives and
@@ -22,18 +36,15 @@ Before=systemd-resolved.service
 
 [Service]
 Type=simple
-# Port 5354 is unprivileged, so this does not need root. The trade-off is that
-# the parking responder cannot take port 80 and falls back to the public
-# parking address — which only affects names that point nowhere yet.
-ExecStart=/usr/bin/env moshcode dns start --port 5354
+# Port 5354 is unprivileged, so this does not need root for the DNS side. The
+# trade-off is that the parking responder cannot take port 80 and falls back to
+# the public parking address — which only affects names that point nowhere yet.
+ExecStart=/usr/local/bin/moshcode dns start --port 5354
 Restart=always
 RestartSec=2
 
-DynamicUser=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
 
 [Install]
 WantedBy=multi-user.target
