@@ -66,12 +66,20 @@ export function serviceUnit({
   entry,
   port,
   registryBase = null,
+  upstreams = [],
   user = process.env.USER || process.env.LOGNAME,
 } = {}) {
   if (!entry) throw new Error("serviceUnit needs the entry script to run");
 
   const args = [entry, "dns", "start", "--port", String(port)];
   if (registryBase) args.push("--registry", registryBase);
+  // The reason this unit exists at all is that the bridge now starts at boot —
+  // and at boot the resolved drop-in is already in place, so the only
+  // nameserver discovery can find is this bridge. It refuses loopback, comes up
+  // with nowhere to forward, and NXDOMAINs every clearnet name including the
+  // registry. Recorded here, while a working resolver is still around to be
+  // asked, rather than rediscovered at boot when it cannot be.
+  if (upstreams.length) args.push("--upstream", upstreams.join(","));
   const exec = [execPath, ...args].map((part) => (/\s/.test(part) ? JSON.stringify(part) : part)).join(" ");
 
   const lines = [
