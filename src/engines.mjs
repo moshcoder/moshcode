@@ -36,6 +36,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { setActiveChildInput } from "./mirror.mjs";
 import { captureSpec } from "./pty.mjs";
 
 export const ENGINES = {
@@ -509,11 +510,27 @@ export function openPassthrough(target, args = [], { onOutput } = {}) {
     // the child the tty's own file descriptors, so none of its bytes ever pass
     // through this process. See src/pty.mjs for why this is script(1) and not
     // a pipe or node-pty.
-    const launch = captureSpec(spec, onOutput);
-    const cleanup = () => launch.stop();
+    //
+    // `input` asks for the same pty to be one we can type into. An engine is
+    // the whole reason it exists: it puts up menus and trust prompts that only
+    // move for a keypress, and until we owned its stdin a session page could
+    // watch one of those appear and had no way to answer it.
+    const launch = captureSpec(spec, onOutput, { input: true });
+    // Route web keys here for as long as this child is up, and only when there
+    // is really somewhere for them to go — an unmirrored pit, or a box with no
+    // `script(1)`, still runs the plain inherited launch, and saying otherwise
+    // would have pressKey silently swallow keys the pit could have handled.
+    // Registered before the spawn on purpose: the fifo buffers, so a key that
+    // arrives while the engine is still starting is delivered, not dropped.
+    const typeable = launch.stdio !== "inherit";
+    if (typeable) setActiveChildInput(launch.write);
+    const cleanup = () => {
+      if (typeable) setActiveChildInput(null);
+      launch.stop();
+    };
 
     let child;
-    try { child = spawn(launch.cmd, launch.args, { stdio: "inherit", env }); }
+    try { child = spawn(launch.cmd, launch.args, { stdio: launch.stdio, env }); }
     catch (e) { cleanup(); resolve({ ok: false, error: e }); return; }
     child.on("error", (e) => { cleanup(); resolve({ ok: false, error: e }); });
     child.on("exit", (code, signal) => { cleanup(); resolve({ ok: true, code, signal }); });
