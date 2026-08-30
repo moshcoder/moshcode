@@ -250,10 +250,14 @@ export function proxyServiceUnit({
     `Environment=MOSHPIT_PROXY_PORT=${port}`,
     `Environment=MOSHPIT_PROXY_DIR=${dir}`,
   ];
-  // Only the endings it is asked to serve. Left unset it defaults to `.moshpit`
-  // alone, which is why a proxy can be running, healthy, and unable to present
-  // a certificate for the name someone is actually trying to reach.
-  if (tlds.length) lines.push(`Environment=MOSHPIT_PROXY_TLDS=${tlds.join(",")}`);
+  // Deliberately not written any more.
+  //
+  // It used to be set from the endings the registry had sold — 18224 of them, a
+  // ~150 KB environment variable in a unit file, for a list stale the next time
+  // one is sold. moshpit-proxy now reads an unset value as "every Moshpit
+  // ending", defining the namespace by excluding the real internet rather than
+  // by enumerating what Moshpit owns, so there is nothing left to pass. Setting
+  // it there still narrows, which is a deployment's choice and not this unit's.
 
   lines.push(
     `ExecStart=${wrapper}`,
