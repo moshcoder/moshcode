@@ -1007,7 +1007,7 @@ export const DNS_VERBS = [
   { name: "disable", description: "undo enable" },
   { name: "status", description: "what is running, what is routed, does it work" },
   { name: "refresh", description: "re-apply routing for endings claimed since" },
-  { name: "start", description: "run the bridge in the foreground" },
+  { name: "start", description: "run the bridge in the foreground (--upstream IP to say where to forward)" },
   { name: "install", description: "print the resolver config without applying it" },
   {
     name: "service",
@@ -1017,6 +1017,7 @@ export const DNS_VERBS = [
       ["moshcode dns service --write", "install and start it as this user; needs no root"],
       ["moshcode dns service --system", "a system unit instead — place it with sudo tee"],
       ["moshcode dns service --remove", "stop it and take the unit away"],
+      ["moshcode dns service --upstream IP", "where to forward, when discovery cannot see past the bridge"],
     ],
   },
   { name: "tlds", description: "list the endings claimed in the Pit" },

@@ -145,6 +145,32 @@ systemd has neither on its own `PATH`. A unit that guesses fails at `203/EXEC`
 with nothing useful in the journal. Regenerate it after moving or reinstalling
 either program.
 
+### If names stop resolving after a reboot
+
+A bridge that starts at boot starts into a machine whose resolver is *already*
+pointed at it, because the drop-in is a file and survives. Upstream discovery
+reads resolv.conf and drops loopback, so on that machine the only nameserver it
+can see is the bridge, it correctly refuses to use it, and the daemon comes up
+with nowhere to forward. Every clearnet lookup then answers NXDOMAIN — including
+`pit.moshcode.sh`, so it never learns which endings are Moshpit and answers for
+nothing either. The box has no DNS and cannot look up why.
+
+`dns service` records the upstreams it finds *now*, while a working resolver is
+still there to be asked, and writes them into the unit. If it warns that it
+found none, say where to forward:
+
+```sh
+moshcode dns service --upstream 1.1.1.1 --write
+```
+
+The journal tells you which case you are in. A healthy bridge logs
+`forwarding non-Moshpit lookups to …` and `answering for N endings` on the way
+up:
+
+```sh
+journalctl --user -u moshcode-dns -n 20
+```
+
 Removing it again:
 
 ```sh

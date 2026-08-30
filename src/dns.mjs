@@ -1629,6 +1629,48 @@ export function dnsmasqCatchAllConf({ host = DEFAULT_HOST, port = DEFAULT_PORT }
  * wrote 127.0.0.53 into resolv.conf is the thing sending us the query, and
  * forwarding back to it is a loop that ends in a timeout rather than an answer.
  */
+/**
+ * Upstreams named on the command line, which override discovery entirely.
+ *
+ * Discovery reads the machine's resolv.conf and drops loopback, which is right
+ * until the machine's resolver is this bridge. Then the only nameserver on file
+ * IS the bridge, discovery correctly refuses to return it, and the daemon comes
+ * up with nowhere to forward — every clearnet name NXDOMAIN, including the
+ * registry it needs in order to know which endings are Moshpit at all. The box
+ * loses DNS entirely and the bridge cannot bootstrap out of it, because the
+ * lookup that would fix it goes through the bridge.
+ *
+ * `dns enable` never hit this: it runs before the routing exists. A supervised
+ * bridge starting at boot hits it every time, because the drop-in is a file and
+ * is already in place. So the upstreams have to be sayable rather than only
+ * discoverable, and `dns service` bakes the ones it found into the unit.
+ *
+ * Repeatable and comma-separated both work. `address#port` matches resolv.conf
+ * and dnsmasq rather than inventing a third spelling.
+ */
+export function upstreamsFromArgs(args = []) {
+  const servers = [];
+  const invalid = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] !== "--upstream") continue;
+    const value = args[i + 1];
+    // A bare trailing `--upstream`, or one followed by the next flag, is a
+    // typo rather than a request for no upstreams. Reported, not ignored.
+    if (value === undefined || value.startsWith("--")) {
+      invalid.push("(missing value)");
+      continue;
+    }
+    for (const part of value.split(",")) {
+      const server = part.trim();
+      if (!server) continue;
+      const [address] = server.split("#");
+      if (!isIP(address)) invalid.push(server);
+      else if (!servers.includes(server)) servers.push(server);
+    }
+  }
+  return { servers, invalid };
+}
+
 export function parseUpstreams(resolvConf) {
   const out = [];
   for (const line of String(resolvConf ?? "").split("\n")) {
@@ -2307,6 +2349,9 @@ const USAGE = `moshcode dns — resolve Moshpit names on this machine
                                  look a name up; --open opens a parked name in the Pit
                                  --json prints one stable document for scripts
   moshcode dns start [--port N]  run the resolver in the foreground
+                                 --upstream IP[,IP] where to forward clearnet
+                                 lookups; overrides resolv.conf discovery, which
+                                 finds nothing once this machine is routed here
                                  also serves parked names over HTTP so \`curl <name>\`
                                  lands on the Pit; --parking-port N, --no-parking-http
                                  --no-filter runs it with blocklists off
@@ -2514,7 +2559,12 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     if (!park) out("! parking host did not resolve — unpointed names will return NXDOMAIN");
     // Without these the bridge answers only for endings it is authoritative
     // for, which is correct for per-ending routing and fatal for catch-all.
-    const upstreams = await discoverUpstreams();
+    // Named upstreams win outright. Discovery is a fallback for the ordinary
+    // case, not a second opinion: someone who says where to forward has almost
+    // always said it because discovery got it wrong.
+    const named = upstreamsFromArgs(rest);
+    for (const bad of named.invalid) out(`! ignoring --upstream ${bad} — not an IP address`);
+    const upstreams = named.servers.length ? named.servers : await discoverUpstreams();
     // Swallowing this was the quietest way to turn the namespace off. An empty
     // ending set makes isOurs() say no to every name, so with upstreams present
     // the bridge forwards the whole of Moshpit to the clearnet, which denies it
@@ -2528,8 +2578,17 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       (err) => ({ error: err?.message || String(err) }),
     );
     const tldSet = new Set(tlds.found || []);
-    if (upstreams.length) out(`forwarding non-Moshpit lookups to ${upstreams.join(", ")}`);
-    else out("! no upstreams found in /etc/resolv.conf — this bridge can only answer Moshpit names");
+    if (upstreams.length) {
+      out(`forwarding non-Moshpit lookups to ${upstreams.join(", ")}${named.servers.length ? " (--upstream)" : ""}`);
+    } else {
+      out("! no upstreams found in /etc/resolv.conf — this bridge can only answer Moshpit names");
+      // The specific way this happens is worth naming, because the symptom
+      // (every name NXDOMAIN) looks nothing like the cause and the machine
+      // cannot look the cause up.
+      out("  if this machine's resolver is already routed here, discovery has only");
+      out("  the bridge to find and correctly refuses it — say where to forward:");
+      out(`  moshcode dns start --port ${port} --upstream 1.1.1.1`);
+    }
     if (tldSet.size) out(`answering for ${tldSet.size} endings`);
     else {
       out(`! could not read the ending list from ${registryBase}${tlds.error ? ` — ${tlds.error}` : ""}`);
@@ -2707,7 +2766,22 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       return 0;
     }
 
-    const unit = serviceUnit({ system, entry: cliEntry(), port, registryBase });
+    // Asked now, not at boot. This command runs while the machine still has a
+    // resolver that answers; the service it writes will not.
+    const upstreams = upstreamsFromArgs(rest).servers.length
+      ? upstreamsFromArgs(rest).servers
+      : await discoverUpstreams();
+    const unit = serviceUnit({ system, entry: cliEntry(), port, registryBase, upstreams });
+
+    if (!upstreams.length) {
+      out("!  no upstream nameservers found, and none given");
+      out("   a bridge with nowhere to forward answers NXDOMAIN for every clearnet");
+      out("   name — including the registry it needs to know which endings exist.");
+      out("   If this machine is already routed here, discovery can only see the");
+      out("   bridge and correctly refuses it. Say where to forward:");
+      out(`     moshcode dns service --upstream 1.1.1.1${rest.includes("--write") ? " --write" : ""}`);
+      out("");
+    }
 
     if (rest.includes("--write")) {
       const result = await installService(unit, { system });
