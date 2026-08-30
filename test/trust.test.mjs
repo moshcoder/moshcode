@@ -161,12 +161,49 @@ test("constraints that are not critical do not count", () => {
   assert.match(verdict.why, /critical/);
 });
 
-test("a root that does not permit the endings we resolve is refused", (t) => {
+test("a root that permits none of the endings we resolve is refused, and names them", (t) => {
   const text = needRoot(t, MOSHPIT_ONLY);
   if (!text) return;
-  const verdict = requireNameConstraints(text, { tlds: ["hacker", "eggs"] });
+  // The root is for `.hacker` and `.rank`. Asked about a namespace it shares
+  // nothing with, it is the wrong root, not a partial one.
+  const verdict = requireNameConstraints(text, { tlds: ["eggs", "2600"] });
   assert.equal(verdict.ok, false);
   assert.match(verdict.why, /eggs/);
+  assert.match(verdict.why, /2600/);
+});
+
+test("a root that covers some of what we resolve goes in, and says how much", (t) => {
+  const text = needRoot(t, MOSHPIT_ONLY);
+  if (!text) return;
+  // This is the case a real machine is always in. The root is minted by
+  // moshpit-proxy for the endings it serves — a handful — while the registry
+  // has sold 18224. Refusing here meant refusing always, and the refusal
+  // printed all 18224 as evidence.
+  const verdict = requireNameConstraints(text, { tlds: ["hacker", "rank", "eggs"] });
+  assert.equal(verdict.ok, true, "a root that covers `.hacker` is worth installing for `.hacker`");
+  assert.deepEqual(verdict.missing, ["eggs"]);
+  assert.match(verdict.why, /covers 2 of 3/);
+});
+
+test("a root reaching past Moshpit is still refused", (t) => {
+  // The gate that actually matters, and the one this change must not weaken:
+  // `.rank` is permitted by the root but is not an ending being resolved here,
+  // so the root can vouch for names outside the namespace it is trusted for.
+  const text = needRoot(t, MOSHPIT_ONLY);
+  if (!text) return;
+  const verdict = requireNameConstraints(text, { tlds: ["hacker"] });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.why, /reaches past Moshpit/);
+  assert.match(verdict.why, /rank/);
+});
+
+test("a refusal names a few endings, never thousands", () => {
+  // 18224 endings turn any diagnostic into several screens, which is how the
+  // line explaining the problem stops being read.
+  const many = Array.from({ length: 500 }, (_, i) => `e${i}`);
+  const verdict = requireNameConstraints("", { tlds: many });
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.why.length < 400, `a refusal must stay readable, got ${verdict.why.length} chars`);
 });
 
 test("nothing usable from openssl is a refusal, not a pass", () => {

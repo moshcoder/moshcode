@@ -33,6 +33,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { operatorHome } from "./trust.mjs";
 
 export const UNIT_NAME = "moshcode-dns.service";
 
@@ -217,7 +218,7 @@ export function proxyServicePaths() {
 export function proxyServiceUnit({
   wrapper,
   nodeDir,
-  home = homedir(),
+  home = operatorHome(),
   user = process.env.SUDO_USER || process.env.USER || process.env.LOGNAME,
   port = 443,
   tlds = [],
@@ -273,7 +274,7 @@ export function proxyServiceUnit({
 }
 
 /** Where moshpit-proxy's installer puts its wrapper, if it ran. */
-export function proxyWrapperPath({ home = homedir(), exists = existsSync } = {}) {
+export function proxyWrapperPath({ home = operatorHome(), exists = existsSync } = {}) {
   const candidate = join(home, ".local/bin/moshpit-proxy");
   return exists(candidate) ? candidate : null;
 }
@@ -293,7 +294,7 @@ export function proxyWrapperPath({ home = homedir(), exists = existsSync } = {})
  * answer, so the wait is generous.
  */
 export async function ensureProxyService({
-  home = homedir(),
+  home = operatorHome(),
   user = process.env.SUDO_USER || process.env.USER || process.env.LOGNAME,
   nodeDir = dirname(process.execPath),
   tlds = [],
