@@ -11,6 +11,8 @@
  * trademark problem, and neither is cheap to unwind after the fact. A static
  * list is a blunt instrument, but it is the one that works on day one.
  */
+import { isRealTld } from "./iana-tlds.mjs";
+
 export const RESERVED_TLDS = new Set([
   // trades on trust in money
   "bank", "banking", "paypal", "visa", "mastercard", "amex", "stripe", "coinbase",
@@ -65,6 +67,16 @@ export function normalizeTld(input) {
 /** Why a TLD cannot be registered, or null when it is fine. */
 export function tldRejection(tld) {
   if (RESERVED_TLDS.has(tld)) return "that name is reserved";
+  // Selling an ending that IANA already delegates does not create a name, it
+  // takes one away: every resolver running a Moshpit bridge stops forwarding
+  // that whole TLD and starts answering for it out of a namespace that has
+  // never heard of the real thing. `.sh` went for $2 and took `pit.moshcode.sh`
+  // — this registry's own hostname — off the air for every bridge, along with
+  // the rest of Saint Helena's ccTLD.
+  //
+  // The static RESERVED_TLDS list above tried to cover this with `com`, `net`
+  // and `org`. There are 1438 of them.
+  if (isRealTld(tld)) return `.${tld} is a real top-level domain — claiming it would stop Moshpit resolvers from reaching the rest of it`;
   if (tld.length < 2) return "a TLD needs at least 2 characters";
   return null;
 }

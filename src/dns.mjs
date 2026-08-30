@@ -1163,7 +1163,23 @@ export function forwardQuery(msg, upstream, { timeoutMs = 3000 } = {}) {
 export function isOurs(name, tldSet) {
   if (!(tldSet instanceof Set) || tldSet.size === 0) return false;
   const parsed = parseRegistryName(name);
-  return Boolean(parsed) && tldSet.has(parsed.tld);
+  if (!parsed) return false;
+  // A real top-level domain is never ours, whatever the registry says it sold.
+  //
+  // Answering for one does not add a name, it removes the internet: every
+  // lookup under that TLD stops being forwarded and starts being answered from
+  // a namespace that has never heard of it. `.sh` was claimed for $2 and took
+  // `pit.moshcode.sh` — the registry every bridge fetches its endings from —
+  // off the air for anyone running a bridge, which is a resolver that cannot
+  // resolve the thing it needs in order to resolve. It also blackholed the real
+  // Saint Helena ccTLD on those machines, quietly, with a parking IP.
+  //
+  // Checked here rather than trusted from the registry because this is the half
+  // that protects a person who is already running a bridge, today, against
+  // endings that were sold before anyone noticed. The registry refusing to sell
+  // new ones is the other half and it fixes nothing already on disk.
+  if (isRealTld(parsed.tld)) return false;
+  return tldSet.has(parsed.tld);
 }
 
 export function createServer(options = {}) {
@@ -2320,6 +2336,7 @@ import { applyTrust, applyUntrust, createAutoTrust, trustName, verifyStockTls } 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { isRealTld } from "./iana-tlds.mjs";
 import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "./dns-service.mjs";
 import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
