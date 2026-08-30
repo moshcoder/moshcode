@@ -25,7 +25,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "../src/dns-service.mjs";
-import { proxyProbeFromArgs } from "../src/dns.mjs";
+import { proxyProbeFromArgs, captureRestorePoint } from "../src/dns.mjs";
+import { proxyServiceUnit, proxyServicePaths, PROXY_UNIT_NAME } from "../src/dns-service.mjs";
 
 const scratch = () => mkdtemp(join(tmpdir(), "moshcode-service-"));
 const unit = (opts = {}) => serviceUnit({ entry: "/opt/moshcode/bin/moshcode.mjs", port: 5354, execPath: "/opt/node/bin/node", ...opts });
@@ -165,4 +166,80 @@ test("without the flag it falls back to the historical synthetic name", () => {
   assert.equal(proxyProbeFromArgs([], ["eggs", "hacker"]).name, "a.eggs");
   assert.equal(proxyProbeFromArgs([]).name, null);
   assert.equal(proxyProbeFromArgs([], []).name, null);
+});
+
+/* ------------------------------------------------ supervising the proxy */
+
+// moshpit-proxy ships no unit of its own, so on every machine that installed it
+// it sat there installed, trusted, and never started. That is indistinguishable
+// from absent — nothing on 443, no certificate, and `dns enable` correctly
+// reporting no proxy on a box that had one. Verified against dev's
+// hand-written unit, which reached the same shape independently.
+
+const px = (opts = {}) => proxyServiceUnit({
+  wrapper: "/home/x/.local/bin/moshpit-proxy",
+  nodeDir: "/opt/node/bin",
+  home: "/home/x",
+  user: "x",
+  ...opts,
+});
+
+test("the proxy unit runs the wrapper with a PATH that has the right node", () => {
+  const text = px();
+  assert.match(text, /^ExecStart=\/home\/x\/\.local\/bin\/moshpit-proxy$/m);
+  // The wrapper execs `node`, which systemd's PATH does not have on a mise,
+  // nvm or asdf box. Three separate bugs today were this exact thing.
+  assert.match(text, /^Environment=PATH=\/opt\/node\/bin:/m);
+});
+
+test("it binds 443 by capability rather than by running as root", () => {
+  const text = px();
+  assert.match(text, /^AmbientCapabilities=CAP_NET_BIND_SERVICE$/m);
+  assert.match(text, /^User=x$/m, "it drops to the operator, who owns the local root");
+  assert.match(text, /^Environment=MOSHPIT_PROXY_PORT=443$/m);
+});
+
+test("the proxy dir is the operator's, never root's", () => {
+  // A system unit would otherwise look in /root/.moshpit, where the local root
+  // that moshpit-proxy's installer generated is definitively not.
+  assert.match(px(), /^Environment=MOSHPIT_PROXY_DIR=\/home\/x\/\.moshpit$/m);
+});
+
+test("it serves the endings it is given, and says nothing when given none", () => {
+  assert.match(px({ tlds: ["moshpit", "eggs", "2600"] }), /^Environment=MOSHPIT_PROXY_TLDS=moshpit,eggs,2600$/m);
+  // Unset means the proxy's own default of `.moshpit` alone — which is why a
+  // healthy proxy can still fail to present a certificate for the name someone
+  // is actually trying to reach.
+  assert.doesNotMatch(px({ tlds: [] }), /MOSHPIT_PROXY_TLDS/);
+});
+
+test("a unit it cannot pin is refused rather than written half-formed", () => {
+  assert.throws(() => proxyServiceUnit({ nodeDir: "/opt/node/bin", user: "x" }), /wrapper/);
+  assert.throws(() => proxyServiceUnit({ wrapper: "/w", nodeDir: "/n", user: "" }), /account/);
+});
+
+test("the proxy is a system unit, because 443 is privileged", () => {
+  const { path, systemctl, scope } = proxyServicePaths();
+  assert.equal(path, `/etc/systemd/system/${PROXY_UNIT_NAME}`);
+  assert.deepEqual(systemctl, ["systemctl"]);
+  assert.equal(scope, "system");
+});
+
+/* ------------------------------------------------- recording them for undo */
+
+test("the restore point records the units, including that they were absent", async () => {
+  // `null` is the load-bearing value: it is what makes `disable` remove a unit
+  // this run created, and what stops it removing one that was already there.
+  const point = await captureRestorePoint({
+    plan: { steps: [] },
+    platform: "linux",
+    bridge: "127.0.0.1:5354",
+    dropins: async () => [],
+    read: async (path) => (path === "/etc/systemd/system/moshpit-proxy.service" ? "theirs, from before\n" : null),
+    extraPaths: ["/etc/systemd/system/moshpit-proxy.service", "/home/x/.config/systemd/user/moshcode-dns.service"],
+  });
+
+  const byPath = Object.fromEntries(point.files.map((f) => [f.path, f.content]));
+  assert.equal(byPath["/etc/systemd/system/moshpit-proxy.service"], "theirs, from before\n");
+  assert.equal(byPath["/home/x/.config/systemd/user/moshcode-dns.service"], null);
 });

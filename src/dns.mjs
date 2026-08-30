@@ -2261,11 +2261,20 @@ export async function captureRestorePoint({
   dropins = readDropins,
   read = defaultReadMaybe,
   now = () => new Date().toISOString(),
+  // Files this run creates that are not part of the resolver plan — the two
+  // service units, and the local root in the system trust store. Recorded the
+  // same way as everything else: prior content, or null for "was not here", so
+  // `disable` replays rather than guesses. A unit removed because it happened
+  // to exist is the failure this shape prevents.
+  extraPaths = [],
 } = {}) {
   const files = new Map();
   for (const file of await dropins({ dir }).catch(() => [])) {
     if (!dropinNameservers(file.content).length && !dropinDomains(file.content).length) continue;
     files.set(`${dir}/${file.name}`, file.content);
+  }
+  for (const path of extraPaths) {
+    if (path && !files.has(path)) files.set(path, await read(path));
   }
   for (const step of plan?.steps || []) {
     if (step.kind !== "write" && step.kind !== "remove") continue;
@@ -2368,7 +2377,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isRealTld } from "./iana-tlds.mjs";
-import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "./dns-service.mjs";
+import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME, ensureProxyService, removeProxyService, proxyServicePaths, proxyWrapperPath } from "./dns-service.mjs";
 import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
   probeResolver, requiredPort, startDaemon, stopDaemon,
@@ -2473,6 +2482,12 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     findLocalProxyImpl = findLocalProxy,
     autoTrustImpl = createAutoTrust,
     stopBridge = stopDaemon,
+    // The two proxy-service calls, injected for the same reason as every
+    // other system call here: a test must be able to exercise the branch
+    // without shelling out to systemctl or writing to /etc.
+    ensureProxy = ensureProxyService,
+    removeProxy = removeProxyService,
+    proxyWrapper = proxyWrapperPath,
     dropins = readDropins,
     manifestFile = manifestPath(),
     readManifest = async (path) => parseManifest(await defaultReadMaybe(path)),
@@ -3181,6 +3196,30 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
 
       const stopped = await stopBridge();
       out(stopped.stopped ? "  ok   bridge stopped" : `  ok   bridge was not running${stopped.reason ? ` (${stopped.reason})` : ""}`);
+
+      // The proxy service `enable` installed. Taken away here, because a
+      // supervised proxy left holding 443 after Moshpit is turned off is a
+      // service the operator never asked to keep and would not think to look
+      // for. Safe from an escalated run: it is a system unit, so root is
+      // exactly the right context to stop it in.
+      //
+      // The manifest still carries whatever was at that path beforehand, so a
+      // machine that already had a unit of its own gets it back rather than
+      // losing it to a cleanup it never asked for.
+      // Only when there is one. A unit that was never installed needs no
+      // systemctl call to not exist, and reaching for /etc on a machine that
+      // never had a proxy is a side effect nobody asked this command for.
+      // Gated on the restore point, not on what happens to be in /etc. `disable`
+      // undoes what `enable` did; a proxy unit this tool never installed is
+      // somebody else's, and stopping it because it shares a filename is
+      // exactly the guessing the manifest exists to prevent.
+      const proxyWasOurs = (restore?.files || []).some((f) => f.path === proxyServicePaths().path);
+      if (platform === "linux" && proxyWasOurs) {
+        const px = await removeProxy();
+        for (const step of px.steps || []) {
+          if (step.ok) out(`  ok   ${step.step}`);
+        }
+      }
       // Consumed. Leaving it would let a later `disable` restore a machine to a
       // state that is two changes old.
       if (restore) {
@@ -3215,12 +3254,38 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // run killed halfway leaves behind the one thing needed to undo it. The
     // per-file backup covers the file this run overwrites; this covers the
     // machine, which is a different question and the one `disable` has to ask.
+    // Supervised before anything goes looking for it. moshpit-proxy ships no
+    // unit of its own, so on every machine that installed it, it sat there
+    // installed, trusted and never started — which is indistinguishable from
+    // absent: nothing on 443, no certificate, and this command correctly
+    // reporting no proxy on a box that had one.
+    //
+    // Non-fatal in every direction. A machine without a working proxy resolves
+    // Moshpit names and cannot verify them, which is bad; a machine whose DNS
+    // was refused because an optional component would not start is worse.
+    let proxyUnitPath = null;
+    if (!rest.includes("--no-proxy") && platform === "linux") {
+      if (!proxyWrapper()) {
+        out("  --   no pinned-TLS proxy installed — https:// on a name will not verify");
+        out("       moshcode update installs it, or:");
+        out("       curl -fsSL https://raw.githubusercontent.com/profullstack/moshpit-proxy/main/install.sh | sh");
+      } else {
+        proxyUnitPath = proxyServicePaths().path;
+        const ensured = await ensureProxy({ tlds });
+        for (const step of ensured.steps || []) {
+          out(`  ${step.ok ? "ok  " : "--  "} ${step.step}${step.error ? ` — ${step.error}` : ""}`);
+        }
+        if (!ensured.ok) out(`  --   the proxy is not serving (${ensured.reason}) — https:// will not verify`);
+      }
+    }
+
     const point = await captureRestorePoint({
       plan,
       platform,
       backend: platform === "linux" ? linuxBackend : platform,
       bridge: `${DEFAULT_HOST}:${wanted}`,
       dropins,
+      extraPaths: [proxyUnitPath, servicePaths({ system: false }).path].filter(Boolean),
     });
     const recorded2 = await applyPlan({
       steps: [{ kind: "write", path: manifestFile, content: `${JSON.stringify(point, null, 2)}\n`, why: "so disable can put this machine back" }],
