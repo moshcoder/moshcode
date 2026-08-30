@@ -139,7 +139,7 @@ export function parseRate(spec) {
   // A flat fee with no period stated is a project fee, not an hourly one: "$5000
   // for the project" is how it is written, and defaulting it to per-hour would
   // silently multiply the invoice by every hour tracked.
-  if (!sawPeriod && rate.unit === "flat" && rate.cap === null) rate.per = "hour";
+  if (!sawPeriod && rate.unit === "flat" && rate.cap === null) rate.per = "project";
   if (rate.cap !== null && rate.unit === "flat") {
     throw new Error("upto: caps a unit, so say what it caps — $100/hour/agent/upto:4");
   }
