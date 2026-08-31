@@ -29,9 +29,8 @@
 // it, and the entry is the script this very command was invoked from. Nothing
 // is guessed and nothing depends on PATH.
 import { spawn } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { operatorHome } from "./trust.mjs";
 
@@ -48,10 +47,49 @@ export const UNIT_NAME = "moshcode-dns.service";
  * /run/user/<uid>/moshpit-dns.pid for the daemon and for the person asking
  * after it. Under a system unit those are two different paths.
  */
-export function servicePaths({ system = false, home = homedir() } = {}) {
+export function servicePaths({ system = false, home = operatorHome(), env = process.env } = {}) {
   return system
     ? { path: join("/etc/systemd/system", UNIT_NAME), systemctl: ["systemctl"], scope: "system" }
-    : { path: join(home, ".config/systemd/user", UNIT_NAME), systemctl: ["systemctl", "--user"], scope: "user" };
+    : { path: join(home, ".config/systemd/user", UNIT_NAME), systemctl: userSystemctl(env), scope: "user" };
+}
+
+/**
+ * How to reach the operator's own systemd from wherever this is running.
+ *
+ * `systemctl --user` talks to the session of whoever is running it. `dns enable`
+ * escalates, so from there it is root's session — which has no bridge in it, has
+ * never had one, and reports every query about one as "not loaded". Meanwhile
+ * the operator's bridge keeps running with whatever it started with.
+ *
+ * That is why enabling proxy mode could be detected, written, and still not take
+ * effect: the unit that had to change belongs to a session the escalated half of
+ * the command cannot see.
+ *
+ * So an escalated run drops back to the invoking user, and hands them the runtime
+ * directory their session bus lives in — deriving it rather than inheriting it,
+ * because sudo does not carry XDG_RUNTIME_DIR across and the default under sudo
+ * points at root's.
+ */
+export function userSystemctl(env = process.env, { home = operatorHome({ env }), owner = ownerOf } = {}) {
+  const user = env.SUDO_USER || env.DOAS_USER;
+  // Not escalated, or escalated from root itself: the session in reach is the
+  // right one.
+  if (!user || user === "root") return ["systemctl", "--user"];
+  // sudo publishes the uid; doas publishes only the name. Falling back to the
+  // owner of the operator's home covers that, and covers an escalator that
+  // publishes neither — without it, a doas machine would quietly address root's
+  // session, which has no bridge in it and never will.
+  const uid = env.SUDO_UID || env.DOAS_UID || owner(home);
+  if (uid === null || uid === undefined) return ["systemctl", "--user"];
+  return ["sudo", "-u", user, "env", `XDG_RUNTIME_DIR=/run/user/${uid}`, "systemctl", "--user"];
+}
+
+function ownerOf(path) {
+  try {
+    return statSync(path).uid;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -127,6 +165,8 @@ export function serviceUnit({
   return lines.join("\n");
 }
 
+const defaultRead = async (path) => readFile(path, "utf8").catch(() => "");
+
 function run(command, args) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -140,8 +180,8 @@ function run(command, args) {
 }
 
 /** Write the unit and start it. Returns the steps taken, in order, for printing. */
-export async function installService(unit, { system = false, home = homedir(), exec = run } = {}) {
-  const { path, systemctl, scope } = servicePaths({ system, home });
+export async function installService(unit, { system = false, home = operatorHome(), exec = run, env = process.env } = {}) {
+  const { path, systemctl, scope } = servicePaths({ system, home, env });
   const steps = [];
   try {
     await mkdir(dirname(path), { recursive: true });
@@ -152,7 +192,14 @@ export async function installService(unit, { system = false, home = homedir(), e
   }
 
   const [cmd, ...flags] = systemctl;
-  for (const args of [[...flags, "daemon-reload"], [...flags, "enable", "--now", UNIT_NAME]]) {
+  // Enable *and* restart. `enable --now` starts a stopped unit and does nothing
+  // to a running one, so rewriting the unit to add `--proxy` would leave the old
+  // bridge running without it — the change on disk, no change in behaviour.
+  for (const args of [
+    [...flags, "daemon-reload"],
+    [...flags, "enable", UNIT_NAME],
+    [...flags, "restart", UNIT_NAME],
+  ]) {
     const result = await exec(cmd, args);
     steps.push({ step: `${cmd} ${args.join(" ")}`, ok: result.ok, error: result.error });
     if (!result.ok) return { ok: false, path, scope, steps };
@@ -160,9 +207,119 @@ export async function installService(unit, { system = false, home = homedir(), e
   return { ok: true, path, scope, steps };
 }
 
+/**
+ * The `--upstream` servers an installed unit already forwards to.
+ *
+ * Read back rather than recomputed. A supervised bridge needs upstreams to hand
+ * the clearnet to, and the machine may already be routing every lookup at that
+ * bridge — so asking the system resolver what its upstreams are can answer
+ * "this bridge", and a bridge whose upstream is itself resolves nothing at all.
+ * Whatever the unit was working with is the safe answer to keep.
+ */
+export function unitUpstreams(text) {
+  const line = String(text ?? "").split("\n").find((l) => l.startsWith("ExecStart="));
+  if (!line) return [];
+  const parts = line.trim().split(/\s+/);
+  const found = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i] !== "--upstream") continue;
+    const value = parts[i + 1];
+    if (!value || value.startsWith("--")) continue;
+    if (!found.includes(value)) found.push(value);
+  }
+  return found;
+}
+
+/**
+ * Re-describe the bridge unit to match the run happening now, and restart it so
+ * the description becomes the truth.
+ *
+ * This is the step that made proxy mode arrive one reboot late. A supervised
+ * bridge is not started by `enable`: it is already up under `Restart=always`,
+ * so `startDaemon` finds a live pidfile and reports "already running" — true,
+ * and useless, because what a resolver answers with is fixed when it spawns. A
+ * bridge that came up before the proxy existed goes on answering origins
+ * forever, and stopping it by hand does not help, since systemd brings the same
+ * ExecStart straight back.
+ *
+ * The only thing that changes a supervised bridge's mind is rewriting its unit
+ * and restarting it. That is all this is.
+ *
+ * With no unit installed it does nothing and says so. An unsupervised machine
+ * is `startDaemon`'s business, and writing a unit here would be `enable`
+ * quietly making the bridge outlive a reboot on a machine that never asked for
+ * that — a different decision, and one `dns service --write` exists to make.
+ */
+export async function refreshService({
+  entry,
+  port,
+  registryBase = null,
+  proxy = null,
+  system = false,
+  home = operatorHome(),
+  env = process.env,
+  exec = run,
+  exists = existsSync,
+  read = defaultRead,
+} = {}) {
+  const { path, scope } = servicePaths({ system, home, env });
+  if (!exists(path)) return { refreshed: false, reason: "no unit installed", path, scope, upstreams: [], steps: [] };
+
+  const current = await read(path);
+  const upstreams = unitUpstreams(current);
+  const unit = serviceUnit({ system, entry, port, registryBase, upstreams, proxy });
+
+  // Deliberately not short-circuited on `current === unit`. Matching text says
+  // the unit describes the right bridge, not that the bridge is running it: a
+  // unit can be installed and stopped, installed and never enabled, or running
+  // what it was spawned with before the file last changed. Since the whole
+  // point here is to make what is running match what is written, the enable and
+  // restart happen either way, and cost a moment of no resolver during a
+  // command that is already rewriting the machine's routing.
+
+  const result = await installService(unit, { system, home, env, exec });
+  return {
+    refreshed: result.ok,
+    reason: result.ok ? null : "systemctl refused the unit",
+    path,
+    scope,
+    upstreams,
+    steps: result.steps,
+  };
+}
+
+/**
+ * Stop the supervised bridge and leave the unit where it is.
+ *
+ * `stopDaemon` cannot do this. It reads the pidfile and signals that process,
+ * which is right for a bridge started by hand and useless for one systemd owns:
+ * the unit is `Restart=always`, so the pid dies and the same ExecStart is back
+ * within the second. `disable` printed "bridge stopped" and left a bridge
+ * running — on a machine whose routing had just been put back, so the bridge
+ * was still up, still answering, and no longer on anybody's path.
+ *
+ * The unit file stays. Removing it is a different decision than turning
+ * resolution off for an afternoon, and `enable` re-enables what it finds — so
+ * leaving it costs nothing and deleting it would quietly take away a unit the
+ * operator may have written themselves.
+ */
+export async function stopService({ system = false, home = operatorHome(), env = process.env, exec = run, exists = existsSync } = {}) {
+  const { path, systemctl, scope } = servicePaths({ system, home, env });
+  if (!exists(path)) return { stopped: false, reason: "no unit installed", path, scope, steps: [] };
+  const [cmd, ...flags] = systemctl;
+  const result = await exec(cmd, [...flags, "disable", "--now", UNIT_NAME]);
+  return {
+    stopped: result.ok,
+    reason: result.ok ? null : (result.error || "systemctl refused"),
+    path,
+    scope,
+    steps: [{ step: `${cmd} ${flags.join(" ")} disable --now ${UNIT_NAME}`, ok: result.ok, error: result.error }],
+  };
+}
+
 /** Stop it and take the unit away. Missing is not a failure — removal is idempotent. */
-export async function removeService({ system = false, home = homedir(), exec = run } = {}) {
-  const { path, systemctl, scope } = servicePaths({ system, home });
+export async function removeService({ system = false, home = operatorHome(), exec = run, env = process.env } = {}) {
+  const { path, systemctl, scope } = servicePaths({ system, home, env });
   const [cmd, ...flags] = systemctl;
   const steps = [];
   for (const args of [[...flags, "disable", "--now", UNIT_NAME]]) {

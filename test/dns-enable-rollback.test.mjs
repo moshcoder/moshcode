@@ -463,6 +463,20 @@ function noSystem() {
     // whatever holds 443 on the machine running the suite.
     findLocalProxyImpl: async () => ({ found: false, why: null, address: { v4: null, v6: null } }),
     startBridge: async () => ({ started: true, pid: 1, alreadyRunning: false }),
+    // No systemd unit on this machine, which is the state these tests were
+    // written in. Stubbed rather than left to the real one, which would read
+    // the suite runner's own ~/.config/systemd/user and, on a developer's box,
+    // restart their actual bridge.
+    refreshBridge: async () => ({ refreshed: false, reason: "no unit installed", upstreams: [], steps: [] }),
+    stopSupervised: async () => ({ stopped: false, reason: "no unit installed", steps: [] }),
+    // Both of these reach the real machine when left to their defaults: one
+    // looks for an installed proxy wrapper and starts it, the other writes
+    // /etc/systemd/resolved.conf.d and restarts systemd-resolved. A test that
+    // forgets to stub them does not fail cleanly — it either edits the system
+    // running the suite or, unprivileged, fails on EACCES from somewhere that
+    // reads as a bug in whatever it was actually testing.
+    proxyWrapper: () => null,
+    applyWith: async () => ({ saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] }),
     stopBridge: async () => ({ stopped: true, reason: null }),
     dropins: async () => [],
     readManifest: async () => null,
@@ -537,4 +551,197 @@ test("with no proxy installed, nothing is claimed and DNS still comes up", async
   assert.equal(code, 0, "a missing optional component must never refuse the machine its DNS");
   assert.equal(startedWith?.proxy, null);
   assert.match(lines.join("\n"), /no pinned-TLS proxy installed/);
+});
+
+/* ------------------- a supervised bridge is re-described, not left alone ---*/
+
+// The last thing that had to be done by hand. `startBridge` reports "already
+// running" for a bridge systemd owns and leaves it alone — correct, and the
+// reason proxy mode arrived a reboot late: what a resolver answers with is
+// fixed when it spawns, so a bridge that came up before the proxy existed goes
+// on answering origins whatever this run decides. Stopping it does not help
+// either, because `Restart=always` brings the same ExecStart back.
+
+test("an installed unit is rewritten with proxy mode and restarted", async () => {
+  const lines = [];
+  let asked = null;
+  let startedByHand = false;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    proxyWrapper: () => "/home/x/.local/bin/moshpit-proxy",
+    ensureProxy: async () => ({ ok: true, steps: [] }),
+    refreshBridge: async (opts) => {
+      asked = opts;
+      return { refreshed: true, reason: null, upstreams: ["1.1.1.1"], steps: [{ step: "systemctl --user restart moshcode-dns.service", ok: true }] };
+    },
+    bridgeReady: async () => ({ started: true, pid: 99, alreadyRunning: false, supervised: true, verified: true }),
+    startBridge: async () => { startedByHand = true; return { started: true, pid: 1, alreadyRunning: false }; },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(asked?.proxy, "127.0.0.1", "the unit has to carry --proxy, or the bridge still answers origins");
+  assert.equal(startedByHand, false, "systemd owns this bridge — starting a second one is how two bridges end up on the port");
+  assert.match(lines.join("\n"), /restarted with proxy mode on/);
+  assert.match(lines.join("\n"), /forwarding the clearnet to 1\.1\.1\.1/);
+});
+
+test("with no unit installed, nothing is said about one and the daemon is started", async () => {
+  const lines = [];
+  let startedByHand = false;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    startBridge: async () => { startedByHand = true; return { started: true, pid: 1, alreadyRunning: false }; },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(startedByHand, true);
+  assert.doesNotMatch(lines.join("\n"), /could not update/, "an unsupervised machine is not a failure to report");
+});
+
+test("a unit that restarts but never answers refuses the machine its routing", async () => {
+  // `systemctl restart` returns as soon as a Type=simple unit forks, so it
+  // returns 0 for a bridge that forked and died. The next thing enable does is
+  // point every lookup on the machine at that port.
+  const lines = [];
+  let applied = false;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    refreshBridge: async () => ({ refreshed: true, reason: null, upstreams: [], steps: [] }),
+    bridgeReady: async () => ({ started: false, alreadyRunning: false, pid: null, supervised: true, error: "moshcode-dns.service restarted but the bridge did not answer on 127.0.0.1:5354" }),
+    applyWith: async () => { applied = true; return { ok: true, steps: [] }; },
+  });
+
+  assert.equal(code, 1);
+  assert.equal(applied, false, "nothing may be written when the bridge is not answering");
+  assert.match(lines.join("\n"), /did not answer/);
+  assert.match(lines.join("\n"), /Nothing has been changed/);
+});
+
+test("a unit that cannot be updated is reported, and the run continues", async () => {
+  // A refusal from systemctl is worth naming — proxy mode will not take effect
+  // — but it is not a reason to leave the machine without DNS.
+  const lines = [];
+  let startedByHand = false;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    refreshBridge: async () => ({ refreshed: false, reason: "systemctl refused the unit", upstreams: [], steps: [{ step: "systemctl --user restart moshcode-dns.service", ok: false, error: "Interactive authentication required" }] }),
+    startBridge: async () => { startedByHand = true; return { started: true, pid: 1, alreadyRunning: false }; },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(startedByHand, true);
+  assert.match(lines.join("\n"), /could not update moshcode-dns\.service/);
+  assert.match(lines.join("\n"), /keeps the mode it started with/);
+});
+
+/* ------------------ turning it off has to stop a bridge systemd is holding -*/
+
+test("disable stops the unit through systemd, not by signalling a pid", async () => {
+  // `stopDaemon` kills what the pidfile names, and the unit is Restart=always:
+  // the process dies and systemd has the same ExecStart back within the second.
+  // So disable printed "bridge stopped" on a machine where the bridge was still
+  // up and answering — just no longer on anything's path.
+  const lines = [];
+  let askedSystemd = false;
+  const code = await dnsCommand(["disable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    dropins: async () => [{ name: "moshpit.conf", content: "[Resolve]\nDNS=127.0.0.1:5354\nDomains=~.\n" }],
+    stopSupervised: async () => { askedSystemd = true; return { stopped: true, reason: null, steps: [] }; },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(askedSystemd, true, "killing the pid alone leaves a bridge systemd will restart");
+  assert.match(lines.join("\n"), /moshcode-dns\.service stopped and disabled/);
+});
+
+test("disable says nothing about a unit on a machine that has none", async () => {
+  const lines = [];
+  const code = await dnsCommand(["disable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    dropins: async () => [{ name: "moshpit.conf", content: "[Resolve]\nDNS=127.0.0.1:5354\nDomains=~.\n" }],
+  });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(lines.join("\n"), /moshcode-dns\.service/);
+});
+
+test("a unit that will not stop is named, because it is about to come back", async () => {
+  const lines = [];
+  const code = await dnsCommand(["disable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    dropins: async () => [{ name: "moshpit.conf", content: "[Resolve]\nDNS=127.0.0.1:5354\nDomains=~.\n" }],
+    stopSupervised: async () => ({ stopped: false, reason: "Interactive authentication required", steps: [] }),
+  });
+
+  assert.equal(code, 0, "a bridge that will not stop is not a reason to leave the routing in place");
+  assert.match(lines.join("\n"), /could not stop moshcode-dns\.service/);
+  assert.match(lines.join("\n"), /it will restart itself/);
+});
+
+test("a supervised machine is not told to re-run enable after a reboot", async () => {
+  // The unit was just enabled and restarted, so the bridge does come back.
+  // Telling someone to re-run a command they do not need is how advice stops
+  // being read at all.
+  const lines = [];
+  await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    refreshBridge: async () => ({ refreshed: true, reason: null, upstreams: [], steps: [] }),
+    bridgeReady: async () => ({ started: true, pid: 99, alreadyRunning: false, supervised: true, verified: true }),
+  });
+
+  const out = lines.join("\n");
+  assert.match(out, /moshcode-dns\.service brings the bridge back after a reboot/);
+  assert.doesNotMatch(out, /does not yet survive a reboot/);
+});
+
+test("an unsupervised machine is still told the bridge dies at reboot", async () => {
+  const lines = [];
+  await dnsCommand(["enable"], (l) => lines.push(String(l)), { ...noSystem() });
+  assert.match(lines.join("\n"), /does not yet survive a reboot/);
+});
+
+test("a rollback leaves a supervised bridge where it found it", async () => {
+  // It was holding the port before this run and is meant to go on holding it.
+  // Signalling its pid would not stop it anyway — Restart=always replaces it
+  // within the second — so the old line printed "remove bridge started by this
+  // run" about a bridge that was neither started by this run nor removed.
+  const lines = [];
+  let killed = false;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    refreshBridge: async () => ({ refreshed: true, reason: null, upstreams: [], steps: [] }),
+    bridgeReady: async () => ({ started: true, pid: 99, alreadyRunning: false, supervised: true, verified: true }),
+    applyWith: async () => ({
+      saved: { ok: true },
+      applied: { ok: true, results: [] },
+      verified: { ok: false, checks: [{ name: "pit.moshcode.sh", kind: "clearnet", ok: false, error: "ENOTFOUND" }] },
+      rolledBack: { ok: true, results: [] },
+      backups: [],
+    }),
+    stopBridge: async () => { killed = true; return { stopped: true, reason: null }; },
+  });
+
+  assert.equal(code, 1);
+  assert.equal(killed, false, "systemd would put it straight back, so the kill is noise that reads as a fact");
+  assert.doesNotMatch(lines.join("\n"), /remove bridge started by this run/);
+});
+
+test("a rollback still cleans up a bridge this run really did start", async () => {
+  const lines = [];
+  let killed = false;
+  await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    startBridge: async () => ({ started: true, pid: 7, alreadyRunning: false }),
+    applyWith: async () => ({
+      saved: { ok: true },
+      applied: { ok: true, results: [] },
+      verified: { ok: false, checks: [{ name: "pit.moshcode.sh", kind: "clearnet", ok: false, error: "ENOTFOUND" }] },
+      rolledBack: { ok: true, results: [] },
+      backups: [],
+    }),
+    stopBridge: async () => { killed = true; return { stopped: true, reason: null }; },
+  });
+
+  assert.equal(killed, true, "an unsupervised bridge left on 5354 is what the next preflight refuses to run past");
+  assert.match(lines.join("\n"), /remove bridge started by this run/);
 });
