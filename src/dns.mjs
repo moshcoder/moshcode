@@ -3294,6 +3294,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     // Moshpit names and cannot verify them, which is bad; a machine whose DNS
     // was refused because an optional component would not start is worse.
     let proxyUnitPath = null;
+    let ours = false;
     if (!rest.includes("--no-proxy") && platform === "linux") {
       if (!proxyWrapper()) {
         out("  --   no pinned-TLS proxy installed — https:// on a name will not verify");
@@ -3306,6 +3307,10 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
           out(`  ${step.ok ? "ok  " : "--  "} ${step.step}${step.error ? ` — ${step.error}` : ""}`);
         }
         if (!ensured.ok) out(`  --   the proxy is not serving (${ensured.reason}) — https:// will not verify`);
+        // Started by this run, and confirmed holding the port. That is the
+        // strongest evidence available that the proxy on 443 is ours, and it is
+        // strictly better than the handshake below.
+        ours = ensured.ok;
       }
     }
 
@@ -3363,6 +3368,26 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       // proxy and retracting it two lines later is worse than not looking.
       out("  --   the bridge already running was not started by this run, so it keeps its own");
       out("       mode — to pick up proxy mode: moshcode dns disable && moshcode dns enable");
+    } else if (ours) {
+      // No handshake needed, and none that would work.
+      //
+      // The probe asks the proxy for a certificate under some name. The proxy
+      // will not present one for a name with no key published in the registry —
+      // deliberately, so a browser gets a TLS failure it can explain rather than
+      // a reset mid-request — and this command has no way to invent a name that
+      // someone has registered. There is no endpoint that lists names, only
+      // endings, so `a.<ending>` is the best it could ever do and that is
+      // exactly the name the proxy refuses.
+      //
+      // Which made the check impossible to pass on a correctly configured
+      // machine: `proxy holds 127.0.0.1:443` and `no pinned-TLS proxy on this
+      // machine`, three lines apart, both true as written.
+      //
+      // So when this run installed the unit, started it, and watched it take the
+      // port, that is the answer. The probe below stays for a proxy this run did
+      // not start, where the question is genuinely open.
+      proxyAddress = { v4: DEFAULT_HOST, v6: null };
+      out(`  ok   pinned-TLS proxy on ${DEFAULT_HOST}:${PROXY_PORT} — started by this run, so every live name will answer there`);
     } else if (!rest.includes("--no-proxy")) {
       const probeName = moshpitProbe || "";
       if (!probeName) {

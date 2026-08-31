@@ -472,3 +472,69 @@ function noSystem() {
     uid: 0,
   };
 }
+
+/* --------------------------- a proxy this run started is a proxy it can trust */
+
+// Detection used to ask the proxy for a certificate under `a.<ending>`. The
+// proxy will not present one for a name with no key published in the registry —
+// deliberately, so a browser gets a TLS failure it can explain — and nothing
+// here can invent a name someone has registered, because the registry lists
+// endings and not names.
+//
+// So on a correctly configured machine the check could not pass. Three lines
+// apart, both true as written:
+//
+//     ok   proxy holds 127.0.0.1:443
+//     --   no pinned-TLS proxy on this machine
+//
+// and the bridge was then started without proxy mode, leaving every name to
+// answer its origin with a certificate no CA had signed.
+
+test("a proxy started by this run turns proxy mode on without a handshake", async () => {
+  const lines = [];
+  let startedWith = null;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    proxyWrapper: () => "/home/x/.local/bin/moshpit-proxy",
+    ensureProxy: async () => ({ ok: true, steps: [{ step: "proxy holds 127.0.0.1:443", ok: true }] }),
+    applyWith: async () => ({ saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] }),
+    // If this is consulted at all the fix has not worked: the whole point is
+    // that no name is invented and no handshake is attempted.
+    findLocalProxyImpl: async () => { throw new Error("the probe must not run for a proxy we started"); },
+    startBridge: async (opts) => { startedWith = opts; return { started: true, pid: 1, alreadyRunning: false }; },
+  });
+
+  assert.equal(code, 0);
+  assert.match(lines.join("\n"), /started by this run/);
+  assert.equal(startedWith?.proxy, "127.0.0.1", "the bridge has to be told, or names still answer their origin");
+});
+
+test("a proxy this run did not start is still probed", async () => {
+  // The question is genuinely open there, so the handshake stays.
+  const lines = [];
+  let probed = false;
+  await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    proxyWrapper: () => "/home/x/.local/bin/moshpit-proxy",
+    ensureProxy: async () => ({ ok: false, reason: "not-listening", steps: [] }),
+    applyWith: async () => ({ saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] }),
+    findLocalProxyImpl: async () => { probed = true; return { found: false, why: null, address: { v4: null, v6: null } }; },
+  });
+
+  assert.equal(probed, true);
+});
+
+test("with no proxy installed, nothing is claimed and DNS still comes up", async () => {
+  const lines = [];
+  let startedWith = null;
+  const code = await dnsCommand(["enable"], (l) => lines.push(String(l)), {
+    ...noSystem(),
+    proxyWrapper: () => null,
+    applyWith: async () => ({ saved: { ok: true }, applied: { ok: true, results: [] }, verified: { ok: true, checks: [] }, rolledBack: null, backups: [] }),
+    startBridge: async (opts) => { startedWith = opts; return { started: true, pid: 1, alreadyRunning: false }; },
+  });
+
+  assert.equal(code, 0, "a missing optional component must never refuse the machine its DNS");
+  assert.equal(startedWith?.proxy, null);
+  assert.match(lines.join("\n"), /no pinned-TLS proxy installed/);
+});
