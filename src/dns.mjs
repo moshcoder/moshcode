@@ -2148,6 +2148,59 @@ export async function verifyResolution({
   return { ok: checks.every((c) => c.ok), checks };
 }
 
+/**
+ * Wait for a bridge that systemd has just restarted to start answering.
+ *
+ * `startDaemon` cannot be asked this. It spawns, watches its own child, and
+ * decides from a pidfile — none of which describes a unit that systemd owns and
+ * has just cycled. Calling it here would either report the pre-restart pid as
+ * "already running" or, on a pidfile not yet rewritten, spawn a second bridge
+ * against the one systemd is bringing up.
+ *
+ * `Type=simple` reports active the moment the process forks, so systemd saying
+ * the restart worked is not yet a resolver that answers. Hence the probe.
+ *
+ * A timeout is reported as started-but-unverified rather than as a failure, the
+ * same way `startDaemon` treats a live process that has not answered yet: the
+ * unit is active, and refusing this machine its DNS over a slow first registry
+ * fetch would be the worse mistake.
+ */
+export async function supervisedReady({
+  host = DEFAULT_HOST,
+  port,
+  probe = probeResolver,
+  status = daemonStatus,
+  timeoutMs = READY_TIMEOUT_MS,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let answered = false;
+  while (Date.now() < deadline) {
+    if (await probe({ host, port }).catch(() => false)) {
+      answered = true;
+      break;
+    }
+    await sleep(150);
+  }
+  const current = await Promise.resolve(status()).catch(() => null);
+  if (!answered) {
+    // Reported as a failure, unlike `startDaemon`'s slow-but-alive case, and
+    // for a reason that does not apply there: that one has watched its own
+    // child and knows it is running. Nothing here has. `systemctl restart`
+    // returns as soon as a Type=simple unit forks, so it returns 0 for a bridge
+    // that forked and died — and the next thing this run does is point every
+    // lookup on the machine at that port. Refusing is the safe direction.
+    return {
+      started: false,
+      alreadyRunning: false,
+      pid: current?.pid ?? null,
+      supervised: true,
+      error: `${UNIT_NAME} restarted but the bridge did not answer on ${host}:${port}`,
+    };
+  }
+  return { started: true, pid: current?.pid ?? null, alreadyRunning: false, supervised: true, verified: true };
+}
+
 const defaultReadMaybe = async (path) => {
   const { readFile: rf } = await import("node:fs/promises");
   return rf(path, "utf8").catch(() => null);
@@ -2407,10 +2460,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isRealTld } from "./iana-tlds.mjs";
-import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME, ensureProxyService, removeProxyService, proxyServicePaths, proxyWrapperPath } from "./dns-service.mjs";
+import { installService, refreshService, removeService, serviceUnit, servicePaths, stopService, UNIT_NAME, ensureProxyService, removeProxyService, proxyServicePaths, proxyWrapperPath } from "./dns-service.mjs";
 import {
   applyPlan, daemonStatus, describePlan, detectPlatform, disablePlan, enablePlan,
-  probeResolver, requiredPort, startDaemon, stopDaemon,
+  probeResolver, READY_TIMEOUT_MS, requiredPort, startDaemon, stopDaemon,
 } from "./dns-system.mjs";
 import { escalateSelf } from "./escalate.mjs";
 
@@ -2508,10 +2561,13 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     presenceImpl = bridgePresence,
     exists = existsSync,
     startBridge = startDaemon,
+    refreshBridge = refreshService,
+    bridgeReady = supervisedReady,
     proxyReachableImpl = proxyReachable,
     findLocalProxyImpl = findLocalProxy,
     autoTrustImpl = createAutoTrust,
     stopBridge = stopDaemon,
+    stopSupervised = stopService,
     // The two proxy-service calls, injected for the same reason as every
     // other system call here: a test must be able to exercise the branch
     // without shelling out to systemctl or writing to /etc.
@@ -3224,6 +3280,19 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         return 1;
       }
 
+      // The supervised bridge first, and by asking systemd rather than by
+      // signalling a pid. `stopDaemon` kills what the pidfile names, and the
+      // unit is `Restart=always` — so the process died, systemd replaced it
+      // within the second, and this command reported "bridge stopped" on a
+      // machine where the bridge was still up and answering, just no longer on
+      // anything's path.
+      const unsupervised = await stopSupervised();
+      if (unsupervised.reason !== "no unit installed") {
+        out(unsupervised.stopped
+          ? `  ok   ${UNIT_NAME} stopped and disabled`
+          : `  --   could not stop ${UNIT_NAME} (${unsupervised.reason}) — it will restart itself`);
+      }
+
       const stopped = await stopBridge();
       out(stopped.stopped ? "  ok   bridge stopped" : `  ok   bridge was not running${stopped.reason ? ` (${stopped.reason})` : ""}`);
 
@@ -3412,17 +3481,42 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       }
     }
 
+    // A bridge under systemd is re-described, not started — and this is the step
+    // whose absence left the last of this to be done by hand.
+    //
+    // `startBridge` below reports "already running" for a supervised bridge and
+    // leaves it alone. That is correct, and it is also why proxy mode arrived a
+    // reboot late: what a resolver answers with is fixed when it spawns, so a
+    // bridge that came up before the proxy existed goes on answering origins no
+    // matter what this run decides. Stopping it does not help either, since
+    // `Restart=always` brings the same ExecStart back.
+    //
+    // So the unit is rewritten to match the run happening now, and restarted.
+    // v4 by preference: `dns start --proxy` takes one address and probes both
+    // families itself, so handing it the v4 loopback lets it find ::1 too
+    // rather than pinning the answer to one family.
+    const proxyArg = proxyAddress ? (proxyAddress.v4 || proxyAddress.v6) : null;
+
+    let refreshed = null;
+    if (!reusing && platform === "linux") {
+      refreshed = await refreshBridge({ entry: cliEntry(), port: wanted, registryBase, proxy: proxyArg });
+      for (const step of refreshed.steps || []) {
+        out(`  ${step.ok ? "ok  " : "--  "} ${step.step}${step.error ? ` — ${step.error}` : ""}`);
+      }
+      if (refreshed.refreshed) {
+        const forwarding = refreshed.upstreams?.length ? `, forwarding the clearnet to ${refreshed.upstreams.join(", ")}` : "";
+        out(`  ok   ${UNIT_NAME} restarted with proxy mode ${proxyArg ? "on" : "off"}${forwarding}`);
+      } else if (refreshed.reason !== "no unit installed") {
+        out(`  --   could not update ${UNIT_NAME} (${refreshed.reason})`);
+        out("       the bridge already running keeps the mode it started with");
+      }
+    }
+
     const started = reusing
       ? { started: false, pid: reusing.pid, alreadyRunning: true, reused: true }
-      : await startBridge({
-        port: wanted,
-        registryBase,
-        entry: cliEntry(),
-        // v4 by preference: `dns start --proxy` takes one address and probes
-        // both families itself, so handing it the v4 loopback lets it find ::1
-        // too rather than pinning the answer to one family.
-        proxy: proxyAddress ? (proxyAddress.v4 || proxyAddress.v6) : null,
-      });
+      : refreshed?.refreshed
+        ? await bridgeReady({ host: DEFAULT_HOST, port: wanted })
+        : await startBridge({ port: wanted, registryBase, entry: cliEntry(), proxy: proxyArg });
     // The routing this is about to install is catch-all — every lookup on the
     // machine, not just Moshpit ones — so a bridge that did not come up is not
     // a degraded feature, it is the machine's resolver pointed at nothing.
@@ -3504,7 +3598,13 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       out(`Moshpit names now resolve on this machine. Try: moshcode dns resolve ${moshpitProbe || "<name>"}`);
       out(`Routing covers the ${tlds.length} TLDs claimed right now. New ones do not route`);
       out("until you re-run this — there is no common suffix to match, so every TLD is listed.");
-      out("Note: the bridge does not yet survive a reboot. Re-run `moshcode dns enable` after one.");
+      // Only where it is still true. On a supervised machine the unit was just
+      // enabled and restarted, so the bridge does come back — and telling
+      // someone to re-run a command they do not need is how advice stops being
+      // read at all.
+      out(started.supervised
+        ? `Note: ${UNIT_NAME} brings the bridge back after a reboot.`
+        : "Note: the bridge does not yet survive a reboot. Re-run `moshcode dns enable` after one.");
       return 0;
     }
 
@@ -3512,7 +3612,14 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     report(outcome.rolledBack.results);
     // Started by this run and no longer routed to, so leaving it would be a
     // process holding 5354 that the next enable's preflight refuses to run past.
-    if (started.started) {
+    //
+    // A supervised bridge is exempt: this run did not start it, only restarted
+    // it, so it was holding that port before the run and is meant to go on
+    // holding it. Signalling its pid would not stop it anyway — `Restart=always`
+    // replaces it within the second — so the only thing the old line achieved
+    // there was printing "remove bridge started by this run" about a bridge
+    // that was neither started by this run nor removed.
+    if (started.started && !started.supervised) {
       const stopped = await stopBridge();
       if (stopped.stopped) out("  ok   remove bridge started by this run");
     }

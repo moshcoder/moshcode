@@ -19,12 +19,12 @@
 // that looks plausible and dies at 203/EXEC with nothing useful in the journal.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "../src/dns-service.mjs";
+import { installService, refreshService, removeService, serviceUnit, servicePaths, stopService, unitUpstreams, userSystemctl, UNIT_NAME } from "../src/dns-service.mjs";
 import { proxyProbeFromArgs, captureRestorePoint, probeName } from "../src/dns.mjs";
 import { proxyServiceUnit, proxyServicePaths, PROXY_UNIT_NAME } from "../src/dns-service.mjs";
 import { rootIsNarrow, ensureProxyService } from "../src/dns-service.mjs";
@@ -89,9 +89,26 @@ test("install writes the unit, then reloads and enables — and stops at the fir
 
   const result = await installService(unit(), { home, exec });
   assert.equal(result.ok, false);
-  assert.deepEqual(calls, ["systemctl --user daemon-reload", `systemctl --user enable --now ${UNIT_NAME}`]);
+  assert.deepEqual(calls, ["systemctl --user daemon-reload", `systemctl --user enable ${UNIT_NAME}`]);
   assert.equal(existsSync(join(home, ".config/systemd/user", UNIT_NAME)), true, "the file is written before systemctl is asked about it");
   assert.equal(result.steps.at(-1).error, "Failed to enable", "the reason systemctl gave is carried back, not swallowed");
+});
+
+test("install restarts, so a rewritten unit actually takes effect", async () => {
+  // `enable --now` starts a stopped unit and does nothing at all to a running
+  // one. That is why rewriting the unit to add `--proxy` used to change the
+  // file and nothing else: the bridge kept running with the arguments it was
+  // spawned with, and proxy mode arrived on the next reboot.
+  const home = await scratch();
+  const calls = [];
+  const exec = async (cmd, args) => {
+    calls.push(args.join(" "));
+    return { ok: true };
+  };
+
+  const result = await installService(unit(), { home, exec });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ["--user daemon-reload", `--user enable ${UNIT_NAME}`, `--user restart ${UNIT_NAME}`]);
 });
 
 test("remove takes the unit away even when it was never enabled", async () => {
@@ -387,4 +404,176 @@ test("--proxy-probe wins, for a machine that needs a specific real name", () => 
   // A bare flag is a typo, not a request to probe with the next flag.
   assert.equal(probeName(["hacker"], ["--proxy-probe"]), "a.hacker");
   assert.equal(probeName(["hacker"], ["--proxy-probe", "--write"]), "a.hacker");
+});
+
+/* --------------------------------- reaching the operator's own systemd ---- */
+
+// `systemctl --user` talks to the session of whoever runs it, and `dns enable`
+// escalates. From there it is root's session: no bridge in it, none ever, and
+// every question about one answered "not loaded" — while the operator's bridge
+// keeps running with whatever it was spawned with. That is why the unit could
+// be rewritten and still not take effect.
+
+test("an escalated run drives the invoking user's systemd, not root's", () => {
+  assert.deepEqual(
+    userSystemctl({ SUDO_USER: "ettinger", SUDO_UID: "1000" }),
+    ["sudo", "-u", "ettinger", "env", "XDG_RUNTIME_DIR=/run/user/1000", "systemctl", "--user"],
+  );
+});
+
+test("an unescalated run uses the session it is already in", () => {
+  assert.deepEqual(userSystemctl({}), ["systemctl", "--user"]);
+});
+
+test("root running this directly is not sent back through sudo to itself", () => {
+  // SUDO_USER=root happens with `sudo -u root`, and also survives in the
+  // environment of anything root spawns afterwards.
+  assert.deepEqual(userSystemctl({ SUDO_USER: "root", SUDO_UID: "0" }), ["systemctl", "--user"]);
+});
+
+test("doas publishes a name and no uid, so the uid comes off the operator's home", () => {
+  // sudo sets SUDO_UID; doas sets DOAS_USER alone. Without this the doas case
+  // addresses root's session — which has no bridge in it and never will — and
+  // does it silently.
+  assert.deepEqual(
+    userSystemctl({ DOAS_USER: "ettinger" }, { home: "/home/ettinger", owner: () => 1000 }),
+    ["sudo", "-u", "ettinger", "env", "XDG_RUNTIME_DIR=/run/user/1000", "systemctl", "--user"],
+  );
+});
+
+test("an unresolvable uid falls back rather than building a command with 'null' in it", () => {
+  assert.deepEqual(
+    userSystemctl({ SUDO_USER: "ettinger" }, { home: "/home/gone", owner: () => null }),
+    ["systemctl", "--user"],
+  );
+});
+
+/* ------------------------------------- upstreams are kept, not recomputed - */
+
+test("the upstreams already in a unit are read back off its ExecStart", () => {
+  const text = [
+    "[Service]",
+    "ExecStart=/usr/bin/node /home/x/bin/moshcode.mjs dns start --port 5354 --upstream 1.1.1.1 --upstream 8.8.8.8#53 --proxy 127.0.0.1",
+  ].join("\n");
+  assert.deepEqual(unitUpstreams(text), ["1.1.1.1", "8.8.8.8#53"]);
+});
+
+test("a unit with no upstreams, and a malformed one, read as none rather than throwing", () => {
+  assert.deepEqual(unitUpstreams("[Service]\nExecStart=/usr/bin/node x dns start --port 5354"), []);
+  assert.deepEqual(unitUpstreams("ExecStart=/usr/bin/node x dns start --upstream --proxy 127.0.0.1"), [], "a flag is not an upstream");
+  assert.deepEqual(unitUpstreams(""), []);
+  assert.deepEqual(unitUpstreams(null), []);
+});
+
+/* ------------------------------------------------- refreshing the unit ---- */
+
+test("with no unit installed, refresh does nothing and says which", async () => {
+  const home = await scratch();
+  let ran = false;
+  const result = await refreshService({
+    entry: "/home/x/bin/moshcode.mjs", port: 5354, home,
+    exec: async () => { ran = true; return { ok: true }; },
+  });
+  assert.equal(result.refreshed, false);
+  assert.equal(result.reason, "no unit installed");
+  assert.equal(ran, false, "an unsupervised machine is startDaemon's business");
+});
+
+test("refresh keeps the unit's upstreams and adds the proxy this run found", async () => {
+  const home = await scratch();
+  const unitPath = join(home, ".config/systemd/user", UNIT_NAME);
+  await mkdir(dirname(unitPath), { recursive: true });
+  await writeFile(unitPath, [
+    "[Service]",
+    "ExecStart=/usr/bin/node /home/x/bin/moshcode.mjs dns start --port 5354 --upstream 9.9.9.9",
+    "",
+  ].join("\n"));
+
+  const calls = [];
+  const result = await refreshService({
+    entry: "/home/x/bin/moshcode.mjs", port: 5354, registryBase: "https://pit.moshcode.sh", proxy: "127.0.0.1",
+    home, exec: async (cmd, args) => { calls.push(args.join(" ")); return { ok: true }; },
+  });
+
+  assert.equal(result.refreshed, true);
+  assert.deepEqual(result.upstreams, ["9.9.9.9"]);
+
+  const written = await readFile(unitPath, "utf8");
+  assert.match(written, /--proxy 127\.0\.0\.1/);
+  assert.match(written, /--upstream 9\.9\.9\.9/, "dropping the upstreams would leave the bridge with nothing to forward the clearnet to");
+  assert.deepEqual(calls, ["--user daemon-reload", `--user enable ${UNIT_NAME}`, `--user restart ${UNIT_NAME}`]);
+});
+
+test("an unchanged unit is still enabled and restarted", async () => {
+  // Matching text says the unit describes the right bridge, not that the bridge
+  // is running it: installed-and-stopped and running-something-older are both
+  // real states, and both look identical to a text comparison.
+  const home = await scratch();
+  const unitPath = join(home, ".config/systemd/user", UNIT_NAME);
+  await mkdir(dirname(unitPath), { recursive: true });
+  const settled = serviceUnit({ entry: "/home/x/bin/moshcode.mjs", port: 5354, proxy: "127.0.0.1" });
+  await writeFile(unitPath, settled);
+
+  const calls = [];
+  const result = await refreshService({
+    entry: "/home/x/bin/moshcode.mjs", port: 5354, proxy: "127.0.0.1",
+    home, exec: async (cmd, args) => { calls.push(args.join(" ")); return { ok: true }; },
+  });
+
+  assert.equal(result.refreshed, true);
+  assert.ok(calls.includes(`--user restart ${UNIT_NAME}`));
+});
+
+test("systemctl refusing is carried back rather than reported as success", async () => {
+  const home = await scratch();
+  const unitPath = join(home, ".config/systemd/user", UNIT_NAME);
+  await mkdir(dirname(unitPath), { recursive: true });
+  await writeFile(unitPath, "[Service]\nExecStart=/usr/bin/node x dns start --port 5354\n");
+
+  const result = await refreshService({
+    entry: "/home/x/bin/moshcode.mjs", port: 5354, home,
+    exec: async (cmd, args) => (args.includes("restart")
+      ? { ok: false, error: "Interactive authentication required" }
+      : { ok: true }),
+  });
+
+  assert.equal(result.refreshed, false);
+  assert.equal(result.reason, "systemctl refused the unit");
+  assert.equal(result.steps.at(-1).error, "Interactive authentication required");
+});
+
+/* -------------------------------------------------- stopping, not removing -*/
+
+test("stop disables the unit now and leaves the file alone", async () => {
+  const home = await scratch();
+  const unitPath = join(home, ".config/systemd/user", UNIT_NAME);
+  await mkdir(dirname(unitPath), { recursive: true });
+  await writeFile(unitPath, "[Service]\nExecStart=/usr/bin/node x dns start --port 5354\n");
+
+  const calls = [];
+  const result = await stopService({ home, exec: async (cmd, args) => { calls.push(args.join(" ")); return { ok: true }; } });
+
+  assert.equal(result.stopped, true);
+  assert.deepEqual(calls, [`--user disable --now ${UNIT_NAME}`], "--now, or the unit stays running until reboot");
+  assert.equal(existsSync(unitPath), true, "turning resolution off for an afternoon must not delete the unit");
+});
+
+test("stop on a machine with no unit asks systemd nothing", async () => {
+  const home = await scratch();
+  let ran = false;
+  const result = await stopService({ home, exec: async () => { ran = true; return { ok: true }; } });
+  assert.equal(result.stopped, false);
+  assert.equal(result.reason, "no unit installed");
+  assert.equal(ran, false);
+});
+
+test("a refusal from systemctl comes back with the reason it gave", async () => {
+  const home = await scratch();
+  const unitPath = join(home, ".config/systemd/user", UNIT_NAME);
+  await mkdir(dirname(unitPath), { recursive: true });
+  await writeFile(unitPath, "[Service]\n");
+
+  const result = await stopService({ home, exec: async () => ({ ok: false, error: "Failed to disable unit" }) });
+  assert.equal(result.stopped, false);
+  assert.equal(result.reason, "Failed to disable unit");
 });
