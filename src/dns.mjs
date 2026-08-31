@@ -1695,6 +1695,36 @@ export function proxyProbeFromArgs(args = [], claimed = []) {
   return { name: claimed[0] ? `a.${claimed[0]}` : null, invalid: false };
 }
 
+/**
+ * A Moshpit name to test this machine's setup with.
+ *
+ * Synthetic on purpose — the proxy mints a certificate for any name inside the
+ * namespace, so the probe does not have to name something anybody registered.
+ * What it does have to be is a hostname the rest of the program can parse.
+ *
+ * `a.${tlds[0]}` was not. The first ending the registry returns is `00`, and
+ * `https://a.00/` is rejected outright by the WHATWG URL parser: a final label
+ * of digits makes the whole host a candidate IPv4 literal, and `a.00` is not a
+ * valid one. So proxy detection asked about a name that could not be looked up,
+ * concluded there was no proxy on a machine that had one running and holding
+ * 443, and started the bridge without proxy mode — leaving every name to answer
+ * its origin with a certificate no CA has signed.
+ *
+ * An all-numeric ending is legal and wanted (`.420`, `.2600`); it is unusable
+ * only here, which is why this skips them for the probe rather than the registry
+ * refusing to sell them. `--proxy-probe <name>` overrides, for a machine where
+ * the choice has to be a specific real name.
+ */
+export function probeName(tlds = [], args = []) {
+  const at = args.indexOf("--proxy-probe");
+  if (at >= 0) {
+    const given = args[at + 1];
+    if (given && !given.startsWith("--")) return given;
+  }
+  const usable = tlds.find((t) => !/^\d+$/.test(String(t)));
+  return usable ? `a.${usable}` : null;
+}
+
 export function upstreamsFromArgs(args = []) {
   const servers = [];
   const invalid = [];
@@ -3095,7 +3125,7 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
 
     // The name whose resolution proves the bridge is answering, alongside the
     // clearnet one that proves it is forwarding.
-    const moshpitProbe = tlds[0] ? `a.${tlds[0]}` : null;
+    const moshpitProbe = probeName(tlds, rest);
     // Restoring files is not a rollback on Windows: NRPT rules are not files,
     // so the undo is the disable plan's commands rather than the enable plan's.
     const undoSteps = platform === "windows" ? disablePlan({ platform, tlds, linuxBackend }).steps : undefined;

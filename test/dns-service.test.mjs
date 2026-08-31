@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { installService, removeService, serviceUnit, servicePaths, UNIT_NAME } from "../src/dns-service.mjs";
-import { proxyProbeFromArgs, captureRestorePoint } from "../src/dns.mjs";
+import { proxyProbeFromArgs, captureRestorePoint, probeName } from "../src/dns.mjs";
 import { proxyServiceUnit, proxyServicePaths, PROXY_UNIT_NAME } from "../src/dns-service.mjs";
 import { rootIsNarrow, ensureProxyService } from "../src/dns-service.mjs";
 
@@ -346,4 +346,45 @@ test("a narrow root is reminted as part of bringing the proxy up", async () => {
     (result?.steps || []).some((s) => /reminted the local root/.test(s.step)),
     "and the remint is reported, because it invalidates the trust the machine already has",
   );
+});
+
+/* -------------------------------------- the name `dns enable` tests itself with */
+
+// `a.${tlds[0]}` looked harmless for as long as the first ending happened to be
+// a word. It is `00` now, and `https://a.00/` is rejected by the WHATWG URL
+// parser — a final label of digits makes the host a candidate IPv4 literal, and
+// `a.00` is not a valid one.
+//
+// The consequence was not a bad error message. Proxy detection asked about a
+// name that could not be looked up, concluded there was no proxy on a machine
+// that had one running and holding 443, and started the bridge without proxy
+// mode — so every name answered its origin with a certificate no CA had signed,
+// on a machine whose setup had otherwise completed perfectly.
+
+test("an all-numeric ending is skipped — it cannot be a URL host", () => {
+  assert.equal(probeName(["00", "01", "2600", "hacker"]), "a.hacker");
+});
+
+test("the chosen probe actually parses as a URL", () => {
+  // The assertion the old code would have failed, and the reason this matters.
+  assert.doesNotThrow(() => new URL(`https://${probeName(["00", "01", "hacker"])}/`));
+  assert.throws(() => new URL("https://a.00/"), { code: "ERR_INVALID_URL" });
+});
+
+test("numeric endings stay sellable — they are only unusable as a probe", () => {
+  // `.420` and `.2600` are names people want. Nothing here refuses them; this
+  // picks a different one to *test with*.
+  assert.equal(probeName(["2600", "eggs"]), "a.eggs");
+});
+
+test("a registry of only numeric endings yields no probe rather than a broken one", () => {
+  assert.equal(probeName(["00", "2600", "420"]), null);
+  assert.equal(probeName([]), null);
+});
+
+test("--proxy-probe wins, for a machine that needs a specific real name", () => {
+  assert.equal(probeName(["00", "hacker"], ["--proxy-probe", "chovy.hacker"]), "chovy.hacker");
+  // A bare flag is a typo, not a request to probe with the next flag.
+  assert.equal(probeName(["hacker"], ["--proxy-probe"]), "a.hacker");
+  assert.equal(probeName(["hacker"], ["--proxy-probe", "--write"]), "a.hacker");
 });
