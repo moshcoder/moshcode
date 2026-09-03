@@ -35,6 +35,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode kill` | runtime | end a herd session |
 | `moshcode wait` | runtime | block until a session is blocked, done, or idle |
 | `moshcode restore` | runtime | rebuild the herd's sessions after a reboot |
+| `moshcode ssh` | runtime | persistent SSH workspaces — one connection, many clean commands |
 | `moshcode install` | engines | install an engine or workflow tool |
 | `moshcode uninstall` <br>`remove` | engines | take an engine or workflow tool off this machine |
 | `moshcode upgrade` <br>`update` | engines | update moshcode, engines, or tools |
@@ -578,6 +579,96 @@ current pit untouched.
 
 The modes are not identical across providers. In particular, OpenCode `--auto`
 auto-approves permission requests but continues to enforce explicit deny rules.
+
+## SSH workspaces
+
+`/ssh` keeps the SSH connection alive; `ssh exec` still gives each tool call a
+clean command channel.
+
+A coding run against a remote box is a few hundred small operations: read a
+file, `git status`, apply a patch, run the tests. Each one as a fresh `ssh
+user@host cmd` pays for a TCP handshake, a key exchange, a host-key check and
+authentication every time. OpenSSH can carry many channels over one
+authenticated connection, and `moshcode ssh` is a thin, careful wrapper over
+exactly that — named targets, one persistent master connection per target,
+and a `--json` execution surface built for agents.
+
+```sh
+moshcode ssh add dev deploy@example.com --cwd /srv/app   # or an alias from ~/.ssh/config
+moshcode ssh open dev                                    # authenticate once
+moshcode ssh exec dev -- git status --short              # …then every command reuses it
+moshcode ssh dev                                         # a real shell, same connection
+moshcode ssh close dev                                   # or let it expire (--persist, default 10m)
+```
+
+Nothing secret is stored. `~/.moshcode/ssh/targets.json` holds a host, a port
+and a directory; your `~/.ssh/config`, agent, `known_hosts`, `ProxyJump` and
+hardware keys keep working exactly as they do at the prompt, and host keys are
+never auto-accepted. The connection lives in an OpenSSH ControlMaster behind a
+socket only you can read, is checked with `ssh -O check` and closed with `ssh
+-O exit`, and a socket the master has gone away from is cleaned up and reopened
+on the next command.
+
+### For an agent: one connection, many clean commands
+
+`exec` runs each command on its own channel with no PTY, so stdout, stderr and
+the exit status come back separately and stdin stays raw. `ok` is the
+command's verdict; `transportOk` is ssh's. A `grep` that finds nothing is
+`{ ok: false, transportOk: true, code: 1 }` — a fact about the files, not the
+network.
+
+```sh
+moshcode ssh exec dev --json -- git diff --stat
+# {
+#   "ok": true, "target": "dev", "connected": true, "transportOk": true,
+#   "code": 0, "signal": null,
+#   "stdout": " src/app.ts | 12 +++++---\n", "stderr": "", "durationMs": 14
+# }
+
+# a model-produced multi-file patch, applied in one round trip
+git diff | moshcode ssh exec dev --json --stdin --cwd /srv/app -- git apply -
+
+moshcode ssh exec dev --json --timeout 10m -- pnpm test
+moshcode ssh exec dev --env NODE_ENV=test -- pnpm test    # for this command only
+moshcode ssh exec dev --sh 'git log --oneline | head -5'  # a pipeline, on purpose
+```
+
+There is no shell state between calls, deliberately: `exec dev -- cd /tmp`
+followed by `exec dev -- pwd` still answers with the target's cwd. Independent
+commands may run concurrently over the same connection. A run that performs a
+hundred operations authenticates once.
+
+The same objects come back from moshscript:
+
+```js
+sshOpen("dev");
+const r = sshExec("dev", ["git", "status", "--short"], { cwd: "/srv/app" });
+if (!r.ok) say(r.stderr);
+sshExec("dev", ["git", "apply", "-"], { cwd: "/srv/app", stdin: patch });
+sshClose("dev");
+```
+
+### When shell state matters
+
+Some work needs a shell that remembers: a `cd`, an export, a dev server, a
+REPL. `shell` puts one in tmux on the remote box, where it outlives this
+terminal, this connection, and the laptop lid.
+
+```sh
+moshcode ssh shell dev --name app            # create or attach · Ctrl-b d leaves it running
+moshcode ssh shell send dev/app "pnpm dev"   # type into it without attaching
+moshcode ssh shell read dev/app --lines 40   # its screen, as text
+moshcode ssh shell kill dev/app
+```
+
+If tmux is not on the remote box, `shell` says so and `exec` keeps working;
+nothing is installed remotely on your behalf.
+
+`put` and `get` copy single files over the same connection with `scp`; `put`
+lands as a temp file and is renamed into place. `bench <name>` measures fresh
+connections against the shared one on your own hosts — on a loopback sshd the
+median command went from ~96ms to ~12ms, and on a real network the handshake
+is the part that grows.
 
 ## Workflow tools: UGig, CoinPay, and the cloud CLIs
 
