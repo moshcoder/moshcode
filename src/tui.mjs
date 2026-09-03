@@ -1024,6 +1024,20 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
+    // SSH workspaces (PRD 0013). `/ssh dev`, `/ssh exec --tty` and `/ssh
+    // shell` hand the terminal to ssh the way /attach does; every other verb
+    // answers in place and the prompt stays.
+    if (cmd === "ssh") {
+      const { sshCommand, takesTerminal } = await import("./ssh.mjs");
+      if (takesTerminal(rest)) {
+        rl.close();
+        await sshCommand(rest);
+        rl = mkrl();
+      } else {
+        await sshCommand(rest);
+      }
+      continue;
+    }
     if (cmd === "agents" || cmd === "agent" || cmd === "engines") {
       if (!rest[0] || (rest.length === 1 && rest[0] === "--json")) {
         printEngines(rest[0] === "--json");

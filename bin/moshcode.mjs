@@ -353,6 +353,13 @@ async function main() {
     process.exitCode = (await herdCommand([cmd === "usage" ? "cost" : cmd, ...rest])) || 0;
     return;
   }
+  // SSH workspaces (PRD 0013). Imported here rather than at the top: it is a
+  // registry read and a few spawns, and `moshcode claude` never needs it.
+  if (cmd === "ssh") {
+    const { sshCommand } = await import("../src/ssh.mjs");
+    process.exitCode = (await sshCommand(rest)) || 0;
+    return;
+  }
   if (cmd === "tools") {
     const asJson = rest.includes("--json");
     printStatus(toolStatus(), asJson);

@@ -208,6 +208,36 @@ export const CORE_CLI_COMMANDS = [
     note: "this brings back the shape — sessions, directories, engines. the processes are new; work that was in flight is not still running.",
   },
   {
+    name: "ssh",
+    group: "runtime",
+    description: "persistent SSH workspaces — one connection, many clean commands",
+    synopsis: [
+      ["moshcode ssh", "targets, and whether each one is connected"],
+      ["moshcode ssh <name>", "an interactive shell over the shared connection"],
+      ["moshcode ssh exec <name> [flags] -- <command…>", "one command over it: stdout, stderr and exit status kept apart"],
+      ["moshcode ssh <verb> [args…]", "add, open, check, close, put, get, shell, bench"],
+    ],
+    verbs: "SSH_VERBS",
+    flags: [
+      ["--json", "machine-readable, on every verb that does not take the terminal", ""],
+      ["--persist <dur>", "how long the connection outlives its last client", "10m"],
+    ],
+    examples: [
+      ["moshcode ssh add dev deploy@example.com --cwd /srv/app", "a name for a box (or an alias from ~/.ssh/config)"],
+      ["moshcode ssh open dev", "authenticate once"],
+      ["moshcode ssh exec dev -- git status --short", "…then every command reuses it"],
+      ["moshcode ssh exec dev --json -- pnpm test", "exit code, stdout and stderr as one object"],
+      ["git diff | moshcode ssh exec dev --stdin -- git apply -", "a multi-file patch in one round trip"],
+      ["moshcode ssh dev", "a real shell on the same connection"],
+      ["moshcode ssh shell dev --name app", "a remote tmux shell that survives your laptop sleeping"],
+      ["moshcode ssh close dev", "hang up (or let --persist expire)"],
+    ],
+    seeAlso: ["herd", "shell"],
+    note: "nothing secret is stored: targets.json holds a host, a port and a directory, and OpenSSH keeps using your ~/.ssh, "
+      + "agent, known_hosts and ProxyJump exactly as it does at the prompt. `exec` gives every call a fresh command channel — "
+      + "no shell state carries between calls; `shell` is for the workflows that need it.",
+  },
+  {
     name: "install",
     group: "engines",
     description: "install an engine or workflow tool",
@@ -1325,6 +1355,82 @@ export const HERD_VERBS = [
 // The business layer's verbs. Flatter than the herd's on purpose: these are
 // commands somebody types between other work, and a verb that needs a paragraph
 // to explain itself is a verb in the wrong place.
+export const SSH_VERBS = [
+  { name: "list", description: "every target, and whether its connection is up",
+    synopsis: [["moshcode ssh [list] [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "add", description: "name a box: user@host, or an alias from ~/.ssh/config",
+    synopsis: [["moshcode ssh add <name> <user@host|alias> [--port N] [--cwd PATH] [--persist 10m]", ""]],
+    flags: [
+      ["--port <n>", "ssh port, when ~/.ssh/config does not say", "22"],
+      ["--cwd <path>", "where exec and the interactive shell start", "the remote login directory"],
+      ["--persist <dur>", "how long the connection outlives its last client", "10m"],
+      ["--json", "machine-readable", ""],
+    ] },
+  { name: "remove", description: "forget a target (and close its connection)",
+    synopsis: [["moshcode ssh remove <name>", ""]] },
+  { name: "show", description: "one target in full, with its socket and state",
+    synopsis: [["moshcode ssh show <name> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "open", description: "authenticate once and keep the connection",
+    synopsis: [["moshcode ssh open <name> [--persist 10m] [--batch] [--json]", ""]],
+    flags: [
+      ["--persist <dur>", "how long it outlives its last client", "10m"],
+      ["--batch", "never prompt — fail instead (the default when stdin is not a terminal)", ""],
+      ["--json", "machine-readable; alreadyOpen says whether it was up", ""],
+    ] },
+  { name: "check", description: "is the connection up? (exit 0 yes, 1 no)",
+    synopsis: [["moshcode ssh check <name> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "close", description: "hang up, with ssh's own -O exit",
+    synopsis: [["moshcode ssh close <name> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "exec", description: "one command over the connection — no PTY, no shared shell state",
+    synopsis: [["moshcode ssh exec <name> [--cwd PATH] [--env K=V…] [--stdin] [--tty] [--timeout 2m] [--sh] [--json] -- <command…>", ""]],
+    flags: [
+      ["--cwd <path>", "run it here, this once", "the target's cwd"],
+      ["--env <K=V>", "an environment variable for this command only (repeatable)", ""],
+      ["--stdin", "forward this process's stdin, raw", ""],
+      ["--tty", "allocate a terminal (sudo, editors, anything that insists)", ""],
+      ["--timeout <dur>", "kill it after this long — exit 124", ""],
+      ["--sh", "the one argument is a shell snippet, pipes and all", ""],
+      ["--batch", "never prompt for auth — fail instead", ""],
+      ["--json", "{ ok, transportOk, code, signal, stdout, stderr, durationMs }", ""],
+    ],
+    examples: [
+      ["moshcode ssh exec dev -- git status --short", ""],
+      ["moshcode ssh exec dev --json -- grep -rn TODO src", "exit 1 is grep's answer, not a transport failure"],
+      ["moshcode ssh exec dev --sh 'git log --oneline | head -5'", "a pipeline, on purpose"],
+    ] },
+  { name: "put", description: "copy a file up over the connection, atomically",
+    synopsis: [["moshcode ssh put <name> <local> <remote> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "get", description: "copy a file down over the connection",
+    synopsis: [["moshcode ssh get <name> <remote> <local> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]] },
+  { name: "shell", description: "a persistent remote shell in tmux, and the verbs to drive it",
+    synopsis: [
+      ["moshcode ssh shell <name> --name <session>", "create or attach — Ctrl-b d leaves it running"],
+      ["moshcode ssh shell send <name>/<session> <text>", "type a line into it"],
+      ["moshcode ssh shell read <name>/<session> [--lines N]", "its screen, as text"],
+      ["moshcode ssh shell kill <name>/<session>", "end it"],
+      ["moshcode ssh shell list <name>", "every moshcode shell on the box"],
+    ],
+    flags: [
+      ["--name <session>", "which shell", "main"],
+      ["--lines <n>", "how much screen to read", "60"],
+      ["--json", "machine-readable", ""],
+    ],
+    examples: [
+      ["moshcode ssh shell dev --name app", ""],
+      ["moshcode ssh shell send dev/app \"pnpm dev\"", ""],
+      ["moshcode ssh shell read dev/app --lines 40", ""],
+    ] },
+  { name: "bench", description: "measure fresh connections against the shared one, on this host",
+    synopsis: [["moshcode ssh bench <name> [--n 20] [--json]", ""]],
+    flags: [["--n <runs>", "how many of each", "20"], ["--json", "machine-readable", ""]] },
+];
+
 export const TIMER_VERBS = [
   { name: "on", description: "start the clock", synopsis: [["moshcode timer on [client] [--task …] [--agents N|auto]", ""]] },
   { name: "off", description: "stop it and write the entry", synopsis: [["moshcode timer off [--note …]", ""]] },
@@ -1377,6 +1483,7 @@ export const PAYMENT_VERBS = [
 
 export const VERB_TABLES = {
   HERD_VERBS,
+  SSH_VERBS,
   TIMER_VERBS,
   CLIENT_VERBS,
   TEAM_VERBS,
@@ -1428,6 +1535,8 @@ export const PIT_COMMANDS = [
     description: "block until a session is blocked or done" },
   { name: "restore", args: "[--resume]", cli: "restore",
     description: "rebuild the herd's sessions after a reboot" },
+  { name: "ssh", args: "[name|verb] [args…]", cli: "ssh",
+    description: "persistent SSH workspaces — one connection, many clean commands" },
   { name: "tools", args: "[name] [args…]", cli: "tools",
     description: "list workflow tools, or run one" },
   { name: "trade", args: "<verb> [args…]", cli: "trade",

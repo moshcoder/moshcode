@@ -22,6 +22,27 @@ import { capture, killSession, remoteStatus, sendPrompt } from "./herd.mjs";
 import { herdStart, isRemoteMember, roster, waitForMany, waitMember } from "./herd-cli.mjs";
 import { endTask, findTask, readTasks, startTask } from "./herd-tasks.mjs";
 import { shellInvocation } from "./shell.mjs";
+import {
+  checkMaster as sshCheckMaster, closeMaster as sshCloseMaster, exec as sshRun, get as sshGetFile,
+  openMaster as sshOpenMaster, parseSessionRef as sshParseSessionRef, parseTimeout as parseSshTimeout,
+  put as sshPutFile, resolveTarget as sshResolve,
+  shellKill as sshShellKillRemote, shellRead as sshShellReadRemote, shellSend as sshShellSendRemote,
+} from "./ssh.mjs";
+
+/** The registry entry for a named ssh target, or a moshscript error naming the verb. */
+function sshTarget(name, verb) {
+  if (!name) throw new Error(`moshscript: ${verb}(name) requires a target name`);
+  const found = sshResolve(String(name));
+  if (found.error) throw new Error(`moshscript: ${verb}: ${found.error.replace(/^ssh: /, "")}`);
+  return found.entry;
+}
+
+/** `dev/app` → the target entry and the session name, or a moshscript error. */
+function sshShellRef(ref, verb) {
+  const parsed = sshParseSessionRef(ref);
+  if (parsed.error) throw new Error(`moshscript: ${verb}: ${parsed.error.replace(/^ssh: /, "")}`);
+  return { found: sshTarget(parsed.name, verb), session: parsed.session };
+}
 import { captureSpec } from "./pty.mjs";
 import { identity, loginAuto, logout as forgetCreds } from "./auth.mjs";
 import { expandAlias, getAlias, loadAliases, removeAlias, setAlias } from "./aliases.mjs";
@@ -654,6 +675,148 @@ const COMMANDS = [
     },
   },
 
+  // SSH workspaces (PRD 0013 R49–R52). Value-returning for the herd's reason:
+  // a script that runs a command on a remote box wants its stdout back, and a
+  // cliVerb's { ok, code } cannot carry it. Each returns the same object the
+  // CLI prints under --json, so a script and a shell pipeline read one shape.
+  //
+  //   sshOpen("dev");
+  //   const r = sshExec("dev", ["git", "status", "--short"], { cwd: "/srv/app" });
+  //   if (!r.ok) say(r.stderr);
+  //   sshExec("dev", ["git", "apply", "-"], { stdin: patch });
+  //   sshClose("dev");
+  {
+    name: "sshOpen",
+    summary: "authenticate to a named ssh target once and keep the connection",
+    usage: "sshOpen(name, { persist })",
+    detail: "returns { ok, connected, alreadyOpen }; a live connection is left alone",
+    run(ctx, name, opts = {}) {
+      const found = sshTarget(name, "sshOpen");
+      if (ctx.dryRun) { ctx.out(`  🔌 sshOpen(${name}) → would open a master to ${found.target}`); return { ok: true, target: found.name, connected: true, dryRun: true }; }
+      const r = sshOpenMaster(found, { persist: opts.persist, batch: opts.batch });
+      ctx.out(r.ok ? `  🔌 sshOpen(${name}) → ${r.alreadyOpen ? "already connected" : "connected"}` : `  ✗ sshOpen(${name}) → ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "sshCheck",
+    summary: "is the connection to a target up?",
+    usage: "sshCheck(name)",
+    detail: "returns { connected, stale, pid }; never connects",
+    run(ctx, name) {
+      const found = sshTarget(name, "sshCheck");
+      if (ctx.dryRun) return { target: found.name, connected: false, dryRun: true };
+      const s = sshCheckMaster(found);
+      return { target: found.name, connected: s.connected, stale: s.stale, pid: s.pid ?? null };
+    },
+  },
+  {
+    name: "sshExec",
+    summary: "run one command over the shared connection and RETURN its result",
+    usage: "sshExec(name, [cmd, ...args], { cwd, env, stdin, timeout, sh })",
+    detail: "returns { ok, transportOk, code, signal, stdout, stderr, durationMs }; opens the connection if it is down. ok is the command's verdict, transportOk is ssh's",
+    run(ctx, name, argv, opts = {}) {
+      const found = sshTarget(name, "sshExec");
+      const command = Array.isArray(argv) ? argv.map(String) : [String(argv ?? "")].filter(Boolean);
+      if (!command.length) throw new Error("moshscript: sshExec(name, [command, ...args]) needs a command");
+      if (ctx.dryRun) {
+        ctx.out(`  ▶ sshExec(${name}) → would run on ${found.target}: ${command.join(" ")}`);
+        return { ok: true, transportOk: true, target: found.name, connected: true, code: 0, signal: null, stdout: "", stderr: "", durationMs: 0, dryRun: true };
+      }
+      ctx.out(`  ▶ sshExec(${name}) → ${command.join(" ").slice(0, 60)}${command.join(" ").length > 60 ? "…" : ""}`);
+      const timeoutMs = opts.timeout === undefined ? undefined
+        : (typeof opts.timeout === "number" ? opts.timeout : parseSshTimeout(opts.timeout));
+      const r = sshRun(found, command, {
+        cwd: opts.cwd, remoteEnv: opts.env || {}, stdin: opts.stdin, sh: Boolean(opts.sh), timeoutMs, persist: opts.persist, batch: opts.batch ?? true,
+      });
+      if (!r.transportOk) ctx.out(`  ✗ sshExec(${name}) → ${r.error}`);
+      else if (!r.ok) ctx.out(`  ✗ sshExec(${name}) exited ${r.signal || r.code}`);
+      return r;
+    },
+  },
+  {
+    name: "sshClose",
+    summary: "hang up a target's connection",
+    usage: "sshClose(name)",
+    detail: "returns { ok, closed, wasOpen }",
+    run(ctx, name) {
+      const found = sshTarget(name, "sshClose");
+      if (ctx.dryRun) { ctx.out(`  🔌 sshClose(${name}) → would send -O exit`); return { ok: true, target: found.name, closed: true, dryRun: true }; }
+      const r = sshCloseMaster(found);
+      ctx.out(r.ok ? `  🔌 sshClose(${name}) → ${r.wasOpen ? "closed" : "was not connected"}` : `  ✗ sshClose(${name}) → ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "sshPut",
+    summary: "copy a local file to a target, atomically",
+    usage: "sshPut(name, local, remote)",
+    detail: "returns { ok, remote }; scp to a temp path over the shared connection, then rename",
+    run(ctx, name, local, remote) {
+      const found = sshTarget(name, "sshPut");
+      if (!local || !remote) throw new Error("moshscript: sshPut(name, local, remote) needs both paths");
+      if (ctx.dryRun) { ctx.out(`  📤 sshPut(${name}) → would copy ${local} to ${remote}`); return { ok: true, target: found.name, dryRun: true }; }
+      const r = sshPutFile(found, String(local), String(remote));
+      ctx.out(r.ok ? `  📤 sshPut(${name}) → ${r.remote}` : `  ✗ sshPut(${name}) → ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "sshGet",
+    summary: "copy a file down from a target",
+    usage: "sshGet(name, remote, local)",
+    detail: "returns { ok, local }",
+    run(ctx, name, remote, local) {
+      const found = sshTarget(name, "sshGet");
+      if (!local || !remote) throw new Error("moshscript: sshGet(name, remote, local) needs both paths");
+      if (ctx.dryRun) { ctx.out(`  📥 sshGet(${name}) → would copy ${remote} to ${local}`); return { ok: true, target: found.name, dryRun: true }; }
+      const r = sshGetFile(found, String(remote), String(local));
+      ctx.out(r.ok ? `  📥 sshGet(${name}) → ${r.local}` : `  ✗ sshGet(${name}) → ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "sshShellSend",
+    summary: "type a line into a persistent remote shell",
+    usage: 'sshShellSend("dev/app", text)',
+    detail: "returns { ok }; literal text then Enter, into the remote tmux session",
+    run(ctx, ref, ...words) {
+      const { found, session } = sshShellRef(ref, "sshShellSend");
+      const text = words.join(" ");
+      if (!text) throw new Error("moshscript: sshShellSend(ref, text) needs text");
+      if (ctx.dryRun) { ctx.out(`  💬 sshShellSend(${ref}) → would send: ${text}`); return { ok: true, dryRun: true }; }
+      const r = sshShellSendRemote(found, session, text);
+      if (!r.ok) ctx.out(`  ✗ sshShellSend(${ref}) → ${r.error}`);
+      return r;
+    },
+  },
+  {
+    name: "sshShellRead",
+    summary: "the screen of a persistent remote shell, as a string",
+    usage: 'sshShellRead("dev/app", { lines })',
+    detail: "returns the text (empty on failure); the same capture-pane the CLI's read prints",
+    run(ctx, ref, opts = {}) {
+      const { found, session } = sshShellRef(ref, "sshShellRead");
+      if (ctx.dryRun) { ctx.out(`  📖 sshShellRead(${ref}) → would capture the pane`); return ""; }
+      const r = sshShellReadRemote(found, session, { lines: opts.lines });
+      if (!r.ok) { ctx.out(`  ✗ sshShellRead(${ref}) → ${r.error}`); return ""; }
+      return r.screen;
+    },
+  },
+  {
+    name: "sshShellKill",
+    summary: "end a persistent remote shell",
+    usage: 'sshShellKill("dev/app")',
+    detail: "returns { ok }",
+    run(ctx, ref) {
+      const { found, session } = sshShellRef(ref, "sshShellKill");
+      if (ctx.dryRun) { ctx.out(`  ☠ sshShellKill(${ref}) → would kill the session`); return { ok: true, dryRun: true }; }
+      const r = sshShellKillRemote(found, session);
+      if (!r.ok) ctx.out(`  ✗ sshShellKill(${ref}) → ${r.error}`);
+      return r;
+    },
+  },
+
   // CLI verbs — each is `moshcode <name> ...args`. This is the whole point:
   // scripting the CLI. Add a capability by adding a line here.
   //
@@ -695,6 +858,7 @@ const COMMANDS = [
   cliVerb("elevenlabs", "drive the ElevenLabs CLI (Eleven Agents, voices, TTS, dubbing)"),
   cliVerb("trade", "look up tickers, inspect markets, and preview/place Alpaca orders"),
   cliVerb("pwd", "print the current repo/location"),
+  cliVerb("ssh", "persistent SSH workspaces (moshcode ssh <verb>) — see sshExec/sshOpen for values"),
 
   // Research and feeds. The *Read() verbs above return the data; these are the
   // rendered CLI, for when a script wants the table on the operator's screen.
