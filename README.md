@@ -1010,6 +1010,39 @@ an equity's score, and each response ships the `caveats` that say so. Prices are
 Alpaca's US venue alone and can differ materially from other exchanges. Research
 aid, not advice — and like `stocks`, nothing under `crypto` can place an order.
 
+### Throttle (`/nice`)
+
+The pit's job is starting other people's programs, and some of them are not shy.
+Run a few engines at once on a box you also want to type on and you get the
+failure everyone knows: nothing crashed, but the machine stops answering.
+
+```text
+/nice on          # nice -n10 + ionice -c2 -n7 for every engine started after
+/nice mem 2G      # a ceiling, so a runaway dies alone
+/nice cpu 15      # yield more (nice takes -20..19)
+/nice             # what it is set to
+/nice off         # back to normal priority (the default)
+```
+
+It is off by default — a throttle nobody asked for is a slow engine nobody can
+explain — and it applies to engines started *after* you turn it on.
+
+**`nice` alone is half a fix, and it is worth knowing which half.** It reorders
+CPU, so it buys back the part of a freeze you could have waited out. It does
+nothing about memory, and memory is the stall that actually costs you a session:
+once free RAM runs out the kernel reclaims, reclaim goes to disk, and no
+scheduling priority makes that faster. That is why `/nice mem` exists — it puts
+the engine in a systemd scope with a hard ceiling, so the one runaway process
+gets killed instead of the whole box going unresponsive.
+
+The ceiling is the one setting that can silently not apply: `systemd-run --user`
+needs a systemd user session, and an ssh login without lingering has none.
+`/nice` says so in its status line rather than pretending, and the CPU and I/O
+halves still work. On a box with no `nice` or `ionice` at all, and on Windows,
+the whole thing is a no-op — engines spawn exactly as they did before.
+
+Settings live in `~/.moshcode/nice.json`, owner-only like the history file.
+
 ### Aliases (`/alias`)
 
 The pit is a prompt you sit at all day, so it lets you name the lines you keep

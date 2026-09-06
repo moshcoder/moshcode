@@ -22,6 +22,7 @@ import { activeChildInput, createMirror, pressKey, setActiveSink, teeOutput } fr
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
+import { loadNice, saveNice, describeNice, canCapMemory, parseMemory } from "./nice.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "./integrations.mjs";
 import { stocksCommand } from "./advisor.mjs";
 import { cryptoCommand } from "./crypto.mjs";
@@ -388,6 +389,63 @@ function isInstalledTool(key) {
  * line, not an argument list: re-joining tokens would drop the quoting that the
  * shell still has to read.
  */
+/**
+ * `/nice` — run the CLIs the pit starts at a lower priority than your terminal.
+ *
+ * A toggle rather than a per-launch flag because the thing being tuned is the
+ * box, not the command: you decide once that this machine is shared, and every
+ * engine started afterwards honours it. Off by default — a throttle nobody
+ * asked for is a slow engine nobody can explain.
+ */
+function niceCommand(rest) {
+  const [verb, ...args] = rest.filter((a) => a !== "--json");
+  const sub = String(verb ?? "").toLowerCase();
+  const json = rest.includes("--json");
+  const settings = loadNice();
+
+  if (json) { console.log(JSON.stringify(settings, null, 2)); return; }
+
+  if (!verb || sub === "status") {
+    console.log(info(describeNice(settings)));
+    if (!settings.on) console.log(ash(`   ${acid("/nice on")} throttles CPU and I/O for every engine the pit starts`));
+    else if (!settings.memoryMax) console.log(ash(`   ${acid("/nice mem 2G")} adds a memory ceiling — the part nice(1) can't do`));
+    return;
+  }
+
+  if (sub === "on" || sub === "off") {
+    const saved = saveNice({ ...settings, on: sub === "on" });
+    console.log(ok(describeNice(saved)));
+    if (saved.on) console.log(ash("   applies to engines started from here on; anything already running keeps its priority"));
+    return;
+  }
+
+  if (sub === "cpu" || sub === "io") {
+    const n = Number(args[0]);
+    if (!Number.isInteger(n)) {
+      console.log(err(`usage: /nice ${sub} <number>${sub === "cpu" ? "  (-20..19, higher = yields more)" : "  (0..7, higher = yields more)"}`));
+      return;
+    }
+    const saved = saveNice({ ...settings, [sub]: n });
+    console.log(ok(describeNice(saved)));
+    return;
+  }
+
+  if (sub === "mem" || sub === "memory") {
+    const parsed = parseMemory(args[0]);
+    if (!parsed.ok) { console.log(err(parsed.error)); return; }
+    const saved = saveNice({ ...settings, memoryMax: parsed.value });
+    console.log(ok(describeNice(saved)));
+    // Worth saying plainly: this is the one setting that can silently not apply.
+    if (parsed.value && !canCapMemory()) {
+      console.log(ash("   no systemd user session on this box, so the ceiling is recorded but not enforced"));
+      console.log(ash(`   ${acid("loginctl enable-linger $USER")} gives this login one`));
+    }
+    return;
+  }
+
+  console.log(err(`/nice ${sub} isn't a thing — try on, off, cpu <n>, io <n>, or mem <size>`));
+}
+
 function aliasCommand(rest, line) {
   const json = rest.includes("--json");
   // `--json` is the listing's flag wherever it appears, so `/alias --json` is a
@@ -936,6 +994,7 @@ export async function tui() {
       continue;
     }
     if (cmd === "alias" || cmd === "aliases") { aliasCommand(rest, line); continue; }
+    if (cmd === "nice" || cmd === "throttle") { niceCommand(rest); continue; }
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "login") {
       const device = rest.includes("--device") || rest.includes("device") || rest.includes("-d");

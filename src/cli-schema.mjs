@@ -1596,6 +1596,20 @@ export const PIT_COMMANDS = [
     description: "show the current dir + git repo/branch/origin" },
   { name: "shell", aliases: ["sh"], args: "[cmd]", pitOnly: true,
     description: "drop into $SHELL (exit → back to the pit); also !cmd" },
+  { name: "nice", aliases: ["throttle"], args: "on | off | cpu <n> | io <n> | mem <size>", pitOnly: true,
+    description: "run engines at low priority so the box stays usable",
+    synopsis: [
+      ["/nice [status]", "what the throttle is set to"],
+      ["/nice on | off", "toggle it (off by default)"],
+      ["/nice cpu <-20..19>", "nice level — higher yields more CPU"],
+      ["/nice io <0..7>", "ionice best-effort level"],
+      ["/nice mem <size> | off", "memory ceiling per engine (needs systemd)"],
+    ],
+    examples: [
+      ["/nice on", "nice -n10 + ionice -c2 -n7 for every engine started after"],
+      ["/nice mem 2G", "the ceiling nice(1) can't give you — a runaway dies alone"],
+    ],
+    seeAlso: ["agents", "start"] },
   { name: "alias", aliases: ["aliases"], args: 'set <name> "<cmd>" | list | get | rm | install <tool>', pitOnly: true,
     description: "name a line you keep retyping; /<name> runs it",
     synopsis: [

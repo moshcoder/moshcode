@@ -37,6 +37,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { setActiveChildInput } from "./mirror.mjs";
+import { throttleSpec } from "./nice.mjs";
 import { captureSpec } from "./pty.mjs";
 
 export const ENGINES = {
@@ -338,7 +339,22 @@ function nodeShebang(file) {
   }
 }
 
+/**
+ * Where every CLI the pit starts is turned into a spawnable command.
+ *
+ * Both launch paths go through here — `runCmd` for installers and updaters,
+ * `openPassthrough` for the engines themselves — which makes it the one place
+ * the resource throttle has to be applied to cover all of them. It wraps
+ * *outside* resolution on purpose: `nice` needs a real executable to hand off
+ * to, and an unresolved binary must still produce its own ENOENT rather than
+ * one from a wrapper that obscures which program was actually missing.
+ * `/nice off` (the default) returns the spec untouched.
+ */
 function spawnSpec(bin, args = [], extraDirs = []) {
+  return throttleSpec(resolveSpec(bin, args, extraDirs));
+}
+
+function resolveSpec(bin, args = [], extraDirs = []) {
   const resolved = resolveExecutable(bin, extraDirs);
   // Unresolved, so hand the spawn the preferred name and let it produce the
   // ENOENT — a list would be spawned as a single nonsense filename.
