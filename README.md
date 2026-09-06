@@ -1017,15 +1017,34 @@ Run a few engines at once on a box you also want to type on and you get the
 failure everyone knows: nothing crashed, but the machine stops answering.
 
 ```text
-/nice on          # nice -n10 + ionice -c2 -n7 for every engine started after
+/nice agents claude    # throttle this one engine
+/nice pnpm -r build    # …or this one shell line
+/nice merge            # …or any other pit command
+
+/nice on          # or throttle everything from here on
 /nice mem 2G      # a ceiling, so a runaway dies alone
 /nice cpu 15      # yield more (nice takes -20..19)
 /nice             # what it is set to
 /nice off         # back to normal priority (the default)
 ```
 
-It is off by default — a throttle nobody asked for is a slow engine nobody can
-explain — and it applies to engines started *after* you turn it on.
+`/nice <line>` is the form to reach for. It runs **anything the pit can already
+run** — a pit command, an engine, a tool, one of your aliases, or a bare shell
+line — at low priority, without changing any setting. It works on all of those
+because it hands the rest of the line back to the top of the dispatcher exactly
+as an alias expansion does, rather than keeping a list of its own that would
+drift. The leading slash is optional: `/nice agents claude` and
+`/nice /agents claude` are the same line.
+
+The throttle lasts exactly as long as the line that asked for it, including
+through an alias that expands into something else. The next thing you type is
+back to normal.
+
+`/nice on` is the other half, for when the box is shared all day and you would
+rather decide once. It is off by default — a throttle nobody asked for is a slow
+engine nobody can explain — and it applies to engines started *after* you turn
+it on. The settings words (`on`, `off`, `status`, `cpu`, `io`, `mem`) win the
+first position, so a program named `on` is not reachable through `/nice`.
 
 **`nice` alone is half a fix, and it is worth knowing which half.** It reorders
 CPU, so it buys back the part of a freeze you could have waited out. It does

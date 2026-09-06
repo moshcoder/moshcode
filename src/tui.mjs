@@ -22,7 +22,10 @@ import { activeChildInput, createMirror, pressKey, setActiveSink, teeOutput } fr
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
-import { loadNice, saveNice, describeNice, canCapMemory, parseMemory } from "./nice.mjs";
+import {
+  loadNice, saveNice, describeNice, canCapMemory, parseMemory,
+  armOneShot, disarmOneShot,
+} from "./nice.mjs";
 import { mcpCommand, pluginCommand, skillCommand } from "./integrations.mjs";
 import { stocksCommand } from "./advisor.mjs";
 import { cryptoCommand } from "./crypto.mjs";
@@ -389,6 +392,16 @@ function isInstalledTool(key) {
  * line, not an argument list: re-joining tokens would drop the quoting that the
  * shell still has to read.
  */
+/**
+ * The words that mean "configure the throttle" rather than "run this".
+ *
+ * Kept next to the command that implements them so the two cannot drift: every
+ * other first word after `/nice` is a line to run, so adding a verb here
+ * without teaching niceCommand about it would make that word silently
+ * unrunnable rather than produce an error.
+ */
+const NICE_SETTING_VERBS = new Set(["on", "off", "status", "cpu", "io", "mem", "memory"]);
+
 /**
  * `/nice` — run the CLIs the pit starts at a lower priority than your terminal.
  *
@@ -929,6 +942,11 @@ export async function tui() {
       finally { atPrompt(null); }
       if (line == null) break; // Ctrl-D
       expansions = 0;
+      // A one-shot `/nice <line>` lasts exactly as long as the line that asked
+      // for it. Cleared here, where a REAL line is read, and not when a command
+      // returns: one typed line can dispatch several times through alias
+      // expansion, and all of that is still the line the user said to be nice.
+      disarmOneShot();
       line = line.trim();
       if (!line) continue;
       saveHistory(); // readline just recorded this line into the shared history
@@ -994,7 +1012,31 @@ export async function tui() {
       continue;
     }
     if (cmd === "alias" || cmd === "aliases") { aliasCommand(rest, line); continue; }
-    if (cmd === "nice" || cmd === "throttle") { niceCommand(rest); continue; }
+    if (cmd === "nice" || cmd === "throttle") {
+      // `/nice <line>` runs one line throttled without touching the setting --
+      // the form anyone who has used nice(1) reaches for first. The settings
+      // verbs win the name, so a command called `on` is unreachable this way;
+      // that is the right trade for `/nice on` meaning what it obviously means.
+      const sub = String(rest[0] ?? "").toLowerCase().replace(/^\//, "");
+      // A leading flag (`/nice --json`) is asking about the throttle, not
+      // naming a program: no line the pit runs starts with a dash.
+      if (!rest.length || sub.startsWith("-") || NICE_SETTING_VERBS.has(sub)) {
+        niceCommand(rest);
+        continue;
+      }
+
+      // Hand the remainder back to the top of this loop rather than dispatching
+      // it here, exactly as alias expansion does. That is what makes `/nice`
+      // work on anything the pit can already run -- a pit command, an engine, a
+      // tool, an alias, or a bare shell line -- with no roster of its own to
+      // drift out of date. The leading slash is optional because the dispatcher
+      // strips one anyway, so `/nice agents claude` and `/nice /agents claude`
+      // are the same line.
+      armOneShot();
+      pending = commandRemainder(line);
+      console.log(ash(`  ▸ throttled: ${pending}`));
+      continue;
+    }
     if (cmd === "pwd" || cmd === "where") { printPwd(); continue; }
     if (cmd === "login") {
       const device = rest.includes("--device") || rest.includes("device") || rest.includes("-d");

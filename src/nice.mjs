@@ -53,6 +53,42 @@ export function niceFile() {
 }
 
 /**
+ * `/nice <line>` throttles one line without changing the saved setting.
+ *
+ * Module-level rather than threaded through every call because the thing being
+ * throttled is not a function argument -- it is whatever that line eventually
+ * spawns, which may be an alias that expands to a pit command that starts an
+ * engine, three dispatch rounds later. The pit reads one line at a time and
+ * fully awaits it, so "armed until the next line the user types" is both the
+ * simplest implementation and exactly the intent.
+ */
+let oneShot = false;
+
+/** Throttle whatever the current line ends up spawning. */
+export function armOneShot() { oneShot = true; }
+
+/**
+ * Stop throttling. The pit calls this when it reads a fresh line, NOT when a
+ * command finishes: one typed line can dispatch several times through alias
+ * expansion, and all of it is the line the user asked to be nice.
+ */
+export function disarmOneShot() { oneShot = false; }
+
+/** Is a one-shot throttle in force? */
+export function oneShotArmed() { return oneShot; }
+
+/**
+ * The settings a spawn should actually use: what is saved, plus a one-shot.
+ *
+ * `/nice on` and `/nice <cmd>` end in the same place by design -- a spawn does
+ * not need to know which of the two asked for it.
+ */
+export function effectiveNice() {
+  const saved = loadNice();
+  return oneShot ? { ...saved, on: true } : saved;
+}
+
+/**
  * The current settings, always a complete object.
  *
  * Read on the spawn path for every CLI the pit starts, so a missing,
@@ -135,7 +171,7 @@ export function canCapMemory({ has = haveBin, env = process.env } = {}) {
  * rather than a wrong guess.
  */
 export function throttleSpec(spec, {
-  settings = loadNice(),
+  settings = effectiveNice(),
   has = haveBin,
   env = process.env,
   platform = process.platform,
