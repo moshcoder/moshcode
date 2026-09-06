@@ -15,6 +15,10 @@ import {
   parseMemory,
   saveNice,
   throttleSpec,
+  armOneShot,
+  disarmOneShot,
+  oneShotArmed,
+  effectiveNice,
 } from "../src/nice.mjs";
 
 /**
@@ -199,4 +203,55 @@ test("status line says when a ceiling is set but cannot be enforced here", () =>
 
 test("off reads as off in the status line", () => {
   assert.match(describeNice({ on: false, ...DEFAULTS }), /off/);
+});
+
+test("a one-shot throttles the spawn without touching the saved setting", () => {
+  withHome(() => {
+    assert.equal(loadNice().on, false);
+    armOneShot();
+    try {
+      assert.equal(effectiveNice().on, true, "the spawn sees it as on");
+      assert.equal(loadNice().on, false, "...but nothing was written to disk");
+      const spec = throttleSpec(BARE, { has: boxWith("nice", "ionice"), platform: "linux" });
+      assert.equal(spec.cmd, "nice");
+      assert.equal(spec.throttled, true);
+    } finally { disarmOneShot(); }
+  });
+});
+
+test("disarming returns the spawn to whatever was saved", () => {
+  withHome(() => {
+    armOneShot();
+    disarmOneShot();
+    assert.equal(oneShotArmed(), false);
+    const spec = throttleSpec(BARE, { has: boxWith("nice", "ionice"), platform: "linux" });
+    assert.equal(spec.throttled, false, "off again once the line is done");
+  });
+});
+
+test("a one-shot can only add throttling, never remove it", () => {
+  // Someone who set `on` and then ran a line through /nice must not silently
+  // get an UNthrottled spawn out of it.
+  withHome(() => {
+    saveNice({ on: true, cpu: 10, io: 7 });
+    disarmOneShot();
+    assert.equal(effectiveNice().on, true);
+    armOneShot();
+    try { assert.equal(effectiveNice().on, true); }
+    finally { disarmOneShot(); }
+  });
+});
+
+test("a one-shot keeps your saved levels and only forces `on`", () => {
+  withHome(() => {
+    saveNice({ on: false, cpu: 3, io: 1, memoryMax: "1G" });
+    armOneShot();
+    try {
+      const s = effectiveNice();
+      assert.equal(s.on, true);
+      assert.equal(s.cpu, 3, "your levels, not the defaults");
+      assert.equal(s.io, 1);
+      assert.equal(s.memoryMax, "1G");
+    } finally { disarmOneShot(); }
+  });
 });
