@@ -723,6 +723,44 @@ login`. Publishing needs one, and `bo login` is a device-code exchange, so a
 terminal never handles a browser session. `bo mcp config` prints the MCP
 registration for a coding agent, which is the same graph over a different door.
 
+### CrawlProof — what the fleet costs and what it returns
+
+[CrawlProof](https://crawlproof.com) knows who arrived on your sites and what
+your ads delivered. `crawlproof` joins that to what the bank actually did, so
+the terminal can answer the question a dashboard usually cannot: is any of this
+paying for itself.
+
+```sh
+moshcode install crawlproof       # npm i -g @profullstack/crawlproof
+
+moshcode crawlproof               # the live dashboard, last day, humans
+moshcode crawlproof dashboard --range=1m
+moshcode crawlproof stats site.com
+moshcode crawlproof dashboard --json | jq .roi.derived
+```
+
+Five screens: ROI, Traffic, Ads, Money, Spend. Two rules run through the
+arithmetic and both exist because breaking either produces a nicer number that
+is false. Where an account advertises on its own slots, ad spend and ad earnings
+are one dollar moving between two pockets, so they are reported under *Internal*
+and counted as neither cost nor revenue. And a bank feed carries groceries next
+to servers, so cost is the business scope only.
+
+It also says what it does not know, next to the number: a site that did not
+answer is missing rather than zero, and a fleet whose visits run far above its
+pageviews says so and offers the per-pageview figure instead.
+
+Needs a CrawlProof API token in `CRAWLPROOF_TOKEN` or the `token` field of
+`~/.crawlproof.json`. The money screens want a CoinPay merchant session as well;
+without one the other four still work and the money panels say what is missing.
+The dashboard is a TUI and wants Node 22.6+, while `stats` and `--json` run
+anywhere.
+
+`crawlproof` also ships in the `cli-tools` set, which symlinks a wrapper of the
+same name that vendors this package. Installing both is fine: the wrapper hands
+over to a `crawlproof` on PATH that is not its own, and refuses to follow one
+that is.
+
 ### Cloud + infra CLIs
 
 ```sh

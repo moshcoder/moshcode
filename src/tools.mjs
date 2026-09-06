@@ -88,6 +88,23 @@ export const TOOLS = {
     // where those words mean something else entirely.
     aliases: { cmd: "cli-tools", args: ["aliases", "--json"] },
   },
+  crawlproof: {
+    desc: "CrawlProof \u2014 what the fleet costs and what it returns: traffic, ad delivery and the bank behind it",
+    bin: "crawlproof",
+    // Reachable two ways on purpose. The `cli-tools` set above symlinks a
+    // wrapper of the same name, and this entry installs the package that
+    // wrapper vendors. Having both is safe: the wrapper hands over to a
+    // `crawlproof` on PATH that is not its own, and refuses to follow one that
+    // is, which would be an exec loop. It is its own entry because
+    // `/install crawlproof` should install CrawlProof rather than seven other
+    // commands that happen to travel with it.
+    //
+    // The dashboard is a TUI and wants Node 22.6+; `crawlproof stats` and
+    // `--json` run anywhere. An ordinary global npm package, and
+    // `npm install -g` is idempotent, so the install is also the upgrade \u2014
+    // no `upgrade` key, the same as bo and railway.
+    install: { cmd: "npm", args: ["install", "-g", "@profullstack/crawlproof"] },
+  },
   timer: {
     desc: "Profullstack timer - track time against projects, for people and for agents",
     bin: "timer",
