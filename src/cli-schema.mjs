@@ -35,7 +35,7 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "agents",
     group: "engines",
-    description: "list engines or launch one autonomously",
+    description: "list engines, open their agent view, or launch autonomously",
     synopsis: [
       ["moshcode agents", "list engines and their install status"],
       ["moshcode agents --json", "list engine status as machine-readable JSON"],
@@ -48,6 +48,7 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode agents", "which engines are here"],
       ["moshcode agents --json", "pipe engine status into a script"],
       ["moshcode agents claude", "claude's agent list"],
+      ["moshcode agents codex", "Codex's shared-daemon agents overview (CLI 0.151.0+)"],
     ],
     seeAlso: ["start", "engines", "install"],
     note: "autonomous modes bypass approval prompts — use them in a container or a workspace you trust.",
@@ -1518,7 +1519,7 @@ export const PIT_COMMANDS = [
   { name: "new", pitOnly: true,
     description: "open and switch to another moshcode tab" },
   { name: "agents", aliases: ["agent", "engines"], args: "[name]", cli: "agents",
-    description: "list engines, or launch one autonomously" },
+    description: "list engines, open their agent view, or launch autonomously" },
   { name: "start", args: "<engine> [args…]", cli: "start",
     description: "raw launch; inject no engine arguments" },
   { name: "herd", args: "[verb] [args…]", cli: "herd",

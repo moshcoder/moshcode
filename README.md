@@ -26,7 +26,7 @@ or miss one that does. A test fails the build when it drifts.
 <!-- COMMANDS:START -->
 | command | group | what it does |
 |---|---|---|
-| `moshcode agents` | engines | list engines or launch one autonomously |
+| `moshcode agents` | engines | list engines, open their agent view, or launch autonomously |
 | `moshcode start` | engines | launch an engine with its native defaults |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
@@ -107,7 +107,7 @@ use this only in an isolated container, VM, or workspace you trust:
 moshcode agents claude      # claude agents --dangerously-skip-permissions  (agent view)
 moshcode agents opencode    # opencode --auto                              (autonomous)
 moshcode agents privacycode # privacycode --auto                           (autonomous)
-moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox  (autonomous)
+moshcode agents codex       # codex --dangerously-bypass-approvals-and-sandbox agents (agent view)
 moshcode agents gemini      # gemini --approval-mode=yolo                       (autonomous)
 moshcode agents kimi        # kimi --yolo                                       (autonomous)
 moshcode agents qwen        # qwen --approval-mode=yolo                         (autonomous)
@@ -115,6 +115,25 @@ moshcode agents deepseek    # deepseek-code --turbo                             
 moshcode agents aider       # aider --yes-always                                (autonomous)
 moshcode agents openagents  # openagents                                        (dashboard)
 ```
+
+Codex's native agents overview requires a CLI with `codex agents` support
+(verified with 0.151.0) and, for the local daemon, the managed standalone
+installation. `moshcode install codex` / `moshcode upgrade codex` use Codex's
+official standalone installer on macOS/Linux; an npm-only install is not enough.
+Existing npm installations are preserved. Windows retains npm and requires
+`--remote <server>` for the agents overview.
+`/agents codex` opens the same live overview of sessions on Codex's shared local
+app-server daemon. The approval/sandbox bypass is passed for this invocation;
+moshcode does not rewrite your global Codex settings or stop existing sessions.
+Additional arguments are forwarded to the native `agents` subcommand, for example
+`moshcode agents codex --no-alt-screen`.
+
+For separate conversations, Codex's `/new` starts a fresh chat in the same CLI,
+`/resume` reopens a saved chat, and `/fork` branches a conversation while preserving
+the original. These commands are distinct from launching parallel subagents:
+ask Codex to delegate work, then use its `/agent` or `/subagents` picker to switch
+threads. See the [Codex command reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
+and [subagent guide](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
 `start` is the explicit raw path. It injects nothing, so the native engine keeps
 its normal permission model and receives only your arguments:

@@ -826,7 +826,7 @@ const COMMANDS = [
   cliVerb("run", "run another .mosh file (include)"),
   // shortcut: ai() runs an engine headlessly and RETURNS its output (see PRD R17)
   aiVerb,
-  cliVerb("agents", "launch an autonomous agent session (moshcode agents <engine>)"),
+  cliVerb("agents", "open the native agent view or launch autonomously (moshcode agents <engine>)"),
   cliVerb("herd", "drive the herd (moshcode herd <verb>) — see herdStart/herdWait for values"),
   cliVerb("ps", "print the herd roster"),
   cliVerb("cost", "print what the herd is spending (moshcode cost [name] [--all])"),

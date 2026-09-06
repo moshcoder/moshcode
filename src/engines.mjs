@@ -5,8 +5,8 @@
 //
 // `agentsView` (optional) is the exact argv that opens the engine's native
 // agent list/view — used by `/agents <name>` when the engine actually has one
-// (currently claude). It's the FULL leading args (subcommand + any flags that
-// subcommand accepts). Engines without an `agentsView` fall back to
+// (currently Claude and Codex). It's the FULL leading args, including root
+// flags before the subcommand when required. Engines without an `agentsView` fall back to
 // `agentArgs` — an autonomous session with native approvals
 // bypassed/auto-approved. Do not use a machine-readable, one-shot list command
 // as an agents view: `/agents` promises to hand the terminal to a live session.
@@ -131,7 +131,16 @@ export const ENGINES = {
     desc: "Codex — OpenAI's coding CLI",
     bin: "codex",
     agentArgs: ["--dangerously-bypass-approvals-and-sandbox"],
-    install: { cmd: "npm", args: ["install", "-g", "@openai/codex"] },
+    // Codex 0.151.0+: live shared-daemon session overview. The bypass option
+    // belongs to the root command, not the `agents` subcommand.
+    agentsView: ["--dangerously-bypass-approvals-and-sandbox", "agents"],
+    // The local agents daemon requires the installer-managed standalone
+    // package; npm alone can launch chats but cannot bootstrap that daemon.
+    // Windows uses a remote agents server and retains its npm installation.
+    install: process.platform === "win32"
+      ? { cmd: "npm", args: ["install", "-g", "@openai/codex"] }
+      : { cmd: "bash", args: ["-o", "pipefail", "-c", "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"] },
+    binDirs: [path.join(homedir(), ".local", "bin")],
     resume: ["resume", "--last"],
     state: {
       blocked: [/\ballow (?:this )?command\b/i, /\bapprove this (?:command|edit|change)\b/i],
