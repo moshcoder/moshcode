@@ -382,14 +382,28 @@ moshcode cost --json             # for a script
 ```
 
 ```
-  session  engine  model          in    out   cache  cost    age
-  api      claude  claude-opus-5  1.2k  27k   10.5M  $9.91~  42m
-  audit    codex   gpt-5.6-sol    400   200   600    —       12m
+  session  engine  model          in    out   cache  cost    age  pr
+  api      claude  claude-opus-5  1.2k  27k   10.5M  $9.91~  42m  view #128
+  audit    codex   gpt-5.6-sol    400   200   600    —       12m  —
 
   total  $9.91~  1.6k in · 27k out · 10.5M cached
   ~ estimated from published rates; unmarked figures are the engine's own.
 ⚠ no rate for gpt-5.6-sol — tokens counted, cost omitted.
 ```
+
+**`view` is a link — click it and the PR opens in your browser.** The cost table
+is where you notice a session that cost $300, and the next thing you want is
+the thing it produced, which lives on GitHub rather than on this machine. The
+cell is an [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda)
+hyperlink: the label stays four characters wide while the click target is the
+full URL, so the column costs nothing to carry. Claude Code writes a `pr-link`
+record when a session opens a pull request, and that is where this comes from —
+other engines leave the column blank because they record nothing like it.
+
+Not every terminal speaks OSC 8, and there is no way to ask one whether it does.
+Piped output prints the raw URL instead, and `MOSHCODE_HYPERLINKS=0` forces that
+same plain form in a terminal that would otherwise paint a "view" nobody can
+click. `moshcode cost --json` always carries `pr` and `prs` in full.
 
 | engine | where the number comes from |
 |---|---|

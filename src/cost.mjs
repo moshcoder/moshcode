@@ -151,6 +151,28 @@ function claudeUsageOf(message) {
   };
 }
 
+/**
+ * A `pr-link` record → the shape the table renders, or null.
+ *
+ * The URL is the only required field, because it is the only one the terminal
+ * can act on; a record without one is a row we cannot make clickable and is
+ * better dropped than shown as a dead link. Only github.com and GitHub
+ * Enterprise-shaped https URLs are accepted — this string ends up in an OSC 8
+ * escape handed to the user's browser, and a transcript is a file on disk that
+ * other tools write to.
+ */
+function claudePrOf(entry) {
+  const url = String(entry?.prUrl || "").trim();
+  if (!/^https:\/\/[A-Za-z0-9.-]+\/[^\s]*$/.test(url)) return null;
+  const number = Number(entry?.prNumber);
+  return {
+    number: Number.isFinite(number) ? number : null,
+    url,
+    repository: String(entry?.prRepository || ""),
+    at: stamp(entry?.timestamp),
+  };
+}
+
 /** One Claude Code transcript → one run, or null when it holds no usage. */
 function readClaudeTranscript(file, { since }) {
   let text;
@@ -165,11 +187,23 @@ function readClaudeTranscript(file, { since }) {
   let end = null;
   let cwd = "";
   let id = path.basename(file, ".jsonl");
+  let pr = null;
 
   for (const line of text.split("\n")) {
     if (!line || line.charCodeAt(0) !== 123) continue; // fast reject: not "{"
     const entry = parseJson(line);
-    if (!entry || entry.type !== "assistant") continue;
+    if (!entry) continue;
+    // Claude Code writes a `pr-link` record when a session opens a pull
+    // request. It is the only place the transcript says what the work turned
+    // into, and it is deliberately read outside the `since` window: a PR opened
+    // yesterday still belongs to the session that shows up in today's table.
+    // Latest wins — a session that opened two PRs points at the newer one.
+    if (entry.type === "pr-link") {
+      const found = claudePrOf(entry);
+      if (found && (!pr || (found.at ?? 0) >= (pr.at ?? 0))) pr = found;
+      continue;
+    }
+    if (entry.type !== "assistant") continue;
     const at = stamp(entry.timestamp);
     if (at != null && since != null && at < since) continue;
 
@@ -199,7 +233,7 @@ function readClaudeTranscript(file, { since }) {
   }
 
   if (!seen.size) return null;
-  return { engine: "claude", id, cwd, usage, byModel, start, end, engineCost: hasEngineCost ? engineCost : null };
+  return { engine: "claude", id, cwd, usage, byModel, start, end, pr, engineCost: hasEngineCost ? engineCost : null };
 }
 
 function claudeRuns({ since, cwd } = {}) {
@@ -678,7 +712,7 @@ export async function engineRuns({
  * line.
  */
 export function attributeRuns(sessions = [], runs = []) {
-  const rows = sessions.map((s) => ({ ...s, runs: [], usage: { ...EMPTY_USAGE }, cost: null, costSource: null, unpriced: [] }));
+  const rows = sessions.map((s) => ({ ...s, runs: [], usage: { ...EMPTY_USAGE }, cost: null, costSource: null, unpriced: [], pr: null, prs: [] }));
   const unattributed = [];
 
   for (const run of runs) {
@@ -707,6 +741,12 @@ export function attributeRuns(sessions = [], runs = []) {
     }
     row.unpriced = [...new Set(row.unpriced)];
     row.models = [...new Set(row.runs.flatMap((r) => r.models))];
+    // A session can resume across several transcripts and open a PR from any of
+    // them. All of them are kept for `--json`; the table has one cell, so it
+    // gets the newest — the PR this session is working on now.
+    row.prs = [...new Map(row.runs.map((r) => r.pr).filter(Boolean).map((p) => [p.url, p])).values()]
+      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    row.pr = row.prs.length ? row.prs[row.prs.length - 1] : null;
   }
 
   return { rows, unattributed };

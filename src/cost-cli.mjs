@@ -14,7 +14,7 @@ import {
 } from "./cost.mjs";
 import { pricingFile } from "./cost-pricing.mjs";
 import { EXIT, humanAge, roster } from "./herd-cli.mjs";
-import { acid, ash, bone, dim, err, info, table, warn } from "./ui.mjs";
+import { acid, ash, bone, dim, err, info, link, table, warn } from "./ui.mjs";
 
 const tilde = (p) => {
   const home = process.env.HOME || "";
@@ -60,6 +60,22 @@ function costCell(cost, source) {
  */
 const cacheTokens = (u) => u.cacheRead + u.cacheWrite5m + u.cacheWrite1h;
 
+/**
+ * The PR this session opened, as one clickable word.
+ *
+ * A cost table is where you notice a session that cost $300, and the next thing
+ * you want is the thing it produced — which lives on github.com, not on this
+ * machine. OSC 8 lets the cell read "view #123" while the click target is the
+ * full URL, so the column stays four characters wide instead of sixty. The URL
+ * itself is the fallback when hyperlinks are off (piped output, or a terminal
+ * without OSC 8), because an unreachable "view" would be worse than a long cell.
+ */
+function prCell(pr) {
+  if (!pr?.url) return ash("—");
+  const label = pr.number == null ? "view" : `view #${pr.number}`;
+  return link(acid(label), pr.url, { fallback: pr.url });
+}
+
 /** The per-session table, shared by the one-shot report and `--watch`. */
 export function renderCost(rows, { indent = "  " } = {}) {
   if (!rows.length) return "";
@@ -73,8 +89,9 @@ export function renderCost(rows, { indent = "  " } = {}) {
       dim(formatTokens(cacheTokens(r.usage))),
       costCell(r.cost, r.costSource),
       dim(humanAge(r.age)),
+      prCell(r.pr),
     ]),
-    { columns: ["session", "engine", "model", "in", "out", "cache", "cost", "age"], header: true, indent: indent.length },
+    { columns: ["session", "engine", "model", "in", "out", "cache", "cost", "age", "pr"], header: true, indent: indent.length },
   );
 }
 
@@ -91,8 +108,9 @@ function renderRuns(runs, { indent = "  " } = {}) {
       dim(formatTokens(r.usage.output)),
       dim(formatTokens(cacheTokens(r.usage))),
       costCell(r.cost, r.costSource),
+      prCell(r.pr),
     ]),
-    { columns: ["run", "engine", "model", "cwd", "in", "out", "cache", "cost"], header: true, indent: indent.length },
+    { columns: ["run", "engine", "model", "cwd", "in", "out", "cache", "cost", "pr"], header: true, indent: indent.length },
   );
 }
 
@@ -164,12 +182,12 @@ export async function costCommand(argv = [], { write = console.log } = {}) {
     if (asJson) {
       write(JSON.stringify({
         since,
-        sessions: rows.map(({ name: n, engine, cwd, state, models, usage, cost, costSource, unpriced, runs }) => ({
-          name: n, engine, cwd, state, models, usage, cost, costSource, unpriced,
-          runs: runs.map((r) => ({ id: r.id, model: r.model, usage: r.usage, cost: r.cost, costSource: r.costSource, start: r.start, end: r.end })),
+        sessions: rows.map(({ name: n, engine, cwd, state, models, usage, cost, costSource, unpriced, pr, prs, runs }) => ({
+          name: n, engine, cwd, state, models, usage, cost, costSource, unpriced, pr, prs,
+          runs: runs.map((r) => ({ id: r.id, model: r.model, usage: r.usage, cost: r.cost, costSource: r.costSource, start: r.start, end: r.end, pr: r.pr ?? null })),
         })),
         unattributed: report.unattributed.map((r) => ({
-          id: r.id, engine: r.engine, cwd: r.cwd, model: r.model, usage: r.usage, cost: r.cost, costSource: r.costSource, start: r.start, end: r.end,
+          id: r.id, engine: r.engine, cwd: r.cwd, model: r.model, usage: r.usage, cost: r.cost, costSource: r.costSource, start: r.start, end: r.end, pr: r.pr ?? null,
         })),
         totals: totals([...rows, ...report.unattributed]),
       }, null, 2));
