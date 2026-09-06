@@ -39,7 +39,7 @@ const EXPECTED_LAUNCH_ARGS = {
   opencode: ["--auto"],
   privacycode: ["--auto"],
   claude: ["agents", "--dangerously-skip-permissions"],
-  codex: ["--dangerously-bypass-approvals-and-sandbox"],
+  codex: ["--dangerously-bypass-approvals-and-sandbox", "agents"],
   gemini: ["--approval-mode=yolo"],
   kimi: ["--yolo"], // no agents view — kimi has no agent list to land on
   qwen: ["--approval-mode=yolo"],
@@ -135,6 +135,31 @@ for (const [key, expected] of Object.entries(EXPECTED_LAUNCH_ARGS)) {
     assert.equal(result.stderr, "");
   });
 }
+
+test("Codex installs the managed runtime needed by its local agents daemon", () => {
+  if (process.platform === "win32") {
+    assert.deepEqual(ENGINES.codex.install, { cmd: "npm", args: ["install", "-g", "@openai/codex"] });
+  } else {
+    assert.equal(ENGINES.codex.install.cmd, "bash");
+    assert.deepEqual(ENGINES.codex.install.args.slice(0, 3), ["-o", "pipefail", "-c"]);
+    assert.match(ENGINES.codex.install.args[3], /https:\/\/chatgpt\.com\/codex\/install\.sh/);
+    assert.match(ENGINES.codex.install.args[3], /CODEX_NON_INTERACTIVE=1 sh$/);
+  }
+  assert.ok(ENGINES.codex.binDirs.includes(path.join(homedir(), ".local", "bin")));
+});
+
+test("Codex overview keeps the root bypass before agents and preserves native view options", async () => {
+  const nativeBin = tempDir();
+  writeEngine(nativeBin, "codex");
+  const extra = ["--no-alt-screen", "-C", "/tmp/project with spaces", "-c", 'model="gpt-6-astra"'];
+  const result = await run(["agents", "codex", ...extra], nativeBin);
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    "--dangerously-bypass-approvals-and-sandbox", "agents", ...extra,
+  ]);
+  assert.deepEqual(ENGINES.codex.agentArgs, ["--dangerously-bypass-approvals-and-sandbox"]);
+  assert.deepEqual(ENGINES.codex.resume, ["resume", "--last"]);
+});
 
 test("bare engine launch remains a raw passthrough", async () => {
   const nativeBin = tempDir();
