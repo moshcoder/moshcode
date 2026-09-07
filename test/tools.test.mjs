@@ -523,6 +523,7 @@ for (const [name, shell, script] of [
   ["c0mpute", "sh", "curl -fsSL https://c0mpute.com/install.sh | sh"],
   ["c0upons", "sh", "curl -fsSL https://c0upons.com/install.sh | sh"],
   ["coral", "bash", "curl -fsSL https://withcoral.com/install.sh | bash"],
+  ["noodle", "bash", "curl -fsSL https://noodlerest.dev/install.sh | bash"],
   ["spinifex", "bash", "curl -fsSL https://install.mulgadc.com | INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash"],
   [
     "cli-tools",
@@ -604,6 +605,25 @@ test("the media toolchain installs through the right mechanism for each tool", (
   for (const key of ["ffmpeg", "imagemagick"]) {
     assert.ok(TOOLS[key].install.args.some((a) => a.endsWith("pkg-install.mjs")), key);
   }
+});
+
+test("noodle installs through its own script and re-runs it to upgrade", () => {
+  assert.deepEqual(resolveTool("noodle"), ["noodle", TOOLS.noodle]);
+  assert.equal(TOOLS.noodle.bin, "noodle");
+  assert.match(toolList(), /noodle/);
+  // bash, not sh: noodle's installer declares a bash shebang and uses `local`,
+  // unlike the c0upons script next to it in the registry.
+  assert.deepEqual(TOOLS.noodle.install, {
+    cmd: "bash",
+    args: ["-c", "curl -fsSL https://noodlerest.dev/install.sh | bash"],
+  });
+  // No updater of its own, and the installer replaces the binary in place from
+  // the latest release, so the upgrade is the install.
+  assert.equal(toolUpgradeSpec(TOOLS.noodle), TOOLS.noodle.install);
+  // A user-local binary in ~/.local/bin, so it never escalates, and the shell
+  // that ran the install needs the directory named to find it afterwards.
+  assert.equal(needsRootHere(TOOLS.noodle, "linux"), false);
+  assert.deepEqual(TOOLS.noodle.binDirs, [path.join(homedir(), ".local", "bin")]);
 });
 
 test("the package-manager tools ask for root everywhere but macOS", () => {
