@@ -869,6 +869,30 @@ engines, `mcpjam` tells you whether that server is healthy first — health
 checks, OAuth conformance, tool-surface diffing, and structured triage from the
 terminal or CI. Re-running `moshcode install mcpjam` is also its upgrade path.
 
+### Noodle — a REST client that lives in the repo
+
+```sh
+moshcode install noodle           # static binary → ~/.local/bin
+
+moshcode noodle collection create my-api
+moshcode noodle request create users/get --url https://api.example.com/users/42
+moshcode noodle request run users/get --collection ./my-api
+moshcode noodle --collection ./my-api   # the TUI
+```
+
+[Noodle](https://noodlerest.dev/) is MCPJam one protocol over: MCPJam tells you
+whether an MCP server answers, Noodle is how you ask an HTTP one anything at
+all. Every request is a readable YAML file — method, url, path params, headers
+— so a collection is reviewed in a diff and kept beside the code it exercises,
+rather than living in a desktop app's private workspace. The same files drive
+the TUI, the CLI and a script, which is what makes it a roster tool: `request
+run` exits with a status and prints the exchange, so it pipes.
+
+It ships a per-platform static binary on its own releases and the install script
+picks the right one, checks it against the published `SHA256SUMS`, and renames
+it over any existing copy. So there is no updater to reach for: re-running
+`moshcode install noodle` is the upgrade path.
+
 ### ElevenLabs — Eleven Agents, voices, and speech
 
 ```sh

@@ -853,6 +853,7 @@ const COMMANDS = [
   cliVerb("coral", "drive the Coral CLI (SQL over APIs, databases, and internal systems)"),
   cliVerb("alpaca", "drive the native Alpaca trading CLI"),
   cliVerb("mcpjam", "drive the MCPJam CLI (test, debug, and validate MCP servers)"),
+  cliVerb("noodle", "drive the Noodle CLI (terminal REST client: collections, requests, runs)"),
   cliVerb("spinifex", "drive the Spinifex CLI (spx — AWS-compatible cloud on your own hardware)"),
   cliVerb("alchemy", "drive the Alchemy CLI (onchain data, apps, wallets, x402)"),
   cliVerb("elevenlabs", "drive the ElevenLabs CLI (Eleven Agents, voices, TTS, dubbing)"),
