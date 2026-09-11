@@ -23,12 +23,20 @@ import { loadCreds } from "./auth.mjs";
 export const KEY_PREFIX = "\u001bmoshkey:";
 /** Keys the page can send. Anything else is ignored on both ends. */
 export const KEY_NAMES = ["up", "down", "left", "right", "enter"];
+export const SIGNAL_PREFIX = "\u001bmoshsignal:";
+export const SIGNAL_NAMES = ["interrupt"];
 
 /** The name of the key this command carries, or null if it is an ordinary line. */
 export function decodeKey(body) {
   if (typeof body !== "string" || !body.startsWith(KEY_PREFIX)) return null;
   const name = body.slice(KEY_PREFIX.length);
   return KEY_NAMES.includes(name) ? name : null;
+}
+
+export function decodeSignal(body) {
+  if (typeof body !== "string" || !body.startsWith(SIGNAL_PREFIX)) return null;
+  const name = body.slice(SIGNAL_PREFIX.length);
+  return SIGNAL_NAMES.includes(name) ? name : null;
 }
 
 // What each key looks like to a program reading the tty in raw mode, and the
@@ -62,6 +70,16 @@ export function pressKey(name, rl = null, stdin = process.stdin) {
   // Otherwise something has the tty in raw mode — a herd bar, the reader, a
   // menu — and it is waiting on the real escape sequence, not on readline.
   try { stdin.emit("data", Buffer.from(bytes, "latin1")); return true; } catch { return false; }
+}
+
+export function pressSignal(name, rl = null, stdin = process.stdin) {
+  if (name !== "interrupt") return false;
+  const toChild = activeChildInput();
+  if (toChild && toChild("\u0003")) return true;
+  if (rl) {
+    try { rl.write(null, { ctrl: true, name: "c" }); return true; } catch { /* fall through to the tty */ }
+  }
+  try { stdin.emit("data", Buffer.from("\u0003", "latin1")); return true; } catch { return false; }
 }
 
 const FLUSH_MS = 150;      // batch writes so a busy render is one request, not fifty
@@ -127,6 +145,7 @@ export function createMirror({
   let poll = null;
   const onCommand = new Set();
   const onKey = new Set();
+  const onSignal = new Set();
 
   const api = (creds?.api || "https://app.moshcode.sh").replace(/\/+$/, "");
   const headers = { "content-type": "application/json", authorization: `Bearer ${creds?.token}` };
@@ -215,7 +234,11 @@ export function createMirror({
         // delivered a command later would land on a different row.
         const key = decodeKey(c.body);
         if (key) { for (const fn of onKey) { try { fn(key); } catch { /* handler's problem */ } } }
-        else { for (const fn of onCommand) { try { fn(c.body); } catch { /* handler's problem */ } } }
+        else {
+          const signal = decodeSignal(c.body);
+          if (signal) { for (const fn of onSignal) { try { fn(signal); } catch { /* handler's problem */ } } }
+          else { for (const fn of onCommand) { try { fn(c.body); } catch { /* handler's problem */ } } }
+        }
         post(`/api/sessions/${sessionId}/commands/${c.id}`, {});
       }
     }
@@ -235,7 +258,7 @@ export function createMirror({
         // What this build can be asked to do. The page arms its arrow pad on
         // the strength of this: a mosh that never says "keys" is one that would
         // type the sentinel at the prompt instead of pressing it.
-        features: ["keys"],
+        features: ["keys", "signals"],
         ...size(),
       });
       if (!r?.id) return false;
@@ -253,6 +276,8 @@ export function createMirror({
     onCommand(fn) { onCommand.add(fn); return () => onCommand.delete(fn); },
     /** Subscribe to keys pressed on the web. Returns an unsubscribe fn. */
     onKey(fn) { onKey.add(fn); return () => onKey.delete(fn); },
+    /** Subscribe to control signals sent by an authorized remote client. */
+    onSignal(fn) { onSignal.add(fn); return () => onSignal.delete(fn); },
     async stop() {
       if (!sessionId || stopped) return;
       stopped = true;

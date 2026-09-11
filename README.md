@@ -1497,6 +1497,40 @@ moshcode skill list --json
 Each row reports `installed` and `supported` separately, so an installed engine
 without that integration primitive remains visible rather than looking absent.
 
+### Connect ChatGPT, Claude, or Chovy to this session
+
+Start the interactive pit, then mint a short-lived remote MCP URL for its live
+session:
+
+```sh
+moshcode
+/mcp answer                    # default: all session scopes for 8 hours
+/mcp answer --ttl 30m          # shorter share
+/mcp answer --scope session:read,session:write
+```
+
+Paste the printed `https://moshcode.sh/api/v1/mcp/mcs_…` endpoint into a remote
+MCP client. The client discovers Moshcode's OAuth endpoints, you authorize the
+specific session and scopes in the browser, and its access token is bound to
+that one opaque share URL. OAuth authorization code + PKCE, rotating refresh
+tokens, and device authorization are supported.
+
+The shared server exposes `session_read`, `session_answer`, `session_approve`,
+`session_send`, and `session_cancel`. Write, approval, and interrupt access are
+separate scopes; the authorization page shows exactly which ones the client
+requested. Share management stays with the logged-in Moshcode operator:
+
+```sh
+moshcode mcp connect            # authenticate the operator by device code
+moshcode mcp status
+moshcode mcp status --json
+moshcode mcp revoke mcs_…
+```
+
+`/mcp share` is an alias for `/mcp answer`. Ending the live terminal makes tool
+writes fail, and revoking or expiring the share invalidates its access and
+refresh tokens.
+
 ### Known MCP servers
 
 Some MCP servers are worth remembering by name rather than by npx invocation:

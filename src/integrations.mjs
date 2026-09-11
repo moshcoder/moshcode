@@ -14,6 +14,7 @@ import {
 } from "./plugins.mjs";
 import { catalogList, resolveCatalog } from "./mcp-catalog.mjs";
 import { MCP_VERBS, PLUGIN_VERBS, SKILL_VERBS } from "./cli-schema.mjs";
+import { connectMcp, createMcpShare, listMcpShares, revokeMcpShare } from "./mcp-share.mjs";
 import { acid, ash, bone, ok, err, info } from "./ui.mjs";
 
 function splitKV(pair) {
@@ -39,6 +40,32 @@ export function parseMcp(tokens) {
   const verb = tokens[0];
   if (!verb || verb === "list") return { list: true, json: tokens.slice(1).includes("--json") };
   if (verb === "catalog") return { showCatalog: true };
+  if (verb === "connect") {
+    if (tokens.length > 1) return { error: "mcp connect takes no arguments" };
+    return { remote: { action: "connect" } };
+  }
+  if (verb === "answer" || verb === "share") {
+    const remote = { action: "share", json: false };
+    for (let i = 1; i < tokens.length; i++) {
+      const flag = tokens[i];
+      if (flag === "--json") remote.json = true;
+      else if (["--session", "--name", "--ttl", "--scope"].includes(flag)) {
+        const next = flagValue(tokens, i, flag);
+        if (next.error) return next;
+        remote[{ "--session": "sessionId", "--name": "name", "--ttl": "ttl", "--scope": "scope" }[flag]] = next.value;
+        i++;
+      } else return { error: `unknown mcp ${verb} flag "${flag}"` };
+    }
+    return { remote };
+  }
+  if (verb === "status") {
+    if (tokens.length > 2 || (tokens[1] && tokens[1] !== "--json")) return { error: "mcp status only takes --json" };
+    return { remote: { action: "status", json: tokens[1] === "--json" } };
+  }
+  if (verb === "revoke") {
+    if (!tokens[1] || tokens.length > 2) return { error: "mcp revoke requires exactly one share id" };
+    return { remote: { action: "revoke", shareId: tokens[1] } };
+  }
   const verbSchema = MCP_VERBS.find(({ name }) => name === verb);
   if (!verbSchema?.acceptsServerSpec) {
     const choices = MCP_VERBS.map(({ name }) => name);
@@ -223,11 +250,50 @@ function summarize(results) {
 const anyFailed = (results) => results.some((r) => r.status === "failed");
 
 /** Run `/mcp …`. `tokens` are the words after `mcp`. `run`/`installedSet` are injectable for tests. */
-export async function mcpCommand(tokens, { run, installedSet } = {}) {
+export async function mcpCommand(tokens, {
+  run, installedSet, sessionId, fetchImpl, credentials, login,
+} = {}) {
   const parsed = parseMcp(tokens);
   if (parsed.list) { printMcpTargets(parsed.json); return 0; }
   if (parsed.showCatalog) { printMcpCatalog(); return 0; }
   if (parsed.error) { console.log(err(parsed.error)); return 1; }
+  if (parsed.remote) {
+    const options = { fetchImpl, credentials, login };
+    try {
+      if (parsed.remote.action === "connect") {
+        const creds = await connectMcp(options);
+        console.log(ok(`connected${creds?.email ? ` as ${creds.email}` : ""}`));
+      } else if (parsed.remote.action === "share") {
+        const share = await createMcpShare({
+          ...options,
+          sessionId: parsed.remote.sessionId || sessionId,
+          name: parsed.remote.name,
+          ttl: parsed.remote.ttl,
+          scope: parsed.remote.scope?.replace(/,/g, " "),
+        });
+        if (parsed.remote.json) console.log(JSON.stringify(share, null, 2));
+        else {
+          console.log(ok("this session can now answer through remote MCP"));
+          console.log(`   ${acid(share.endpoint)}`);
+          console.log(ash(`   expires ${new Date(share.expires_at).toISOString()} · revoke with /mcp revoke ${share.id}`));
+        }
+      } else if (parsed.remote.action === "status") {
+        const result = await listMcpShares(options);
+        if (parsed.remote.json) console.log(JSON.stringify(result, null, 2));
+        else if (!result.shares?.length) console.log(ash("  no remote MCP shares"));
+        else for (const share of result.shares) {
+          console.log(`   ${share.status === "active" ? acid("●") : ash("○")} ${bone(share.id)} ${ash(share.session_live ? "live" : "offline")} ${share.endpoint}`);
+        }
+      } else {
+        await revokeMcpShare(parsed.remote.shareId, options);
+        console.log(ok(`revoked ${parsed.remote.shareId}`));
+      }
+      return 0;
+    } catch (error) {
+      console.log(err(error.message || "remote MCP request failed"));
+      return 1;
+    }
+  }
 
   const { spec } = parsed;
   console.log(info(`registering ${bone(spec.name)} → ${ash(spec.target)} across MCP engines…`));

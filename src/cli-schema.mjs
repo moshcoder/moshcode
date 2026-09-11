@@ -943,6 +943,25 @@ export const CORE_CLI_COMMAND_NAMES = CORE_CLI_COMMANDS.map(({ name }) => name);
 
 export const MCP_VERBS = [
   {
+    name: "answer",
+    description: "share this live session with ChatGPT or Claude",
+    synopsis: [["/mcp answer [--ttl 8h]", "print a unique OAuth-protected MCP URL"]],
+    flags: [
+      ["--ttl <duration>", "60s to 7d", "8h"],
+      ["--name <name>", "label shown during authorization", "session name"],
+      ["--scope <scopes>", "comma or space-separated session scopes", "all"],
+      ["--json", "machine-readable", ""],
+    ],
+  },
+  { name: "connect", description: "authenticate this operator with device OAuth", synopsis: [["moshcode mcp connect", ""]] },
+  {
+    name: "status",
+    description: "list remote MCP session shares",
+    synopsis: [["moshcode mcp status [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]],
+  },
+  { name: "revoke", description: "revoke a remote session share", synopsis: [["/mcp revoke <share-id>", ""]] },
+  {
     name: "install",
     description: "register an MCP server across engines",
     acceptsServerSpec: true,

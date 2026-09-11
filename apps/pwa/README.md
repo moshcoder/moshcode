@@ -30,9 +30,11 @@ CLI: `doppler run -- npm start`.
   migrations then boots (`railway.json`).
 - Set env from Doppler: `DATABASE_URL` + `DATABASE_AUTH_TOKEN` (Turso libSQL URL
   + token), `SESSION_SECRET`, `MOSHCODE_WEBHOOK_SECRET`, `RESEND_API_KEY`,
-  `PUBLIC_ORIGIN=https://app.moshcode.sh`, and the `COINPAY_*` values.
+  `PUBLIC_ORIGIN=https://app.moshcode.sh`, `MCP_PUBLIC_ORIGIN=https://moshcode.sh`,
+  and the `COINPAY_*` values.
 - Point the domain **app.moshcode.sh** at the service. Root `moshcode.sh` stays a
-  parked marketing site.
+  marketing site, but must proxy `/.well-known/oauth-*`, `/oauth/*`, `/device`,
+  and `/api/v1/mcp/*` to this service so canonical MCP URLs work at the apex.
 
 ## Routes
 
@@ -44,6 +46,10 @@ CLI: `doppler run -- npm start`.
 | `POST /api/approvals` | CLI (Bearer key) | ingest an approval → fan out + charge |
 | `GET /api/approvals/:id` | CLI / cap token | poll status + response |
 | `GET/POST /approve/:id` | human (session or `?t=cap`) | read context, submit reply |
+| `POST /api/v1/mcp/shares` | CLI (Bearer key) | create an expiring share for one live session |
+| `POST /api/v1/mcp/:shareId` | MCP client (OAuth Bearer) | Streamable HTTP MCP session tools |
+| `GET/POST /oauth/authorize` | user | authorize one MCP client, share, and scope set |
+| `POST /oauth/device_authorization` | MCP client | begin RFC 8628 device authorization |
 | `POST /webhooks/coinpay` | CoinPay | confirm a top-up → credit balance |
 | `GET /healthz` | Railway | health check |
 

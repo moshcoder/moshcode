@@ -131,20 +131,42 @@ cliRouter.post("/cli/device/code", async (req, res) => {
 cliRouter.get("/device", requireAuth, async (req, res) => {
   const prefill = req.query.code ? normCode(req.query.code) : "";
   const done = req.query.done;
+  const denied = req.query.denied;
   const bad = req.query.bad;
-  const body = `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
-  <main class="wrap" style="max-width:440px;padding-top:8vh">
-    <div class="card"><div class="card-body" style="text-align:center">
-      <div style="font-size:2rem">🔑</div>
-      <h1 style="font-size:1.4rem;margin:10px 0">Connect a device</h1>
-      ${done ? `<div class="notice ok">✓ device connected — return to your terminal 🤘</div>`
+  const pending = prefill ? await get(
+    `SELECT d.*, sh.user_id AS share_owner, COALESCE(sh.name,s.name) AS share_name
+     FROM device_codes d
+     LEFT JOIN mcp_shares sh ON sh.id = d.share_id
+     LEFT JOIN cli_sessions s ON s.id = sh.session_id
+     WHERE d.user_code = ? AND d.status = 'pending' AND d.expires_at > ?`,
+    [prefill, Date.now()]
+  ) : null;
+  const mcpRequest = pending?.kind === "mcp" && pending.share_owner === req.user.id ? pending : null;
+  const content = done
+    ? `<div class="notice ok">✓ device connected — return to your terminal 🤘</div>`
+    : denied
+      ? `<div class="notice">request denied — you can close this tab.</div>`
+      : mcpRequest
+        ? `<p class="dim mono" style="font-size:.82rem"><b class="acid">${esc(mcpRequest.name || "MCP client")}</b> wants to control only <b>${esc(mcpRequest.share_name || "this Moshcode session")}</b> as ${esc(req.user.email || req.user.display_name)}.</p>
+        <p class="mono" style="font-size:.76rem">Scopes: ${esc(mcpRequest.scope || "")}</p>
+        <form method="post" action="/device" style="margin-top:14px">${csrfInput(req)}
+          <input type="hidden" name="user_code" value="${esc(prefill)}">
+          <button class="btn acid block" name="decision" value="approve" type="submit">Authorize MCP access</button>
+          <button class="btn block" name="decision" value="deny" type="submit" style="margin-top:8px">Deny</button>
+        </form>`
         : `<p class="dim mono" style="font-size:.82rem">Enter the code shown in your terminal to authorize the moshcode CLI as <b>${esc(req.user.email || req.user.display_name)}</b>.</p>
         ${bad ? `<div class="notice err">that code is invalid or expired — check your terminal.</div>` : ""}
         <form method="post" action="/device" style="margin-top:14px">${csrfInput(req)}
           <input name="user_code" value="${esc(prefill)}" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters"
             style="text-align:center;font-size:1.3rem;letter-spacing:.2em;text-transform:uppercase" required>
           <button class="btn acid block" type="submit" style="margin-top:12px">Authorize 🤘</button>
-        </form>`}
+        </form>`;
+  const body = `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
+  <main class="wrap" style="max-width:440px;padding-top:8vh">
+    <div class="card"><div class="card-body" style="text-align:center">
+      <div style="font-size:2rem">🔑</div>
+      <h1 style="font-size:1.4rem;margin:10px 0">${mcpRequest ? "Authorize MCP access" : "Connect a device"}</h1>
+      ${content}
     </div></div>
   </main>${footer}`;
   res.type("html").send(page({ title: "moshcode ▸ connect device", body }));
@@ -154,6 +176,22 @@ cliRouter.post("/device", requireAuth, async (req, res) => {
   const userCode = normCode(req.body.user_code);
   const row = await get(`SELECT * FROM device_codes WHERE user_code = ? AND status = 'pending' AND expires_at > ?`, [userCode, Date.now()]);
   if (!row) return res.redirect(`/device?bad=1${req.body.user_code ? "&code=" + encodeURIComponent(req.body.user_code) : ""}`);
+  if (row.kind === "mcp") {
+    const share = await get(
+      `SELECT 1 FROM mcp_shares WHERE id = ? AND user_id = ? AND status = 'active' AND expires_at > ?`,
+      [row.share_id, req.user.id, Date.now()]
+    );
+    if (!share) return res.redirect(`/device?bad=1${req.body.user_code ? "&code=" + encodeURIComponent(req.body.user_code) : ""}`);
+    if (!req.body?.decision) return res.redirect(`/device?code=${encodeURIComponent(userCode)}`);
+    if (req.body.decision === "deny") {
+      await run(
+        `UPDATE device_codes SET status = 'denied', user_id = ? WHERE device_code = ? AND status = 'pending'`,
+        [req.user.id, row.device_code]
+      );
+      return res.redirect("/device?denied=1");
+    }
+    if (req.body.decision !== "approve") return res.redirect(`/device?code=${encodeURIComponent(userCode)}`);
+  }
   const approved = await run(
     `UPDATE device_codes SET status = 'approved', user_id = ? WHERE device_code = ? AND status = 'pending' AND expires_at > ?`,
     [req.user.id, row.device_code, Date.now()]
@@ -166,7 +204,7 @@ cliRouter.post("/device", requireAuth, async (req, res) => {
 
 // CLI polls here until approved.
 cliRouter.post("/cli/device/token", async (req, res) => {
-  const row = await get(`SELECT * FROM device_codes WHERE device_code = ?`, [req.body?.device_code || ""]);
+  const row = await get(`SELECT * FROM device_codes WHERE device_code = ? AND kind = 'cli'`, [req.body?.device_code || ""]);
   if (!row || row.expires_at < Date.now() || row.status === "claimed") return res.status(400).json({ error: "expired_token" });
   if (row.status === "denied") return res.status(400).json({ error: "access_denied" });
   if (row.status !== "approved") return res.status(400).json({ error: "authorization_pending" });

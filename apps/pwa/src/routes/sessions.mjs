@@ -70,12 +70,13 @@ export function splitChunk(text, max = MAX_CHUNK) {
 // keeps a key from ever colliding with a real command. Kept in step with
 // `src/mirror.mjs` (the CLI half) by sessions-keys.test.mjs.
 const KEY_PREFIX = "\u001bmoshkey:";
+const SIGNAL_PREFIX = "\u001bmoshsignal:";
 const KEY_NAMES = new Set(["up", "down", "left", "right", "enter"]);
 export const keyCommand = (name) => KEY_PREFIX + name;
 
 // Capabilities a CLI is allowed to claim when it registers. Anything else is
 // dropped, so a session row can never carry whatever a client felt like sending.
-const FEATURES = new Set(["keys"]);
+const FEATURES = new Set(["keys", "signals"]);
 export function readFeatures(value) {
   const list = Array.isArray(value) ? value : [];
   return [...new Set(list.filter((f) => FEATURES.has(f)))];
@@ -499,7 +500,7 @@ sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {
     // The sentinel stays a channel only the key path can open. Nobody can type
     // one, but a hand-rolled post could, and it would reach a prompt as a
     // keypress that never met the capability check above.
-    .filter((line) => !line.startsWith(KEY_PREFIX))
+    .filter((line) => !line.startsWith(KEY_PREFIX) && !line.startsWith(SIGNAL_PREFIX))
     .slice(0, MAX_PASTED_LINES)
     .map((line) => line.slice(0, 500));
   if (!lines.length) return wantsJson(req) ? res.status(400).json({ error: "empty command" }) : res.redirect(`/sessions/${s.id}`);
