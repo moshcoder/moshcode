@@ -48,6 +48,11 @@ const rpID = new URL(origin).hostname;
 // every passkey already registered.
 const pitOrigin = (process.env.PIT_ORIGIN || origin).trim().replace(/\/+$/, "");
 
+// Remote MCP is served on the product apex in production, even when the
+// Express service itself is reached through app.moshcode.sh or Railway.
+const mcpOrigin = (process.env.MCP_PUBLIC_ORIGIN || ((process.env.NODE_ENV || "development") === "production"
+  ? "https://moshcode.sh"
+  : origin)).trim().replace(/\/+$/, "");
 export const config = {
   root: ROOT,
   env: process.env.NODE_ENV || "development",
@@ -55,6 +60,13 @@ export const config = {
   origin,
   /** Canonical public home of the namespace — /pit and /n/<name>. */
   pitOrigin,
+  mcp: {
+    origin: mcpOrigin,
+    accessTtlMs: 60 * 60 * 1000,
+    refreshTtlMs: 30 * 24 * 60 * 60 * 1000,
+    shareTtlMs: 8 * 60 * 60 * 1000,
+    maxShareTtlMs: 7 * 24 * 60 * 60 * 1000,
+  },
   // WebAuthn relying party = this host.
   rpID,
   rpName: "moshcode",

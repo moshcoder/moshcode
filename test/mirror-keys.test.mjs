@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
-import { createMirror, decodeKey, pressKey, KEY_PREFIX, KEY_NAMES } from "../src/mirror.mjs";
+import {
+  createMirror, decodeKey, decodeSignal, pressKey, pressSignal,
+  KEY_PREFIX, KEY_NAMES, SIGNAL_PREFIX,
+} from "../src/mirror.mjs";
 
 const json = (body) => new Response(JSON.stringify(body), {
   headers: { "content-type": "application/json" },
@@ -28,6 +31,12 @@ test("decodeKey tells a key from a line", () => {
   assert.equal(decodeKey(undefined), null);
 });
 
+test("decodeSignal accepts only the remote interrupt sentinel", () => {
+  assert.equal(decodeSignal(`${SIGNAL_PREFIX}interrupt`), "interrupt");
+  assert.equal(decodeSignal(`${SIGNAL_PREFIX}terminate`), null);
+  assert.equal(decodeSignal("interrupt"), null);
+});
+
 test("a queued key reaches onKey, and never onCommand", async () => {
   const acked = [];
   let served = false;
@@ -45,6 +54,7 @@ test("a queued key reaches onKey, and never onCommand", async () => {
       return json({ commands: [
         { id: "c1", body: `${KEY_PREFIX}down` },
         { id: "c2", body: "/ps" },
+        { id: "c3", body: `${SIGNAL_PREFIX}interrupt` },
       ] });
     }
     acked.push(pathname);
@@ -57,16 +67,19 @@ test("a queued key reaches onKey, and never onCommand", async () => {
   });
   const keys = [];
   const lines = [];
+  const signals = [];
   mirror.onKey((name) => keys.push(name));
   mirror.onCommand((body) => lines.push(body));
+  mirror.onSignal((name) => signals.push(name));
 
   assert.equal(await mirror.start(), true);
-  await waitFor(() => keys.length > 0 && lines.length > 0);
+  await waitFor(() => keys.length > 0 && lines.length > 0 && signals.length > 0);
 
   assert.deepEqual(keys, ["down"]);
   assert.deepEqual(lines, ["/ps"], "the sentinel must never be handed to the prompt as text");
-  // Both are acked, so neither is claimed again by the next poll.
-  await waitFor(() => acked.length === 2);
+  assert.deepEqual(signals, ["interrupt"]);
+  // All are acked, so none is claimed again by the next poll.
+  await waitFor(() => acked.length === 3);
   await mirror.stop();
 });
 
@@ -101,6 +114,14 @@ test("a key we don't know does nothing at all", () => {
   assert.equal(pressKey("pgdn", rl, stdin), false);
   assert.equal(pressKey("", null, stdin), false);
   assert.equal(wrote, false);
+});
+
+test("an interrupt reaches readline as ctrl-c", () => {
+  const seen = [];
+  const rl = { write: (data, key) => seen.push({ data, key }) };
+  assert.equal(pressSignal("interrupt", rl), true);
+  assert.equal(pressSignal("terminate", rl), false);
+  assert.deepEqual(seen, [{ data: null, key: { ctrl: true, name: "c" } }]);
 });
 
 test("a prompt that refuses the keypress falls back to the tty", () => {

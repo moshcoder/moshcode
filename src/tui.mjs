@@ -18,7 +18,7 @@ import { createPrd, listPrds, authoringPrompt } from "./prd.mjs";
 import { loginAuto, whoami, logout } from "./auth.mjs";
 import { startAutoSync } from "./autosync.mjs";
 import { loadCommand, saveCommand } from "./settings-sync.mjs";
-import { activeChildInput, createMirror, pressKey, setActiveSink, teeOutput } from "./mirror.mjs";
+import { activeChildInput, createMirror, pressKey, pressSignal, setActiveSink, teeOutput } from "./mirror.mjs";
 import { fetchMotdAd } from "./ads.mjs";
 import { runScript } from "./runtime.mjs";
 import { moshVocabulary } from "./commands.mjs";
@@ -1173,7 +1173,7 @@ export async function tui() {
     }
     if (cmd === "mcp") {
       rl.close();
-      await mcpCommand(rest);
+      await mcpCommand(rest, { sessionId: activeMirror?.id });
       rl = mkrl();
       continue;
     }
@@ -1466,6 +1466,7 @@ async function startMirror() {
   // because it would otherwise appear from nowhere, but a key's effect is the
   // redraw it causes, and printing over that would shift it out of place.
   mirror.onKey((name) => { pressKey(name, promptRl); });
+  mirror.onSignal((name) => { pressSignal(name, promptRl); });
 
   console.log(info(`mirroring this session → ${acid(mirror.url)}`));
   return { restoreTee, drainRemote, atPrompt: (rl) => { promptRl = rl; } };

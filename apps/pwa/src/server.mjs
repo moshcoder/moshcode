@@ -12,6 +12,7 @@ import { approvalsRouter } from "./routes/approvals.mjs";
 import { creditsRouter } from "./routes/credits.mjs";
 import { cliRouter } from "./routes/cli.mjs";
 import { sessionsRouter } from "./routes/sessions.mjs";
+import { mcpRouter } from "./routes/mcp.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
 import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
@@ -72,6 +73,7 @@ app.use(approvalsRouter);
 app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
+app.use(mcpRouter);       // OAuth discovery + /api/v1/mcp/:opaque-session-id
 app.use(pagesRouter);     // /app, /settings
 app.use(settingsSyncRouter); // /api/settings (+ /settings/sync) — the pit's /save and /load
 app.use(socialsRouter);   // public browser composers used by /post
