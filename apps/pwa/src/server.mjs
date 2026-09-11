@@ -12,6 +12,8 @@ import { approvalsRouter } from "./routes/approvals.mjs";
 import { creditsRouter } from "./routes/credits.mjs";
 import { cliRouter } from "./routes/cli.mjs";
 import { sessionsRouter } from "./routes/sessions.mjs";
+import { mcpRouter } from "./routes/mcp.mjs";
+import { mcpOAuthBrowserRouter, mcpOAuthMachineRouter } from "./routes/mcp-oauth.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
 import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
@@ -62,6 +64,13 @@ for (const [route, file] of Object.entries(vendor)) {
 app.get("/healthz", (_req, res) => res.json({ ok: true, env: config.env }));
 
 app.use(sessionMiddleware);
+
+// OAuth token/registration and MCP calls are machine endpoints. Mount them
+// before browser CSRF; each MCP call is bearer-authenticated and token issuance
+// is protected by authorization-code + PKCE instead of cookies.
+app.use(mcpOAuthMachineRouter);
+app.use(mcpRouter);
+
 app.use(csrfGuard);
 
 // routes
@@ -72,6 +81,7 @@ app.use(approvalsRouter);
 app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
+app.use(mcpOAuthBrowserRouter); // /oauth/authorize — logged-in consent + CSRF
 app.use(pagesRouter);     // /app, /settings
 app.use(settingsSyncRouter); // /api/settings (+ /settings/sync) — the pit's /save and /load
 app.use(socialsRouter);   // public browser composers used by /post
@@ -91,7 +101,9 @@ app.use((err, req, res, _next) => {
     const detail = err?.type === "entity.too.large"
       ? `that body is too large. Publish up to ${MAX_BATCH} items at a time, and split the batch if it is still refused — publishing upserts on the slug, so a split batch is safe to retry.`
       : "could not read that request body as JSON";
-    if (req.path.startsWith("/api/")) return res.status(status).json({ error: detail });
+    if (req.path.startsWith("/api/") || req.path === "/mcp" || req.path.startsWith("/oauth/")) {
+      return res.status(status).json({ error: detail });
+    }
     return res.status(status).type("text").send(`${detail}\n`);
   }
   console.error(err);
