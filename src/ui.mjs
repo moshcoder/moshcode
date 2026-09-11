@@ -59,9 +59,14 @@ export function hr() {
 // it wrong is how a table's right edge goes ragged the moment one cell is
 // coloured, and every caller here paints cells.
 const ANSI = /\x1b\[[0-9;]*m/g;
+// OSC 8 hyperlinks wrap a label in two escape sequences whose payload is a URL
+// — tens of characters that print nothing. They are not SGR, so ANSI above does
+// not match them, and a table measured without this would size its columns to
+// the length of a GitHub URL and blow the layout apart.
+const OSC8 = /\x1b\]8;.*?(?:\x07|\x1b\\)/g;
 
-/** `text` with every SGR sequence removed. */
-export const strip = (s) => String(s ?? "").replace(ANSI, "");
+/** `text` with every SGR sequence and OSC 8 hyperlink wrapper removed. */
+export const strip = (s) => String(s ?? "").replace(ANSI, "").replace(OSC8, "");
 
 /** Printable width of `text` in terminal columns, colour codes not counted. */
 export const visible = (s) => strip(s).length;
@@ -109,13 +114,25 @@ export function clip(text, width, { collapse = true } = {}) {
   let out = "";
   let printed = 0;
   let painted = false;
+  let linked = false;
   for (let i = 0; i < s.length && printed < room; i++) {
     if (s[i] === "\x1b") {
-      const match = /^\x1b\[[0-9;]*m/.exec(s.slice(i));
-      if (match) {
-        out += match[0];
+      const colour = /^\x1b\[[0-9;]*m/.exec(s.slice(i));
+      if (colour) {
+        out += colour[0];
         painted = true;
-        i += match[0].length - 1;
+        i += colour[0].length - 1;
+        continue;
+      }
+      // An OSC 8 wrapper is copied whole for the same reason a colour code is:
+      // half of one is garbage on screen. `linked` tracks whether an opener has
+      // gone past without its closer, because a cut landing inside a hyperlink
+      // would otherwise leave the terminal linking everything printed after it.
+      const href = /^\x1b\]8;.*?(?:\x07|\x1b\\)/.exec(s.slice(i));
+      if (href) {
+        out += href[0];
+        linked = !LINK_CLOSE_RE.test(href[0]);
+        i += href[0].length - 1;
         continue;
       }
     }
@@ -125,7 +142,50 @@ export function clip(text, width, { collapse = true } = {}) {
   // A full reset rather than ui.mjs's narrower `\x1b[39m`: the cut may have
   // landed inside dim, or inside a colour some caller opened around us, and
   // leaking either is the bug this function exists to avoid.
-  return out + (painted ? "\x1b[0m" : "") + "…";
+  return out + (linked ? LINK_CLOSE : "") + (painted ? "\x1b[0m" : "") + "…";
+}
+
+/* ------------------------------------------------------------ hyperlinks */
+
+// OSC 8: ESC ]8;<params>;<uri> ST <label> ESC ]8;; ST. The label is arbitrary
+// text — "view" — while the target has to be a real URI, because it is the
+// terminal's own link handler that opens it, not us. That split is the point: a
+// table can carry a click target without spending a column on a GitHub URL.
+const LINK_OPEN = "\x1b]8;;";
+const ST = "\x1b\\";
+const LINK_CLOSE = `${LINK_OPEN}${ST}`;
+/** A wrapper whose URI is empty is the closer, not another opener. */
+const LINK_CLOSE_RE = /^\x1b\]8;[^;]*;(?:\x07|\x1b\\)$/;
+
+/**
+ * Whether hyperlinks are worth emitting.
+ *
+ * Piped output is read by something that wants text rather than escapes, so the
+ * URL itself is the more useful thing there. And OSC 8 is not universal — a
+ * terminal without it paints the label and drops the target on the floor,
+ * leaving a "view" nobody can reach — so `MOSHCODE_HYPERLINKS=0` forces the
+ * plain URL back. There is no way to feature-detect this, which is why it is a
+ * knob and not a guess.
+ */
+const useLinks = () => {
+  const flag = process.env.MOSHCODE_HYPERLINKS;
+  if (flag != null) return !/^(0|off|no|false)$/i.test(flag.trim());
+  return process.stdout.isTTY === true;
+};
+
+/**
+ * `label`, clickable, pointing at `url`.
+ *
+ * Falls back to `fallback` — the raw URL, for callers with nowhere else to put
+ * it — when hyperlinks are off, and to the bare label when they gave none. A
+ * missing url is not an error: it is a row that has no PR yet.
+ */
+export function link(label, url, { fallback = null } = {}) {
+  const text = String(label ?? "");
+  const href = String(url ?? "").trim();
+  if (!href) return text;
+  if (!useLinks()) return fallback == null ? text : String(fallback);
+  return `${LINK_OPEN}${href}${ST}${text}${LINK_CLOSE}`;
 }
 
 /* --------------------------------------------------------------- layout */

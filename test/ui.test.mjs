@@ -13,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { clip, gauge, pad, panel, sparkline, strip, table, visible } from "../src/ui.mjs";
+import { clip, gauge, link, pad, panel, sparkline, strip, table, visible } from "../src/ui.mjs";
 
 // A red "abc" the way rgb() writes it, and a dim run the way wrap() does.
 const RED = (s) => `\x1b[38;2;255;77;61m${s}\x1b[39m`;
@@ -248,3 +248,62 @@ test("gauge survives a zero maximum instead of rendering NaN", () => {
 test("gauge fills proportionally", () => {
   assert.equal(strip(gauge(0.5, { max: 1, width: 10, label: false })), "█████░░░░░");
 });
+
+/* ------------------------------------------------------------ hyperlinks */
+
+// The runner has no tty, so hyperlinks are off by default here for the same
+// reason colour is. `useLinks` reads the env on every call rather than at
+// import, so a test can turn them on around one assertion.
+const PR = "https://github.com/profullstack/moshcode/pull/1";
+const withLinks = (fn) => {
+  const previous = process.env.MOSHCODE_HYPERLINKS;
+  process.env.MOSHCODE_HYPERLINKS = "1";
+  try { return fn(); }
+  finally {
+    if (previous === undefined) delete process.env.MOSHCODE_HYPERLINKS;
+    else process.env.MOSHCODE_HYPERLINKS = previous;
+  }
+};
+
+test("link wraps the label in OSC 8 and points it at the url", () => withLinks(() => {
+  assert.equal(link("view", PR), `\x1b]8;;${PR}\x1b\\view\x1b]8;;\x1b\\`);
+}));
+
+test("a link is as wide as its label, not its url", () => withLinks(() => {
+  // The whole reason the label and the target are separate: a column sized to
+  // a GitHub URL would push every other column off the right edge.
+  assert.equal(visible(link("view", PR)), 4);
+}));
+
+test("strip removes the hyperlink wrapper as well as colour", () => withLinks(() => {
+  assert.equal(strip(link(RED("view"), PR)), "view");
+}));
+
+test("a linked cell lines up with a plain one", () => withLinks(() => {
+  const lines = table([[link("view", PR), "a"], ["view", "b"]], { columns: ["pr", "x"], header: false, indent: 0 })
+    .split("\n");
+  assert.deepEqual(lines.map(strip), ["view  a", "view  b"]);
+}));
+
+test("clip closes a hyperlink it cut into, so the rest of the line is not a link", () => withLinks(() => {
+  const cut = clip(link("view now", PR), 5);
+  // Two wrappers out: the opener copied through, and the closer this added.
+  assert.equal((cut.match(/\x1b\]8;/g) || []).length, 2);
+  assert.ok(cut.endsWith("\x1b]8;;\x1b\\…"), JSON.stringify(cut));
+  assert.equal(visible(cut), 5);
+}));
+
+test("link falls back to the url when hyperlinks are off", () => {
+  // Piped output and terminals without OSC 8 both land here: an unreachable
+  // "view" would be worse than a long cell.
+  assert.equal(link("view", PR, { fallback: PR }), PR);
+});
+
+test("link with no fallback degrades to the bare label", () => {
+  assert.equal(link("view", PR), "view");
+});
+
+test("link without a url is the label, not an empty link", () => withLinks(() => {
+  assert.equal(link("view", null), "view");
+  assert.equal(link("view", "  "), "view");
+}));

@@ -382,14 +382,28 @@ moshcode cost --json             # for a script
 ```
 
 ```
-  session  engine  model          in    out   cache  cost    age
-  api      claude  claude-opus-5  1.2k  27k   10.5M  $9.91~  42m
-  audit    codex   gpt-5.6-sol    400   200   600    —       12m
+  session  engine  model          in    out   cache  cost    age  pr
+  api      claude  claude-opus-5  1.2k  27k   10.5M  $9.91~  42m  view #128
+  audit    codex   gpt-5.6-sol    400   200   600    —       12m  —
 
   total  $9.91~  1.6k in · 27k out · 10.5M cached
   ~ estimated from published rates; unmarked figures are the engine's own.
 ⚠ no rate for gpt-5.6-sol — tokens counted, cost omitted.
 ```
+
+**`view` is a link — click it and the PR opens in your browser.** The cost table
+is where you notice a session that cost $300, and the next thing you want is
+the thing it produced, which lives on GitHub rather than on this machine. The
+cell is an [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda)
+hyperlink: the label stays four characters wide while the click target is the
+full URL, so the column costs nothing to carry. Claude Code writes a `pr-link`
+record when a session opens a pull request, and that is where this comes from —
+other engines leave the column blank because they record nothing like it.
+
+Not every terminal speaks OSC 8, and there is no way to ask one whether it does.
+Piped output prints the raw URL instead, and `MOSHCODE_HYPERLINKS=0` forces that
+same plain form in a terminal that would otherwise paint a "view" nobody can
+click. `moshcode cost --json` always carries `pr` and `prs` in full.
 
 | engine | where the number comes from |
 |---|---|
@@ -854,6 +868,30 @@ MCPJam is the companion to `moshcode mcp`: `mcp` registers a server across your
 engines, `mcpjam` tells you whether that server is healthy first — health
 checks, OAuth conformance, tool-surface diffing, and structured triage from the
 terminal or CI. Re-running `moshcode install mcpjam` is also its upgrade path.
+
+### Noodle — a REST client that lives in the repo
+
+```sh
+moshcode install noodle           # static binary → ~/.local/bin
+
+moshcode noodle collection create my-api
+moshcode noodle request create users/get --url https://api.example.com/users/42
+moshcode noodle request run users/get --collection ./my-api
+moshcode noodle --collection ./my-api   # the TUI
+```
+
+[Noodle](https://noodlerest.dev/) is MCPJam one protocol over: MCPJam tells you
+whether an MCP server answers, Noodle is how you ask an HTTP one anything at
+all. Every request is a readable YAML file — method, url, path params, headers
+— so a collection is reviewed in a diff and kept beside the code it exercises,
+rather than living in a desktop app's private workspace. The same files drive
+the TUI, the CLI and a script, which is what makes it a roster tool: `request
+run` exits with a status and prints the exchange, so it pipes.
+
+It ships a per-platform static binary on its own releases and the install script
+picks the right one, checks it against the published `SHA256SUMS`, and renames
+it over any existing copy. So there is no updater to reach for: re-running
+`moshcode install noodle` is the upgrade path.
 
 ### ElevenLabs — Eleven Agents, voices, and speech
 
@@ -1506,7 +1544,7 @@ session:
 moshcode
 /mcp answer                    # default: all session scopes for 8 hours
 /mcp answer --ttl 30m          # shorter share
-/mcp answer --scope session:read,session:write
+/mcp answer --scope sessions:read,sessions:control
 ```
 
 Paste the printed `https://moshcode.sh/api/v1/mcp/mcs_…` endpoint into a remote
@@ -1515,10 +1553,11 @@ specific session and scopes in the browser, and its access token is bound to
 that one opaque share URL. OAuth authorization code + PKCE, rotating refresh
 tokens, and device authorization are supported.
 
-The shared server exposes `session_read`, `session_answer`, `session_approve`,
-`session_send`, and `session_cancel`. Write, approval, and interrupt access are
-separate scopes; the authorization page shows exactly which ones the client
-requested. Share management stays with the logged-in Moshcode operator:
+The shared server exposes `moshcode_session_read`, `moshcode_session_answer`,
+`moshcode_session_approve`, `moshcode_session_send`, and
+`moshcode_session_cancel`. Read and control access are separate scopes; the
+authorization page shows exactly which ones the client requested. Share
+management stays with the logged-in Moshcode operator:
 
 ```sh
 moshcode mcp connect            # authenticate the operator by device code

@@ -39,6 +39,13 @@ const claudeAssistant = ({ id, requestId, model = "claude-opus-5", at, cwd, sess
   message: { id, model, usage },
 });
 
+/** The record Claude Code appends when a session opens a pull request. */
+const claudePrLink = ({ number, at, repository = "profullstack/moshcode", sessionId = "s" }) => JSON.stringify({
+  type: "pr-link", sessionId, prNumber: number,
+  prUrl: `https://github.com/${repository}/pull/${number}`,
+  prRepository: repository, timestamp: at,
+});
+
 const USAGE = {
   input_tokens: 1000,
   output_tokens: 2000,
@@ -115,6 +122,73 @@ test("claude transcripts", async (t) => {
     assert.equal(run.usage.cacheWrite5m, 8000);
     assert.equal(run.costSource, "rates");
     assert.equal(run.cost, priceUsage("claude-opus-5", run.usage));
+  }));
+
+  await t.test("a pr-link record becomes the run's clickable target", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), [
+      claudeAssistant({ id: "m1", requestId: "r1", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE }),
+      claudePrLink({ number: 42, at: new Date().toISOString() }),
+    ].join("\n"));
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+    assert.equal(run.pr.number, 42);
+    assert.equal(run.pr.url, "https://github.com/profullstack/moshcode/pull/42");
+    assert.equal(run.pr.repository, "profullstack/moshcode");
+  }));
+
+  await t.test("a PR opened before the window still belongs to the run", () => withHome(async (home) => {
+    // The window is about which requests to bill, not about which PR the
+    // session produced. A run in today's table that opened its PR yesterday is
+    // the ordinary case for anything that ran overnight.
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), [
+      claudePrLink({ number: 7, at: new Date(Date.now() - 86400e3 * 3).toISOString() }),
+      claudeAssistant({ id: "m1", requestId: "r1", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE }),
+    ].join("\n"));
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+    assert.equal(run.pr.number, 7);
+  }));
+
+  await t.test("two PRs from one session: the newest is the one shown", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), [
+      claudePrLink({ number: 1, at: new Date(Date.now() - 7200e3).toISOString() }),
+      claudeAssistant({ id: "m1", requestId: "r1", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE }),
+      claudePrLink({ number: 2, at: new Date(Date.now() - 60e3).toISOString() }),
+    ].join("\n"));
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+    assert.equal(run.pr.number, 2);
+  }));
+
+  await t.test("a pr-link with no usable url is dropped, not shown as a dead link", () => withHome(async (home) => {
+    // This string is handed to the terminal's link handler and then to a
+    // browser. A transcript is a file on disk, so it is not trusted to hold a
+    // scheme we are willing to open.
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    for (const url of ["", "javascript:alert(1)", "file:///etc/passwd", "http://example.com/pull/1", "not a url"]) {
+      write(path.join(dir, "s.jsonl"), [
+        claudeAssistant({ id: "m1", requestId: "r1", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE }),
+        JSON.stringify({ type: "pr-link", sessionId: "s", prNumber: 3, prUrl: url, timestamp: new Date().toISOString() }),
+      ].join("\n"));
+      const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+      assert.equal(run.pr, null, `accepted ${JSON.stringify(url)}`);
+    }
+  }));
+
+  await t.test("a transcript with no PR reports null rather than guessing one", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), claudeAssistant({ id: "m1", requestId: "r1", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE }));
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+    assert.equal(run.pr, null);
   }));
 
   await t.test("a replayed message is counted once", () => withHome(async (home) => {

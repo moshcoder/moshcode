@@ -18,11 +18,11 @@ async function quietly(fn) {
 }
 
 test("remote MCP verbs parse separately from server registration", () => {
-  assert.deepEqual(parseMcp(["answer", "--ttl", "8h", "--scope", "session:read,session:write", "--json"]), {
+  assert.deepEqual(parseMcp(["answer", "--ttl", "8h", "--scope", "sessions:read,sessions:control", "--json"]), {
     remote: {
       action: "share",
       ttl: "8h",
-      scope: "session:read,session:write",
+      scope: "sessions:read,sessions:control",
       json: true,
     },
   });
@@ -44,7 +44,7 @@ test("mcp answer shares the active TUI session through the authenticated API", a
     request = { url, options, body: JSON.parse(options.body) };
     return json({ id: "mcs_share", endpoint: "https://moshcode.sh/api/v1/mcp/mcs_share", expires_at: 1 });
   };
-  const result = await quietly(() => mcpCommand(["answer", "--ttl", "8h", "--scope", "session:read,session:write"], {
+  const result = await quietly(() => mcpCommand(["answer", "--ttl", "8h", "--scope", "sessions:read,sessions:control"], {
     sessionId: "session-live",
     credentials: { api: "https://app.example.test", token: "mck_test" },
     fetchImpl,
@@ -56,7 +56,7 @@ test("mcp answer shares the active TUI session through the authenticated API", a
   assert.deepEqual(request.body, {
     session_id: "session-live",
     ttl_seconds: 28800,
-    scope: "session:read session:write",
+    scope: "sessions:read sessions:control",
   });
   assert.match(result.lines.join("\n"), /https:\/\/moshcode\.sh\/api\/v1\/mcp\/mcs_share/);
 });

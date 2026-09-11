@@ -304,6 +304,32 @@ export const TOOLS = {
     // idempotent, so it doubles as the upgrade path — no `upgrade` key needed.
     install: { cmd: "npm", args: ["install", "-g", "@mcpjam/cli"] },
   },
+  noodle: {
+    desc: "Noodle — terminal REST client: readable request files, run them from the TUI, CLI or a script",
+    bin: "noodle",
+    // The sibling of mcpjam one protocol over: mcpjam tells you whether an MCP
+    // server answers, noodle is how you ask an HTTP one anything at all. Every
+    // request is a YAML file that lives beside the code it exercises, so a
+    // collection is reviewable in a diff and runnable from a pipeline rather
+    // than trapped in a desktop app's workspace.
+    //
+    // Its own install script, not npm: noodle ships a per-platform static
+    // binary on its GitHub releases and the script picks the right one. The
+    // shebang is bash and the script uses `local`, so it goes through bash
+    // rather than `sh` — the opposite of the c0upons entry above, which avoids
+    // bashisms on purpose.
+    install: { cmd: "bash", args: ["-c", "curl -fsSL https://noodlerest.dev/install.sh | bash"] },
+    // No `upgrade` key on purpose: noodle ships no updater of its own, and the
+    // installer always fetches the latest release, checks it against the
+    // published SHA256SUMS, and renames it over the existing binary atomically.
+    // Re-running the install IS the upgrade, the same as mcpjam and railway,
+    // and toolUpgradeSpec falls back to install on its own.
+    //
+    // It lands in ~/.local/bin and appends nothing to PATH, so the shell that
+    // ran the install cannot see it — the same gap turso, gradient, kimi and
+    // yt-dlp have.
+    binDirs: [path.join(homedir(), ".local", "bin")],
+  },
   spinifex: {
     desc: "Spinifex — AWS-compatible cloud on your own hardware (EC2, EBS, S3, VPC, IAM)",
     // The product is Spinifex; the binary it installs is `spx`. Same split as
