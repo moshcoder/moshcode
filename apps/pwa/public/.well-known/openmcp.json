@@ -1,0 +1,19 @@
+{
+  "openmcp": "0.1",
+  "mcp": "https://moshcode.sh/mcp",
+  "name": "moshcode",
+  "description": "Shared coding sessions and their transcripts, over MCP with OAuth.",
+  "url": "https://moshcode.sh",
+  "auth": {
+    "kind": "oauth",
+    "url": "https://moshcode.sh/settings"
+  },
+  "tags": [
+    "coding",
+    "collaboration"
+  ],
+  "operator": "https://logicsrc.com/.well-known/openprofile.md",
+  "catalogs": [
+    "https://openmcp.logicsrc.com"
+  ]
+}
