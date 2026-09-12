@@ -1,0 +1,29 @@
+{
+  "openaccess": "0.1",
+  "name": "moshcode",
+  "url": "https://moshcode.sh",
+  "operator": "https://logicsrc.com/.well-known/openprofile.md",
+  "redirect_uris": [
+    "https://moshcode.sh/api/v1/openaccess/callback"
+  ],
+  "jwks": {
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "kid": "NZ8tRe6lAOqA",
+        "x": "WrAHtbFxSg9EveTS4W7GeX-MEDL1uHNDCHMUZkG-32Q",
+        "alg": "EdDSA",
+        "use": "sig"
+      }
+    ]
+  },
+  "scopes": {},
+  "honours": [
+    "profullstack.com/all-access"
+  ],
+  "webhooks": "https://moshcode.sh/api/v1/openaccess/events",
+  "hubs": [
+    "https://openaccess.logicsrc.com"
+  ]
+}
