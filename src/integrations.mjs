@@ -285,8 +285,14 @@ export async function mcpCommand(tokens, {
         });
         if (parsed.remote.json) console.log(JSON.stringify(share, null, 2));
         else {
-          console.log(ok("this session can now answer through remote MCP"));
+          console.log(ok("remote MCP share ready"));
           console.log(`   ${acid(share.endpoint)}`);
+          if (share.scopes?.length) {
+            console.log(ash(`   permissions: ${share.scopes.join(", ")}`));
+            if (share.scopes.length === 1 && share.scopes[0] === "sessions:read") {
+              console.log(ash("   read-only; to allow answers, create a share with /mcp answer --scope sessions:read,sessions:write"));
+            }
+          }
           console.log(ash(`   expires ${new Date(share.expires_at).toISOString()} · revoke with /mcp revoke ${share.id}`));
         }
       } else if (parsed.remote.action === "status") {

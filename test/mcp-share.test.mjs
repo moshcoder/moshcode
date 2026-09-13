@@ -150,3 +150,13 @@ test("disabled mirroring refuses local shares before authentication but still pe
   assert.equal((await quietly(() => mcpCommand(["connect"], options))).code, 0);
   assert.equal(logins, 1);
 });
+
+test("default share output explains read-only permissions and how to enable answers", async () => {
+  const result = await quietly(() => mcpCommand(["answer"], {
+    sessionId: "live", credentials: { token: "mck_test" },
+    fetchImpl: async () => json({ id: "share", endpoint: "https://example.test/share", expires_at: 1, scopes: ["sessions:read"] }),
+  }));
+  assert.equal(result.code, 0);
+  assert.match(result.lines.join("\n"), /permissions: sessions:read/);
+  assert.match(result.lines.join("\n"), /read-only; to allow answers/);
+});
