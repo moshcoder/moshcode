@@ -1643,14 +1643,21 @@ tokens, and device authorization are supported.
   share URL, then connect and complete Moshcode authorization. Team owners
   configure the connector for their organization first. See
   [Claude's setup guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
-- **Chovy and other integrations:** use an OAuth-capable remote MCP client
-  with the same share URL. Chovy does not yet provide a native connector screen;
-  its adapter needs the discovery, PKCE, resource-bound token and refresh flow
-  described in [the server integration contract](apps/pwa/MCP.md).
+- **Chovy:** open [Settings](https://chovy.com/app/settings) → Moshcode,
+  paste the share URL, and choose **Check permissions**. Read access is selected
+  by default; select any additional permissions offered by the share, then
+  choose **Authorize with Moshcode** and consent as the session owner. Back in
+  Chovy, **Read session** shows the terminal output and the controls permitted
+  by that connection. Connections are private to your Chovy account.
+- **Other integrations:** implement the discovery, PKCE, resource-bound token
+  and refresh flow in [the server integration contract](apps/pwa/MCP.md).
 
 After connecting, ask the client to read this session before granting or using
 write tools. Removing a client-side connector does not replace revoking the
 Moshcode share when you want to end all access to that URL.
+Chovy's **Disconnect** revokes its own OAuth grant. If Moshcode cannot confirm
+revocation, Chovy disables the connection and offers **Retry disconnect**;
+the share itself remains available to other authorized clients.
 
 The shared server exposes `session_read`, `session_answer`, `session_approve`,
 `session_send`, and `session_cancel`. Reading, writing, approval and interruption
