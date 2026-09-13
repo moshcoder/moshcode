@@ -12,6 +12,7 @@ import { approvalsRouter } from "./routes/approvals.mjs";
 import { creditsRouter } from "./routes/credits.mjs";
 import { cliRouter } from "./routes/cli.mjs";
 import { sessionsRouter } from "./routes/sessions.mjs";
+import { organizationsRouter } from "./routes/organizations.mjs";
 import { mcpRouter } from "./routes/mcp.mjs";
 import { mcpOAuthBrowserRouter, mcpOAuthMachineRouter } from "./routes/mcp-oauth.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
@@ -81,6 +82,7 @@ app.use(approvalsRouter);
 app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
+app.use(organizationsRouter); // organizations, teams, membership, and session sharing
 app.use(mcpOAuthBrowserRouter); // /oauth/authorize — logged-in consent + CSRF
 app.use(pagesRouter);     // /app, /settings
 app.use(settingsSyncRouter); // /api/settings (+ /settings/sync) — the pit's /save and /load

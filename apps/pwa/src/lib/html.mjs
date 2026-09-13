@@ -106,6 +106,7 @@ export function appBar(user, balance, csrf = "") {
     <div class="bar-right">
       <a class="btn" href="/pit">The pit</a>
       ${user ? `<span class="bal-chip">◆ <b>${balance.toLocaleString()}</b> cr</span>
+      <a class="btn" href="/organizations">Teams</a>
       <a class="btn" href="/settings">Settings</a>
       <form method="post" action="/auth/logout" style="margin:0"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="btn">Sign out</button></form>`
       : `<a class="btn acid" href="/">Sign in</a>`}
