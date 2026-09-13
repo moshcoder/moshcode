@@ -141,15 +141,37 @@ export const ENGINES = {
         "env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS": "4 agents at once, hard cap",
       },
     },
+    // Dialogs the engine puts up BEFORE any work, and the keys that answer them
+    // the way an unattended session wants (PRD 0015). The workspace trust
+    // check is the one that matters: its default is "No, exit", so a bare
+    // Enter — the reflex answer to "something is blocking" — ends the engine.
+    // Down, then Enter, picks "Yes, I trust this folder". Matched against the
+    // screen with ANSI stripped; a swarm answers each once and then waits for
+    // the prompt.
+    boot: [
+      { pattern: /\bIs this a project you created or one you trust\b/i, keys: ["Down", "Enter"], label: "trust this folder" },
+    ],
     state: {
       // The permission dialog's own heading, and the selector on its first
       // option — the generic numbered-menu pattern would catch the second only
-      // if the cursor happened to be resting there.
-      blocked: [/\bdo you want to (?:proceed|make this edit|create)\b/i, /^\s*❯\s*1\.\s*yes/im],
+      // if the cursor happened to be resting there. The trust check is blocked
+      // too: it waits on a human exactly as a permission prompt does, and the
+      // roster read it as "unknown" until it was listed here.
+      blocked: [
+        /\bdo you want to (?:proceed|make this edit|create)\b/i,
+        /^\s*❯\s*1\.\s*yes/im,
+        /\bIs this a project you created or one you trust\b/i,
+      ],
       // Claude Code parks "? for shortcuts" under the composer when it is
       // waiting on you and nothing else, which is as close to an explicit
-      // "idle" as it publishes.
-      idle: [/\?\s+for shortcuts/i],
+      // "idle" as it publishes. Matched on its stem: on a narrow pane the
+      // status line is cut to "? for shortc…" and the member read as unknown.
+      // 2.1.x with permissions bypassed prints its mode footer there instead
+      // ("bypass permissions on (shift+tab to cycle)"), and an empty composer
+      // shows a placeholder ('❯ Try "refactor …"'). Both are checked after the
+      // shared working rules, so a footer that stays up while the engine
+      // works cannot outrank "esc to interrupt".
+      idle: [/\?\s+for shortc/i, /shift\+tab to cycle/i, /^\s*❯\s+Try\s+"/m],
     },
   },
   codex: {

@@ -356,6 +356,13 @@ async function main() {
     process.exitCode = (await herdCommand(rest)) || 0;
     return;
   }
+  // A swarm (PRD 0015): the herd's parts, composed. Imported here because a
+  // plain launch never needs it.
+  if (cmd === "swarm") {
+    const { swarmCommand } = await import("../src/swarm.mjs");
+    process.exitCode = (await swarmCommand(rest)) || 0;
+    return;
+  }
   if (["ps", "attach", "kill", "wait", "restore", "cost", "usage"].includes(cmd)) {
     process.exitCode = (await herdCommand([cmd === "usage" ? "cost" : cmd, ...rest])) || 0;
     return;

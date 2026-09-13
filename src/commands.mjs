@@ -829,6 +829,7 @@ const COMMANDS = [
   cliVerb("agents", "open the native agent view or launch autonomously (moshcode agents <engine>)"),
   cliVerb("herd", "drive the herd (moshcode herd <verb>) — see herdStart/herdWait for values"),
   cliVerb("ps", "print the herd roster"),
+  cliVerb("swarm", "one task, a herd of agents, one answer (moshcode swarm \"<task>\" [--agents 4])"),
   cliVerb("cost", "print what the herd is spending (moshcode cost [name] [--all])"),
   cliVerb("start", "raw-launch an engine (moshcode start <engine>)"),
   cliVerb("install", "install an engine or workflow tool"),

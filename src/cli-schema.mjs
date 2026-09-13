@@ -110,6 +110,32 @@ export const CORE_CLI_COMMANDS = [
       + "with neither, launches stay in the foreground and say so.",
   },
   {
+    name: "swarm",
+    group: "runtime",
+    description: "one task, a herd of agents, one answer — plan, fan out, verify, synthesise (PRD 0015)",
+    synopsis: [["moshcode swarm \"<task>\" [--agents 4] [--engine claude] [--verify] [--plan-only] [--keep]", ""]],
+    flags: [
+      ["--agents <n>", "sessions at a time, and the most pieces the plan may have", "4"],
+      ["--engine <engine>", "which engine plans, works and synthesises", "the first installed"],
+      ["--cwd <dir>", "where every session works", "."],
+      ["--herd <name>", "the herd the sessions join", "swarm"],
+      ["--verify", "one skeptic per piece, prompted to refute it; the synthesis sees the verdicts", ""],
+      ["--plan-only", "print the plan and start nothing", ""],
+      ["--keep", "leave the sessions running afterwards", ""],
+      ["--timeout <dur>", "how long one piece may take", "30m"],
+      ["--json", "the whole run as data: plan, one row per piece, synthesis", ""],
+    ],
+    examples: [
+      ["moshcode swarm \"port the auth routes and the dashboard to the new API\"", "planned, run 4 at a time, one answer"],
+      ["moshcode swarm \"audit src/ for unhandled promise rejections\" --agents 8 --verify", "wider, and reviewed"],
+      ["moshcode swarm \"…\" --plan-only", "see how it would split first"],
+    ],
+    seeAlso: ["herd", "ps", "wait", "run"],
+    note: "the same thing claude code calls ultracode, on any engine moshcode can start: one headless call splits the task into pieces that "
+      + "do not touch the same files, each piece runs in its own herd session (`moshcode herd task <id>` afterwards), and one more call "
+      + "folds the outputs into the answer. sessions are ended when it is done unless --keep. a plan that does not parse runs the task as one piece.",
+  },
+  {
     name: "ps",
     group: "runtime",
     description: "list herd sessions and what each one is doing",
@@ -1559,6 +1585,8 @@ export const PIT_COMMANDS = [
     description: "sessions that keep running when you leave" },
   { name: "ps", cli: "ps",
     description: "what the herd is running, and which one wants you" },
+  { name: "swarm", args: "<task> [--agents 4] [--verify]", cli: "swarm",
+    description: "one task, a herd of agents, one answer" },
   { name: "cost", aliases: ["usage"], args: "[name] [--all]", cli: "cost",
     description: "what the herd is spending, from the engines' own logs" },
   { name: "attach", args: "<name>", cli: "attach",

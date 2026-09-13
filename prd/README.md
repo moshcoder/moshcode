@@ -29,4 +29,6 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0011](0011-herd-agent-protocol.md) | Teach the herd the agent protocol — hooks-first state, a task ledger, and an A2A surface for local and remote agents | Draft |
 | [0012](0012-billing-baked-into-the-agent-cli.md) | Bake billing into the agent CLI — timer, clients, teams, rates, invoices, rails | Draft |
 | [0013](0013-persistent-ssh-workspaces.md) | Add persistent SSH workspaces for humans and agents | Draft |
+| [0014](0014-remote-mcp-session-gateway.md) | Expose live Moshcode sessions over remote MCP | Draft |
+| [0015](0015-swarm-one-task-a-herd-of-agents.md) | Swarm — one task, a herd of agents, one answer | Draft |
 <!-- PRD-INDEX:END -->

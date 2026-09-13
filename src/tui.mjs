@@ -1121,6 +1121,11 @@ export async function tui() {
     // sessions run somewhere that outlives it.
     if (cmd === "herd") { await herdCommand(rest); continue; }
     if (cmd === "ps") { await herdCommand(["ps", ...rest]); continue; }
+    if (cmd === "swarm") {
+      const { swarmCommand } = await import("./swarm.mjs");
+      await swarmCommand(rest, { write: (l) => console.log(`  ${l}`) });
+      continue;
+    }
     if (cmd === "cost" || cmd === "usage") { await herdCommand(["cost", ...rest]); continue; }
     if (cmd === "kill") { await herdCommand(["kill", ...rest]); continue; }
     if (cmd === "wait") { await herdCommand(["wait", ...rest]); continue; }
