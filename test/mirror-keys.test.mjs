@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   createMirror, decodeKey, decodeSignal, pressKey, pressSignal,
   KEY_PREFIX, KEY_NAMES, SIGNAL_PREFIX,
+  setActiveChildInput,
 } from "../src/mirror.mjs";
 
 const json = (body) => new Response(JSON.stringify(body), {
@@ -39,10 +40,14 @@ test("decodeSignal accepts only the remote interrupt sentinel", () => {
 
 test("a queued key reaches onKey, and never onCommand", async () => {
   const acked = [];
+  let features;
   let served = false;
   const fetchImpl = async (url, options = {}) => {
     const pathname = new URL(url).pathname;
-    if (pathname === "/api/sessions") return json({ id: "session-1" });
+    if (pathname === "/api/sessions") {
+      features = JSON.parse(options.body).features;
+      return json({ id: "session-1" });
+    }
     if (pathname === "/api/sessions/session-1/commands") {
       if (served) {
         // One batch, then park: the pump loops forever otherwise.
@@ -55,6 +60,8 @@ test("a queued key reaches onKey, and never onCommand", async () => {
         { id: "c1", body: `${KEY_PREFIX}down` },
         { id: "c2", body: "/ps" },
         { id: "c3", body: `${SIGNAL_PREFIX}interrupt` },
+        { id: "c4", body: `${KEY_PREFIX}ctrl+c` },
+        { id: "c5", body: `${KEY_PREFIX}shift+tab` },
       ] });
     }
     acked.push(pathname);
@@ -73,14 +80,43 @@ test("a queued key reaches onKey, and never onCommand", async () => {
   mirror.onSignal((name) => signals.push(name));
 
   assert.equal(await mirror.start(), true);
+  assert.ok(features.includes("keys-v2"), "the app can safely enable extended keys");
   await waitFor(() => keys.length > 0 && lines.length > 0 && signals.length > 0);
 
-  assert.deepEqual(keys, ["down"]);
+  assert.deepEqual(keys, ["down", "ctrl+c", "shift+tab"]);
   assert.deepEqual(lines, ["/ps"], "the sentinel must never be handed to the prompt as text");
   assert.deepEqual(signals, ["interrupt"]);
   // All are acked, so none is claimed again by the next poll.
-  await waitFor(() => acked.length === 3);
+  await waitFor(() => acked.length === 5);
   await mirror.stop();
+});
+
+test("modifiers reach a child engine as terminal input, without editing the pit prompt", () => {
+  const received = [];
+  setActiveChildInput((bytes) => { received.push(bytes); return true; });
+  const rl = { write: () => assert.fail("child owns the terminal") };
+  try {
+    for (const key of ["ctrl+c", "ctrl+d", "ctrl+z", "shift+tab", "shift+enter", "ctrl+left", "shift+up", "ctrl+shift+right", "shift+a", "ctrl+space", "escape", "tab"]) {
+      assert.equal(pressKey(key, rl), true, key);
+    }
+    assert.deepEqual(received, ["\x03", "\x04", "\x1a", "\x1b[Z", "\x1b[13;2u", "\x1b[1;5D", "\x1b[1;2A", "\x1b[1;6C", "A", "\x00", "\x1b", "\t"]);
+  } finally {
+    setActiveChildInput(null);
+  }
+});
+
+test("readline gets modifier metadata and printable letters as text", () => {
+  const received = [];
+  const rl = { write: (...args) => received.push(args) };
+  for (const key of ["ctrl+c", "shift+tab", "ctrl+shift+left", "a", "shift+a", "space"]) {
+    assert.equal(pressKey(key, rl), true);
+  }
+  assert.deepEqual(received, [
+    [null, { name: "c", ctrl: true }], [null, { name: "tab", shift: true }],
+    [null, { name: "left", ctrl: true, shift: true }], ["a"], ["A"], [" "],
+  ]);
+  assert.equal(pressKey("constructor", rl), false);
+  assert.equal(pressKey("__proto__", rl), false);
 });
 
 test("at the prompt a key is a readline keypress", () => {

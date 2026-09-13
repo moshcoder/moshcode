@@ -14,6 +14,8 @@
 // pit behind it.
 import os from "node:os";
 import { loadCreds } from "./auth.mjs";
+import { EXTENDED_KEYS_FEATURE, KEY_NAMES, KEY_BYTES, readlineKey } from "./session-keys.mjs";
+export { KEY_NAMES, KEY_BYTES } from "./session-keys.mjs";
 
 // A key pressed on the session page travels through the same queue as a typed
 // line, tagged with this sentinel. ESC leads it because it is a byte you cannot
@@ -21,8 +23,6 @@ import { loadCreds } from "./auth.mjs";
 // — and the app refuses to queue one for a mosh too old to decode it, rather
 // than letting the sentinel get typed at somebody's prompt as text.
 export const KEY_PREFIX = "\u001bmoshkey:";
-/** Keys the page can send. Anything else is ignored on both ends. */
-export const KEY_NAMES = ["up", "down", "left", "right", "enter"];
 export const SIGNAL_PREFIX = "\u001bmoshsignal:";
 export const SIGNAL_NAMES = ["interrupt"];
 
@@ -38,14 +38,6 @@ export function decodeSignal(body) {
   const name = body.slice(SIGNAL_PREFIX.length);
   return SIGNAL_NAMES.includes(name) ? name : null;
 }
-
-// What each key looks like to a program reading the tty in raw mode, and the
-// keypress readline wants when it is the one holding the line.
-export const KEY_BYTES = { up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D", enter: "\r" };
-const KEY_PRESS = {
-  up: { name: "up" }, down: { name: "down" }, right: { name: "right" },
-  left: { name: "left" }, enter: { name: "return" },
-};
 
 /**
  * Deliver one key to whatever is reading this terminal. Returns false for a key
@@ -65,7 +57,11 @@ export function pressKey(name, rl = null, stdin = process.stdin) {
   // At the prompt readline owns the line editor, so hand it a keypress rather
   // than bytes: ↑/↓ walk the history, ←/→ move within the line, enter runs it.
   if (rl) {
-    try { rl.write(null, KEY_PRESS[name]); return true; } catch { /* fall through to the tty */ }
+    try {
+      if (/^(shift\+)?([a-z]|space)$/.test(name)) rl.write(bytes);
+      else rl.write(null, readlineKey(name));
+      return true;
+    } catch { /* fall through to the tty */ }
   }
   // Otherwise something has the tty in raw mode — a herd bar, the reader, a
   // menu — and it is waiting on the real escape sequence, not on readline.
@@ -258,7 +254,7 @@ export function createMirror({
         // What this build can be asked to do. The page arms its arrow pad on
         // the strength of this: a mosh that never says "keys" is one that would
         // type the sentinel at the prompt instead of pressing it.
-        features: ["keys", "signals"],
+        features: ["keys", "signals", EXTENDED_KEYS_FEATURE],
         ...size(),
       });
       if (!r?.id) return false;

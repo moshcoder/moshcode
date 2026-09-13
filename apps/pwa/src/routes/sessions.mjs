@@ -17,6 +17,7 @@ import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
+import { BASE_KEY_NAMES, EXTENDED_KEYS_FEATURE, KEY_NAMES as ALL_KEY_NAMES } from "../lib/session-keys.mjs";
 
 export const sessionsRouter = Router();
 
@@ -64,19 +65,19 @@ export function splitChunk(text, max = MAX_CHUNK) {
   return parts;
 }
 
-// Arrow keys pressed on the session page. The command queue carries opaque
+// Keys pressed on the session page. The command queue carries opaque
 // strings, so a key rides it as a sentinel the CLI decodes — ESC leads it
 // because it is a byte nobody can put in the send box by typing, which is what
 // keeps a key from ever colliding with a real command. Kept in step with
 // `src/mirror.mjs` (the CLI half) by sessions-keys.test.mjs.
 const KEY_PREFIX = "\u001bmoshkey:";
 const SIGNAL_PREFIX = "\u001bmoshsignal:";
-const KEY_NAMES = new Set(["up", "down", "left", "right", "enter"]);
+const KEY_NAMES = new Set(ALL_KEY_NAMES);
 export const keyCommand = (name) => KEY_PREFIX + name;
 
 // Capabilities a CLI is allowed to claim when it registers. Anything else is
 // dropped, so a session row can never carry whatever a client felt like sending.
-const FEATURES = new Set(["keys", "signals"]);
+const FEATURES = new Set(["keys", "signals", EXTENDED_KEYS_FEATURE]);
 export function readFeatures(value) {
   const list = Array.isArray(value) ? value : [];
   return [...new Set(list.filter((f) => FEATURES.has(f)))];
@@ -86,6 +87,10 @@ export function readFeatures(value) {
 // type the sentinel at the prompt of a live machine instead.
 export const supportsKeys = (session) => {
   try { return JSON.parse(session.features || "[]").includes("keys"); }
+  catch { return false; }
+};
+export const supportsExtendedKeys = (session) => {
+  try { return JSON.parse(session.features || "[]").includes(EXTENDED_KEYS_FEATURE); }
   catch { return false; }
 };
 
@@ -353,18 +358,24 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
   if (!s) return res.status(404).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>No such session</h1></main>` }));
   const live = isLive(s);
   const geo = dim(s.cols) && dim(s.rows) ? `${dim(s.cols)}×${dim(s.rows)}` : "";
-  // The pad is only live against a mosh that decodes the keys. Say so on the
-  // page rather than leaving five buttons that quietly do nothing.
   const keys = supportsKeys(s);
   const padOn = live && keys;
+  const extendedOn = padOn && supportsExtendedKeys(s);
   const padNote = !live
     ? "offline"
-    : keys
-      ? "navigate the remote screen · ⏎ selects"
-      : "this mosh is too old for keys — update it";
+    : extendedOn
+      ? "Ctrl / Shift apply to the next key · choose a letter or tap a key"
+      : keys
+        ? "update and restart mosh for Ctrl, Shift, Esc, and Tab"
+        : "this mosh is too old for keys — update it";
   const padKey = (name, glyph, label, area) =>
     `<button type="button" class="padkey" data-key="${esc(name)}" style="grid-area:${area}"
       aria-label="${esc(label)}" title="${esc(label)}"${padOn ? "" : " disabled"}>${glyph}</button>`;
+  const extraKey = (name, glyph, label) =>
+    `<button type="button" class="padkey extrakey" data-key="${esc(name)}" data-extended
+      aria-label="${esc(label)}" title="${esc(label)}"${extendedOn ? "" : " disabled"}>${glyph}</button>`;
+  const keyOptions = [..."abcdefghijklmnopqrstuvwxyz", "enter", "tab", "escape", "space", "backspace", "delete", "home", "end", "pageup", "pagedown"];
+  const clipboardIcon = (path) => `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
   res.type("html").send(page({
     title: `moshcode ▸ ${s.name}`,
     head: `<link rel="stylesheet" href="/vendor/xterm.css">${SESSION_CSS}`,
@@ -379,7 +390,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
       <div class="term ${live ? "" : "off"}" id="frame">
         <div id="term"></div>
       </div>
-      <div class="padbar">
+      <div class="padbar" id="keyboard" role="group" aria-label="Terminal keyboard controls">
         <div class="pad" id="pad" role="group" aria-label="Send arrow keys to the terminal">
           ${padKey("up", "↑", "Up", "u")}
           ${padKey("left", "←", "Left — back out", "l")}
@@ -387,12 +398,30 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
           ${padKey("right", "→", "Right — drill in", "r")}
           ${padKey("down", "↓", "Down", "d")}
         </div>
-        <span class="faint mono padnote">${esc(padNote)}</span>
+        <div class="keytools">
+          <div class="keyrow" role="group" aria-label="Remote shortcuts">
+            ${extraKey("escape", "Esc", "Escape")}
+            ${extraKey("tab", "⇥ Tab", "Tab")}
+            ${extraKey("shift+tab", "⇧ Tab", "Shift+Tab")}
+            ${extraKey("shift+enter", "⇧ ⏎", "Shift+Enter")}
+            ${extraKey("ctrl+c", "Ctrl+C", "Ctrl+C — interrupt")}
+            <button type="button" class="padkey extrakey" id="copy" title="Copy selected terminal output or prompt text" aria-label="Copy selected text">${clipboardIcon('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>')}Copy</button>
+            <button type="button" class="padkey extrakey" id="paste" title="Paste into the command box" aria-label="Paste into command box"${live ? "" : " disabled"}>${clipboardIcon('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M8 4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3M8 12h8M8 16h5"/>')}Paste</button>
+          </div>
+          <div class="keyrow" role="group" aria-label="Send a key combination">
+            <button type="button" class="padkey extrakey" data-modifier="ctrl" data-extended aria-pressed="false" title="Ctrl for the next remote key"${extendedOn ? "" : " disabled"}>Ctrl</button>
+            <button type="button" class="padkey extrakey" data-modifier="shift" data-extended aria-pressed="false" title="Shift for the next remote key"${extendedOn ? "" : " disabled"}>⇧ Shift</button>
+            <select id="keychoice" aria-label="Key to send" data-extended${extendedOn ? "" : " disabled"}>${keyOptions.map((key) => `<option value="${key}"${key === "c" ? " selected" : ""}>${key.length === 1 ? key.toUpperCase() : key}</option>`).join("")}</select>
+            <button type="button" class="padkey extrakey" id="sendkey" data-extended title="Send chosen key combination"${extendedOn ? "" : " disabled"}>Send key</button>
+          </div>
+          <span class="faint mono padnote">${esc(padNote)}</span>
+        </div>
       </div>
       <form id="send" method="post" action="/sessions/${esc(s.id)}/commands" class="sendbar">
         ${csrfInput(req)}
-        <span class="prompt acid mono" aria-hidden="true">❯</span>
-        <textarea name="body" id="body" rows="1" placeholder="/agents claude — paste a block, enter runs it, shift+enter for a new line" autocomplete="off" spellcheck="false" autocapitalize="off" ${live ? "" : "disabled"}></textarea>
+        <button class="prompt acid mono" id="editor-toggle" type="button" aria-label="Expand multiline editor" title="Expand multiline editor" aria-expanded="false" aria-controls="body"${live ? "" : " disabled"}><span aria-hidden="true">❯</span></button>
+        <span class="editor-note faint mono" id="editor-hint" hidden>Enter adds a line · Ctrl/⌘+Enter runs</span>
+        <textarea name="body" id="body" rows="1" aria-label="Command" aria-describedby="editor-hint" placeholder="Type a command…" autocomplete="off" spellcheck="false" autocapitalize="off" ${live ? "" : "disabled"}></textarea>
         <button class="btn acid" type="submit" ${live ? "" : "disabled"}>run</button>
       </form>
       <div class="termbar">
@@ -401,16 +430,14 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
       </div>
       <p class="faint mono" style="font-size:.72rem;margin-top:8px">
         Type anywhere on the terminal to reach the prompt. Commands run in the live mosh prompt.
-        Arrow keys don't queue as text — they're pressed on the far end as they land, from the pad
-        or from your own arrow keys with the terminal focused.
-        Output from an engine that has taken over the terminal (<span class="acid">/agents</span>)
-        stays on that machine — you'll see the hand-off, not the engine's own screen.
+        Keyboard controls act on the remote terminal. Copy uses selected text; Paste inserts into
+        the command box so you can review it before pressing run. Click ❯ to open the multiline editor.
       </p>
     </main>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script>${MIRROR_JS}</script>
-    <script>mirror(${JSON.stringify({ id: s.id, cols: dim(s.cols), rows: dim(s.rows), live, keys: padOn })});</script>
+    <script>mirror(${JSON.stringify({ id: s.id, cols: dim(s.cols), rows: dim(s.rows), live, keys: padOn, extendedKeys: extendedOn })});</script>
     ${footer}`,
   }));
 });
@@ -485,6 +512,9 @@ async function queueKey(res, s, name) {
   if (!KEY_NAMES.has(name)) return res.status(400).json({ error: "unknown key" });
   if (!isLive(s)) return res.status(409).json({ error: "session offline" });
   if (!supportsKeys(s)) return res.status(409).json({ error: "this mosh is too old for keys — update it" });
+  if (!BASE_KEY_NAMES.includes(name) && !supportsExtendedKeys(s)) {
+    return res.status(409).json({ error: "update and restart mosh for Ctrl, Shift, and other keyboard controls" });
+  }
   const cid = id();
   const body = keyCommand(name);
   await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,?,'queued',?)`,
@@ -565,32 +595,55 @@ const SESSION_CSS = `<style>
   .term .xterm-viewport { background:transparent !important; scrollbar-width:thin; scrollbar-color:#333a25 transparent; }
   .term .xterm-viewport::-webkit-scrollbar { width:9px; }
   .term .xterm-viewport::-webkit-scrollbar-thumb { background:#333a25; border-radius:9px; }
-  .sendbar { display:flex; gap:8px; margin-top:10px; align-items:flex-start; }
-  .sendbar .prompt { font-size:1rem; flex:none; line-height:2.6; }
-  /* Grows with a pasted block instead of scrolling one line at a time, but
-     stops well short of pushing the terminal off screen. */
-  .sendbar textarea { flex:1; font-family:ui-monospace,monospace; resize:none; overflow-y:auto; max-height:9.5rem; line-height:1.45; padding:11px 13px; }
+  .sendbar { display:grid; grid-template-columns:36px minmax(0,1fr) auto; gap:8px; margin-top:10px; align-items:start; }
+  .sendbar .prompt { grid-column:1; grid-row:1; display:grid; place-items:center; height:44px; padding:0; font-size:1rem; color:var(--acid); background:transparent; border:1px solid var(--line); border-radius:8px; cursor:pointer; touch-action:manipulation; }
+  .sendbar .prompt:hover:not(:disabled) { background:var(--glow); border-color:var(--acid); }
+  .sendbar .prompt:focus-visible { outline:2px solid var(--acid); outline-offset:2px; }
+  .sendbar .prompt[aria-expanded="true"] span { transform:rotate(90deg); }
+  /* Keep the whole draft visible. The page scrolls for long blocks, instead
+     of trapping them in a short textarea with its own scrollbar. */
+  .sendbar textarea { grid-column:2; grid-row:1; min-width:0; width:100%; min-height:44px; font-family:ui-monospace,monospace; resize:none; overflow:hidden; line-height:1.45; padding:11px 13px; }
+  .sendbar.expanded textarea { grid-column:1 / -1; grid-row:2; min-height:12rem; }
+  .editor-note { grid-column:2; grid-row:1; align-self:center; font-size:.72rem; }
   .sendbar textarea:disabled, .sendbar button:disabled { opacity:.45; cursor:not-allowed; }
-  .sendbar button { line-height:1.45; padding:11px 16px; }
+  .sendbar button[type="submit"] { grid-column:3; grid-row:1; line-height:1.45; padding:11px 16px; }
   .termbar { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:.72rem; min-height:1.2em; }
   /* The pad sits between the screen and the prompt, in that reading order: it
      acts on what's above it, not on what you're about to type below it. */
-  .padbar { display:flex; align-items:center; gap:12px; margin-top:10px; }
+  .padbar { display:flex; align-items:flex-start; gap:12px; margin-top:10px; }
   .pad {
     display:grid; flex:none;
     grid-template-areas:". u ." "l c r" ". d .";
-    grid-template-columns:repeat(3, 30px); gap:3px;
+    grid-template-columns:repeat(3, 40px); gap:3px;
   }
   .padkey {
-    width:30px; height:30px; padding:0; line-height:1; font-size:.9rem;
+    width:40px; height:40px; padding:0; line-height:1; font-size:.9rem;
     display:flex; align-items:center; justify-content:center;
     background:#0b0d09; color:#edf2e4; border:1px solid #1d2418; border-radius:6px;
     cursor:pointer; -webkit-user-select:none; user-select:none; touch-action:manipulation;
   }
   .padkey:hover:not(:disabled) { border-color:#a6ff1a; color:#a6ff1a; }
   .padkey:active:not(:disabled) { background:#a6ff1a; color:#070806; border-color:#a6ff1a; }
+  .padkey[aria-pressed="true"] { background:#a6ff1a; color:#070806; border-color:#a6ff1a; }
+  .padkey:focus-visible, #keychoice:focus-visible { outline:2px solid #a6ff1a; outline-offset:2px; }
   .padkey:disabled { opacity:.35; cursor:not-allowed; }
+  .keytools { display:flex; flex:1; min-width:0; flex-direction:column; gap:7px; }
+  .keyrow { display:flex; flex-wrap:wrap; align-items:center; gap:5px; }
+  .extrakey { width:auto; padding:0 10px; gap:6px; font-family:var(--mono); font-size:.75rem; white-space:nowrap; }
+  #keychoice { width:auto; max-width:100%; height:40px; padding:0 8px; font-size:.75rem; }
+  #keychoice:disabled { opacity:.35; }
   .padnote { font-size:.72rem; }
+  @media (max-width:540px) {
+    .bar-inner { height:auto; min-height:60px; padding-block:10px; flex-wrap:wrap; gap:10px; }
+    .bar-right { margin-left:0; flex-wrap:wrap; gap:6px; }
+    .sess-top { flex-wrap:wrap; overflow-wrap:anywhere; }
+    .sendbar { grid-template-columns:44px minmax(0,1fr) auto; }
+    .padbar { flex-wrap:wrap; }
+    .keytools { flex-basis:100%; }
+    .pad { grid-template-areas:"l u c d r"; grid-template-columns:repeat(5, 44px); }
+    .padkey { min-width:44px; height:44px; }
+    #keychoice { height:44px; }
+  }
 </style>`;
 
 // The CLI ships raw ANSI, so the browser runs a real terminal emulator over it
@@ -604,9 +657,17 @@ function mirror(opts) {
   var frame = document.getElementById("frame"), host = document.getElementById("term");
   var dot = document.getElementById("dot"), geo = document.getElementById("geo");
   var form = document.getElementById("send"), input = document.getElementById("body");
+  var editorToggle = document.getElementById("editor-toggle"), editorHint = document.getElementById("editor-hint");
+  var editorOpen = false;
   var status = document.getElementById("sendstatus");
   var pad = document.getElementById("pad"), padnote = document.querySelector(".padnote");
+  var keyboard = document.getElementById("keyboard"), choice = document.getElementById("keychoice");
+  var copy = document.getElementById("copy"), paste = document.getElementById("paste");
   var keysOn = !!opts.keys;
+  var extendedOn = !!opts.extendedKeys;
+  var modifiers = { ctrl: false, shift: false };
+  var allowedKeys = ${JSON.stringify(ALL_KEY_NAMES)};
+  var baseKeys = ${JSON.stringify(BASE_KEY_NAMES)};
   var GLYPH = { up: "↑", down: "↓", left: "←", right: "→", enter: "⏎" };
   var seq = 0;
   // Whether the CLI told us its tty size. If it did we run the emulator at
@@ -686,10 +747,12 @@ function mirror(opts) {
     if (dot) { dot.classList.remove("on"); dot.classList.add("off"); }
     frame.classList.add("off");
     if (input) input.disabled = true;
-    if (form) { var b = form.querySelector("button"); if (b) b.disabled = true; }
+    if (form) form.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
     keysOn = false;
-    if (pad) {
-      var pk = pad.querySelectorAll("button");
+    extendedOn = false;
+    resetModifiers();
+    if (keyboard) {
+      var pk = keyboard.querySelectorAll("[data-key], [data-extended], #paste");
       for (var i = 0; i < pk.length; i++) pk[i].disabled = true;
     }
     if (padnote) padnote.textContent = "offline";
@@ -697,11 +760,29 @@ function mirror(opts) {
 
   function flash(msg) { if (status) status.textContent = msg; }
 
+  function resetModifiers() {
+    modifiers.ctrl = modifiers.shift = false;
+    if (!keyboard) return;
+    keyboard.querySelectorAll("[data-modifier]").forEach(function (button) {
+      button.setAttribute("aria-pressed", "false");
+    });
+  }
+
+  function modifiedKey(name, ctrl, shift) {
+    var parts = name.split("+");
+    var key = parts.pop();
+    return (ctrl || parts.indexOf("ctrl") !== -1 ? "ctrl+" : "") +
+      (shift || parts.indexOf("shift") !== -1 ? "shift+" : "") + key;
+  }
+
   // A key is not a command: it goes out on its own and the far end presses it
   // straight away, so there is nothing to echo here — what comes back is the
   // remote screen redrawing.
   function sendKey(name) {
     if (!keysOn || !form) return;
+    if (allowedKeys.indexOf(name) === -1) { flash("unsupported key combination"); return; }
+    if (!extendedOn && baseKeys.indexOf(name) === -1) { flash("update and restart mosh for this key"); return; }
+    resetModifiers();
     fetch(form.action, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
@@ -714,11 +795,77 @@ function mirror(opts) {
     }).catch(function () { flash("could not send — network"); });
   }
 
-  if (pad) pad.addEventListener("click", function (ev) {
-    var btn = ev.target && ev.target.closest ? ev.target.closest("button[data-key]") : null;
+  if (keyboard) keyboard.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest("button") : null;
     if (!btn || btn.disabled) return;
-    sendKey(btn.getAttribute("data-key"));
+    var modifier = btn.getAttribute("data-modifier");
+    if (modifier) {
+      modifiers[modifier] = !modifiers[modifier];
+      btn.setAttribute("aria-pressed", String(modifiers[modifier]));
+      return;
+    }
+    var key = btn.id === "sendkey" ? choice.value : btn.getAttribute("data-key");
+    if (key) sendKey(modifiedKey(key, modifiers.ctrl, modifiers.shift));
   });
+
+  function selectedText() {
+    var promptSelection = input ? input.value.slice(input.selectionStart, input.selectionEnd) : "";
+    if (document.activeElement === input && promptSelection) return promptSelection;
+    return term.getSelection() || String(window.getSelection() || "") || promptSelection;
+  }
+
+  function copySelection() {
+    var text = selectedText();
+    if (!text) { flash("select terminal output or prompt text to copy"); return; }
+    function fallback() {
+      var previous = document.activeElement;
+      var area = document.createElement("textarea");
+      area.value = text;
+      area.style.cssText = "position:fixed;top:0;left:-9999px";
+      document.body.appendChild(area);
+      area.select();
+      var copied = false;
+      try { copied = document.execCommand("copy"); } catch (e) { /* browser denied clipboard */ }
+      area.remove();
+      if (previous && previous.focus) previous.focus({ preventScroll: true });
+      flash(copied ? "copied selection" : "copy unavailable — use your browser's Copy action");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { flash("copied selection"); }, fallback);
+    } else fallback();
+  }
+
+  if (copy) {
+    // Keep the input selection while clicking or tapping its Copy control.
+    copy.addEventListener("pointerdown", function (e) { e.preventDefault(); });
+    copy.addEventListener("click", copySelection);
+  }
+
+  function insertPaste(text) {
+    if (!input || input.disabled) return;
+    input.focus();
+    input.setRangeText(text, input.selectionStart, input.selectionEnd, "end");
+    if (input.value.indexOf("\\n") !== -1) setEditor(true, false);
+    autogrow();
+    flash(text ? "pasted — press run when ready" : "clipboard is empty");
+  }
+
+  if (paste) paste.addEventListener("click", function () {
+    if (!input || input.disabled) return;
+    input.focus();
+    function fallback() { flash("use your keyboard or touch menu to paste into the command box"); }
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(insertPaste, fallback);
+    } else fallback();
+  });
+
+  // xterm has stdin disabled; capture native paste before it discards the text.
+  host.addEventListener("paste", function (e) {
+    if (!input || input.disabled || !e.clipboardData) return;
+    e.preventDefault();
+    e.stopPropagation();
+    insertPaste(e.clipboardData.getData("text/plain"));
+  }, true);
 
   function connect() {
     var es = new EventSource("/sessions/" + sessionId + "/stream?since=" + seq);
@@ -740,40 +887,81 @@ function mirror(opts) {
   // faithful mirror, not a keyboard: the CLI takes whole command lines, so
   // keystrokes have nowhere to go until you press enter.
   //
-  // Arrows are the exception: they act on the screen you're looking at rather
-  // than on the box below it, so they leave as a keypress instead of as text.
-  // Enter stays with the box — it is how you run what you just typed.
-  var ARROW = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+  // Remote keys apply only with the terminal focused; the command box keeps
+  // its normal editing and clipboard shortcuts.
+  var SPECIAL = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+    Tab: "tab", Escape: "escape", Home: "home", End: "end", Delete: "delete", PageUp: "pageup", PageDown: "pagedown" };
   term.attachCustomKeyEventHandler(function (ev) {
-    if (ev.type !== "keydown") return true;
-    if (ev.ctrlKey || ev.metaKey || ev.altKey) return true; // leave copy/paste alone
+    if (ev.type !== "keydown" || ev.isComposing) return true;
+    var lower = ev.key.toLowerCase();
+    if ((ev.ctrlKey || ev.metaKey) && lower === "c" && (ev.shiftKey || term.hasSelection())) {
+      ev.preventDefault(); copySelection(); return false;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && lower === "v") {
+      // xterm's input is readonly. Move focus before the browser performs its
+      // native paste, which also works without Clipboard API permission.
+      if (input && !input.disabled) input.focus();
+      return false;
+    }
+    if (ev.metaKey || ev.altKey) return true;
+    var ctrl = ev.ctrlKey || modifiers.ctrl, shift = ev.shiftKey || modifiers.shift;
+    var key = SPECIAL[ev.key];
+    if (!key && (ctrl || shift) && (ev.key === "Enter" || ev.key === "Backspace")) key = lower;
+    if (!key && (ctrl || modifiers.shift) && /^[a-z]$/.test(lower)) key = lower;
+    if (!key && ctrl && ev.key === " ") key = "space";
     // Auto-repeat is dropped: holding a key down would put thirty presses a
     // second on a queue that crosses a network before anything moves, so the
     // screen would still be catching up long after you let go.
-    if (keysOn && ARROW[ev.key]) {
+    if (keysOn && key) {
       ev.preventDefault();
-      if (!ev.repeat) sendKey(ARROW[ev.key]);
+      if (!ev.repeat) sendKey(modifiedKey(key, ctrl, shift));
       return false;
     }
     if (!input || input.disabled) return true;
     if (ev.key === "Enter" || ev.key === "Backspace") { input.focus(); return false; }
-    if (ev.key.length === 1) { input.focus(); input.value += ev.key; ev.preventDefault(); return false; }
+    if (!ev.ctrlKey && ev.key.length === 1) {
+      input.focus(); input.setRangeText(ev.key, input.selectionStart, input.selectionEnd, "end");
+      autogrow(); ev.preventDefault(); return false;
+    }
     return true;
   });
 
-  // The box grows with what you paste. A pasted block that scrolls one line at
-  // a time is impossible to check over before running it on a live machine.
+  function setEditor(open, focus) {
+    editorOpen = open;
+    form.classList.toggle("expanded", open);
+    editorToggle.setAttribute("aria-expanded", String(open));
+    var label = open ? "Collapse multiline editor" : "Expand multiline editor";
+    editorToggle.setAttribute("aria-label", label);
+    editorToggle.title = label;
+    editorHint.hidden = !open;
+    input.placeholder = open ? "Write or paste multiple lines…" : "Type a command…";
+    autogrow();
+    if (focus) input.focus({ preventScroll: true });
+  }
+  if (editorToggle) editorToggle.addEventListener("click", function () {
+    if (!input.disabled) setEditor(!editorOpen, true);
+  });
+
+  // scrollHeight includes padding, but excludes borders. Include them when
+  // assigning the border-box height to avoid a scrollbar even for one line.
   function autogrow() {
     if (!input) return;
     input.style.height = "auto";
-    input.style.height = input.scrollHeight + "px";
+    var styles = window.getComputedStyle(input);
+    var borders = parseFloat(styles.borderTopWidth) + parseFloat(styles.borderBottomWidth);
+    input.style.height = Math.ceil(input.scrollHeight + borders) + "px";
   }
+  window.addEventListener("resize", autogrow);
   if (input) {
-    input.addEventListener("input", autogrow);
-    // Enter runs, shift+enter makes a new line. A bare enter has to submit or
-    // the common case — one command — would need a reach for the mouse.
+    input.addEventListener("input", function () {
+      if (!editorOpen && input.value.indexOf("\\n") !== -1) setEditor(true, false);
+      else autogrow();
+    });
+    // In the expanded editor Enter writes a new line. Ctrl/Cmd+Enter runs it;
+    // the compact field retains Enter-to-run and Shift+Enter for a new line.
     input.addEventListener("keydown", function (e) {
-      if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.isComposing || e.key !== "Enter" || e.shiftKey || e.altKey) return;
+      if (editorOpen ? !(e.ctrlKey || e.metaKey) : (e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
       if (form.requestSubmit) form.requestSubmit(); else form.dispatchEvent(new Event("submit", { cancelable: true }));
     });

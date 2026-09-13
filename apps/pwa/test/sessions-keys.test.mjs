@@ -56,6 +56,7 @@ async function boot() {
     `INSERT INTO cli_sessions (id,user_id,name,features,status,created_at,last_seen_at) VALUES (?,?,?,?,?,?,?)`,
     [id, "u1", "local", features, status, Date.now(), Date.now()]);
   await cli("new-cli", JSON.stringify(["keys"]));
+  await cli("extended-cli", JSON.stringify(["keys", "keys-v2"]));
   await cli("old-cli", null);
   await cli("dead-cli", JSON.stringify(["keys"]), "ended");
 
@@ -117,9 +118,53 @@ test("the app and the CLI agree on the sentinel", skip, async () => {
 test("an unknown key is refused before anything is queued", skip, async () => {
   const { post, queued } = await app();
   const before = (await queued("new-cli")).length;
-  const res = await post("new-cli", { key: "escape" });
+  const res = await post("new-cli", { key: "f99" });
   assert.equal(res.status, 400);
   assert.equal((await queued("new-cli")).length, before);
+});
+
+test("extended keys are refused for a CLI that only decodes arrows", skip, async () => {
+  const { post, queued } = await app();
+  const before = (await queued("new-cli")).length;
+  for (const key of ["escape", "ctrl+c", "shift+tab", "ctrl+shift+left"]) {
+    const response = await post("new-cli", { key });
+    assert.equal(response.status, 409);
+    assert.match(response.body.error, /update and restart/);
+  }
+  assert.equal((await queued("new-cli")).length, before);
+});
+
+test("every offered key queues and decodes with extended capabilities", skip, async () => {
+  const { post, queued } = await app();
+  const { KEY_NAMES, decodeKey } = await import("../../../src/mirror.mjs");
+  for (const key of KEY_NAMES) {
+    const response = await post("extended-cli", { key });
+    assert.equal(response.status, 200, key);
+  }
+  assert.deepEqual((await queued("extended-cli")).map((row) => decodeKey(row.body)), KEY_NAMES);
+});
+
+test("key definitions stay identical in the standalone CLI and PWA packages", () => {
+  assert.equal(
+    fs.readFileSync(new URL("../../../src/session-keys.mjs", import.meta.url), "utf8"),
+    fs.readFileSync(new URL("../src/lib/session-keys.mjs", import.meta.url), "utf8"),
+  );
+});
+
+test("keyboard controls reflect capabilities; copying stays available offline", skip, async () => {
+  const { base } = await app();
+  for (const [id, extended, live] of [["extended-cli", true, true], ["new-cli", false, true], ["old-cli", false, true], ["dead-cli", false, false]]) {
+    const response = await fetch(`${base}/sessions/${id}`, { headers: { cookie: `mc_sess=${SESSION}` } });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    for (const name of ["ctrl+c", "shift+tab", "shift+enter", "escape", "tab"]) {
+      const tag = html.match(new RegExp(`<button[^>]*data-key="${name.replaceAll("+", "\\+")}"[^>]*>`))?.[0];
+      assert.ok(tag, `${id}: ${name}`);
+      assert.equal(tag.includes(" disabled"), !extended, `${id}: ${name} enabled state`);
+    }
+    assert.doesNotMatch(html.match(/<button[^>]*id="copy"[^>]*>/)[0], / disabled/);
+    assert.equal(html.match(/<button[^>]*id="paste"[^>]*>/)[0].includes(" disabled"), !live);
+  }
 });
 
 test("a mosh that never claimed keys is told so, not sent one", skip, async () => {
@@ -150,6 +195,7 @@ test("a session only carries features we know", skip, async () => {
   const { routes } = await app();
   assert.deepEqual(routes.readFeatures(["keys"]), ["keys"]);
   assert.deepEqual(routes.readFeatures(["keys", "keys"]), ["keys"], "declared twice is still once");
+  assert.deepEqual(routes.readFeatures(["keys", "keys-v2", "signals", "keys-v2"]), ["keys", "keys-v2", "signals"]);
   assert.deepEqual(routes.readFeatures(["keys", "rm -rf", 7, null]), ["keys"]);
   // Every shape an older or hand-rolled client can register with.
   for (const value of [undefined, null, "keys", {}, 3]) assert.deepEqual(routes.readFeatures(value), []);
@@ -162,6 +208,10 @@ test("supportsKeys reads what the session declared, and nothing else", skip, asy
   assert.equal(routes.supportsKeys({ features: null }), false, "every session before this shipped");
   assert.equal(routes.supportsKeys({ features: "not json" }), false);
   assert.equal(routes.supportsKeys({}), false);
+  assert.equal(routes.supportsExtendedKeys({ features: '["keys","keys-v2"]' }), true);
+  for (const features of ['["keys"]', "[]", null, "not json"]) {
+    assert.equal(routes.supportsExtendedKeys({ features }), false);
+  }
 });
 
 test("a CLI that declares keys can then be sent them end to end", skip, async () => {
