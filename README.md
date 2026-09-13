@@ -1299,7 +1299,7 @@ each useful on its own — the timer needs no client, the rate needs no gateway
 > not exist. `billing import` is what closes that gap, which is why it comes
 > first.
 >
-> The standalone billing carries the same rate model (`$100/hour/agent/upto:4`)
+> The standalone billing carries the same rate model (`$400/hour/agent/upto:4`)
 > and bills **agent-hours**.
 
 ```sh
@@ -1325,14 +1325,14 @@ fixed field list — `--billing.po` works because it says what it means.
 `/business`, `/merchant` and `/customer` are the same command.
 
 ```sh
-moshcode rate set default $100/hour/agent/upto:4
+moshcode rate set default '$400/hour/agent'
 moshcode rate set acme-inc 0.5 SOL/day --prefer SOL,USDC --accept fiat
 moshcode rate set initech $5000/project
 ```
 
-`$100/hour/agent/upto:4` is the sentence from the contract, parsed: price,
-period, unit, and the cap that made the client sign. Four agents cost four
-hundred an hour and **so do six**. Order after the price does not matter.
+`$400/hour/agent/upto:4` is the sentence from the contract, parsed: price,
+period, unit, and the cap that made the client sign. Four agents cost $1,600
+an hour and **so do six** when the contract explicitly caps billing at four. Order after the price does not matter.
 
 ```sh
 moshcode billing acme-inc                 # a preview — writes nothing

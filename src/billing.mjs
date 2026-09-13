@@ -191,7 +191,7 @@ function draftInvoice(argv, write, run) {
     return 0;
   }
   if (!invoice.rate) {
-    write(err(`no rate for ${bone(found.id)} — ${acid(`/rate set ${found.id} $100/hour/agent/upto:4`)}`));
+    write(err(`no rate for ${bone(found.id)} — ${acid(`/rate set ${found.id} $400/hour/agent/upto:4`)}`));
     return 1;
   }
 
