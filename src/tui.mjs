@@ -919,7 +919,7 @@ export async function tui() {
   const ad = await motd;
   if (ad) console.log(dim(ad) + "\n");
 
-  const { restoreTee, drainRemote, atPrompt } = await startMirror();
+  let { restoreTee, drainRemote, atPrompt } = await startMirror();
 
   // Settings sync, unattended. Started per `tui()` call and stopped in the
   // teardown below, because the pit is re-entered after an engine session
@@ -1192,7 +1192,21 @@ export async function tui() {
     }
     if (cmd === "mcp") {
       rl.close();
-      await mcpCommand(rest, { sessionId: activeMirror?.id });
+      await mcpCommand(rest, {
+        sessionId: activeMirror?.id,
+        sharingDisabled: Boolean(process.env.MOSHCODE_NO_MIRROR),
+        ensureSession: async (credentials, { restart = false } = {}) => {
+          if (process.env.MOSHCODE_NO_MIRROR) {
+            throw new Error("remote session sharing is disabled by MOSHCODE_NO_MIRROR; unset it and restart moshcode to share");
+          }
+          if (restart && activeMirror) await stopMirror(restoreTee);
+          if (!activeMirror) ({ restoreTee, drainRemote, atPrompt } = await startMirror({ credentials }));
+          if (!activeMirror?.id) {
+            throw new Error("could not register this live session; check the connection and retry /mcp answer");
+          }
+          return activeMirror.id;
+        },
+      });
       rl = mkrl();
       continue;
     }
@@ -1428,7 +1442,7 @@ export async function tui() {
  * Entirely optional — not logged in, or the app unreachable, and the pit runs
  * exactly as before.
  */
-async function startMirror() {
+async function startMirror({ credentials } = {}) {
   const noop = { restoreTee: null, drainRemote: () => {}, atPrompt: () => {} };
   // Only mirror a real interactive pit. A piped or scripted run (tests, CI,
   // `echo /quit | moshcode`) has no human to watch from a browser, and the
@@ -1436,7 +1450,7 @@ async function startMirror() {
   if (!process.stdin.isTTY || process.env.MOSHCODE_NO_MIRROR) return noop;
 
   let mirror;
-  try { mirror = createMirror({ version: moshcodeVersion() || "", cwd: process.cwd() }); }
+  try { mirror = createMirror({ version: moshcodeVersion() || "", cwd: process.cwd(), credentials }); }
   catch { return noop; }
 
   let started = false;

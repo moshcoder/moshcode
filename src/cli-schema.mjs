@@ -989,7 +989,7 @@ export const MCP_VERBS = [
     flags: [
       ["--ttl <duration>", "60s to 7d", "8h"],
       ["--name <name>", "label shown during authorization", "session name"],
-      ["--scope <scopes>", "comma or space-separated session scopes", "all"],
+      ["--scope <scopes>", "sessions:read, sessions:write, sessions:approve, sessions:cancel", "sessions:read"],
       ["--json", "machine-readable", ""],
     ],
   },

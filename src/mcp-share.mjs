@@ -15,7 +15,7 @@ export function parseMcpTtl(value) {
   return seconds;
 }
 
-async function credentialsFor({ credentials, login = loginDevice } = {}) {
+export async function ensureMcpCredentials({ credentials, login = loginDevice } = {}) {
   let creds = credentials === undefined ? loadCreds() : credentials;
   if (!creds?.token) {
     const result = await login();
@@ -26,7 +26,7 @@ async function credentialsFor({ credentials, login = loginDevice } = {}) {
 }
 
 async function request(path, { method = "GET", body, fetchImpl = fetch, ...options } = {}) {
-  const creds = await credentialsFor(options);
+  const creds = await ensureMcpCredentials(options);
   const api = String(creds.api || process.env.MOSHCODE_API || "https://app.moshcode.sh").replace(/\/+$/, "");
   const response = await fetchImpl(`${api}${path}`, {
     method,
@@ -43,7 +43,9 @@ async function request(path, { method = "GET", body, fetchImpl = fetch, ...optio
 
 export async function connectMcp({ login = loginDevice, credentials } = {}) {
   const result = await login();
-  return result?.token ? result : (credentials === undefined ? loadCreds() : credentials);
+  const creds = result?.token ? result : (credentials === undefined ? loadCreds() : credentials);
+  if (!creds?.token) throw new Error("device authorization completed without storing Moshcode credentials");
+  return creds;
 }
 
 export function createMcpShare({ sessionId, name, scope, ttl, ...options } = {}) {

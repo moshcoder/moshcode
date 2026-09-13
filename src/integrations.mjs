@@ -14,7 +14,7 @@ import {
 } from "./plugins.mjs";
 import { catalogList, resolveCatalog } from "./mcp-catalog.mjs";
 import { MCP_VERBS, PLUGIN_VERBS, SKILL_VERBS } from "./cli-schema.mjs";
-import { connectMcp, createMcpShare, listMcpShares, revokeMcpShare } from "./mcp-share.mjs";
+import { connectMcp, createMcpShare, ensureMcpCredentials, listMcpShares, revokeMcpShare } from "./mcp-share.mjs";
 import { acid, ash, bone, ok, err, info } from "./ui.mjs";
 
 function splitKV(pair) {
@@ -251,7 +251,7 @@ const anyFailed = (results) => results.some((r) => r.status === "failed");
 
 /** Run `/mcp …`. `tokens` are the words after `mcp`. `run`/`installedSet` are injectable for tests. */
 export async function mcpCommand(tokens, {
-  run, installedSet, sessionId, fetchImpl, credentials, login,
+  run, installedSet, sessionId, ensureSession, sharingDisabled = false, fetchImpl, credentials, login,
 } = {}) {
   const parsed = parseMcp(tokens);
   if (parsed.list) { printMcpTargets(parsed.json); return 0; }
@@ -262,11 +262,23 @@ export async function mcpCommand(tokens, {
     try {
       if (parsed.remote.action === "connect") {
         const creds = await connectMcp(options);
+        if (ensureSession && !sharingDisabled) await ensureSession(creds, { restart: true });
         console.log(ok(`connected${creds?.email ? ` as ${creds.email}` : ""}`));
       } else if (parsed.remote.action === "share") {
+        if (sharingDisabled && !parsed.remote.sessionId) {
+          throw new Error("remote session sharing is disabled by MOSHCODE_NO_MIRROR; unset it and restart moshcode to share");
+        }
+        let liveSessionId = parsed.remote.sessionId || sessionId;
+        if (!liveSessionId && ensureSession) {
+          // A terminal may have started before login, or while the service was
+          // unavailable. Authenticate first, then register this exact live pit
+          // with the same credentials used to create the share.
+          options.credentials = await ensureMcpCredentials(options);
+          liveSessionId = await ensureSession(options.credentials);
+        }
         const share = await createMcpShare({
           ...options,
-          sessionId: parsed.remote.sessionId || sessionId,
+          sessionId: liveSessionId,
           name: parsed.remote.name,
           ttl: parsed.remote.ttl,
           scope: parsed.remote.scope?.replace(/,/g, " "),
