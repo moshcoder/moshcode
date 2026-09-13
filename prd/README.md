@@ -31,4 +31,5 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0013](0013-persistent-ssh-workspaces.md) | Add persistent SSH workspaces for humans and agents | Draft |
 | [0014](0014-remote-mcp-session-gateway.md) | Expose live Moshcode sessions over remote MCP | Draft |
 | [0015](0015-swarm-one-task-a-herd-of-agents.md) | Swarm — one task, a herd of agents, one answer | Draft |
+| [0016](0016-openfleet-the-record-a-swarm-leaves-behind.md) | OpenFleet: the record a swarm leaves behind, and the fleet verb that reads it | Draft |
 <!-- PRD-INDEX:END -->

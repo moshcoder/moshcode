@@ -55,13 +55,13 @@ R1. `moshcode swarm "<task>"` plans the task, fans it out, and prints one synthe
 
 R2. Planning is one headless engine call (`ai()`'s path, `aiExecArgs`). The engine is asked for a JSON array of at most `--agents` pieces, each a self-contained prompt that names the files it may touch and ends with a SUMMARY section. The first JSON array in the reply is the plan. A reply that does not parse, or a call that fails, degrades to one piece holding the whole task, and says so.
 
-R3. Fan-out starts one herd session per piece with `herd start <engine> --agent`, named `swarm-<slug>-<n>`, in the herd `swarm` (`--herd` overrides), at most `--agents` at a time (default 4, maximum 16). Each session is waited on until it draws its prompt, then prompted exactly as `herd prompt --wait` does, so the ledger holds the piece's output.
+R3. Fan-out starts one herd session per piece with the engine's own bypass flags as plain args, named after the piece's OpenFleet member id, `<swarm>-<n>` where the swarm id is `<slug>-<HHMM>` (PRD 0016; before 0.99.0 the names were `swarm-<slug>-<n>`), in the herd `swarm` (`--herd` overrides), at most `--agents` at a time (default 4, maximum 16). Each session is waited on until it draws its prompt, then prompted exactly as `herd prompt --wait` does, so the ledger holds the piece's output.
 
 R4. `--verify` runs one headless skeptic per piece, prompted to refute it and to default to refuted when unsure. Its verdict is attached to the piece and shown to the synthesis; it never drops a piece on its own.
 
 R5. Synthesis is one headless call over the pieces' outputs, truncated per piece, that writes the answer the operator should read: what was done, found, unfinished or contradicted, and what to do next.
 
-R6. Sessions are ended when the swarm is done. `--keep` leaves them for inspection and names them. The ledger is never pruned by a swarm.
+R6. Sessions are ended when the swarm is done, after the fleet ledger's end lines are written (PRD 0016). `--keep` leaves them for inspection and names them and the swarm. The ledger is never pruned by a swarm.
 
 R7. `--plan-only` prints the plan and starts nothing. `--json` prints the whole run as data: engine, plan, one row per piece with session, task id, state, outcome, output and verdict, and the synthesis.
 

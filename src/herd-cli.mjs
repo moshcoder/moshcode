@@ -86,6 +86,27 @@ export function paintState(state) {
  */
 export function renderRoster(rows, { indent = "  " } = {}) {
   if (!rows.length) return "";
+  const grouped = groupByFleet(rows);
+  // A roster with no fleet in it is the flat list it always was. One with a
+  // fleet is drawn as the tree the fleet is: the fleet, its swarms, and the
+  // members of each, so `moshcode ps` and `moshcode fleet tree` agree on who
+  // belongs to what (PRD 0016).
+  if (grouped.length === 1 && grouped[0].fleet === null && grouped[0].swarms.length === 1 && grouped[0].swarms[0].swarm === null) {
+    return rosterTable(rows, indent.length);
+  }
+  const out = [];
+  for (const group of grouped) {
+    if (group.fleet !== null) out.push(`${indent}${bone(group.fleet)} ${ash("fleet")}`);
+    for (const sub of group.swarms) {
+      const deeper = indent.length + (group.fleet !== null ? 2 : 0);
+      if (sub.swarm !== null) out.push(`${" ".repeat(deeper)}${bone(`swarm ${sub.swarm}`)}`);
+      out.push(rosterTable(sub.rows, deeper + (sub.swarm !== null ? 2 : 0)));
+    }
+  }
+  return out.join("\n");
+}
+
+function rosterTable(rows, indent) {
   // Cells go in painted and `table` measures what prints, which is what the
   // state column needed: padding a coloured string to a fixed 9 used to mean
   // hand-correcting the width by the length of its own escape codes, and the
@@ -106,9 +127,34 @@ export function renderRoster(rows, { indent = "  " } = {}) {
       // the hook install visible — and the one that stops a remote's claim from
       // being mistaken for something this box verified.
       dim(String(r.authority || "")),
+      // The mark the spec asks every sysop tool to show: this member runs with
+      // the engine's own approval prompts skipped.
+      r.approvals === "bypass" ? amber("bypass") : "",
     ]),
-    { columns: ["name", "engine", "state", "cwd", "age", "from"], header: false, indent: indent.length },
+    { columns: ["name", "engine", "state", "cwd", "age", "from", "approvals"], header: false, indent },
   );
+}
+
+/**
+ * Rows by fleet, then by swarm. Rows with no fleet come first under no
+ * heading, then each fleet in name order; inside a fleet, members outside any
+ * swarm come before the swarms. Shape: `[{ fleet, swarms: [{ swarm, rows }] }]`.
+ */
+export function groupByFleet(rows) {
+  const fleets = new Map();
+  for (const row of rows) {
+    const fleet = row.fleet || null;
+    if (!fleets.has(fleet)) fleets.set(fleet, new Map());
+    const swarms = fleets.get(fleet);
+    const swarm = row.swarm || null;
+    if (!swarms.has(swarm)) swarms.set(swarm, []);
+    swarms.get(swarm).push(row);
+  }
+  const order = (a, b) => (a === null ? -1 : b === null ? 1 : a.localeCompare(b));
+  return [...fleets.entries()].sort(([a], [b]) => order(a, b)).map(([fleet, swarms]) => ({
+    fleet,
+    swarms: [...swarms.entries()].sort(([a], [b]) => order(a, b)).map(([swarm, members]) => ({ swarm, rows: members })),
+  }));
 }
 
 /** Every session, with state attached. The one place that assembles both. */
@@ -142,12 +188,34 @@ function findSession(name, options) {
  * session that installed opencode — the exact case that bit the foreground
  * path first.
  */
-export function herdStart(argv, { write = console.log } = {}) {
-  const substrate = requireSubstrate(write);
-  if (!substrate) return EXIT.usage;
+/**
+ * Does this launch skip the engine's own approval prompts? True for `--agent`,
+ * and true when the engine's autonomous flags are all present as plain args,
+ * which is how `moshcode swarm` starts its members. The manifest, the JSON and
+ * the warning all read this, so `sessions.json` cannot say `agent: false`
+ * about a pane running `claude --dangerously-skip-permissions` (PRD 0016).
+ */
+export function carriesBypass(engine, args = [], { agent = false } = {}) {
+  if (agent) return true;
+  const spec = typeof engine === "string" ? ENGINES[engine] : engine;
+  const flags = spec?.agentArgs || [];
+  return flags.length > 0 && flags.every((flag) => args.includes(flag));
+}
 
-  const flags = { name: null, cwd: process.cwd(), agent: false, json: false, herd: "main" };
+/** `herd start`'s own flags, split from the engine's. Exported for its tests. */
+export function parseStartArgs(argv = []) {
+  const flags = { name: null, cwd: process.cwd(), agent: false, json: false, herd: "main", env: {} };
   const rest = [];
+  const errors = [];
+  // `--env KEY=VALUE`, repeatable: a variable for the session alone, set on
+  // the same prefix as MOSHCODE_HERD_NAME so both substrates and the strip
+  // treat it the same. A swarm hands its members their OPENFLEET_* this way.
+  const setEnv = (raw) => {
+    const eq = String(raw ?? "").indexOf("=");
+    const key = eq > 0 ? raw.slice(0, eq) : "";
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) { errors.push(`--env takes KEY=VALUE, got ${JSON.stringify(String(raw ?? ""))}`); return; }
+    flags.env[key] = raw.slice(eq + 1);
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--name") flags.name = argv[++i];
@@ -155,10 +223,30 @@ export function herdStart(argv, { write = console.log } = {}) {
     else if (a === "--cwd") flags.cwd = path.resolve(argv[++i] || ".");
     else if (a === "--herd") flags.herd = slugifyName(argv[++i]);
     else if (a.startsWith("--herd=")) flags.herd = slugifyName(a.slice(7));
+    else if (a === "--env") setEnv(argv[++i]);
+    else if (a.startsWith("--env=")) setEnv(a.slice(6));
     else if (a === "--agent") flags.agent = true;
     else if (a === "--json") flags.json = true;
     else rest.push(a);
   }
+  return { flags, rest, errors };
+}
+
+/** The fleet keys a member's env names, for the manifest entry. */
+function fleetMeta(env = {}) {
+  const meta = {};
+  if (env.OPENFLEET_FLEET) meta.fleet = env.OPENFLEET_FLEET;
+  if (env.OPENFLEET_SWARM) meta.swarm = env.OPENFLEET_SWARM;
+  if (env.OPENFLEET_MEMBER) meta.member = env.OPENFLEET_MEMBER;
+  return meta;
+}
+
+export function herdStart(argv, { write = console.log } = {}) {
+  const substrate = requireSubstrate(write);
+  if (!substrate) return EXIT.usage;
+
+  const { flags, rest, errors } = parseStartArgs(argv);
+  if (errors.length) { for (const e of errors) write(err(e)); return EXIT.usage; }
 
   const target = rest.shift();
   const resolved = target && resolveEngine(target);
@@ -178,22 +266,31 @@ export function herdStart(argv, { write = console.log } = {}) {
 
   const bin = resolveExecutable(engine.bin, engine.binDirs || []) || engine.bin;
   const args = flags.agent ? agentLaunchArgs(engine, rest) : rest;
+  const bypass = carriesBypass(engine, args, { agent: flags.agent });
   const started = startSession({
-    name, engine: key, bin, args, stripEnv: engine.stripEnv || [], cwd: flags.cwd, substrate,
+    name, engine: key, bin, args, stripEnv: engine.stripEnv || [], cwd: flags.cwd, substrate, extraEnv: flags.env,
   });
 
   if (!started.ok) {
     write(err(String(started.error?.message || started.error)));
     return EXIT.usage;
   }
-  rememberSession(name, { agent: flags.agent, herd: flags.herd });
+  const fleet = fleetMeta(flags.env);
+  rememberSession(name, {
+    agent: bypass, approvals: bypass ? "bypass" : "native", herd: flags.herd, ...fleet,
+    // Kept so `herd restore` can hand the same variables back to the session
+    // it rebuilds. Paths and ids, never a credential: the manifest is 0600
+    // regardless, because args already carry worse.
+    ...(Object.keys(flags.env).length ? { env: flags.env } : {}),
+  });
 
   if (flags.json) {
-    write(JSON.stringify({ name, engine: key, herd: flags.herd, cwd: flags.cwd, substrate, agent: flags.agent }, null, 2));
+    write(JSON.stringify({ name, engine: key, herd: flags.herd, cwd: flags.cwd, substrate, agent: bypass, approvals: bypass ? "bypass" : "native", ...fleet }, null, 2));
     return EXIT.matched;
   }
   write(ok(`${bone(name)} — ${key} running in the herd. the prompt is yours.`));
-  if (flags.agent) write(warn("agent mode: native approvals are bypassed or auto-approved."));
+  if (bypass) write(warn("agent mode: native approvals are bypassed or auto-approved."));
+  if (fleet.member) write(info(`fleet ${fleet.fleet}${fleet.swarm ? ` · swarm ${fleet.swarm}` : ""} · member ${fleet.member}`));
   write(info(`workspace: ${acid("moshcode herd ui")} · attach: ${acid(`moshcode attach ${name}`)} · roster: ${acid("moshcode ps")}`));
   const note = substrateNote(substrate);
   if (note) write(info(note));
@@ -302,12 +399,15 @@ export function splitDetachArgs(args = []) {
 export function herdPs(argv, { write = console.log } = {}) {
   const rows = roster();
   if (argv.includes("--json")) {
-    write(JSON.stringify(rows.map(({ name, engine, herd, state, authority, blockedOn, kind, url, cwd, age, alive, attached, substrate }) => ({
+    write(JSON.stringify(rows.map(({ name, engine, herd, fleet, swarm, member, approvals, state, authority, blockedOn, kind, url, cwd, age, alive, attached, substrate }) => ({
       name, engine, herd, state, authority, kind, ...(url ? { url } : {}),
       // The blocked sub-kind (R4) rides here and not in the roster's own
       // column: `--ask` needs to know whether a menu or a sentence is wanted,
       // and a person glancing at six rows does not.
       ...(blockedOn ? { blockedOn } : {}),
+      // Where the member sits in its fleet (PRD 0016), and whether it runs
+      // with the engine's approvals bypassed. Null when nobody said.
+      fleet: fleet || null, swarm: swarm || null, member: member || null, approvals: approvals || "native",
       cwd, ageMs: age, alive, attached, substrate,
     })), null, 2));
     return EXIT.matched;
@@ -977,6 +1077,23 @@ async function deliver(session, config, write) {
 }
 
 /**
+ * The environment a restored session gets back from the manifest. A resumed
+ * session is the same conversation and re-exports as the same OpenFleet
+ * member, so it keeps everything. A fresh session under a record that a dead
+ * session already claimed would have to derive a child (rule 8) and, at
+ * depth 1 in the implicit fleet, be refused on its first prompt; it keeps the
+ * home and the fleet and drops the record, member and swarm. Exported for its
+ * test.
+ */
+export function restoreEnv(env = {}, { resumed = false } = {}) {
+  const all = env || {};
+  if (resumed) return { env: { ...all }, dropped: [] };
+  const claimed = ["OPENFLEET_RECORD", "OPENFLEET_MEMBER", "OPENFLEET_SWARM"];
+  const dropped = claimed.filter((k) => k in all);
+  return { env: Object.fromEntries(Object.entries(all).filter(([k]) => !claimed.includes(k))), dropped };
+}
+
+/**
  * Rebuild the herd from the manifest.
  *
  * What comes back is the *shape* — the sessions, in their directories, on their
@@ -1011,10 +1128,12 @@ export function herdRestore(argv, { write = console.log } = {}) {
     if (dryRun) { write(info(`would restore ${bone(name)} — ${meta.engine} in ${tilde(meta.cwd)}${resumeArgs ? " (resumed)" : ""}`)); restored++; continue; }
 
     const bin = resolveExecutable(engine.bin, engine.binDirs || []) || engine.bin;
-    const started = startSession({ name, engine: meta.engine, bin, args, stripEnv: engine.stripEnv || [], cwd: meta.cwd, substrate });
+    const { env: extraEnv, dropped } = restoreEnv(meta.env, { resumed: Boolean(resumeArgs) });
+    const started = startSession({ name, engine: meta.engine, bin, args, stripEnv: engine.stripEnv || [], cwd: meta.cwd, substrate, extraEnv });
     if (!started.ok) { write(err(`${name}: ${started.error?.message || started.error}`)); continue; }
     clearReport(name);
     write(ok(`${bone(name)} — ${meta.engine} in ${tilde(meta.cwd)}${resumeArgs ? ash(" (asked to resume)") : ""}`));
+    if (dropped.length) write(info(`${name}: a fresh session is a new member, not ${meta.member || "the old one"}: ${dropped.join(", ")} not handed back (--resume keeps them)`));
     restored++;
   }
   if (restored && !dryRun) {
