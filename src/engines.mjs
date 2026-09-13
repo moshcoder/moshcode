@@ -122,21 +122,27 @@ export const ENGINES = {
     // above — a key the operator already set is never touched, so this is a
     // floor under a fresh install and not a policy over an old one.
     //
-    // Why these three: a coding session that fans out to a workflow by default
-    // is what a herd of agents is for, and the two caps keep one session from
-    // eating the box the rest of the herd is running on. "small" is Claude's
-    // own advisory tier (fewer than 5 agents per workflow); the env var is the
-    // hard gate on how many run at once, and 4 leaves room for the other three.
+    // Why these four: ultracode (every substantive prompt becomes a workflow
+    // of agents) and its keyword trigger (the word "ultracode" anywhere in a
+    // prompt does the same for that turn) are both OFF. Left on, a herd of
+    // sessions fanning out by default ran the bill up by the hour, so a
+    // workflow now runs only when the operator asks for one in so many words.
+    // The two caps stay for the workflows that are asked for: "small" is
+    // Claude's own advisory tier (fewer than 5 agents per workflow); the env
+    // var is the hard gate on how many run at once, and 4 leaves room for the
+    // other three sessions on the box.
     settings: {
       format: "claude-settings",
       file: () => path.join(homedir(), ".claude", "settings.json"),
       defaults: {
-        ultracode: true,
+        ultracode: false,
+        workflowKeywordTriggerEnabled: false,
         workflowSizeGuideline: "small",
         env: { CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS: "4" },
       },
       labels: {
-        "ultracode": "ultracode on by default",
+        "ultracode": "ultracode off by default",
+        "workflowKeywordTriggerEnabled": "no ultracode keyword trigger",
         "workflowSizeGuideline": "small workflows (under 5 agents)",
         "env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS": "4 agents at once, hard cap",
       },
