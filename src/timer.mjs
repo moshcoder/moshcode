@@ -192,7 +192,7 @@ function stopTimer(args, write, now) {
   } else if (charge?.flat) {
     write(`  ${ash("flat project fee — /billing adds it once, not per entry")}`);
   } else if (!rate) {
-    write(`  ${ash("no rate for this one —")} ${acid(`/rate set ${entry.client || "default"} $100/hour/agent`)}`);
+    write(`  ${ash("no rate for this one —")} ${acid(`/rate set ${entry.client || "default"} $400/hour/agent`)}`);
   }
   write(`  ${ash(`entry ${entry.id}`)}`);
   return 0;

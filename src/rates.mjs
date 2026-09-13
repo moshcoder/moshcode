@@ -1,6 +1,6 @@
 // What an hour of agent time costs, written the way people say it out loud.
 //
-//   /rate set acme $100/hour/agent/upto:4
+//   /rate set acme $400/hour/agent/upto:4
 //
 // One line that carries four decisions: the price, the period it is charged
 // for, the thing that is multiplied (an agent, a seat, a person), and the point
@@ -101,15 +101,15 @@ function parseAmount(token) {
  *
  * The grammar is positional only in its first segment (the price); everything
  * after it is recognised by what it says rather than where it sits, so
- * `$100/agent/hour` and `$100/hour/agent` mean the same thing. People do not
+ * `$400/agent/hour` and `$400/hour/agent` mean the same thing. People do not
  * remember an order they were never told.
  */
 export function parseRate(spec) {
   const text = String(spec ?? "").trim();
-  if (!text) throw new Error("a rate looks like $100/hour/agent/upto:4");
+  if (!text) throw new Error("a rate looks like $400/hour/agent/upto:4");
   const parts = text.split("/").map((p) => p.trim()).filter(Boolean);
   const price = parseAmount(parts.shift());
-  if (!price) throw new Error(`can't read a price out of ${JSON.stringify(text)} — try $100/hour/agent`);
+  if (!price) throw new Error(`can't read a price out of ${JSON.stringify(text)} — try $400/hour/agent`);
 
   const rate = { ...price, per: "hour", unit: "flat", cap: null, min: null };
   let sawPeriod = false;
@@ -141,7 +141,7 @@ export function parseRate(spec) {
   // silently multiply the invoice by every hour tracked.
   if (!sawPeriod && rate.unit === "flat" && rate.cap === null) rate.per = "project";
   if (rate.cap !== null && rate.unit === "flat") {
-    throw new Error("upto: caps a unit, so say what it caps — $100/hour/agent/upto:4");
+    throw new Error("upto: caps a unit, so say what it caps — $400/hour/agent/upto:4");
   }
   return rate;
 }
@@ -235,14 +235,14 @@ export function splitSettlement(argv) {
 const USAGE = [
   "usage: /rate set <client|default> <spec> [--prefer SOL,USDC] [--accept fiat]",
   "       /rate [list] [--json] · /rate show <client> · /rate rm <client>",
-  "  spec: $100/hour/agent/upto:4 · 0.5 SOL/day · $5000/project · 250 USDC/task",
+  "  spec: $400/hour/agent/upto:4 · 0.5 SOL/day · $5000/project · 250 USDC/task",
 ];
 
 /**
  * `/rate` and `/rates`.
  *
  * `set:` with a colon is accepted because that is how it was first written down
- * (`/rates set: $100/hour/agent/upto:4`), and refusing punctuation somebody
+ * (`/rates set: $400/hour/agent/upto:4`), and refusing punctuation somebody
  * already typed teaches them nothing.
  */
 export function rateCommand(argv = [], { write = console.log } = {}) {
@@ -257,7 +257,7 @@ export function rateCommand(argv = [], { write = console.log } = {}) {
     if (json) { write(JSON.stringify(rates, null, 2)); return 0; }
     if (!names.length) {
       write(info("no rates yet."));
-      write(`  ${acid("/rate set default $100/hour/agent/upto:4")}`);
+      write(`  ${acid("/rate set default $400/hour/agent")}`);
       return 0;
     }
     write(table(
@@ -299,7 +299,7 @@ export function rateCommand(argv = [], { write = console.log } = {}) {
     const found = resolveRateTarget(business, positional[1] || "default");
     const who = found.ok ? found.id : String(positional[1]).toLowerCase();
     const rate = rateFor(business, who);
-    if (!rate) { write(err(`no rate for ${JSON.stringify(who)} and no default — /rate set ${who} $100/hour/agent`)); return 1; }
+    if (!rate) { write(err(`no rate for ${JSON.stringify(who)} and no default — /rate set ${who} $400/hour/agent`)); return 1; }
     if (json) { write(JSON.stringify(rate, null, 2)); return 0; }
     write(`  ${bone(who)} ${acid(formatRate(rate))}${rate.source !== who ? ash(`  (from ${rate.source})`) : ""}`);
     write(`  ${ash(describeRate(rate))}`);
@@ -342,7 +342,7 @@ function parseSafely(spec) {
  * The arithmetic everybody does in their head and gets wrong once a quarter.
  * Two things make it more than a multiplication:
  *
- *   - the cap. `$100/hour/agent/upto:4` means four agents cost four hundred an
+ *   - the cap. `$400/hour/agent/upto:4` means four agents cost sixteen hundred an
  *     hour and *so do six* — the cap is the promise that made the client sign,
  *     and it has to be applied here rather than remembered at invoice time.
  *   - the floor. `min:1` bills a fifteen-minute call as an hour, which is the

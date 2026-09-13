@@ -118,7 +118,7 @@ export const TOOLS = {
   billing: {
     desc: "Profullstack billing - clients, rates and invoices from tracked hours",
     bin: "billing",
-    // The other half. It carries the rate model /rate parses ($100/hour/agent/
+    // The other half. It carries the rate model /rate parses ($400/hour/agent/
     // upto:4) and bills agent-hours from the timer's entries. `billing import`
     // brings across a ledger that started in ~/.moshcode/business.json.
     install: { cmd: "npm", args: ["install", "-g", "@profullstack/billing"] },

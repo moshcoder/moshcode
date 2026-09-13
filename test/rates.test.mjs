@@ -45,7 +45,7 @@ test("the spellings people actually type all land", () => {
 test("a rate that cannot be read says which word it choked on", () => {
   assert.throws(() => parseRate("$100/fortnight"), /fortnight/);
   assert.throws(() => parseRate("free"), /can't read a price/);
-  assert.throws(() => parseRate(""), /\$100\/hour\/agent/);
+  assert.throws(() => parseRate(""), /\$400\/hour\/agent/);
   // A cap with nothing to cap is the error that matters most: it reads as a
   // discount and silently is not one.
   assert.throws(() => parseRate("$100/hour/upto:4"), /caps a unit/);
