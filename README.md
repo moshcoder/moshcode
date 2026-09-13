@@ -29,6 +29,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode agents` | engines | list engines, open their agent view, or launch autonomously |
 | `moshcode start` | engines | launch an engine with its native defaults |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
+| `moshcode swarm` | runtime | one task, a herd of agents, one answer — plan, fan out, verify, synthesise (PRD 0015) |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
 | `moshcode cost` <br>`usage` | runtime | what each session is spending, read from the engines' own logs |
 | `moshcode attach` | runtime | attach this terminal to a herd session |
@@ -471,6 +472,35 @@ moshcode wait --all api web --state done
 const first = await herdWait(["api", "web", "docs"], { any: true });
 await herdWait(["api", "web"], { states: ["done"] });
 ```
+
+### Swarm — one task, a herd of agents, one answer
+
+Claude Code calls it ultracode: a prompt that becomes a workflow of agents. The
+herd already had every part of that, so this is the verb that composes them,
+on any engine moshcode can start:
+
+```sh
+moshcode swarm "port the auth routes and the dashboard to the new API"
+· plan — claude is splitting the task into up to 4 pieces
+   1 auth routes
+   2 dashboard
+   3 shared API client
+· swarm — 3 sessions, 3 at a time (claude, herd swarm)
+  ✓ swarm-port-the-auth-1 done · t-…
+  ✓ swarm-port-the-auth-2 done · t-…
+  ✓ swarm-port-the-auth-3 done · t-…
+· synthesis — claude is folding 3 pieces into one answer
+```
+
+One headless call splits the task into pieces that do not touch the same
+files. Each piece runs in its own herd session, `--agents` of them at a time
+(default 4, the same cap the claude engine's defaults put on Claude's own
+workflows), prompted and waited on exactly as `herd prompt --wait` is, so every
+piece is a task in the ledger. One more call folds the outputs into the answer
+you read. `--verify` adds a skeptic per piece whose verdict the synthesis sees;
+`--plan-only` shows the split and starts nothing; `--keep` leaves the sessions
+in `moshcode ps`. A plan that does not parse runs the task as one piece rather
+than not at all.
 
 ### Let the engine say what it is doing
 
