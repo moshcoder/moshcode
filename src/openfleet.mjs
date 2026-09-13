@@ -164,21 +164,70 @@ export function ledgerPaths(fleet, env = process.env) {
 }
 
 /**
- * Append one line to this host's ledger. Adds `at`, `fleet` and `host`; the
- * caller passes `event`, `by` and the event's own keys. Never throws: a lost
- * ledger line must not fail the swarm that was writing it. Returns the line as
- * written, or null.
+ * The once-marker a line takes before it is appended, so two writers that
+ * both checked the ledger and found nothing cannot both append: a claude
+ * pane's hook and the moshcode that started it race on `member.start`, and
+ * `member.end` and `swarm.end` have the same check-then-append shape. The
+ * marker is `fleets/<fleet>/marks/<event>.<id>`, created exclusively; on
+ * EEXIST the line is not written and the caller hears "already". A `lost`
+ * end takes `member.end.<id>.lost` instead, so the engine's or the spawner's
+ * real end can still supersede it and takes the plain marker. logicsrc
+ * writes the same paths. Null for an event that has no marker.
  */
-export function append(fleet, line, { env = process.env, now = Date.now(), host: h = host() } = {}) {
+export function markerFor(line) {
+  const { event, member, swarm, state } = line || {};
+  if (event === "member.start" && member) return `member.start.${member}`;
+  if (event === "member.end" && member) return state === "lost" ? `member.end.${member}.lost` : `member.end.${member}`;
+  if (event === "swarm.end" && swarm) return `swarm.end.${swarm}`;
+  return null;
+}
+
+export function markPath(fleet, marker, env = process.env) {
+  return path.join(fleetDir(fleet, env), "marks", marker);
+}
+
+/**
+ * Take a once-marker. True when this call created it, false when another
+ * writer already had. A marker that cannot be created for any other reason
+ * (an unwritable home) counts as taken: the append that follows will say
+ * whether the ledger is writable at all.
+ */
+export function claimOnce(fleet, marker, env = process.env) {
+  const file = markPath(fleet, marker, env);
+  try {
+    ensureDir(path.dirname(file));
+    fs.writeFileSync(file, "", { flag: "wx", mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+    return true;
+  } catch (error) {
+    return error?.code !== "EEXIST";
+  }
+}
+
+/**
+ * Append one line to this host's ledger, taking its once-marker first when
+ * the event has one. Adds `at`, `fleet` and `host`; the caller passes
+ * `event`, `by` and the event's own keys. Never throws: a lost ledger line
+ * must not fail the swarm that was writing it. Returns `{ line, already }`:
+ * the line as written, or null, and whether another writer got there first.
+ */
+export function appendOnce(fleet, line, { env = process.env, now = Date.now(), host: h = host(), once = true } = {}) {
   const { at, event, by, ...rest } = line || {};
   const written = { at: at || iso(now), event, fleet, host: h, by, ...rest };
+  const marker = once ? markerFor(written) : null;
+  if (marker && !claimOnce(fleet, marker, env)) return { line: null, already: true };
   try {
     ensureDir(fleetDir(fleet, env));
     const file = ledgerPath(fleet, env);
     fs.appendFileSync(file, `${JSON.stringify(written)}\n`, { mode: 0o600 });
     fs.chmodSync(file, 0o600);
-    return written;
-  } catch { return null; }
+    return { line: written, already: false };
+  } catch { return { line: null, already: false }; }
+}
+
+/** appendOnce for a caller that only needs the line: the line as written, or null. */
+export function append(fleet, line, options = {}) {
+  return appendOnce(fleet, line, options).line;
 }
 
 const atMs = (line) => {
@@ -250,19 +299,28 @@ export function parseBudget(value) {
   return m ? { amount: Number(m[1]), unit: m[2] } : null;
 }
 
-/** Key by key: every key `narrowing` carries replaces the one in `base`. */
-export function mergeCeiling(base = {}, narrowing = {}) {
-  const out = { ...(base || {}) };
-  for (const key of CEILING_KEYS) {
-    if (narrowing && narrowing[key] !== undefined && narrowing[key] !== null) out[key] = narrowing[key];
-  }
-  return out;
-}
-
-const untilMs = (value) => {
+/** An ISO time as epoch milliseconds, or null when it is not one. */
+export const untilMs = (value) => {
   const t = Date.parse(String(value ?? ""));
   return Number.isFinite(t) ? t : null;
 };
+
+/**
+ * Key by key: a key `narrowing` carries replaces the one in `base` only when
+ * it is narrower or equal. A merged ceiling never widens, whatever a ledger
+ * line claims (rule 3): a spawn line saying `approvals: bypass` under a
+ * native fleet is ignored here and refused by the engine that checks it.
+ * Unknown keys ride through unchanged, as the spec keeps them.
+ */
+export function mergeCeiling(base = {}, narrowing = {}) {
+  const out = { ...(base || {}) };
+  for (const [key, value] of Object.entries(narrowing || {})) {
+    if (value === undefined || value === null) continue;
+    if (!CEILING_KEYS.includes(key)) { out[key] = value; continue; }
+    if (keyNarrower(key, value, out)) out[key] = value;
+  }
+  return out;
+}
 
 /**
  * Is one key of `narrowing` narrower than, or equal to, the same key of `base`?
@@ -361,22 +419,24 @@ export function checkCeiling(wanted = {}, allowed = {}, { now = Date.now() } = {
 
 /**
  * A fleet's whole ceiling: the latest `fleet.cap` whose target is the fleet,
- * else `fleet.open`, else the implicit fleet's. An opened fleet's absent keys
- * are resolved the way the spec reads them (approvals native, depth 1, hosts
- * the host the line was written on); the implicit fleet carries no approvals
- * key at all, because each root member supplies its own.
+ * else `fleet.open`, else the implicit fleet's. Absent `depth` is 1 and
+ * absent `hosts` is the host the line was written on. `opened` is true only
+ * when a `fleet.open` line exists: a cap never opens a fleet. In an opened
+ * fleet an absent `approvals` means native, whether the ceiling comes from
+ * `fleet.open` or a later cap; a cap on the implicit fleet that names no
+ * approvals leaves each root's own approvals in place, so the key stays
+ * absent here and enters at the root in effectiveCeiling.
  */
 export function fleetCeiling(lines, fleet, { host: h = host() } = {}) {
   const caps = findEvents(lines, "fleet.cap", { target: fleet });
-  const open = findEvents(lines, "fleet.open");
-  const line = caps.at(-1) || open.at(-1) || null;
+  const open = findEvents(lines, "fleet.open").at(-1) || null;
+  const opened = Boolean(open);
+  const line = caps.at(-1) || open;
   if (!line) return { ceiling: { depth: 1, hosts: [h] }, opened: false, line: null };
   const c = line.ceiling || {};
-  return {
-    ceiling: { ...c, approvals: c.approvals || "native", depth: c.depth ?? 1, hosts: Array.isArray(c.hosts) ? c.hosts : [line.host || h] },
-    opened: true,
-    line,
-  };
+  const ceiling = { ...c, depth: c.depth ?? 1, hosts: Array.isArray(c.hosts) ? c.hosts : [line.host || h] };
+  if (opened && !ceiling.approvals) ceiling.approvals = "native";
+  return { ceiling, opened, line };
 }
 
 /** The `swarm.spawn` lines from the top-most ancestor down to `swarm`. */
@@ -394,35 +454,52 @@ export function swarmChain(lines, swarm) {
   return chain;
 }
 
-/** The record at the top of a member's parent chain, or the deepest one readable. */
-export function rootOf(fleet, record, env = process.env) {
+/**
+ * The root above a record: `parent` followed through record files, then
+ * through `member.start` lines when a record is missing (it may have been
+ * written on another host). Null when the chain breaks, which reads as
+ * approvals native: nothing vouches for more.
+ */
+export function rootOf(fleet, record, { env = process.env, lines = readLedger(fleet, env) } = {}) {
   let current = record;
-  const seen = new Set();
-  while (current?.parent && !seen.has(current.parent)) {
-    seen.add(current.parent);
-    const parent = readMember(fleet, current.parent, env);
-    if (!parent) break;
-    current = parent;
+  const seen = new Set([record?.member]);
+  while (current?.parent) {
+    const parent = current.parent;
+    if (seen.has(parent)) return null;
+    seen.add(parent);
+    const file = readMember(fleet, parent, env);
+    if (file) { current = file; continue; }
+    const start = claimedBy(lines, parent);
+    if (!start) return null;
+    current = { member: parent, approvals: start.approvals, parent: start.parent };
   }
   return current || null;
 }
 
+/** The approvals a root supplies to its subtree in the implicit fleet: its own, or native when orphan. */
+export function rootApprovalsOf(root) {
+  if (!root || root.orphan) return "native";
+  return root.approvals === "bypass" ? "bypass" : "native";
+}
+
 /**
- * The effective ceiling at a point in the tree: the fleet's, merged key by key
- * with each `swarm.spawn` on the path down to `swarm`, with the latest
- * `fleet.cap` for any swarm on that path applied after its spawn. In the
- * implicit fleet `approvals` enters at the root: `rootApprovals`, or the
- * record's own ceiling when the caller has one and no chain to rebuild from.
+ * The effective ceiling at a point in the tree, in the order both sysop
+ * tools use: the fleet's whole ceiling as the base (the latest fleet-target
+ * cap, else `fleet.open`, else the implicit fleet's), then each `swarm.spawn`
+ * narrowing on the path from the root swarm down to `swarm`, then the latest
+ * `fleet.cap` for any swarm on that path, applied last so the sysop's word
+ * wins over what a spawner wrote. Nothing in the merge widens. The copy in a
+ * member's record is a snapshot and never an input here, so a later fleet
+ * cap takes effect (rule 7). In the implicit fleet `approvals` enters at the
+ * root, `rootApprovals`, unless a cap on the fleet named the key itself.
  */
-export function effectiveCeiling(lines, fleet, { swarm = null, rootApprovals = null, record = null, host: h = host() } = {}) {
+export function effectiveCeiling(lines, fleet, { swarm = null, rootApprovals = null, host: h = host() } = {}) {
   const { ceiling: base, opened } = fleetCeiling(lines, fleet, { host: h });
   let ceiling = { ...base };
-  if (!opened) {
-    if (record?.ceiling) ceiling = { ...record.ceiling };
-    if (rootApprovals) ceiling.approvals = rootApprovals;
-  }
-  for (const spawn of swarmChain(lines, swarm)) {
-    ceiling = mergeCeiling(ceiling, spawn.ceiling || {});
+  if (!opened && ceiling.approvals === undefined && rootApprovals) ceiling.approvals = rootApprovals;
+  const chain = swarmChain(lines, swarm);
+  for (const spawn of chain) ceiling = mergeCeiling(ceiling, spawn.ceiling || {});
+  for (const spawn of chain) {
     const cap = findEvents(lines, "fleet.cap", { target: spawn.swarm }).at(-1);
     if (cap) ceiling = mergeCeiling(ceiling, cap.ceiling || {});
   }
@@ -431,21 +508,15 @@ export function effectiveCeiling(lines, fleet, { swarm = null, rootApprovals = n
 
 /**
  * The effective ceiling a member's record was, or would be, started under:
- * effectiveCeiling with the implicit fleet's root approvals resolved. In the
- * implicit fleet approvals enter at the root: when the walk up the parent
- * chain reaches it, its own flags decide; when a record on the way up is
- * missing, the ceiling copied into this record is the best remaining witness.
+ * effectiveCeiling with the implicit fleet's root approvals resolved by
+ * walking the parent chain to its root. A parentless record is its own root
+ * and supplies its own approvals (never native by default); a broken chain
+ * vouches for nothing and reads native.
  */
 export function ceilingOf(fleet, record, { env = process.env, lines = readLedger(fleet, env), swarm = record?.swarm || null, host: h = host() } = {}) {
   const { opened } = fleetCeiling(lines, fleet, { host: h });
-  let rootApprovals = null;
-  if (record && !opened) {
-    const root = rootOf(fleet, record, env);
-    rootApprovals = root && !root.parent
-      ? (root.orphan ? "native" : root.approvals || "native")
-      : record.ceiling?.approvals || record.approvals || "native";
-  }
-  return effectiveCeiling(lines, fleet, { swarm, rootApprovals, record, host: h });
+  const rootApprovals = record && !opened ? rootApprovalsOf(rootOf(fleet, record, { env, lines })) : null;
+  return effectiveCeiling(lines, fleet, { swarm, rootApprovals, host: h });
 }
 
 /* ---------------------------------------------------------------- the caller */
@@ -496,6 +567,11 @@ export function swarmId(task, { name = null, now = Date.now() } = {}) {
 }
 
 /* ----------------------------------------------------------------- the fold */
+
+/** Whether the herd's roster is the one that can hold a member of this engine. */
+export function herdHolds(engine) {
+  return /^moshcode\//.test(engine || "") || engine === "tmux";
+}
 
 /** Sum spend strings of matching units; "12 USD + 5000 tokens" when they differ. */
 export function sumSpend(values) {
@@ -565,9 +641,12 @@ export function fold({ fleets = [], roster = null, host: h = host(), implicit = 
         claimed: Boolean(start),
         started: start?.at || r?.started || null,
         end,
-        state: end ? end.state : start ? "running" : "unclaimed",
+        // `working` is the landing page's word for a claimed member with no
+        // end line; the herd's finer states (idle, blocked) ride on `live`.
+        state: end ? end.state : start ? "working" : "unclaimed",
         spend: spends.get(id) || null,
         live: null,
+        herdState: null,
         lost: false,
         rosterOnly: false,
         swarms: [],
@@ -576,14 +655,17 @@ export function fold({ fleets = [], roster = null, host: h = host(), implicit = 
     for (const r of records) if (r?.member && !members.has(r.member)) members.set(r.member, node(r, null));
     for (const [id, s] of starts) if (!members.has(id)) members.set(id, node(null, s));
 
+    // The herd roster can only hold a moshcode pane or a tmux target on this
+    // host, so only such a member it no longer lists is lost; a claude-code
+    // member, or a pane on another host, is nothing this roster can speak to.
     if (roster) {
       for (const m of members.values()) {
-        if (!(/^moshcode\//.test(m.engine || "") || m.engine === "tmux")) continue;
+        if (!herdHolds(m.engine) || m.host !== h) continue;
         const row = roster.find((x) => x.name === m.session || x.name === m.member);
         if (row) {
           matched.add(row.name);
           m.live = Boolean(row.alive);
-          if (!m.end && m.claimed && row.state) m.state = row.state;
+          m.herdState = row.state || null;
         } else if (m.claimed && !m.end) {
           m.state = "lost";
           m.lost = true;
@@ -655,7 +737,8 @@ export function fold({ fleets = [], roster = null, host: h = host(), implicit = 
       impl.nodes.push({
         kind: "member", member: row.name, session: row.name, title: null, task: null, engine: row.engine || null, host: h, cwd: row.cwd || null,
         depth: 0, parent: null, swarm: null, approvals: row.approvals || "native", owns: null, orphan: false, recorded: false, claimed: false,
-        started: null, end: null, state: row.state || (row.alive ? "running" : "gone"), spend: null, live: Boolean(row.alive), lost: false, rosterOnly: true, swarms: [],
+        started: null, end: null, state: row.state || (row.alive ? "working" : "gone"), spend: null, live: Boolean(row.alive), herdState: row.state || null,
+        lost: false, rosterOnly: true, swarms: [],
       });
     }
   }
@@ -673,34 +756,49 @@ const hhmm = (value) => {
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 };
 
-const clipText = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 3)}...` : String(s));
-
-function memberLabel(m, h) {
-  const parts = [m.session && m.session !== m.member ? `${m.member} (${m.session})` : m.member];
-  if (m.title) parts.push(m.title);
-  else if (m.rosterOnly && m.cwd) parts.push(m.cwd);
-  if (m.engine) parts.push(m.engine);
-  if (m.host && m.host !== h) parts.push(`@${m.host}`);
-  parts.push(m.state);
-  if (m.approvals === "bypass") parts.push("[bypass]");
-  if (Array.isArray(m.owns) && m.owns.length) parts.push(`owns ${m.owns.join(",")}`);
-  if (m.orphan) parts.push("[orphan]");
-  if (m.rosterOnly) parts.push("[roster]");
-  if (m.spend) parts.push(`spent ${m.spend}`);
-  return parts.join("  ");
+/**
+ * A swarm's task, quoted, clipped at 60 characters with ` ...`; bare when the
+ * task carries a double quote of its own, as a command line does. The same
+ * rule logicsrc's tree uses, so the two tools draw one swarm one way.
+ */
+function quoteTask(task, max = 60) {
+  const text = String(task);
+  const clipped = text.length > max ? `${text.slice(0, max - 4).trimEnd()} ...` : text;
+  return clipped.includes('"') ? clipped : `"${clipped}"`;
 }
 
-function swarmLabel(s) {
-  const parts = [`swarm ${s.swarm}`];
-  if (s.task) parts.push(`"${clipText(s.task, 40)}"`);
-  parts.push(`${s.members.length}${s.fan_out ? `/${s.fan_out}` : ""} member${s.members.length === 1 ? "" : "s"}`);
-  if (s.end) parts.push(s.end.state);
-  else if (s.state === "ended") parts.push("ended");
-  else if (s.until) parts.push(`until ${hhmm(s.until)}`);
-  else parts.push("running");
-  if (s.spend) parts.push(`spent ${s.spend}`);
-  if (s.missing) parts.push("[no swarm.spawn]");
-  return parts.join("  ");
+/** A member row in three padded columns (label, title, engine) and the rest. */
+function memberRow(m, h) {
+  const marks = [m.state];
+  if (m.approvals === "bypass") marks.push("[bypass]");
+  if (m.orphan) marks.push("[orphan]");
+  if (m.rosterOnly) marks.push("[roster]");
+  if (m.live === false && m.state === "working") marks.push("[gone]");
+  if (Array.isArray(m.owns) && m.owns.length) marks.push(`owns ${m.owns.join(",")}`);
+  if (m.host && m.host !== h) marks.push(`@${m.host}`);
+  if (m.spend) marks.push(`spent ${m.spend}`);
+  return {
+    label: m.session && m.session !== m.member ? `${m.member} (${m.session})` : String(m.member),
+    title: m.title || (m.rosterOnly && m.cwd ? m.cwd : ""),
+    engine: m.engine || "?",
+    rest: marks.join("  "),
+  };
+}
+
+function swarmRow(s) {
+  const rest = [];
+  if (s.end) rest.push(s.end.state);
+  else if (s.state === "ended") rest.push("ended");
+  else if (s.until) rest.push(`until ${hhmm(s.until)}`);
+  else rest.push("running");
+  if (s.spend) rest.push(`spent ${s.spend}`);
+  if (s.missing) rest.push("[no swarm.spawn]");
+  return {
+    label: `swarm ${s.swarm}`,
+    title: s.task ? quoteTask(s.task) : "",
+    engine: `${s.members.length}${s.fan_out ? `/${s.fan_out}` : ""} member${s.members.length === 1 ? "" : "s"}`,
+    rest: rest.join("  "),
+  };
 }
 
 function fleetLabel(f) {
@@ -716,21 +814,34 @@ function fleetLabel(f) {
   return `${f.fleet}  (${bits.join(", ")})`;
 }
 
-/** The tree as text, in the shape of the spec's landing page. */
+/**
+ * The tree as text, in the shape of the spec's landing page: one fleet after
+ * another, the label, title and engine columns padded per fleet so the state
+ * column lines up, the way logicsrc's tree prints the same files.
+ */
 export function renderTree(model, { host: h = host() } = {}) {
   const lines = [];
-  const draw = (nodes, prefix) => {
-    nodes.forEach((n, i) => {
-      const last = i === nodes.length - 1;
-      lines.push(`${prefix}${last ? "└─ " : "├─ "}${n.kind === "swarm" ? swarmLabel(n) : memberLabel(n, h)}`);
-      const children = n.kind === "swarm" ? n.members : n.swarms;
-      if (children?.length) draw(children, `${prefix}${last ? "   " : "│  "}`);
-    });
-  };
   for (const f of model.fleets || []) {
     lines.push(fleetLabel(f));
-    if (f.nodes?.length) draw(f.nodes, "");
-    else lines.push("└─ (no members yet)");
+    if (!f.nodes?.length) { lines.push("└─ (no members yet)"); continue; }
+    const rows = [];
+    const draw = (nodes, prefix) => {
+      nodes.forEach((n, i) => {
+        const last = i === nodes.length - 1;
+        rows.push({ prefix: `${prefix}${last ? "└─ " : "├─ "}`, ...(n.kind === "swarm" ? swarmRow(n) : memberRow(n, h)) });
+        const children = n.kind === "swarm" ? n.members : n.swarms;
+        if (children?.length) draw(children, `${prefix}${last ? "   " : "│  "}`);
+      });
+    };
+    draw(f.nodes, "");
+    const labelWidth = Math.max(...rows.map((r) => r.prefix.length + r.label.length));
+    const titleWidth = Math.max(...rows.map((r) => r.title.length));
+    const engineWidth = Math.max(...rows.map((r) => r.engine.length));
+    for (const r of rows) {
+      const head = `${r.prefix}${r.label}`.padEnd(labelWidth);
+      const title = titleWidth ? `  ${r.title.padEnd(titleWidth)}` : "";
+      lines.push(`${head}${title}  ${r.engine.padEnd(engineWidth)}  ${r.rest}`.trimEnd());
+    }
   }
   return lines.join("\n");
 }

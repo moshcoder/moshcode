@@ -26,8 +26,10 @@ function harness({ roster = [], env = {} } = {}) {
     env: { OPENFLEET_HOME: dir, ...env },
     now: () => NOW,
     host: "dev",
+    // The seeded fleet is the implicit one on any box, not just the author's.
+    implicit: FLEET,
     roster: () => roster,
-    kill: async (name) => { kills.push(name); return roster.some((r) => r.name === name) ? { ok: true } : { ok: false, error: "no such session" }; },
+    kill: async (name) => { kills.push(name); return (roster || []).some((r) => r.name === name) ? { ok: true } : { ok: false, error: "no such session" }; },
     exec: (bin, args) => { execs.push([bin, ...args]); return { ok: true }; },
     signal: (pid) => { signals.push(pid); return { ok: true }; },
   };
@@ -49,6 +51,10 @@ function seed(h) {
   const rec = (r) => fleet.writeRecord({ openfleet: "0.1", fleet: FLEET, sysop: FLEET, host: "dev", ...r }, { env });
   rec({ member: "460a4502", engine: "claude-code", depth: 0, approvals: "bypass", ceiling: { approvals: "bypass", depth: 1, hosts: ["dev"] } });
   put({ event: "member.start", by: "460a4502", member: "460a4502", engine: "claude-code", depth: 0, approvals: "bypass" }, at("04:55:00"));
+  // The sysop raised the implicit fleet's depth so the second piece may spawn
+  // a swarm of its own: the spec's own answer to the depth-1 noise. A cap
+  // never opens the fleet, and naming no approvals leaves each root's own.
+  put({ event: "fleet.cap", by: "sysop", target: FLEET, ceiling: { depth: 2 } }, at("05:41:00"));
   put({ event: "swarm.spawn", by: "460a4502", swarm: "create-two-0541", task: "create two ...", ceiling: { fan_out: 4, until: at("06:11:01") },
     pieces: [{ member: "create-two-0541-1", title: "create hello.sh bash", owns: ["hello.sh"] }, { member: "create-two-0541-2", title: "create bye.sh bash", owns: ["bye.sh"] }] }, at("05:41:01"));
   const ceiling = { approvals: "bypass", depth: 2, fan_out: 4, hosts: ["dev"], until: at("06:11:01") };
@@ -131,7 +137,7 @@ test("cap on a fleet writes fleet.cap and stops the members now above the ceilin
   try {
     seed(h);
     assert.equal(await h.run(["cap", FLEET, "--approvals", "native", "--depth", "2"]), 0);
-    const cap = h.ledger().find((l) => l.event === "fleet.cap");
+    const cap = h.ledger().filter((l) => l.event === "fleet.cap").at(-1);
     assert.equal(cap.by, "sysop");
     assert.equal(cap.target, FLEET);
     assert.deepEqual(cap.ceiling, { approvals: "native", depth: 2 });
@@ -144,6 +150,29 @@ test("cap on a fleet writes fleet.cap and stops the members now above the ceilin
     assert.ok(ends.every((l) => l.by === "sysop"));
     assert.match(h.text(), /460a4502 stopped/);
     assert.equal(h.ledger().filter((l) => l.event === "member.end" && l.member === "create-two-0541-1").length, 1, "an ended member is left alone");
+  } finally { h.cleanup(); }
+});
+
+test("cap on the implicit fleet that names no approvals leaves each root's own in place, and no bypass root is stopped", async () => {
+  const h = harness({ roster: ROSTER });
+  try {
+    seed(h);
+    assert.equal(await h.run(["cap", FLEET, "--depth", "2", "--json"]), 0);
+    const out = JSON.parse(h.lines.at(-1));
+    assert.deepEqual(out.members, [], "a cap never opens a fleet, so absent approvals is not native here");
+    assert.deepEqual(h.execs, []);
+    assert.deepEqual(h.kills, []);
+    const { env } = h.opts;
+    const lines = h.ledger();
+    const root = fleet.ceilingOf(FLEET, fleet.readMember(FLEET, "460a4502", env), { env, lines, host: "dev" });
+    assert.deepEqual(root, { depth: 2, hosts: ["dev"], approvals: "bypass" }, "the cap's depth took effect over the record's depth 1 copy; the root's approvals stayed");
+    const pane = fleet.ceilingOf(FLEET, fleet.readMember(FLEET, "create-two-0541-2", env), { env, lines, host: "dev" });
+    assert.equal(pane.approvals, "bypass");
+    assert.equal(pane.depth, 2);
+    // Naming approvals is what changes them.
+    assert.equal(await h.run(["cap", FLEET, "--approvals", "native", "--depth", "2"]), 0);
+    assert.deepEqual(h.execs, [["claude", "stop", "460a4502"]]);
+    assert.deepEqual(h.kills, ["create-two-0541-2"]);
   } finally { h.cleanup(); }
 });
 
@@ -176,15 +205,16 @@ test("tree draws the fleet from the records and the ledger, joined to the herd r
     seed(h);
     assert.equal(await h.run(["tree"]), 0);
     const text = h.text();
-    assert.match(text, /^anthony@dev  \(implicit fleet, sysop anthony@dev, depth 1, hosts dev\)$/m);
-    assert.match(text, /^├─ 460a4502  claude-code  running  \[bypass\]$/m);
-    assert.match(text, /^│  └─ swarm create-two-0541  "create two \.\.\."  2\/4 members  until 06:11$/m);
-    assert.match(text, /^│     ├─ create-two-0541-1 \(172ffd83\)  create hello\.sh bash  claude-code  done  \[bypass\]  owns hello\.sh$/m);
-    assert.match(text, /^│     └─ create-two-0541-2  create bye\.sh bash  moshcode\/claude  working  \[bypass\]  owns bye\.sh$/m, "state from the roster");
-    assert.match(text, /^│        └─ swarm inner-0541  "inner"  1\/4 member  until 06:11$/m);
-    assert.match(text, /^│           └─ inner-0541-1  inner piece  moshcode\/codex  working$/m);
-    assert.match(text, /^└─ scratch  \/home\/anthony  moshcode\/shell  idle  \[roster\]$/m, "a herd session with no record is a root, marked as from the roster");
+    assert.match(text, /^anthony@dev  \(implicit fleet, sysop anthony@dev, depth 2, hosts dev\)$/m, "the cap's depth, and still no fleet-level approvals");
+    assert.match(text, /^├─ 460a4502\s+claude-code\s+working  \[bypass\]$/m);
+    assert.match(text, /^│  └─ swarm create-two-0541\s+"create two \.\.\."\s+2\/4 members\s+until 06:11$/m);
+    assert.match(text, /^│     ├─ create-two-0541-1 \(172ffd83\)\s+create hello\.sh bash\s+claude-code\s+done  \[bypass\]  owns hello\.sh$/m);
+    assert.match(text, /^│     └─ create-two-0541-2\s+create bye\.sh bash\s+moshcode\/claude\s+working  \[bypass\]  owns bye\.sh$/m);
+    assert.match(text, /^│        └─ swarm inner-0541\s+"inner"\s+1\/4 member\s+until 06:11$/m);
+    assert.match(text, /^│           └─ inner-0541-1\s+inner piece\s+moshcode\/codex\s+working$/m);
+    assert.match(text, /^└─ scratch\s+\/home\/anthony\s+moshcode\/shell\s+idle  \[roster\]$/m, "a herd session with no record is a root, marked as from the roster");
     assert.equal(h.ledger().filter((l) => l.state === "lost").length, 0);
+    assert.equal(h.ledger().filter((l) => l.event === "member.end").length, 1, "nothing is past its until at 05:42, so nothing is enforced");
 
     h.lines.length = 0;
     assert.equal(await h.run(["tree", "--json"]), 0);
@@ -203,10 +233,20 @@ test("tree writes member.end lost for a claimed moshcode member the roster no lo
     const lost = h.ledger().filter((l) => l.event === "member.end" && l.state === "lost");
     assert.deepEqual(lost.map((l) => l.member).sort(), ["create-two-0541-2", "inner-0541-1"]);
     assert.ok(lost.every((l) => l.by === "sysop"));
-    assert.match(h.text(), /create-two-0541-2  create bye\.sh bash  moshcode\/claude  lost/);
+    assert.match(h.text(), /create-two-0541-2\s+create bye\.sh bash\s+moshcode\/claude\s+lost/);
+    assert.ok(fs.existsSync(path.join(h.dir, "fleets", FLEET, "marks", "member.end.create-two-0541-2.lost")), "under the lost marker, so a real end can still supersede it");
     h.lines.length = 0;
     assert.equal(await h.run(["tree"]), 0);
     assert.equal(h.ledger().filter((l) => l.state === "lost").length, 2, "written once, not on every look");
+    assert.equal(h.ledger().filter((l) => l.member === "460a4502" && l.event === "member.end").length, 0, "a claude-code member is never lost by the herd's roster");
+
+    const unread = harness({ roster: null });
+    try {
+      seed(unread);
+      assert.equal(await unread.run(["tree"]), 0);
+      assert.equal(unread.ledger().filter((l) => l.state === "lost").length, 0, "an unreadable manifest says nothing about any pane");
+      assert.match(unread.text(), /create-two-0541-2\s+create bye\.sh bash\s+moshcode\/claude\s+working/);
+    } finally { unread.cleanup(); }
 
     const agent = harness({ roster: [], env: { OPENFLEET_MEMBER: "460a4502" } });
     try {
@@ -214,6 +254,71 @@ test("tree writes member.end lost for a claimed moshcode member the roster no lo
       await agent.run(["tree"]);
       assert.ok(agent.ledger().filter((l) => l.state === "lost").every((l) => l.by === "460a4502"), "an agent's tool never writes sysop");
     } finally { agent.cleanup(); }
+  } finally { h.cleanup(); }
+});
+
+test("tree enforces the clock: a working member past its effective until is stopped through its engine with member.end timeout, then its swarm ends", async () => {
+  const h = harness({ roster: ROSTER });
+  try {
+    seed(h);
+    // 06:20, past the 06:11:01 the spawn narrowed to. The nested swarm inherits it.
+    h.opts.now = () => Date.UTC(2026, 8, 13, 6, 20, 0);
+    assert.equal(await h.run(["tree"]), 0);
+    assert.deepEqual(h.kills, ["inner-0541-1", "create-two-0541-2"], "nested first, through the herd");
+    assert.deepEqual(h.execs, [], "the root sits under the implicit fleet, which has no until");
+    const tail = h.ledger().slice(-4).map((l) => `${l.event}:${l.member || l.swarm}:${l.state}:${l.by}`);
+    assert.deepEqual(tail, [
+      "member.end:inner-0541-1:timeout:sysop",
+      "member.end:create-two-0541-2:timeout:sysop",
+      "swarm.end:inner-0541:timeout:sysop",
+      "swarm.end:create-two-0541:timeout:sysop",
+    ]);
+    assert.match(h.text(), /create-two-0541-2\s+create bye\.sh bash\s+moshcode\/claude\s+timeout/);
+    assert.match(h.text(), /create-two-0541-2 stopped as timeout \(past its until\)/);
+    assert.match(h.text(), /swarm create-two-0541 ended timeout/);
+
+    h.lines.length = 0;
+    const before = h.ledger().length;
+    assert.equal(await h.run(["tree", "--json"]), 0);
+    assert.equal(h.ledger().length, before, "once ended, nothing more is written");
+    assert.equal(JSON.parse(h.text()).enforced, undefined);
+  } finally { h.cleanup(); }
+});
+
+test("tree enforces the budget: members under a swarm or fleet whose summed member.spend has reached its budget are stopped with member.end budget", async () => {
+  const h = harness({ roster: ROSTER });
+  try {
+    seed(h);
+    const { env } = h.opts;
+    const put = (line, when) => fleet.append(FLEET, { ...line, at: when }, { env, host: "dev" });
+    put({ event: "fleet.cap", by: "sysop", target: "create-two-0541", ceiling: { budget: "1000 tokens" } }, at("05:41:50"));
+    put({ event: "member.spend", by: "create-two-0541-2", member: "create-two-0541-2", amount: "700 tokens", total: "700 tokens" }, at("05:41:51"));
+    put({ event: "member.spend", by: "inner-0541-1", member: "inner-0541-1", amount: "2 USD", total: "2 USD" }, at("05:41:52"));
+    assert.equal(await h.run(["tree"]), 0);
+    assert.deepEqual(h.kills, [], "700 tokens under 1000, and 2 USD is another unit: not counted");
+    put({ event: "member.spend", by: "inner-0541-1", member: "inner-0541-1", amount: "300 tokens", total: "300 tokens" }, at("05:41:53"));
+    h.lines.length = 0;
+    assert.equal(await h.run(["tree", "--json"]), 0);
+    assert.deepEqual(h.kills, ["inner-0541-1", "create-two-0541-2"], "the nested member's spend counts against the swarm above it");
+    const ends = h.ledger().filter((l) => l.event === "member.end" && l.state === "budget").map((l) => l.member);
+    assert.deepEqual(ends, ["inner-0541-1", "create-two-0541-2"]);
+    assert.deepEqual(h.ledger().filter((l) => l.event === "swarm.end").map((l) => [l.swarm, l.state]), [["inner-0541", "budget"], ["create-two-0541", "budget"]]);
+    const model = JSON.parse(h.text());
+    assert.deepEqual(model.enforced.members.map((m) => [m.member, m.outcome, m.over]), [["inner-0541-1", "stopped", "budget"], ["create-two-0541-2", "stopped", "budget"]]);
+
+    // A fleet's own budget, on an opened fleet, over a claude -p member.
+    const g = harness({ roster: [] });
+    try {
+      assert.equal(await g.run(["open", "team", "--budget", "10 USD"]), 0);
+      const e = g.opts.env;
+      fleet.writeRecord({ openfleet: "0.1", fleet: "team-20260913", sysop: FLEET, member: "p-1", engine: "claude-p", session: "4242", host: "dev" }, { env: e });
+      fleet.append("team-20260913", { event: "member.start", by: "p-1", member: "p-1", engine: "claude-p", session: "4242" }, { env: e, host: "dev" });
+      fleet.append("team-20260913", { event: "member.spend", by: "p-1", member: "p-1", amount: "10 USD", total: "10 USD" }, { env: e, host: "dev" });
+      assert.equal(await g.run(["tree"]), 0);
+      assert.deepEqual(g.signals, [4242]);
+      assert.equal(fleet.endOf(g.ledger("team-20260913"), "p-1").state, "budget");
+      assert.match(g.text(), /p-1 stopped as budget \(over budget\)/);
+    } finally { g.cleanup(); }
   } finally { h.cleanup(); }
 });
 
@@ -257,6 +362,68 @@ test("stop on a swarm ends nested swarms first, then its members through their e
   } finally { h.cleanup(); }
 });
 
+test("stop leaves a swarm open when a member's engine would not let go: no end line for it, no swarm.end, exit 3", async () => {
+  const h = harness({ roster: ROSTER });
+  try {
+    seed(h);
+    h.opts.kill = async (name) => { h.kills.push(name); return name === "create-two-0541-2" ? { ok: false, error: "tmux said no" } : { ok: true }; };
+    assert.equal(await h.run(["stop", "create-two-0541"]), 3);
+    assert.deepEqual(h.kills, ["inner-0541-1", "create-two-0541-2"]);
+    assert.equal(fleet.endOf(h.ledger(), "create-two-0541-2"), null, "an end line the engine did not honour is a lie");
+    assert.deepEqual(h.ledger().filter((l) => l.event === "swarm.end").map((l) => l.swarm), ["inner-0541"], "the nested swarm, whose member did stop, still ends");
+    assert.match(h.text(), /create-two-0541-2: tmux said no/);
+    assert.match(h.text(), /swarm create-two-0541 left open: no end line yet for create-two-0541-2/);
+    // Once the member has ended, a second stop closes the swarm.
+    h.opts.kill = async (name) => { h.kills.push(name); return { ok: true }; };
+    h.lines.length = 0;
+    assert.equal(await h.run(["stop", "create-two-0541", "--json"]), 0);
+    const out = JSON.parse(h.text());
+    assert.deepEqual(out.swarms.map((s) => [s.swarm, s.state]), [["inner-0541", "already-ended"], ["create-two-0541", "stopped"]]);
+    assert.equal(h.ledger().filter((l) => l.event === "swarm.end").length, 2);
+  } finally { h.cleanup(); }
+});
+
+test("stop ends a claude code member by its job id: the member id when it is one, else the first eight of a session UUID; an interactive session has none", async () => {
+  const h = harness({ roster: [] });
+  try {
+    const { env } = h.opts;
+    const rec = (r) => fleet.writeRecord({ openfleet: "0.1", fleet: FLEET, sysop: FLEET, host: "dev", engine: "claude-code", ...r }, { env });
+    const start = (member, session) => fleet.append(FLEET, { event: "member.start", by: member, member, session, engine: "claude-code", depth: 0 }, { env, host: "dev" });
+    rec({ member: "job-0541-1" });
+    start("job-0541-1", "172ffd83-3a5f-4c1e-9b2d-0123456789ab");
+    assert.equal(await h.run(["stop", "job-0541-1"]), 0);
+    assert.deepEqual(h.execs, [["claude", "stop", "172ffd83"]], "the hooks write the full session id; claude stop takes the job id");
+    assert.equal(fleet.endOf(h.ledger(), "job-0541-1").state, "stopped");
+
+    const uuid = "9c0d5b2a-1111-4222-8333-444455556666";
+    rec({ member: uuid });
+    start(uuid, uuid);
+    h.execs.length = 0;
+    assert.equal(await h.run(["stop", uuid]), 3);
+    assert.deepEqual(h.execs, [], "nothing this tool runs can end an interactive session");
+    assert.match(h.text(), /no job id/);
+    assert.equal(fleet.endOf(h.ledger(), uuid), null);
+  } finally { h.cleanup(); }
+});
+
+test("stop on a member whose record was written but never claimed writes nothing and says so", async () => {
+  const h = harness({ roster: [] });
+  try {
+    seed(h);
+    fleet.writeRecord({ openfleet: "0.1", fleet: FLEET, sysop: FLEET, host: "dev", member: "create-two-0541-3", swarm: "create-two-0541", parent: "460a4502", depth: 1, engine: "moshcode/claude", session: "create-two-0541-3" }, { env: h.opts.env });
+    const before = h.ledger().length;
+    assert.equal(await h.run(["stop", "create-two-0541-3"]), 3);
+    assert.deepEqual(h.kills, [], "not pushed through the engine");
+    assert.equal(h.ledger().length, before, "and never lost: it never started");
+    assert.match(h.text(), /create-two-0541-3 never started: nothing to end/);
+    // Inside its swarm it is skipped, and does not hold the swarm open.
+    h.opts.roster = () => ROSTER;
+    h.opts.kill = async (name) => { h.kills.push(name); return { ok: true }; };
+    assert.equal(await h.run(["stop", "create-two-0541"]), 0);
+    assert.equal(h.ledger().find((l) => l.event === "swarm.end" && l.swarm === "create-two-0541").state, "stopped");
+  } finally { h.cleanup(); }
+});
+
 test("stop on a member ends that member and nothing else; an ended member writes nothing", async () => {
   const h = harness({ roster: ROSTER });
   try {
@@ -276,11 +443,19 @@ test("stop on a member ends that member and nothing else; an ended member writes
 });
 
 test("stop marks a member lost when its engine no longer has it, and reports one it cannot reach", async () => {
+  const unread = harness({ roster: null });
+  try {
+    seed(unread);
+    assert.equal(await unread.run(["stop", "inner-0541-1"]), 3);
+    assert.equal(fleet.endOf(unread.ledger(), "inner-0541-1"), null, "with no roster to say otherwise, a failed kill is a failure, not a loss");
+  } finally { unread.cleanup(); }
   const h = harness({ roster: [] });
   try {
     seed(h);
     assert.equal(await h.run(["stop", "inner-0541-1"]), 0);
     assert.equal(h.ledger().at(-1).state, "lost");
+    assert.equal(await h.run(["stop", "inner-0541-1"]), 0);
+    assert.match(h.text(), /had already ended \(lost\)/);
     fleet.writeRecord({ openfleet: "0.1", fleet: FLEET, sysop: FLEET, member: "odd-1", engine: "gemini-cli", session: "x" }, { env: h.opts.env });
     fleet.append(FLEET, { event: "member.start", by: "odd-1", member: "odd-1", engine: "gemini-cli" }, { env: h.opts.env, host: "dev" });
     assert.equal(await h.run(["stop", "odd-1"]), 3);
@@ -346,8 +521,9 @@ test("log reads the ledger in order and filters by member, swarm and since; --js
     const all = h.lines;
     assert.equal(all.length, h.ledger().length);
     assert.match(all[0], /^2026-09-13T04:55:00Z  member\.start\s+by 460a4502  460a4502 · claude-code · bypass$/);
-    assert.match(all[1], /swarm\.spawn\s+by 460a4502  create-two-0541 "create two \.\.\." · 2 pieces · fan_out 4, until 2026-09-13T06:11:01Z/);
-    assert.match(all[4], /member\.end\s+by create-two-0541-1  create-two-0541-1 · done · Created hello\.sh\./);
+    assert.match(all[1], /fleet\.cap\s+by sysop  anthony@dev · depth 2/);
+    assert.match(all[2], /swarm\.spawn\s+by 460a4502  create-two-0541 "create two \.\.\." · 2 pieces · fan_out 4, until 2026-09-13T06:11:01Z/);
+    assert.match(all[5], /member\.end\s+by create-two-0541-1  create-two-0541-1 · done · Created hello\.sh\./);
 
     h.lines.length = 0;
     assert.equal(await h.run(["log", "--member", "create-two-0541-1"]), 0);

@@ -9,9 +9,10 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  CEILING_KEYS, append, checkCeiling, claimedBy, context, currentFleet, effectiveCeiling, endOf, findEvents, fleetCeiling, fold,
-  hasEvent, implicitFleet, isNarrower, iso, ledgerPaths, listFleets, listRecords, mergeCeiling, narrowingOf, parseBudget, readLedger,
-  readMember, readRecord, recordPath, renderTree, sumSpend, swarmChain, swarmEndState, swarmId, writeCurrent, writeRecord,
+  CEILING_KEYS, append, appendOnce, checkCeiling, claimedBy, context, currentFleet, effectiveCeiling, endOf, findEvents, fleetCeiling, fold,
+  hasEvent, herdHolds, host, implicitFleet, isNarrower, iso, ledgerPaths, listFleets, listRecords, markPath, markerFor, mergeCeiling, narrowingOf,
+  parseBudget, readLedger, readMember, readRecord, recordPath, renderTree, rootApprovalsOf, rootOf, sumSpend, swarmChain, swarmEndState, swarmId,
+  writeCurrent, writeRecord,
 } from "../src/openfleet.mjs";
 import { NAME_RE } from "../src/herd.mjs";
 
@@ -137,6 +138,48 @@ test("a record with no member.start is unclaimed; the first start claims it", ()
   });
 });
 
+test("member.start, member.end and swarm.end take a once-marker first, so two writers that both found nothing cannot both append", () => {
+  withHome((dir) => {
+    // The race: a claude pane's hook and the moshcode that started it both
+    // check the ledger, find no member.start, and append. The marker is the
+    // exclusion, at the path logicsrc takes too.
+    const first = appendOnce("f", { event: "member.start", by: "m-1", member: "m-1", session: "a" }, { host: "dev" });
+    assert.equal(first.already, false);
+    assert.equal(first.line.event, "member.start");
+    const marker = markPath("f", "member.start.m-1");
+    assert.equal(marker, path.join(dir, "fleets", "f", "marks", "member.start.m-1"));
+    assert.equal(mode(marker), 0o600);
+    assert.equal(mode(path.dirname(marker)), 0o700);
+    const second = appendOnce("f", { event: "member.start", by: "sysop", member: "m-1", session: "b" }, { host: "dev" });
+    assert.deepEqual(second, { line: null, already: true });
+    assert.equal(append("f", { event: "member.start", by: "sysop", member: "m-1" }), null, "append says nothing more than null");
+    assert.equal(readLedger("f").filter((l) => l.event === "member.start").length, 1);
+    assert.equal(claimedBy(readLedger("f"), "m-1").session, "a");
+
+    // lost takes its own marker, so the engine's real end still lands and supersedes it; then nothing else does.
+    assert.equal(markerFor({ event: "member.end", member: "m-1", state: "lost" }), "member.end.m-1.lost");
+    assert.equal(markerFor({ event: "member.end", member: "m-1", state: "done" }), "member.end.m-1");
+    assert.equal(appendOnce("f", { event: "member.end", by: "sysop", member: "m-1", state: "lost" }).already, false);
+    assert.equal(appendOnce("f", { event: "member.end", by: "m-1", member: "m-1", state: "done" }).already, false);
+    assert.equal(appendOnce("f", { event: "member.end", by: "sysop", member: "m-1", state: "stopped" }).already, true);
+    assert.equal(appendOnce("f", { event: "member.end", by: "sysop", member: "m-1", state: "lost" }).already, true, "lost is written once as well");
+    assert.equal(endOf(readLedger("f"), "m-1").state, "done");
+    assert.equal(readLedger("f").filter((l) => l.event === "member.end").length, 2);
+
+    assert.equal(markerFor({ event: "swarm.end", swarm: "s" }), "swarm.end.s");
+    assert.equal(appendOnce("f", { event: "swarm.end", by: "sysop", swarm: "s", state: "done" }).already, false);
+    assert.equal(appendOnce("f", { event: "swarm.end", by: "sysop", swarm: "s", state: "failed" }).already, true);
+    assert.equal(readLedger("f").filter((l) => l.event === "swarm.end").length, 1);
+
+    // Everything else has no marker and appends as the ledger allows.
+    assert.equal(markerFor({ event: "swarm.spawn", swarm: "s" }), null);
+    assert.equal(append("f", { event: "member.spend", by: "m-1", member: "m-1", amount: "1 USD", total: "1 USD" }).event, "member.spend");
+    assert.equal(append("f", { event: "member.spend", by: "m-1", member: "m-1", amount: "1 USD", total: "2 USD" }).event, "member.spend");
+    assert.equal(appendOnce("f", { event: "member.end", by: "sysop", member: "m-9", state: "done" }, { once: false }).already, false);
+    assert.equal(appendOnce("f", { event: "member.end", by: "sysop", member: "m-9", state: "done" }, { once: false }).already, false, "once: false skips the marker");
+  });
+});
+
 test("one end line counts: the first written, except lost, which a real end supersedes", () => {
   const lines = [
     { event: "member.end", member: "a", state: "lost" },
@@ -162,11 +205,17 @@ test("a swarm ends done only when every member did, else the first failure state
 
 /* ------------------------------------------------------------ the ceiling */
 
-test("a ceiling merges key by key, and unknown keys ride along", () => {
+test("a ceiling merges key by key, never widens, and unknown keys ride along", () => {
   const fleet = { approvals: "bypass", depth: 2, hosts: ["dev"], budget: "20 USD" };
   assert.deepEqual(mergeCeiling(fleet, { fan_out: 4, until: "2026-09-13T06:11:01Z" }), { ...fleet, fan_out: 4, until: "2026-09-13T06:11:01Z" });
   assert.deepEqual(mergeCeiling(fleet, {}), fleet);
   assert.deepEqual(mergeCeiling(fleet, { depth: null, approvals: undefined }), fleet, "null and undefined are not narrowings");
+  assert.deepEqual(mergeCeiling(fleet, { approvals: "native", depth: 1, budget: "5 USD" }), { ...fleet, approvals: "native", depth: 1, budget: "5 USD" });
+  // A ledger line that widens is ignored key by key (rule 3): the reader trusts no writer to widen.
+  assert.deepEqual(mergeCeiling({ approvals: "native", depth: 1, fan_out: 2 }, { approvals: "bypass", depth: 3, fan_out: 8 }), { approvals: "native", depth: 1, fan_out: 2 });
+  assert.deepEqual(mergeCeiling({ hosts: ["dev"], until: "2026-09-13T06:00:00Z", budget: "20 USD" }, { hosts: ["dev", "mars"], until: "2026-09-13T07:00:00Z", budget: "30 USD", note: "kept" }),
+    { hosts: ["dev"], until: "2026-09-13T06:00:00Z", budget: "20 USD", note: "kept" }, "unknown keys ride along");
+  assert.deepEqual(mergeCeiling({}, { approvals: "bypass", depth: 2, fan_out: 4 }), { fan_out: 4 }, "absent approvals means native and absent depth means 1, so neither enters by a spawn line; absent fan_out is uncapped");
   assert.deepEqual(CEILING_KEYS, ["approvals", "budget", "depth", "fan_out", "hosts", "until"]);
 });
 
@@ -223,6 +272,9 @@ test("checkCeiling names the first key that would be exceeded, with both values"
   assert.equal(parseBudget("lots"), null);
 });
 
+/** A cap on the implicit fleet, which never opens it. */
+const IMPLICIT_CAP = { at: "2026-09-13T05:30:00Z", event: "fleet.cap", fleet: "anthony@dev", host: "dev", by: "sysop", target: "anthony@dev", ceiling: { depth: 2 } };
+
 test("a fleet's ceiling is the latest cap on it, else fleet.open, else the implicit fleet's", () => {
   const implicit = fleetCeiling([], "anthony@dev", { host: "dev" });
   assert.deepEqual(implicit, { ceiling: { depth: 1, hosts: ["dev"] }, opened: false, line: null });
@@ -235,7 +287,14 @@ test("a fleet's ceiling is the latest cap on it, else fleet.open, else the impli
   const cap = { at: "2026-09-13T05:30:00Z", event: "fleet.cap", fleet: "f", host: "dev", by: "sysop", target: "f", ceiling: { approvals: "native", depth: 3 } };
   const other = { ...cap, at: "2026-09-13T05:20:00Z", target: "some-swarm", ceiling: { depth: 0 } };
   assert.deepEqual(fleetCeiling([open, other, cap], "f", { host: "dev" }).ceiling, { approvals: "native", depth: 3, hosts: ["dev"] }, "the latest cap on the fleet wins whole");
+  assert.deepEqual(fleetCeiling([open, { ...cap, ceiling: { depth: 3 } }], "f", { host: "dev" }).ceiling, { approvals: "native", depth: 3, hosts: ["dev"] }, "a cap on an opened fleet with no approvals means native too");
+  // A cap never opens a fleet: capped, the implicit fleet still has no fleet-level approvals unless the cap named them.
+  const capped = fleetCeiling([IMPLICIT_CAP], "anthony@dev", { host: "dev" });
+  assert.equal(capped.opened, false);
+  assert.deepEqual(capped.ceiling, { depth: 2, hosts: ["dev"] });
+  assert.deepEqual(fleetCeiling([{ ...IMPLICIT_CAP, ceiling: { approvals: "native" } }], "anthony@dev", { host: "dev" }).ceiling, { approvals: "native", depth: 1, hosts: ["dev"] });
 });
+
 
 test("the effective ceiling merges the fleet's with every spawn on the path, a cap on a swarm applied last", () => {
   const lines = [
@@ -251,6 +310,18 @@ test("the effective ceiling merges the fleet's with every spawn on the path, a c
   assert.deepEqual(effectiveCeiling(lines, "f", { host: "dev" }), { approvals: "bypass", depth: 3, hosts: ["dev", "netcup"] });
   // The implicit fleet: approvals enter at the root, from the flags it was started with.
   assert.deepEqual(effectiveCeiling([], "anthony@dev", { rootApprovals: "bypass", host: "dev" }), { depth: 1, hosts: ["dev"], approvals: "bypass" });
+  // A cap on the implicit fleet that names no approvals leaves the root's in place; one that names them wins.
+  assert.deepEqual(effectiveCeiling([IMPLICIT_CAP], "anthony@dev", { rootApprovals: "bypass", host: "dev" }), { depth: 2, hosts: ["dev"], approvals: "bypass" });
+  assert.equal(effectiveCeiling([{ ...IMPLICIT_CAP, ceiling: { approvals: "native" } }], "anthony@dev", { rootApprovals: "bypass", host: "dev" }).approvals, "native");
+  // The sysop's cap on an ancestor swarm is applied after every spawn on the path, so a descendant's later, wider until does not undo it.
+  const capUntil = { at: "2026-09-13T05:55:00Z", event: "fleet.cap", fleet: "f", host: "dev", by: "sysop", target: "outer-0541", ceiling: { until: "2026-09-13T06:00:00Z" } };
+  const innerLater = { ...lines[2], ceiling: { fan_out: 2, until: "2026-09-13T06:05:00Z" } };
+  assert.equal(effectiveCeiling([lines[0], lines[1], innerLater, capUntil], "f", { swarm: "inner-0545", host: "dev" }).until, "2026-09-13T06:00:00Z");
+  // A spawn line that widens is ignored: the fleet said native and depth 2, whatever the child wrote.
+  const widening = { ...lines[2], ceiling: { fan_out: 8, approvals: "bypass", depth: 9 } };
+  assert.deepEqual(effectiveCeiling([{ ...lines[0], ceiling: { approvals: "native", depth: 2 } }, lines[1], widening], "f", { swarm: "inner-0545", host: "dev" }), {
+    approvals: "native", depth: 2, hosts: ["dev"], fan_out: 4, until: "2026-09-13T06:11:01Z",
+  });
 });
 
 /* ------------------------------------------------------------- the caller */
@@ -287,7 +358,7 @@ test("context resolves the fleet from the record, else OPENFLEET_FLEET, else cur
     assert.equal(own.agent, true);
     assert.equal(own.by, "460a4502");
     assert.equal(own.depth, 0);
-    assert.deepEqual(own.ceiling, { approvals: "bypass", depth: 1, hosts: ["dev"] });
+    assert.deepEqual(own.ceiling, { approvals: "bypass", depth: 1, hosts: [host()] }, "the fleet's ceiling with the root's own approvals; the record's copy is a snapshot, not an input");
   });
 });
 
@@ -302,7 +373,22 @@ test("inside a member of the implicit fleet, approvals come from the root of the
     assert.equal(context().ceiling.approvals, "native", "a root that carries orphan gets native");
     const missing = writeRecord({ openfleet: "0.1", fleet: "anthony@dev", sysop: "anthony@dev", member: "lonely", parent: "nobody", depth: 1, ceiling: { approvals: "bypass", depth: 1 } });
     process.env.OPENFLEET_RECORD = missing.path;
-    assert.equal(context().ceiling.approvals, "bypass", "with the chain broken, the record's own ceiling is the witness");
+    assert.equal(context().ceiling.approvals, "native", "with the chain broken nothing vouches for bypass, whatever the record copied");
+    // A parent with no record on this host but a member.start line still vouches.
+    append("anthony@dev", { event: "member.start", by: "elsewhere", member: "elsewhere", engine: "claude-code", depth: 0, approvals: "bypass" }, { host: "netcup" });
+    const viaStart = writeRecord({ openfleet: "0.1", fleet: "anthony@dev", sysop: "anthony@dev", member: "elsewhere-1-1", parent: "elsewhere", depth: 1 });
+    process.env.OPENFLEET_RECORD = viaStart.path;
+    assert.equal(context().ceiling.approvals, "bypass");
+    assert.equal(rootOf("anthony@dev", readRecord(viaStart.path)).member, "elsewhere");
+    assert.equal(rootOf("anthony@dev", readRecord(missing.path)), null);
+    // A parentless record whose ceiling lacks approvals is its own root and supplies its own, never native by default.
+    const byHand = writeRecord({ openfleet: "0.1", fleet: "anthony@dev", sysop: "anthony@dev", member: "byhand-0541-1", swarm: "byhand-0541", depth: 0, approvals: "bypass", ceiling: { depth: 1, hosts: [host()] } });
+    process.env.OPENFLEET_RECORD = byHand.path;
+    assert.equal(context().ceiling.approvals, "bypass");
+    assert.equal(rootApprovalsOf({ approvals: "bypass" }), "bypass");
+    assert.equal(rootApprovalsOf({ approvals: "bypass", orphan: true }), "native");
+    assert.equal(rootApprovalsOf({}), "native");
+    assert.equal(rootApprovalsOf(null), "native");
   });
 });
 
@@ -356,7 +442,7 @@ test("fold turns the worked example into the tree on the landing page", () => {
   assert.deepEqual(f.nodes.map((n) => n.kind), ["member"], "one root, and the swarms hang under it");
   const root = f.nodes[0];
   assert.equal(root.member, "460a4502");
-  assert.equal(root.state, "running");
+  assert.equal(root.state, "working", "the landing page's word for a claimed member with no end line");
   assert.equal(root.approvals, "bypass");
   assert.deepEqual(root.swarms.map((s) => s.swarm), ["460a4502-1", "create-two-0541"]);
   const [planner, swarm] = root.swarms;
@@ -374,21 +460,29 @@ test("fold turns the worked example into the tree on the landing page", () => {
   assert.equal(one.spend, "1200 tokens");
   assert.deepEqual(one.owns, ["hello.sh"]);
   assert.equal(one.title, "create hello.sh bash");
-  assert.equal(two.state, "running");
+  assert.equal(two.state, "working");
   assert.equal(two.engine, "moshcode/claude");
   assert.equal(two.claimed, true);
   assert.equal(swarm.spend, "1200 tokens");
 
+  // The text is the landing page's shape, columns padded per fleet the way
+  // logicsrc's tree prints the same files.
   const text = renderTree(model, { host: "dev" });
   const lines = text.split("\n");
   assert.equal(lines[0], "anthony@dev  (implicit fleet, sysop anthony@dev, depth 1, hosts dev, spent 1200 tokens)");
-  assert.match(lines[1], /^└─ 460a4502  claude-code  running  \[bypass\]$/);
-  assert.match(lines[2], /^   ├─ swarm 460a4502-1  "claude -p "Split the task below into \.\.\."  1 member  done$/, "a long task is clipped to 40 characters");
-  assert.match(lines[3], /^   │  └─ 460a4502-1-1 \(31337\)  claude-p  done  \[bypass\]$/);
-  assert.match(lines[4], /^   └─ swarm create-two-0541  "create two \.\.\."  2\/4 members  until 06:11  spent 1200 tokens$/);
-  assert.match(lines[5], /^      ├─ create-two-0541-1 \(172ffd83\)  create hello\.sh bash  claude-code  done  \[bypass\]  owns hello\.sh  spent 1200 tokens$/);
-  assert.match(lines[6], /^      └─ create-two-0541-2  create bye\.sh bash  moshcode\/claude  running  \[bypass\]  owns bye\.sh$/);
+  assert.match(lines[1], /^└─ 460a4502\s+claude-code\s+working  \[bypass\]$/);
+  assert.match(lines[2], /^   ├─ swarm 460a4502-1\s+claude -p "Split the task below into at most 4 \.\.\."\s+1 member\s+done$/, "a task that carries a quote reads bare");
+  assert.match(lines[3], /^   │  └─ 460a4502-1-1 \(31337\)\s+claude-p\s+done  \[bypass\]$/);
+  assert.match(lines[4], /^   └─ swarm create-two-0541\s+"create two \.\.\."\s+2\/4 members\s+until 06:11  spent 1200 tokens$/);
+  assert.match(lines[5], /^      ├─ create-two-0541-1 \(172ffd83\)\s+create hello\.sh bash\s+claude-code\s+done  \[bypass\]  owns hello\.sh  spent 1200 tokens$/);
+  assert.match(lines[6], /^      └─ create-two-0541-2\s+create bye\.sh bash\s+moshcode\/claude\s+working  \[bypass\]  owns bye\.sh$/);
   assert.equal(lines.length, 7);
+  const engineAt = lines.slice(5, 7).map((l) => l.indexOf("claude-code") >= 0 ? l.indexOf("claude-code") : l.indexOf("moshcode/claude"));
+  assert.equal(engineAt[0], engineAt[1], "the engine column lines up");
+  const long = renderTree(fold({ fleets: [{ fleet: "f", lines: [
+    { at: "2026-09-13T05:41:01Z", event: "swarm.spawn", fleet: "f", host: "dev", by: "sysop", swarm: "long-0541", task: "x".repeat(80), ceiling: {}, pieces: [] },
+  ], records: [] }], host: "dev", implicit: "anthony@dev" }), { host: "dev" });
+  assert.match(long, new RegExp(`"${"x".repeat(56)} \\.\\.\\."`), "a long task is clipped at 60 with an ellipsis");
 });
 
 test("fold joins the herd roster: liveness for moshcode members, lost for a claimed pane the roster dropped, roster-only roots", () => {
@@ -401,7 +495,8 @@ test("fold joins the herd roster: liveness for moshcode members, lost for a clai
     host: "dev", implicit: "anthony@dev",
   });
   const swarm = live.fleets[0].nodes[0].swarms[1];
-  assert.equal(swarm.members[1].state, "working", "the roster's state, since the member is claimed and has no end line");
+  assert.equal(swarm.members[1].state, "working", "claimed and no end line; the herd's finer state rides beside it");
+  assert.equal(swarm.members[1].herdState, "working");
   assert.equal(swarm.members[1].live, true);
   assert.equal(swarm.members[1].lost, false);
   assert.equal(swarm.members[0].live, null, "a claude-code member is not in the herd roster; no liveness claimed");
@@ -409,7 +504,15 @@ test("fold joins the herd roster: liveness for moshcode members, lost for a clai
   assert.ok(rosterOnly, "a herd session with no record is a root of the implicit fleet");
   assert.equal(rosterOnly.rosterOnly, true);
   assert.equal(rosterOnly.depth, 0);
-  assert.match(renderTree(live, { host: "dev" }), /shell-1  \/home\/anthony\/src  moshcode\/shell  idle  \[roster\]/);
+  assert.match(renderTree(live, { host: "dev" }), /shell-1\s+\/home\/anthony\/src\s+moshcode\/shell\s+idle  \[roster\]/);
+
+  // A pane the herd still lists but that is no longer alive keeps its ledger state and is marked gone.
+  const dead = fold({
+    fleets: [{ fleet: "anthony@dev", lines: EXAMPLE_LINES, records: EXAMPLE_RECORDS }],
+    roster: [{ name: "create-two-0541-2", engine: "moshcode/claude", state: "done", alive: false, approvals: "bypass" }], host: "dev", implicit: "anthony@dev",
+  });
+  assert.equal(dead.fleets[0].nodes[0].swarms[1].members[1].state, "working", "the herd's state never replaces the ledger's in the state column");
+  assert.match(renderTree(dead, { host: "dev" }), /create-two-0541-2\s+create bye\.sh bash\s+moshcode\/claude\s+working  \[bypass\]  \[gone\]  owns bye\.sh/);
 
   const dropped = fold({ fleets: [{ fleet: "anthony@dev", lines: EXAMPLE_LINES, records: EXAMPLE_RECORDS }], roster: [], host: "dev", implicit: "anthony@dev" });
   const gone = dropped.fleets[0].nodes[0].swarms[1].members[1];
@@ -417,6 +520,16 @@ test("fold joins the herd roster: liveness for moshcode members, lost for a clai
   assert.equal(gone.lost, true, "flagged so the tool writes the member.end");
   assert.equal(dropped.fleets.length, 1, "an empty roster invents no implicit fleet entry");
   assert.equal(dropped.fleets[0].nodes[0].swarms[1].members[0].lost, false, "an ended member is not lost");
+  assert.equal(dropped.fleets[0].nodes[0].lost, false, "a claude-code member is never lost by the herd's roster: it cannot hold one");
+
+  // No roster at all (an unreadable manifest) says nothing about anyone; a pane on another host is not this roster's to lose.
+  const unread = fold({ fleets: [{ fleet: "anthony@dev", lines: EXAMPLE_LINES, records: EXAMPLE_RECORDS }], roster: null, host: "dev", implicit: "anthony@dev" });
+  assert.equal(unread.fleets[0].nodes[0].swarms[1].members[1].lost, false);
+  const remote = fold({ fleets: [{ fleet: "anthony@dev", lines: EXAMPLE_LINES, records: EXAMPLE_RECORDS.map((r) => (r.member === "create-two-0541-2" ? { ...r, host: "netcup" } : r)) }], roster: [], host: "dev", implicit: "anthony@dev" });
+  assert.equal(remote.fleets[0].nodes[0].swarms[1].members[1].lost, false);
+  assert.equal(herdHolds("moshcode/codex"), true);
+  assert.equal(herdHolds("tmux"), true);
+  assert.equal(herdHolds("claude-code"), false);
 
   const noFleet = fold({ fleets: [], roster: [{ name: "api", engine: "moshcode/claude", state: "idle", alive: true, approvals: "bypass" }], host: "dev", implicit: "anthony@dev" });
   assert.equal(noFleet.fleets.length, 1);

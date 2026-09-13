@@ -155,7 +155,9 @@ test("a member's summary is its SUMMARY: section when it wrote one, else the tai
   assert.equal(summaryOf("first SUMMARY: no\nlater\nSummary: the last one counts"), "the last one counts");
   assert.equal(summaryOf("x".repeat(600), { max: 500 }).length, 500);
   assert.equal(summaryOf(""), "");
-  assert.equal(endStateOf({ outcome: "matched" }), "done");
+  assert.equal(endStateOf({ outcome: "matched", state: "idle" }), "done");
+  assert.equal(endStateOf({ outcome: "matched", state: "done" }), "done");
+  assert.equal(endStateOf({ outcome: "matched", state: "blocked" }), "failed", "a pane asking a question did not finish its piece");
   assert.equal(endStateOf({ outcome: "timeout" }), "timeout");
   assert.equal(endStateOf({ outcome: "gone" }), "lost");
   assert.equal(endStateOf({ outcome: "failed" }), "failed");
@@ -196,7 +198,7 @@ test("the synthesis carries every piece, its state, and its verdict", () => {
     { title: "b", state: "failed", artifact: "", verified: { refuted: true, reason: "no diff" } },
   ] });
   assert.match(p, /piece 1: a \(done\)/);
-  assert.match(p, /piece 2: b \(failed, review: REFUTED — no diff\)/);
+  assert.match(p, /piece 2: b \(failed, review: REFUTED: no diff\)/);
   assert.match(p, /A!/);
   assert.match(p, /\(no output captured\)/);
 });
@@ -264,12 +266,12 @@ function fakes({ plan, verdict = { refuted: false, reason: "fine" }, synthesis =
     // was written before the first member began.
     start: (name, opts) => { calls.start.push({ name, ...opts, seen: events() }); return failStart.includes(name) ? { ok: false, error: "tmux said no" } : { ok: true }; },
     boot: async (name) => { calls.boot.push(name); return neverReady.includes(name) ? { outcome: "timeout", state: "working" } : { outcome: "matched", state: "idle" }; },
-    prompt: async (name, text, { onSubmitted } = {}) => {
+    prompt: async (name, text, { onSubmitted, timeoutMs } = {}) => {
       running++; peak = Math.max(peak, running);
       onSubmitted?.({ at: now(), task: `t-${name}` });
       await new Promise((r) => setTimeout(r, 5));
       running--;
-      calls.prompt.push({ name, text });
+      calls.prompt.push({ name, text, timeoutMs });
       return { ok: true, task: `t-${name}`, outcome: "matched", state: "done", artifact: artifact(name), error: null };
     },
     kill: async (name) => { calls.kill.push(name); calls.killSeen.push(events()); },
@@ -316,7 +318,7 @@ test("a swarm plans, fans out, kills its sessions, and synthesises", () => inHom
   const synth = f.calls.ai.at(-1).prompt;
   assert.match(synth, new RegExp(`output of ${m(1)}`));
   assert.match(synth, new RegExp(`output of ${m(2)}`));
-  assert.equal(f.calls.ai.length, 2, "plan, synthesis — and no verifier unless asked");
+  assert.equal(f.calls.ai.length, 2, "plan, synthesis, and no verifier unless asked");
 }));
 
 test("the record of a swarm: spawn before the first start, one record and the four variables per member, start on submit, ends before the kills", () => inHome(async (home) => {
@@ -355,7 +357,7 @@ test("the record of a swarm: spawn before the first start, one record and the fo
   assert.equal(record.session, m(1), "the pane name is the tmux target");
   assert.equal(record.cwd, "/x");
   assert.equal(record.approvals, "bypass", "truthful: the pane runs claude --dangerously-skip-permissions");
-  assert.deepEqual(record.ceiling, { depth: 1, hosts: [host], fan_out: 4, until });
+  assert.deepEqual(record.ceiling, { depth: 1, hosts: [host], fan_out: 4, until, approvals: "bypass" }, "a member of a swarm the sysop started by hand is its own root: its record carries its own approvals");
   assert.equal(fs.statSync(openfleet.recordPath(fleet, m(1))).mode & 0o777, 0o600);
 
   // The four variables, plus the home, reach the pane.
@@ -459,7 +461,8 @@ test("run by hand in the implicit fleet, the bypass flag is the sysop's own choi
   const result = await run({}, f);
   assert.equal(result.ok, true);
   assert.equal(ledger().filter((l) => l.event === "ceiling.refuse").length, 0);
-  assert.equal(openfleet.readMember(fleetOf(), m(1)).ceiling.approvals, undefined, "no fleet-level approvals in the implicit fleet");
+  assert.equal(openfleet.readMember(fleetOf(), m(1)).ceiling.approvals, "bypass", "no fleet-level approvals in the implicit fleet: the root, which this member is, supplies its own");
+  assert.equal(openfleet.context({ ...process.env, OPENFLEET_RECORD: openfleet.recordPath(fleetOf(), m(1)) }).ceiling.approvals, "bypass", "and every reader agrees");
 }));
 
 test("an opened fleet's ceiling applies: native means the bypass flag is refused, and fan_out caps the plan", () => inHome(async () => {
@@ -554,9 +557,47 @@ test("--verify attaches a verdict to every piece, shows it to the synthesis, and
   assert.deepEqual(result.results[0].verified, { refuted: true, reason: "claims a test it never ran" });
   assert.equal(f.calls.ai.length, 3, "plan, verify, synthesis");
   assert.match(f.calls.ai[1].prompt, new RegExp(`output of ${m(1)}`));
-  assert.match(f.calls.ai.at(-1).prompt, /REFUTED — claims a test it never ran/);
+  assert.match(f.calls.ai.at(-1).prompt, /REFUTED: claims a test it never ran/);
   const end = ledger().find((l) => l.event === "swarm.end");
   assert.deepEqual(end.verdict, [{ member: m(1), refuted: true, reason: "claims a test it never ran" }]);
+}));
+
+test("a pane that ends its wait blocked, asking a question, is written failed, and its swarm with it", () => inHome(async () => {
+  const f = fakes({ plan: [{ title: "a", prompt: "a" }, { title: "b", prompt: "b" }] });
+  const inner = f.deps.prompt;
+  f.deps.prompt = async (name, text, opts) => {
+    const r = await inner(name, text, opts);
+    return name === m(1) ? { ...r, state: "blocked" } : r;
+  };
+  const result = await run({}, f);
+  assert.equal(result.ok, true, "the synthesis still ran");
+  const ends = ledger().filter((l) => l.event === "member.end");
+  assert.deepEqual(ends.map((l) => [l.member, l.state]), [[m(1), "failed"], [m(2), "done"]]);
+  assert.equal(ledger().find((l) => l.event === "swarm.end").state, "failed");
+}));
+
+test("an inherited until earlier than --timeout clamps each prompt's wait, so the swarm ends when the ceiling says", () => inHome(async () => {
+  openfleet.writeCurrent("team-20260913");
+  const until = openfleet.iso(NOW + 30 * 1000);
+  openfleet.append("team-20260913", { event: "fleet.open", by: "sysop", sysop: "anthony@dev", ceiling: { approvals: "bypass", depth: 2, until } });
+  const f = fakes({ plan: [{ title: "a", prompt: "a" }] });
+  const result = await run({ timeoutMs: 60 * 1000 }, f);
+  assert.equal(result.ok, true);
+  const spawn = openfleet.readLedger("team-20260913").find((l) => l.event === "swarm.spawn");
+  assert.equal(spawn.ceiling.until, undefined, "sixty seconds out is wider than the fleet's thirty: not a narrowing");
+  assert.equal(openfleet.readMember("team-20260913", m(1)).ceiling.until, until);
+  const waited = f.calls.prompt[0].timeoutMs;
+  assert.ok(waited > 0 && waited <= 30 * 1000, `waited ${waited}ms, within the fleet's deadline`);
+  assert.ok(waited < 60 * 1000, "not the full --timeout");
+}));
+
+test("a one-piece swarm is the spawner's to end: swarm.end follows member.end, by moshcode, never treated as an engine's swarm of one", () => inHome(async () => {
+  insideMember({ member: "460a4502", depth: 0, approvals: "bypass" });
+  const f = fakes({ plan: [{ title: "only", prompt: "do it" }] });
+  await run({}, f);
+  const mine = ledger().filter((l) => l.swarm === SWARM || l.member === m(1)).map((l) => `${l.event}:${l.by}`);
+  assert.deepEqual(mine, ["swarm.spawn:460a4502", "member.start:460a4502", "member.end:460a4502", "swarm.end:460a4502"]);
+  assert.equal(ledger().find((l) => l.event === "swarm.end").swarm, SWARM, "the spawner's id, not <parent>-<n>");
 }));
 
 test("a session that already wrote its own member.start and member.end is left alone", () => inHome(async () => {

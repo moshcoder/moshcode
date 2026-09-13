@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  EXIT, carriesBypass, groupByFleet, herdRun, humanAge, paintState, parseStartArgs, renderRoster, shouldNotify, splitDetachArgs, waitFor,
+  EXIT, carriesBypass, groupByFleet, herdRun, humanAge, paintState, parseStartArgs, renderRoster, restoreEnv, shouldNotify, splitDetachArgs, waitFor,
 } from "../src/herd-cli.mjs";
 import { ENGINES } from "../src/engines.mjs";
 import { strip } from "../src/ui.mjs";
@@ -215,6 +215,20 @@ test("ages read as durations, not milliseconds", () => {
 });
 
 /* ------------------------------------------------------------- the fleet */
+
+test("restore hands a fresh session only the fleet's home and id, and a resumed one everything it had (PRD 0016)", () => {
+  // A dead session's record is claimed; a fresh session under it would have
+  // to derive a child and, at depth 1 in the implicit fleet, be refused on
+  // its first prompt. Only --resume is the same member again.
+  const env = { OPENFLEET_HOME: "/h", OPENFLEET_RECORD: "/h/r.json", OPENFLEET_FLEET: "f", OPENFLEET_MEMBER: "m", OPENFLEET_SWARM: "s", OTHER: "x" };
+  assert.deepEqual(restoreEnv(env), {
+    env: { OPENFLEET_HOME: "/h", OPENFLEET_FLEET: "f", OTHER: "x" },
+    dropped: ["OPENFLEET_RECORD", "OPENFLEET_MEMBER", "OPENFLEET_SWARM"],
+  });
+  assert.deepEqual(restoreEnv(env, { resumed: true }), { env, dropped: [] });
+  assert.deepEqual(restoreEnv(undefined), { env: {}, dropped: [] });
+  assert.deepEqual(restoreEnv({ OPENFLEET_HOME: "/h" }), { env: { OPENFLEET_HOME: "/h" }, dropped: [] }, "nothing to drop, nothing said");
+});
 
 test("carriesBypass is true for --agent and for the engine's own bypass flags passed as plain args", () => {
   // The untruthful `agent: false` the spec called out: a swarm pane runs

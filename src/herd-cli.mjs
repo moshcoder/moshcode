@@ -1077,6 +1077,23 @@ async function deliver(session, config, write) {
 }
 
 /**
+ * The environment a restored session gets back from the manifest. A resumed
+ * session is the same conversation and re-exports as the same OpenFleet
+ * member, so it keeps everything. A fresh session under a record that a dead
+ * session already claimed would have to derive a child (rule 8) and, at
+ * depth 1 in the implicit fleet, be refused on its first prompt; it keeps the
+ * home and the fleet and drops the record, member and swarm. Exported for its
+ * test.
+ */
+export function restoreEnv(env = {}, { resumed = false } = {}) {
+  const all = env || {};
+  if (resumed) return { env: { ...all }, dropped: [] };
+  const claimed = ["OPENFLEET_RECORD", "OPENFLEET_MEMBER", "OPENFLEET_SWARM"];
+  const dropped = claimed.filter((k) => k in all);
+  return { env: Object.fromEntries(Object.entries(all).filter(([k]) => !claimed.includes(k))), dropped };
+}
+
+/**
  * Rebuild the herd from the manifest.
  *
  * What comes back is the *shape* — the sessions, in their directories, on their
@@ -1111,10 +1128,12 @@ export function herdRestore(argv, { write = console.log } = {}) {
     if (dryRun) { write(info(`would restore ${bone(name)} — ${meta.engine} in ${tilde(meta.cwd)}${resumeArgs ? " (resumed)" : ""}`)); restored++; continue; }
 
     const bin = resolveExecutable(engine.bin, engine.binDirs || []) || engine.bin;
-    const started = startSession({ name, engine: meta.engine, bin, args, stripEnv: engine.stripEnv || [], cwd: meta.cwd, substrate, extraEnv: meta.env || {} });
+    const { env: extraEnv, dropped } = restoreEnv(meta.env, { resumed: Boolean(resumeArgs) });
+    const started = startSession({ name, engine: meta.engine, bin, args, stripEnv: engine.stripEnv || [], cwd: meta.cwd, substrate, extraEnv });
     if (!started.ok) { write(err(`${name}: ${started.error?.message || started.error}`)); continue; }
     clearReport(name);
     write(ok(`${bone(name)} — ${meta.engine} in ${tilde(meta.cwd)}${resumeArgs ? ash(" (asked to resume)") : ""}`));
+    if (dropped.length) write(info(`${name}: a fresh session is a new member, not ${meta.member || "the old one"}: ${dropped.join(", ")} not handed back (--resume keeps them)`));
     restored++;
   }
   if (restored && !dryRun) {

@@ -11,9 +11,11 @@
 // goes through herdKill; a Claude Code job through `claude stop`; a `claude -p`
 // through its pid. Anything else is reported, never faked.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 import { EXIT, herdKill, roster as herdRoster } from "./herd-cli.mjs";
-import { slugifyName } from "./herd.mjs";
+import { herdDir, slugifyName } from "./herd.mjs";
 import * as fleet from "./openfleet.mjs";
 import { acid, amber, ash, bone, dim, err, info, ok, warn } from "./ui.mjs";
 
@@ -118,7 +120,14 @@ function agentRefusal(env, verb) {
 
 /* --------------------------------------------------------------- the world */
 
+/**
+ * The herd's roster, or null when its manifest cannot be read. Null matters:
+ * a member is marked lost only by a roster that could hold it and does not,
+ * and a manifest that is missing or torn says nothing about any pane.
+ */
 function liveRoster() {
+  try { JSON.parse(fs.readFileSync(path.join(herdDir(), "sessions.json"), "utf8")); }
+  catch { return null; }
   return herdRoster().map((s) => ({
     name: s.name, engine: `moshcode/${s.engine}`, state: s.state, alive: s.alive, approvals: s.approvals || "native",
     cwd: s.cwd, fleet: s.fleet || null, swarm: s.swarm || null, member: s.member || null,
@@ -175,52 +184,138 @@ function locate(id, model, env) {
 
 /* ---------------------------------------------------------------- stopping */
 
+const HEX8 = /^[0-9a-f]{8}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * End one member through its own engine, and write its end line. Returns
- * what happened; never throws. A member the engine no longer has, with no end
- * line from anyone, is `lost`, so the ledger closes rather than hangs.
+ * The job id `claude stop` takes for a claude-code member: the member id when
+ * it is a background job's 8-hex id, else the first eight characters of the
+ * record's session when that is a session UUID (a job's id is its session
+ * id's first eight). An interactive session is its own UUID with no job id,
+ * and nothing this tool runs can end it.
+ */
+export function claudeJobId(m) {
+  if (HEX8.test(String(m.member || ""))) return m.member;
+  const session = String(m.session || "");
+  if (HEX8.test(session)) return session;
+  if (UUID.test(session) && session !== m.member) return session.slice(0, 8);
+  return null;
+}
+
+/**
+ * End one member through its own engine, and write its end line under its
+ * once-marker. Returns what happened; never throws. A member that never
+ * started gets nothing. A member its engine's roster could hold and no
+ * longer lists, with no end line from anyone, is `lost`, so the ledger closes
+ * rather than hangs; one the engine still has but could not end is reported
+ * and left open, because an end line the engine did not honour is a lie.
  */
 async function stopMember(m, fleetId, state, o) {
   const { env, now, host } = o;
   const by = env.OPENFLEET_MEMBER || "sysop";
   if (m.end && m.end.state !== "lost") return { member: m.member, outcome: "already-ended", state: m.end.state };
+  if (!m.claimed && !m.rosterOnly) return { member: m.member, outcome: "never-started" };
   const session = m.session || m.member;
   let ended;
-  if (m.rosterOnly || /^moshcode\//.test(m.engine || "") || m.engine === "tmux") ended = await o.kill(session);
-  else if (m.engine === "claude-code") ended = o.exec("claude", ["stop", session]);
-  else if (m.engine === "claude-p") ended = Number.isInteger(Number(session)) ? o.signal(Number(session)) : { ok: false, error: "no pid in the record" };
+  if (m.rosterOnly || fleet.herdHolds(m.engine)) ended = await o.kill(session);
+  else if (m.engine === "claude-code") {
+    const job = claudeJobId(m);
+    ended = job ? o.exec("claude", ["stop", job]) : { ok: false, error: "an interactive claude-code session has no job id: end it from its own terminal" };
+  } else if (m.engine === "claude-p") ended = Number.isInteger(Number(session)) ? o.signal(Number(session)) : { ok: false, error: "no pid in the record" };
   else ended = { ok: false, error: `no engine to stop it through (${m.engine || "unknown"})` };
   if (m.rosterOnly) return { member: m.member, outcome: ended.ok ? "stopped" : "failed", error: ended.error || null };
   if (ended.ok) {
-    fleet.append(fleetId, { event: "member.end", by, member: m.member, state }, { env, now: now(), host });
+    const { already } = fleet.appendOnce(fleetId, { event: "member.end", by, member: m.member, state }, { env, now: now(), host });
+    if (already) return { member: m.member, outcome: "already-ended", state: fleet.endOf(fleet.readLedger(fleetId, env), m.member)?.state || state };
     return { member: m.member, outcome: "stopped", state };
   }
-  const listed = m.engine && /^moshcode\//.test(m.engine) ? o.roster().some((r) => r.name === session) : true;
-  if (!listed && !m.end) {
-    fleet.append(fleetId, { event: "member.end", by, member: m.member, state: "lost" }, { env, now: now(), host });
+  if (m.end) return { member: m.member, outcome: "already-ended", state: m.end.state };
+  const roster = fleet.herdHolds(m.engine) && m.host === host ? o.roster() : null;
+  if (roster && !roster.some((r) => r.name === session)) {
+    fleet.appendOnce(fleetId, { event: "member.end", by, member: m.member, state: "lost" }, { env, now: now(), host });
     return { member: m.member, outcome: "lost", state: "lost" };
   }
   return { member: m.member, outcome: "failed", error: ended.error || "could not stop it" };
 }
 
 /**
- * End a swarm as one unit (rule 11): nested swarms first, each with its own
- * swarm.end, then the members through their engines, then this swarm's end
- * line, written only when none exists.
+ * Write a swarm's end line, once, and only when every member that started
+ * has an end line that counts and every nested swarm has ended: a swarm.end
+ * says the whole unit is over, so a member whose engine would not let go
+ * leaves the swarm open and reported rather than closed over a running
+ * session. `state` is the end the caller is writing, used when no member
+ * ever started; otherwise the members' end lines decide.
  */
-async function stopSwarm(s, fleetId, state, o, out) {
+function closeSwarm(s, fleetId, state, o, out) {
   const { env, now, host } = o;
   const by = env.OPENFLEET_MEMBER || "sysop";
+  const lines = fleet.readLedger(fleetId, env);
+  if (fleet.findEvents(lines, "swarm.end", { swarm: s.swarm }).length) { out.swarms.push({ swarm: s.swarm, state: "already-ended" }); return; }
+  const started = s.members.filter((m) => m.claimed && !m.rosterOnly);
+  const missing = started.filter((m) => !fleet.endOf(lines, m.member)).map((m) => m.member);
+  const open = s.members.flatMap((m) => m.swarms).filter((n) => !fleet.findEvents(lines, "swarm.end", { swarm: n.swarm }).length).map((n) => n.swarm);
+  if (missing.length || open.length) { out.swarms.push({ swarm: s.swarm, state: "open", missing, nested: open }); return; }
+  const ends = started.map((m) => fleet.endOf(lines, m.member));
+  const { line, already } = fleet.appendOnce(fleetId, { event: "swarm.end", by, swarm: s.swarm, state: started.length ? fleet.swarmEndState(ends) : state }, { env, now: now(), host });
+  out.swarms.push({ swarm: s.swarm, state: already ? "already-ended" : line?.state || null });
+}
+
+/**
+ * End a swarm as one unit (rule 11): nested swarms first, each with its own
+ * swarm.end, then the members through their engines, then this swarm's end
+ * line, written only when none exists and every member has ended.
+ */
+async function stopSwarm(s, fleetId, state, o, out) {
   for (const m of s.members) for (const nested of m.swarms) await stopSwarm(nested, fleetId, state, o, out);
   for (const m of s.members) out.members.push(await stopMember(m, fleetId, state, o));
-  if (!fleet.hasEvent(fleetId, "swarm.end", { swarm: s.swarm }, env)) {
-    const lines = fleet.readLedger(fleetId, env);
-    const ends = s.members.map((m) => fleet.endOf(lines, m.member)).filter(Boolean);
-    const line = fleet.append(fleetId, { event: "swarm.end", by, swarm: s.swarm, state: fleet.swarmEndState(ends) }, { env, now: now(), host });
-    out.swarms.push({ swarm: s.swarm, state: line?.state || null });
-  } else {
-    out.swarms.push({ swarm: s.swarm, state: "already-ended" });
+  closeSwarm(s, fleetId, state, o, out);
+}
+
+/**
+ * Rule 6, run by `tree` since the sysop runs it: a working member whose
+ * effective ceiling's `until` has passed is stopped through its engine with
+ * `member.end` timeout, and every working member under a swarm or fleet whose
+ * summed `member.spend`, in the budget's unit, has reached the budget is
+ * stopped with `member.end` budget. A swarm a stop touched gets its swarm.end
+ * once it is complete, deepest first. Returns what happened.
+ */
+async function enforceCeilings(model, o) {
+  const { env, now, host } = o;
+  const out = { members: [], swarms: [] };
+  const working = (m) => m.claimed && !m.end && !m.rosterOnly && !m.lost;
+  const overBudget = (budget, members) => {
+    const cap = fleet.parseBudget(budget);
+    if (!cap) return false;
+    const spent = members.map((m) => fleet.parseBudget(m.spend)).filter((b) => b && b.unit === cap.unit).reduce((sum, b) => sum + b.amount, 0);
+    return spent >= cap.amount;
+  };
+  for (const f of model.fleets) {
+    const lines = fleet.readLedger(f.fleet, env);
+    const touched = new Set();
+    const stop = async (m, state, over) => {
+      const result = await stopMember(m, f.fleet, state, o);
+      if (result.outcome === "stopped" || result.outcome === "lost") m.end = { state: result.state };
+      out.members.push({ ...result, over });
+      for (const s of walkSwarms(f.nodes)) if (s.members.includes(m)) touched.add(s);
+    };
+    // Deepest members first, as a stop on a swarm ends nested swarms first.
+    for (const m of [...walkMembers(f.nodes)].reverse()) {
+      if (!working(m)) continue;
+      const effective = fleet.ceilingOf(f.fleet, fleet.readMember(f.fleet, m.member, env), { env, lines, swarm: m.swarm, host });
+      const deadline = Date.parse(effective.until || "");
+      if (Number.isFinite(deadline) && now() >= deadline) await stop(m, "timeout", "until");
+    }
+    for (const s of walkSwarms(f.nodes)) {
+      const members = [...walkMembers(s.members)].reverse();
+      if (!overBudget(fleet.effectiveCeiling(lines, f.fleet, { swarm: s.swarm, host }).budget, members)) continue;
+      for (const m of members) if (working(m)) await stop(m, "budget", "budget");
+    }
+    const everyone = [...walkMembers(f.nodes)].reverse();
+    if (overBudget(f.ceiling?.budget, everyone)) for (const m of everyone) if (working(m)) await stop(m, "budget", "budget");
+    // Deepest first, so a parent sees its nested swarm's end line.
+    for (const s of [...walkSwarms(f.nodes)].reverse()) if (touched.has(s)) closeSwarm(s, f.fleet, "stopped", o, out);
   }
+  return out;
 }
 
 /** May an agent stop this target? Only a swarm it spawned, or anything under one. */
@@ -245,14 +340,17 @@ function withinReach(caller, target, model) {
 
 function reportStops(out, { write, json }) {
   if (json) { write(JSON.stringify(out, null, 2)); return; }
+  const why = (m) => (m.over === "until" ? " (past its until)" : m.over === "budget" ? " (over budget)" : m.over ? ` (above the ceiling on ${m.over})` : "");
   for (const m of out.members) {
-    if (m.outcome === "stopped") write(ok(`${bone(m.member)} stopped`));
+    if (m.outcome === "stopped") write(ok(`${bone(m.member)} stopped${m.state && m.state !== "stopped" ? ` as ${m.state}` : ""}${why(m)}`));
     else if (m.outcome === "lost") write(warn(`${m.member} was already gone: marked lost`));
     else if (m.outcome === "already-ended") write(dim(`${m.member} had already ended (${m.state})`));
+    else if (m.outcome === "never-started") write(dim(`${m.member} never started: nothing to end`));
     else write(err(`${m.member}: ${m.error}`));
   }
   for (const s of out.swarms) {
     if (s.state === "already-ended") write(dim(`swarm ${s.swarm} had already ended`));
+    else if (s.state === "open") write(warn(`swarm ${s.swarm} left open: no end line yet for ${[...(s.missing || []), ...(s.nested || []).map((n) => `swarm ${n}`)].join(", ")}`));
     else write(ok(`swarm ${bone(s.swarm)} ended ${s.state}`));
   }
 }
@@ -274,7 +372,7 @@ async function fleetOpen(argv, o) {
   const name = slugifyName(flags.name || positional[0] || "fleet");
   let id = `${name}-${stamp}`;
   for (let n = 2; fleet.listFleets(env).includes(id); n++) id = `${name}-${stamp}-${n}`;
-  const sysop = flags.sysop || fleet.implicitFleet(env);
+  const sysop = flags.sysop || o.implicit;
   const line = fleet.append(id, { event: "fleet.open", by: "sysop", sysop, ceiling }, { env, now: now(), host });
   if (!line) { write(err(`could not write ${fleet.ledgerPath(id, env)}`)); return EXIT.infra; }
   fleet.writeCurrent(id, env);
@@ -294,7 +392,7 @@ async function fleetCap(argv, o) {
   const target = positional[0];
   if (errors.length || bad.length || !target) { write(err(USAGE.cap)); return EXIT.usage; }
 
-  const model = fleet.fold({ fleets: loadFleets(env, flags.fleet || null), roster: o.roster(), host, implicit: fleet.implicitFleet(env), now: now() });
+  const model = fleet.fold({ fleets: loadFleets(env, flags.fleet || null), roster: o.roster(), host, implicit: o.implicit, now: now() });
   const found = locate(target, model, env);
   if (!found || found.kind === "member") { write(err(`no fleet or swarm named ${JSON.stringify(target)}: ${acid("moshcode fleet tree")}`)); return EXIT.gone; }
   const fleetId = found.fleet;
@@ -312,7 +410,7 @@ async function fleetCap(argv, o) {
   // a bypass member under a now-native ceiling, a member on a now-forbidden
   // host, one deeper than the tree now allows.
   const lines = fleet.readLedger(fleetId, env);
-  const fresh = fleet.fold({ fleets: [{ fleet: fleetId, lines, records: fleet.listRecords(fleetId, env) }], roster: o.roster(), host, implicit: fleet.implicitFleet(env), now: now() });
+  const fresh = fleet.fold({ fleets: [{ fleet: fleetId, lines, records: fleet.listRecords(fleetId, env) }], roster: o.roster(), host, implicit: o.implicit, now: now() });
   const scope = found.kind === "fleet" ? fresh.fleets[0]?.nodes || [] : [[...walkSwarms(fresh.fleets[0]?.nodes || [])].find((s) => s.swarm === target)].filter(Boolean);
   const out = { target, kind: found.kind, fleet: fleetId, ceiling, members: [], swarms: [] };
   for (const m of walkMembers(scope)) {
@@ -335,27 +433,43 @@ async function fleetTree(argv, o) {
   for (const e of errors) write(err(e));
   if (errors.length) { write(err(USAGE.tree)); return EXIT.usage; }
   const only = flags.fleet || positional[0] || null;
-  const implicit = fleet.implicitFleet(env);
+  const implicit = o.implicit;
   if (only && only !== implicit && !fleet.listFleets(env).includes(only)) { write(err(`no fleet named ${JSON.stringify(only)} under ${fleet.home(env)}`)); return EXIT.gone; }
   const model = fleet.fold({ fleets: loadFleets(env, only), roster: o.roster(), host, implicit, now: now() });
   if (only) model.fleets = model.fleets.filter((f) => f.fleet === only);
   // A recorded moshcode member the roster no longer lists, with no end line
-  // from anyone, is lost: the tool writes that line so the tree stops saying
-  // "running" about a pane that is not there (spec, `tree`).
+  // from anyone, is lost: the tool writes that line, under the lost marker a
+  // real end may still supersede, so the tree stops saying "working" about a
+  // pane that is not there (spec, `tree`).
   const by = env.OPENFLEET_MEMBER || "sysop";
   for (const f of model.fleets) {
     for (const m of walkMembers(f.nodes)) {
       if (!m.lost) continue;
-      const line = fleet.append(f.fleet, { event: "member.end", by, member: m.member, state: "lost" }, { env, now: now(), host });
+      const { line } = fleet.appendOnce(f.fleet, { event: "member.end", by, member: m.member, state: "lost" }, { env, now: now(), host });
       if (line) m.end = line;
     }
   }
+  // Rule 6: the sysop runs tree, so tree is where the clock and the budget
+  // are enforced. What it stopped is reported after the tree.
+  const enforced = await enforceCeilings(model, o);
+  for (const f of model.fleets) {
+    for (const m of walkMembers(f.nodes)) {
+      const hit = enforced.members.find((r) => r.member === m.member && (r.outcome === "stopped" || r.outcome === "lost"));
+      if (hit) { m.state = hit.state; m.lost = hit.state === "lost"; }
+    }
+    for (const s of walkSwarms(f.nodes)) {
+      const hit = enforced.swarms.find((r) => r.swarm === s.swarm && r.state && r.state !== "open" && r.state !== "already-ended");
+      if (hit) s.state = hit.state;
+    }
+  }
+  if (enforced.members.length) model.enforced = enforced;
   if (flags.json) { write(JSON.stringify(model, null, 2)); return EXIT.matched; }
   if (!model.fleets.length) {
     write(info(`no fleet yet under ${fleet.home(env)}: ${acid("moshcode fleet open")} opens one, ${acid("moshcode swarm")} records its members in the implicit fleet ${bone(implicit)}.`));
     return EXIT.matched;
   }
   for (const line of fleet.renderTree(model, { host }).split("\n")) write(line);
+  if (enforced.members.length) reportStops(enforced, { write, json: false });
   return EXIT.matched;
 }
 
@@ -366,7 +480,7 @@ async function fleetStop(argv, o) {
   const target = positional[0] || null;
   if (errors.length || (!target && !flags.fleet)) { write(err(USAGE.stop)); return EXIT.usage; }
   const caller = env.OPENFLEET_MEMBER || null;
-  const model = fleet.fold({ fleets: loadFleets(env), roster: o.roster(), host: o.host, implicit: fleet.implicitFleet(env), now: o.now() });
+  const model = fleet.fold({ fleets: loadFleets(env), roster: o.roster(), host: o.host, implicit: o.implicit, now: o.now() });
   const out = { target: target || flags.fleet, members: [], swarms: [] };
 
   if (flags.fleet && !target) {
@@ -396,7 +510,9 @@ async function fleetStop(argv, o) {
     out.members.push(await stopMember(found.node, found.fleet, "stopped", o));
   }
   reportStops(out, { write, json: Boolean(flags.json) });
-  return out.members.some((m) => m.outcome === "failed") ? EXIT.gone : EXIT.matched;
+  // The one member asked for was never there to stop: not found, as logicsrc says.
+  const nothing = found.kind === "member" && out.members.at(-1)?.outcome === "never-started";
+  return out.members.some((m) => m.outcome === "failed") || nothing ? EXIT.gone : EXIT.matched;
 }
 
 function describeLine(l) {
@@ -471,6 +587,9 @@ export async function fleetCommand(argv = [], { write = console.log, ...deps } =
     roster: liveRoster, kill: liveKill, exec: liveExec, signal: liveSignal,
     ...deps,
   };
+  // The implicit fleet is injectable so a test's seeded `<user>@<host>` is
+  // the one the roster-only rows file under, on any box.
+  o.implicit = deps.implicit || fleet.implicitFleet(o.env);
   const [verb, ...rest] = argv;
   if (!verb || verb.startsWith("--")) return fleetTree(argv, o);
   const run = VERBS[verb];

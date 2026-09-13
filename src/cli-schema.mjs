@@ -160,8 +160,9 @@ export const CORE_CLI_COMMANDS = [
     note: "the records and the ledger live under $OPENFLEET_HOME (default ~/.openfleet), the same files `logicsrc fleet` and claude code read. "
       + "open and cap are the sysop's alone and refuse when OPENFLEET_MEMBER is set, because a process carrying it is an agent; "
       + "stop refuses anything outside what that agent spawned. tree joins the herd roster for liveness, draws a herd session with no "
-      + "record as a root of the implicit fleet <user>@<host>, and marks a recorded member the roster no longer lists as lost. "
-      + "moshcode stops its own panes; a claude code member goes through `claude stop`, a `claude -p` through its pid.",
+      + "record as a root of the implicit fleet <user>@<host>, marks a recorded pane the roster no longer lists as lost, and stops "
+      + "whatever has passed its until or spent its budget. moshcode stops its own panes; a claude code job goes through `claude stop`, "
+      + "a `claude -p` through its pid.",
   },
   {
     name: "ps",
@@ -1422,7 +1423,7 @@ export const HERD_VERBS = [
     flags: [
       ["--port <n>", "port to listen on", "7683"],
       ["--bind <addr>", "interface to bind", "127.0.0.1"],
-      ["--expose-autonomous", "also serve sessions started with --agent", "off"],
+      ["--expose-autonomous", "also serve sessions whose approvals are bypassed: --agent, or a swarm's members", "off"],
     ],
     note: "message/send is keystrokes into a real pty. there is no unauthenticated mode, loopback included, and sessions "
       + "started with --agent are withheld unless you ask for them: an engine with approvals bypassed plus a network prompt "
@@ -1476,16 +1477,21 @@ export const FLEET_VERBS = [
     flags: [["--json", "the folded model: fleets, nodes, refusals, spend", ""]],
     note: "fleet, its root members, each member's swarms, each swarm's members: state, engine, depth, spend against budget, owns, and a "
       + "[bypass] mark on every member whose approvals are bypassed. a herd session with no record is a root of the implicit fleet "
-      + "marked [roster]; a recorded moshcode member the roster no longer lists gets member.end lost." },
+      + "marked [roster]; a recorded moshcode pane the herd roster can hold and no longer lists gets member.end lost (a claude code "
+      + "session is never marked lost here: this tool reads no claude roster). tree also enforces the ceiling's clock and budget: a "
+      + "working member past its until is stopped with member.end timeout, one under a swarm or fleet that has spent its budget with "
+      + "member.end budget, then the swarm's swarm.end once every member has ended." },
   { name: "stop", description: "end a member, a swarm, or a whole fleet as one unit",
     synopsis: [
       ["moshcode fleet stop <member|swarm>", "nested swarms first, each with its own swarm.end, then the members, then the target's swarm.end"],
       ["moshcode fleet stop --fleet <fleet>", "everything in the fleet"],
     ],
     flags: [["--fleet <id>", "stop every swarm and root member of this fleet", ""], ["--json", "machine-readable", ""]],
-    note: "each member ends through its own engine: a moshcode pane through the herd, a claude code job through `claude stop`, a `claude -p` "
-      + "through its pid; one it cannot reach is reported, never faked. an agent (OPENFLEET_MEMBER set) may stop only a swarm it spawned "
-      + "or a member under one; --fleet, an ancestor or a sibling's swarm is refused with exit 4. a member already ended writes nothing." },
+    note: "each member ends through its own engine: a moshcode pane through the herd, a claude code job through `claude stop <job id>` "
+      + "(the 8-hex id; an interactive claude session has none and is reported), a `claude -p` through its pid; one it cannot reach is "
+      + "reported, never faked, and its swarm stays open until it has an end line. an agent (OPENFLEET_MEMBER set) may stop only a swarm "
+      + "it spawned or a member under one; --fleet, an ancestor or a sibling's swarm is refused with exit 4. a member already ended, or "
+      + "never started, writes nothing." },
   { name: "log", description: "the ledger for a fleet, a swarm or a member, in order",
     synopsis: [["moshcode fleet log [fleet] [--since 1h] [--member <id>] [--swarm <id>] [--json]", ""]],
     flags: [

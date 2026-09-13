@@ -1,9 +1,9 @@
-// Swarm — one task, a herd of agents, one answer (PRD 0015, PRD 0016).
+// Swarm: one task, a herd of agents, one answer (PRD 0015, PRD 0016).
 //
 // Claude Code calls it ultracode: a prompt that becomes a workflow of agents,
 // planned, fanned out, verified and synthesised. The herd already has every
-// piece of that — sessions that outlive the terminal, `prompt --wait`, a task
-// ledger with each session's output — and `moshscript` could already wire them
+// piece of that: sessions that outlive the terminal, `prompt --wait`, a task
+// ledger with each session's output. `moshscript` could already wire them
 // together by hand. This is the verb that does it for you, with any engine
 // moshcode can start, not one vendor's.
 //
@@ -14,12 +14,12 @@
 //              a plan that does not parse degrades to one piece (the whole
 //              task) rather than to nothing.
 //   fan out    one herd session per piece, `--agents` of them at a time
-//              (default 4 — the same number the claude engine's settings
+//              (default 4, the same number the claude engine's settings
 //              defaults cap Claude's own workflows at). Each is prompted and
 //              waited on exactly the way `moshcode herd prompt --wait` does,
 //              so every piece is a task in the ledger with its output.
 //   verify     optional: a skeptic per piece, prompted to refute it. What it
-//              says is attached to the piece, never used to drop it — the
+//              says is attached to the piece, never used to drop it: the
 //              synthesis sees both and the operator decides.
 //   synthesise one more headless call folds the pieces into an answer.
 //
@@ -66,7 +66,7 @@ function parseDuration(raw, fallback) {
   return { ms: n, s: n * 1000, m: n * 60000, h: n * 3600000 }[m[2] || "s"];
 }
 
-/** The flags, and the task — every positional word that is not one. */
+/** The flags, and the task: every positional word that is not one. */
 export function parseSwarmArgs(argv = []) {
   const flags = {
     agents: DEFAULT_AGENTS, engine: null, cwd: process.cwd(), herd: "swarm", name: null,
@@ -103,7 +103,7 @@ export function parseSwarmArgs(argv = []) {
 // The headless calls run in the operator's working directory, and an engine
 // in print mode still has its tools. Seen live: a synthesis asked to fold two
 // failed pieces into an answer went and did the task itself instead. The
-// planner, the skeptic and the synthesis are asked to think, not act — the
+// planner, the skeptic and the synthesis are asked to think, not act; the
 // agents in the herd are the ones that act.
 const NO_TOOLS = "Do not run commands, read or write files, or use any tool for this: answer from the text you are given, and nothing else.";
 
@@ -137,7 +137,7 @@ export function verifyPrompt({ task, piece, output }) {
 
 export function synthesisPrompt({ task, results }) {
   const parts = results.map((r, i) => [
-    `--- piece ${i + 1}: ${r.title} (${r.state}${r.verified ? `, review: ${r.verified.refuted ? "REFUTED" : "stands"} — ${r.verified.reason}` : ""}) ---`,
+    `--- piece ${i + 1}: ${r.title} (${r.state}${r.verified ? `, review: ${r.verified.refuted ? "REFUTED" : "stands"}: ${r.verified.reason}` : ""}) ---`,
     r.artifact || "(no output captured)",
   ].join("\n"));
   return [
@@ -208,9 +208,13 @@ export function summaryOf(text, { max = SUMMARY_CHARS } = {}) {
   return body.length > max ? body.slice(-max) : body;
 }
 
-/** The herd's outcome for a piece, as the end state the ledger names. */
+/**
+ * The herd's outcome for a piece, as the end state the ledger names. A wait
+ * that matched on `blocked` is a pane asking a question, not one that
+ * finished its piece, so it is not `done`.
+ */
 export function endStateOf(result) {
-  if (result.outcome === "matched") return "done";
+  if (result.outcome === "matched") return result.state === "blocked" ? "failed" : "done";
   if (result.outcome === "timeout") return "timeout";
   if (result.outcome === "gone") return "lost";
   return "failed";
@@ -284,7 +288,7 @@ export function liveDeps() {
   return {
     ai: (engine, prompt, { cwd, omitEnv } = {}) => runHeadless(engine, prompt, { cwd, omitEnv }),
     // The engine's autonomous-session flags, spelled out. NOT `--agent`: for
-    // an engine with an `agentsView` that opens its agents *overview* — the
+    // an engine with an `agentsView` that opens its agents *overview*, the
     // right screen for `/agents claude`, and a screen where a typed prompt
     // starts a background job somewhere else instead of working here. Seen
     // live: two pieces "finished" in 8s with a roster for output.
@@ -299,12 +303,12 @@ export function liveDeps() {
       return code === EXIT.matched ? { ok: true } : { ok: false, error: lines.join(" ") || "could not start the session" };
     },
     // An engine takes a moment to draw its prompt; keystrokes typed before
-    // that are lost. Idle is "ready". A dialog before any work — "trust this
-    // folder?" on a directory the engine has not seen — is answered from the
+    // that are lost. Idle is "ready". A dialog before any work ("trust this
+    // folder?" on a directory the engine has not seen) is answered from the
     // engine's own boot spec, each one once, and then the wait resumes.
     // Anything the spec does not name is left alone and reported: guessing
     // at a dialog is how an agent ends up saying yes to something it should
-    // not have — or, with Claude's trust check, "No, exit".
+    // not have, or, with Claude's trust check, "No, exit".
     boot: (name, { engine }) => waitForPrompt(name, { engine }),
     // `herd prompt --wait`, with one difference: it will not take an idle
     // screen as "finished" until it has seen the engine work. herd prompt
@@ -363,14 +367,14 @@ export async function throttled(items, limit, fn) {
 
 /**
  * The whole thing, as data. `write` gets the narration; the return value is
- * what `--json` prints. Never throws for an engine's failure — a piece that
+ * what `--json` prints. Never throws for an engine's failure: a piece that
  * failed is a piece with `state: "failed"` and the synthesis says so.
  */
 export async function runSwarm(options, { write = () => {}, deps = liveDeps(), engineOf = pickAiEngine, now = () => Date.now() } = {}) {
   const { task, agents, cwd, herd, verify, planOnly, keep, timeoutMs } = options;
   const engine = engineOf(options.engine);
   if (!engine) {
-    return { ok: false, error: options.engine ? `no installed engine named ${JSON.stringify(options.engine)}` : "no engine installed — moshcode install claude" };
+    return { ok: false, error: options.engine ? `no installed engine named ${JSON.stringify(options.engine)}` : "no engine installed: moshcode install claude" };
   }
   if (!Object.hasOwn(ENGINES, engine) || !ENGINES[engine].bin) return { ok: false, error: `no engine named ${JSON.stringify(engine)}` };
   const fleetIO = deps.fleet || openfleet;
@@ -394,14 +398,14 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
   const omitEnv = ["OPENFLEET_SWARM"];
 
   // 1. plan
-  write(info(`plan — ${engine} is splitting the task into up to ${agents} pieces`));
+  write(info(`plan: ${engine} is splitting the task into up to ${agents} pieces`));
   let plan = null, planNote = null;
   try {
     const reply = deps.ai(engine, planPrompt({ task, agents, cwd }), { cwd, omitEnv });
     plan = parsePlan(reply, { agents });
-    if (!plan) planNote = "the plan did not parse — running the task as one piece";
+    if (!plan) planNote = "the plan did not parse: running the task as one piece";
   } catch (error) {
-    planNote = `planning failed (${error.message || error}) — running the task as one piece`;
+    planNote = `planning failed (${error.message || error}): running the task as one piece`;
   }
   if (!plan) plan = [{ title: "the whole task", prompt: `${task}\n\nEnd your work with a section headed SUMMARY: saying what you did and what you found.` }];
   if (planNote) write(warn(planNote));
@@ -420,6 +424,15 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
   const ceiling = openfleet.mergeCeiling(ctx.ceiling, narrowing);
   const refusal = openfleet.checkCeiling({ depth, fan_out: plan.length, hosts: [hostname] }, ceiling, { now: startedAt })
     || openfleet.checkCeiling({ approvals }, ceiling, { now: startedAt });
+  // In the implicit fleet approvals enter at the root, and a member of a swarm
+  // the sysop started by hand is its own root: its record carries its own
+  // approvals in the ceiling, so every reader agrees on what it runs under.
+  if (!refusal && !parent && ceiling.approvals === undefined) ceiling.approvals = approvals;
+  // A deadline inherited from above is earlier than --timeout would allow:
+  // each prompt waits at most until it, so the swarm ends when the ceiling
+  // says rather than after it (rule 6).
+  const deadline = openfleet.untilMs(ceiling.until);
+  const waitMs = () => (deadline === null ? timeoutMs : Math.max(1, Math.min(timeoutMs, deadline - now())));
   if (refusal) {
     const reason = `the ceiling refuses ${refusal.key}: wanted ${JSON.stringify(refusal.wanted)}, allowed ${JSON.stringify(refusal.allowed)}`;
     const line = { event: "ceiling.refuse", by, key: refusal.key, wanted: refusal.wanted, allowed: refusal.allowed };
@@ -468,13 +481,13 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
       };
       const launch = deps.start(name, { engine, cwd, herd, env });
       if (!launch.ok) {
-        write(err(`${name} — could not start: ${launch.error}`));
+        write(err(`${name}: could not start: ${launch.error}`));
         return row({ error: String(launch.error) });
       }
       started.add(name);
       const boot = await deps.boot(name, { engine });
       if (boot.outcome !== "matched") {
-        write(err(`${name} — never became ready (${boot.outcome}, ${boot.state})`));
+        write(err(`${name}: never became ready (${boot.outcome}, ${boot.state})`));
         return row({ outcome: boot.outcome, error: "the engine never became ready" });
       }
       write(`  ${ash("→")} ${bone(name)} ${ash(piece.title)}`);
@@ -490,9 +503,9 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
           engine: engineString, cwd, approvals, piece: pieceOf(i),
         }, { now: at });
       };
-      const done = await deps.prompt(name, text, { timeoutMs, onSubmitted });
+      const done = await deps.prompt(name, text, { timeoutMs: waitMs(), onSubmitted });
       if (!done.ok) {
-        write(err(`${name} — ${done.error || "the prompt was not delivered"}`));
+        write(err(`${name}: ${done.error || "the prompt was not delivered"}`));
         return row({ task: done.task, outcome: done.outcome, artifact: done.artifact || "", error: done.error });
       }
       const mark = done.outcome === "matched" ? acid("✓") : amber("~");
@@ -502,7 +515,7 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
 
     // 5. verify
     if (verify) {
-      write(info(`verify — one skeptic per piece (${engine})`));
+      write(info(`verify: one skeptic per piece (${engine})`));
       for (const r of results) {
         if (r.state === "failed") continue;
         try {
@@ -516,7 +529,7 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
     }
 
     // 6. synthesise
-    write(info(`synthesis — ${engine} is folding ${results.length} piece${results.length === 1 ? "" : "s"} into one answer`));
+    write(info(`synthesis: ${engine} is folding ${results.length} piece${results.length === 1 ? "" : "s"} into one answer`));
     try {
       synthesis = deps.ai(engine, synthesisPrompt({
         task, results: results.map((r) => ({ ...r, artifact: (r.artifact || r.error || "").slice(-PIECE_CHARS) })),
@@ -563,7 +576,7 @@ export async function swarmCommand(argv = [], { write = console.log, deps, engin
   if (options.errors.length) { for (const e of options.errors) write(err(e)); write(err(USAGE)); return EXIT.usage; }
   if (!options.task) { write(err(USAGE)); return EXIT.usage; }
   if (options.engine && !resolveEngine(options.engine)) {
-    write(err(`no engine named ${JSON.stringify(options.engine)} — one of ${Object.keys(ENGINES).join(", ")}`));
+    write(err(`no engine named ${JSON.stringify(options.engine)}: one of ${Object.keys(ENGINES).join(", ")}`));
     return EXIT.usage;
   }
 
@@ -572,7 +585,7 @@ export async function swarmCommand(argv = [], { write = console.log, deps, engin
 
   if (options.json) { write(JSON.stringify(result, null, 2)); return result.ok ? EXIT.matched : EXIT.usage; }
   if (!result.ok && !result.results?.length) { write(err(result.error)); return EXIT.usage; }
-  if (result.planOnly) { write(info("plan only — nothing was started.")); return EXIT.matched; }
+  if (result.planOnly) { write(info("plan only: nothing was started.")); return EXIT.matched; }
 
   const failed = result.results.filter((r) => r.state === "failed").length;
   write("");

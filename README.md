@@ -517,10 +517,10 @@ over those files, the same files `logicsrc fleet` reads:
 ```sh
 moshcode fleet tree
 anthony@dev  (implicit fleet, sysop anthony@dev, depth 1, hosts dev)
-└─ 460a4502  claude-code  running  [bypass]
-   └─ swarm create-two-0541  "create two ..."  2/4 members  until 06:11
-      ├─ create-two-0541-1 (172ffd83)  create hello.sh bash  claude-code  done  [bypass]  owns hello.sh
-      └─ create-two-0541-2  create bye.sh bash  moshcode/claude  working  [bypass]  owns bye.sh
+└─ 460a4502                                                  claude-code      working  [bypass]
+   └─ swarm create-two-0541            "create two ..."      2/4 members      until 06:11
+      ├─ create-two-0541-1 (172ffd83)  create hello.sh bash  claude-code      done  [bypass]  owns hello.sh
+      └─ create-two-0541-2             create bye.sh bash    moshcode/claude  working  [bypass]  owns bye.sh
 
 moshcode fleet log --swarm create-two-0541     # spawn, starts, ends, in order, who did each
 moshcode fleet stop create-two-0541            # end it as one unit, nested swarms first
@@ -528,7 +528,9 @@ moshcode fleet open --approvals native --depth 2   # a fleet with a ceiling; new
 ```
 
 `open` and `cap` are the sysop's alone: a process carrying `OPENFLEET_MEMBER`
-is an agent and is refused. `moshcode ps` groups its rows by fleet and swarm
+is an agent and is refused. `tree` is where the ceiling's clock and budget are
+enforced: a member past its `until` or a swarm that has spent its budget is
+stopped through its engine and ends `timeout` or `budget` in the ledger. `moshcode ps` groups its rows by fleet and swarm
 and marks every session whose approvals are bypassed. The records live under
 `$OPENFLEET_HOME`, default `~/.openfleet`.
 
