@@ -149,7 +149,7 @@ export const CORE_CLI_COMMANDS = [
     name: "cost",
     group: "runtime",
     description: "what each session is spending, read from the engines' own logs",
-    synopsis: [["moshcode cost [name] [--all] [--since 6h] [--json]", "session, engine, model, tokens, cost"]],
+    synopsis: [["moshcode cost [name] [--all] [--since 6h] [--json]", "session, engine, model, tokens, cost, and the burn by window"]],
     flags: [
       ["--all", "every engine session on disk, herd or not", ""],
       ["--since <dur>", "how far back to look (30m, 6h, 3d)", "24h"],
@@ -168,7 +168,9 @@ export const CORE_CLI_COMMANDS = [
       + "`~` was worked out from published rates and is what the tokens WOULD cost on the api; unmarked "
       + "figures are the engine's own arithmetic. models with no rate show tokens and no cost — add yours "
       + "to ~/.moshcode/pricing.json. gemini, kimi, deepseek and openagents log nothing readable, "
-      + "so they report no cost rather than zero.",
+      + "so they report no cost rather than zero. under the table, `burn` is the same windows for every "
+      + "engine — last 1 min, 15 min, 1 hour, 4 hours, 8 hours and the report window — with what the "
+      + "requests inside each cost, that cost per hour, and the runs behind it; --json carries them as `burn`.",
   },
   // Everyone who has used a coding agent's own `/usage` types that word first,
   // and tokens-and-spend is exactly what `cost` already answers.

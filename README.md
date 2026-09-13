@@ -392,6 +392,31 @@ moshcode cost --json             # for a script
 ⚠ no rate for gpt-5.6-sol — tokens counted, cost omitted.
 ```
 
+Under the table, **`burn` is the slope**: the same windows for every engine —
+last 1 min, 15 min, 1 hour, 4 hours, 8 hours, and the report window — each with
+what the requests inside it cost, that cost per hour of window, and the runs
+behind it. `cost` says what the day cost; `burn` says whether the next hour will
+cost the same, which is the number that decides whether to kill something.
+From a box running a herd of claude sessions, `moshcode cost --all --since 8h`:
+
+```
+  burn          cost       rate       runs
+  last 1 min    $1.32~     $79.16/h   2
+  last 15 min   $38.34~    $153.35/h  8
+  last 1 hour   $222.03~   $222.03/h  11
+  last 4 hours  $966.27~   $241.57/h  19
+  last 8 hours  $1786.84~  $223.35/h  45
+  window (8h)   $1786.84~  $223.33/h  45
+  $3.72 a minute over the window, on average
+```
+
+The rows come from the same per-request records the table does, priced the
+same way, so a claude herd and a codex herd are comparable on one screen. A
+window longer than `--since` is left out rather than shown short. Codex logs
+running totals, so a turn is the difference between two of them; aider stamps
+only the start of a run, so its whole run lands there. `--json` carries the rows
+as `burn`, each with its cost split by engine.
+
 **`view` is a link — click it and the PR opens in your browser.** The cost table
 is where you notice a session that cost $300, and the next thing you want is
 the thing it produced, which lives on GitHub rather than on this machine. The
@@ -408,7 +433,7 @@ click. `moshcode cost --json` always carries `pr` and `prs` in full.
 
 | engine | where the number comes from |
 |---|---|
-| claude | per-message `usage` in `~/.claude/projects/**/*.jsonl` |
+| claude | per-message `usage` in `~/.claude/projects/**/*.jsonl`; a session's subagents and workflow agents (`<session>/subagents/…`) fold into its row |
 | codex | cumulative `token_count` events in `~/.codex/sessions/…` |
 | opencode, privacycode | the per-message `cost` each one computed itself |
 | aider | the running session total it prints into `.aider.chat.history.md` |

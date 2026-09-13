@@ -27,11 +27,22 @@ import { homedir } from "node:os";
  * below, which is Anthropic's published relationship (and the only vendor whose
  * cache pricing this file claims to know).
  *
- * Anthropic rates as published 2026-06; Sonnet 5's introductory $2/$10 runs
- * through 2026-08-31 and is deliberately not encoded — an intro rate that
- * expires silently would make this table wrong on a date nobody is watching.
+ * Anthropic rates as published 2026-06 (Fable 5.1 / Mythos 5.1 added 2026-09);
+ * Sonnet 5's introductory $2/$10 runs through 2026-08-31 and is deliberately
+ * not encoded — an intro rate that expires silently would make this table
+ * wrong on a date nobody is watching.
  */
 export const PRICING = {
+  // Claude Fable 5.1 reads the cache at $0.25/MTok — 0.025× of input, a quarter
+  // of what CACHE_MULTIPLIERS would derive — so it carries its own `cacheRead`.
+  // It also needs its own entry: without one the prefix match in rateFor()
+  // lands on `claude-fable-5` and prices every cache read at four times the
+  // real rate, and on a long agent session cache reads are most of the tokens,
+  // so most of the estimate is wrong. Whether Mythos 5.1 shares the read rate
+  // was open at launch; it inherits Fable's here and ~/.moshcode/pricing.json
+  // overrides it.
+  "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25 },
+  "claude-mythos-5-1": { input: 10, output: 50, cacheRead: 0.25 },
   "claude-fable-5": { input: 10, output: 50 },
   "claude-mythos-5": { input: 10, output: 50 },
   "claude-opus-5": { input: 5, output: 25 },
