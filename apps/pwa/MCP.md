@@ -62,6 +62,30 @@ preflight responses support CORS; an authenticated browser MCP request must have
 a configured origin or one of that OAuth client's registered redirect origins.
 Unknown protocol versions and tool calls disguised as notifications are rejected.
 
+## Client adapter contract
+
+ChatGPT and Claude setup links are in the root README. A Chovy adapter or another
+remote MCP client should accept the exact share URL, discover its protected
+resource metadata from the 401 challenge, and follow `authorization_servers`
+to the app authority. Register a redirect URI with the advertised registration
+endpoint, generate a random state and S256 PKCE verifier, and open the advertised
+authorization endpoint with the share URL as `resource`. Validate the callback
+state, then exchange the single-use code using the same redirect, verifier,
+client ID and resource. Store tokens privately on behalf of that user.
+
+Send the access token only to the canonical share resource. Initialize using a
+supported MCP protocol version, list the tools allowed by the granted scope,
+and call them with the bound session implicit. Refresh through the advertised
+token endpoint, replacing both stored tokens atomically and repeating the exact
+resource. A refresh failure requires reauthorization; never retry a consumed
+refresh token. Revocation or expiry must stop further tool calls. Disconnect can
+revoke the authorization grant through the advertised revocation endpoint.
+
+This is an integration contract, not a claim that Chovy already has a native
+remote MCP connector. Hosted ChatGPT/Claude account flows require their own
+account access to verify; local protocol and terminal tests do not establish
+that a particular hosted account or workspace policy permits a connector.
+
 Validation uses isolated local databases and HTTP servers, including ownership,
 CSRF, scope separation, exact binding, replay, concurrency, queue revocation,
 audit exclusions and an upgrade from the previous database schema:

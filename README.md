@@ -1602,6 +1602,24 @@ specific session and scopes in the browser, and its access token is bound to
 that one opaque share URL. OAuth authorization code + PKCE, rotating refresh
 tokens, and device authorization are supported.
 
+- **ChatGPT:** in an account/workspace with custom MCP apps enabled, open
+  Settings → Apps → Create, enter the share URL, choose OAuth, and scan tools.
+  Complete the Moshcode consent page as the session owner. Availability and
+  write permissions depend on your plan and administrator settings; see
+  [OpenAI's setup guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta).
+- **Claude:** open Customize → Connectors → Add custom connector, enter the
+  share URL, then connect and complete Moshcode authorization. Team owners
+  configure the connector for their organization first. See
+  [Claude's setup guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+- **Chovy and other integrations:** use an OAuth-capable remote MCP client
+  with the same share URL. Chovy does not yet provide a native connector screen;
+  its adapter needs the discovery, PKCE, resource-bound token and refresh flow
+  described in [the server integration contract](apps/pwa/MCP.md).
+
+After connecting, ask the client to read this session before granting or using
+write tools. Removing a client-side connector does not replace revoking the
+Moshcode share when you want to end all access to that URL.
+
 The shared server exposes `session_read`, `session_answer`, `session_approve`,
 `session_send`, and `session_cancel`. Reading, writing, approval and interruption
 have separate scopes; the authorization page shows which ones the client
