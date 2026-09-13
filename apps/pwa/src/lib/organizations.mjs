@@ -164,10 +164,3 @@ export async function shareSession(actorId, sessionId, teamId, remove = false) {
     await tx.execute({ sql: "INSERT OR IGNORE INTO session_team_shares (session_id,team_id,shared_by,created_at) VALUES (?,?,?,?)", args: [sessionId, teamId, actorId, Date.now()] });
   });
 }
-
-// Checked again inside the atomic CLI claim, so removed writers cannot leave
-// commands waiting to run after their access has ended.
-export const COMMAND_ACTOR_ALLOWED = `(actor_user_id IS NULL
-  OR actor_user_id=(SELECT user_id FROM cli_sessions WHERE id=session_commands.session_id)
-  OR EXISTS (SELECT 1 FROM shared_session_access a WHERE a.session_id=session_commands.session_id
-    AND a.user_id=session_commands.actor_user_id AND a.permission>=2))`;

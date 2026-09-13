@@ -18,7 +18,7 @@ import { balance } from "../lib/credits.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { BASE_KEY_NAMES, EXTENDED_KEYS_FEATURE, KEY_NAMES as ALL_KEY_NAMES } from "../lib/session-keys.mjs";
-import { accessibleSession, sessionsFor, sharesFor, teamsFor, roleFor, COMMAND_ACTOR_ALLOWED } from "../lib/organizations.mjs";
+import { accessibleSession, sessionsFor, sharesFor, teamsFor, roleFor } from "../lib/organizations.mjs";
 
 export const sessionsRouter = Router();
 
@@ -251,7 +251,10 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
   await run(`UPDATE cli_sessions SET last_seen_at = ? WHERE id = ?`, [Date.now(), session.id]);
 
   const claim = async () => {
-    await run(`UPDATE session_commands SET status='cancelled' WHERE session_id=? AND status='queued' AND NOT ${COMMAND_ACTOR_ALLOWED}`, [session.id]);
+    await run(`UPDATE session_commands SET status='cancelled' WHERE session_id=? AND status='queued' AND NOT (
+      actor_user_id IS NULL OR actor_user_id=(SELECT user_id FROM cli_sessions WHERE id=session_commands.session_id)
+      OR EXISTS (SELECT 1 FROM shared_session_access a WHERE a.session_id=session_commands.session_id
+        AND a.user_id=session_commands.actor_user_id AND a.permission>=2))`, [session.id]);
     await run(`UPDATE session_commands SET status='cancelled'
       WHERE session_id=? AND status='queued' AND (
         (mcp_share_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mcp_shares sh WHERE sh.id=session_commands.mcp_share_id
@@ -268,7 +271,10 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
       // The UPDATE is the lock — only the poll that flips 'queued' runs it.
       const claimed = await run(
         `UPDATE session_commands SET status='claimed', claimed_at=? WHERE id=? AND status='queued'
-          AND ${COMMAND_ACTOR_ALLOWED}
+          AND (actor_user_id IS NULL
+            OR actor_user_id=(SELECT user_id FROM cli_sessions WHERE id=session_commands.session_id)
+            OR EXISTS (SELECT 1 FROM shared_session_access a WHERE a.session_id=session_commands.session_id
+              AND a.user_id=session_commands.actor_user_id AND a.permission>=2))
           AND (mcp_share_id IS NULL OR EXISTS (SELECT 1 FROM mcp_shares sh
             WHERE sh.id=session_commands.mcp_share_id AND sh.session_id=session_commands.session_id
               AND sh.user_id=? AND sh.status='active' AND sh.expires_at>?))
