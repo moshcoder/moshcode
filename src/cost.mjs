@@ -33,6 +33,22 @@ import { EMPTY_USAGE, addUsage, priceUsage, loadUserPricing } from "./cost-prici
 /** Default reporting window: today's work, not the whole history on disk. */
 export const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The horizons `moshcode cost` reports burn over — the same list for every
+ * engine, so a claude herd and a codex herd read on one scale. The short ones
+ * answer "how fast is it going right now"; the long ones answer "is this a
+ * spike or the new normal". burn() appends the report window itself as the
+ * last row, so the list ends at 8h and the table ends at whatever `--since`
+ * said.
+ */
+export const BURN_WINDOWS = [
+  { key: "1m", label: "last 1 min", ms: 60e3 },
+  { key: "15m", label: "last 15 min", ms: 15 * 60e3 },
+  { key: "1h", label: "last 1 hour", ms: 3600e3 },
+  { key: "4h", label: "last 4 hours", ms: 4 * 3600e3 },
+  { key: "8h", label: "last 8 hours", ms: 8 * 3600e3 },
+];
+
 const home = () => homedir();
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
@@ -104,6 +120,13 @@ const stamp = (value) => {
   return Number.isFinite(t) ? t : null;
 };
 
+/** a − b per field, floored at zero: a running total that restarts must not bill negative tokens. */
+const diffUsage = (a, b) => {
+  const out = {};
+  for (const k of Object.keys(EMPTY_USAGE)) out[k] = Math.max(0, num(a[k]) - num(b[k]));
+  return out;
+};
+
 /** Paths compare after resolution, so `~/src/api` and `~/src/api/` are one place. */
 const samePath = (a, b) => {
   if (!a || !b) return false;
@@ -173,12 +196,18 @@ function claudePrOf(entry) {
   };
 }
 
-/** One Claude Code transcript → one run, or null when it holds no usage. */
-function readClaudeTranscript(file, { since }) {
+/**
+ * One Claude Code transcript → one run, or null when it holds no usage.
+ *
+ * `seen` is the set of request ids already counted. It is shared across a
+ * session's transcripts because the parent replays a subagent's messages when
+ * it folds the output back in — the same id in two files is one API call.
+ */
+function readClaudeTranscript(file, { since, seen = new Set() }) {
   let text;
   try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
 
-  const seen = new Set();
+  let counted = 0;
   const byModel = new Map();
   let usage = { ...EMPTY_USAGE };
   let engineCost = 0;
@@ -188,6 +217,7 @@ function readClaudeTranscript(file, { since }) {
   let cwd = "";
   let id = path.basename(file, ".jsonl");
   let pr = null;
+  const samples = [];
 
   for (const line of text.split("\n")) {
     if (!line || line.charCodeAt(0) !== 123) continue; // fast reject: not "{"
@@ -222,18 +252,56 @@ function readClaudeTranscript(file, { since }) {
     const key = `${message.id || ""}|${entry.requestId || ""}`;
     if (key !== "|" && seen.has(key)) continue;
     seen.add(key);
+    counted += 1;
 
     usage = addUsage(usage, one);
     const model = message.model || "unknown";
     byModel.set(model, addUsage(byModel.get(model) || EMPTY_USAGE, one));
-    if (Number.isFinite(Number(entry.costUSD))) { engineCost += Number(entry.costUSD); hasEngineCost = true; }
+    const priced = Number.isFinite(Number(entry.costUSD)) ? Number(entry.costUSD) : null;
+    if (priced != null) { engineCost += priced; hasEngineCost = true; }
+    // Kept per request, on the engine's own clock, so burn() can put it in a
+    // window without a second pass over the transcript.
+    samples.push({ at, usage: one, model, engineCost: priced });
     if (at != null) { start = start == null ? at : Math.min(start, at); end = end == null ? at : Math.max(end, at); }
     if (entry.cwd) cwd = entry.cwd;
     if (entry.sessionId) id = entry.sessionId;
   }
 
-  if (!seen.size) return null;
-  return { engine: "claude", id, cwd, usage, byModel, start, end, pr, engineCost: hasEngineCost ? engineCost : null };
+  if (!counted) return null;
+  return { engine: "claude", id, cwd, usage, byModel, start, end, pr, samples, engineCost: hasEngineCost ? engineCost : null };
+}
+
+/**
+ * Every transcript under a project directory, the sessions and what their
+ * subagents wrote. A session is `<id>.jsonl` beside a directory `<id>/`, and
+ * that directory holds `subagents/<agent>.jsonl` plus, for a workflow,
+ * `subagents/workflows/<run>/<agent>.jsonl`. The depth cap is that shape and
+ * one to spare, so an unexpected tree cannot turn a cost report into a crawl.
+ */
+function claudeTranscripts(dir) {
+  const out = [];
+  const walk = (d, depth) => {
+    for (const entry of listDir(d)) {
+      const p = path.join(d, entry.name);
+      if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(p);
+      else if (entry.isDirectory() && depth < 5) walk(p, depth + 1);
+    }
+  };
+  walk(dir, 0);
+  return out;
+}
+
+/** Fold one transcript's run into another's: a session and its subagents are one bill. */
+function mergeClaudeRun(into, run) {
+  into.usage = addUsage(into.usage, run.usage);
+  for (const [model, u] of run.byModel) into.byModel.set(model, addUsage(into.byModel.get(model) || EMPTY_USAGE, u));
+  into.samples.push(...run.samples);
+  if (run.start != null) into.start = into.start == null ? run.start : Math.min(into.start, run.start);
+  if (run.end != null) into.end = into.end == null ? run.end : Math.max(into.end, run.end);
+  if (run.pr && (!into.pr || (run.pr.at ?? 0) >= (into.pr.at ?? 0))) into.pr = run.pr;
+  if (run.engineCost != null) into.engineCost = (into.engineCost ?? 0) + run.engineCost;
+  if (!into.cwd && run.cwd) into.cwd = run.cwd;
+  return into;
 }
 
 function claudeRuns({ since, cwd } = {}) {
@@ -243,20 +311,28 @@ function claudeRuns({ since, cwd } = {}) {
     : listDir(root).filter((e) => e.isDirectory()).map((e) => path.join(root, e.name));
 
   const runs = [];
+  const seen = new Set();
   for (const dir of dirs) {
-    for (const entry of listDir(dir)) {
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
-      const file = path.join(dir, entry.name);
+    // A subagent's transcript records the parent's sessionId, and every request
+    // in it is one the parent caused, so it folds into the parent's run: a
+    // workflow that fans out to twenty agents is one bill, not twenty rows —
+    // and on a box running workflows it is most of the bill, which a reader
+    // that stops at the top of the directory never sees.
+    const byId = new Map();
+    for (const file of claudeTranscripts(dir)) {
       // mtime is the cheap gate: a transcript untouched since before the window
       // cannot contain a request inside it, and there are thousands of these.
       const stat = safeStat(file);
       if (!stat || (since != null && stat.mtimeMs < since)) continue;
-      const run = readClaudeTranscript(file, { since });
+      const run = readClaudeTranscript(file, { since, seen });
       if (!run) continue;
       // The slug is lossy, so confirm against the cwd the transcript recorded.
       if (cwd && run.cwd && !samePath(run.cwd, cwd)) continue;
-      runs.push({ ...run, cwd: run.cwd || cwd || "" });
+      const have = byId.get(run.id);
+      if (have) mergeClaudeRun(have, run);
+      else byId.set(run.id, { ...run, cwd: run.cwd || cwd || "" });
     }
+    runs.push(...byId.values());
   }
   return runs;
 }
@@ -301,12 +377,23 @@ function readCodexRollout(file, { since, cwd }) {
 
   const tail = tailLines(file);
   let last = null;
+  let previous = null;
+  const samples = [];
   for (const line of tail) {
     const entry = parseJson(line);
     if (!entry) continue;
-    if (entry.payload?.type === "token_count" && entry.payload?.info) last = entry;
-    // The model can change mid-rollout; the last turn_context wins.
+    // The model can change mid-rollout; the last turn_context wins, and a
+    // turn is priced at whichever model was current when it was recorded.
     if (entry.type === "turn_context" && entry.payload?.model) model = entry.payload.model;
+    if (entry.payload?.type !== "token_count" || !entry.payload?.info) continue;
+    last = entry;
+    // Each event is a running total, so one turn's usage is the difference
+    // from the event before it. The first event in the tail carries every turn
+    // before it; those land on its timestamp, which is as close as a
+    // cumulative log gets without reading the whole file.
+    const total = codexUsageOf(entry.payload.info);
+    samples.push({ at: stamp(entry.timestamp), usage: previous ? diffUsage(total, previous) : total, model: model || "unknown", engineCost: null });
+    previous = total;
   }
   if (!last) return null;
 
@@ -323,7 +410,7 @@ function readCodexRollout(file, { since, cwd }) {
     cwd: meta.cwd || cwd || "",
     usage,
     byModel: new Map([[model || "unknown", usage]]),
-    start, end, engineCost: null,
+    start, end, samples, engineCost: null,
   };
 }
 
@@ -421,7 +508,7 @@ async function opencodeRuns(engine, { since, cwd } = {}) {
       const run = bySession.get(key) || {
         engine, id: key, cwd: data.path?.cwd || cwd || "",
         usage: { ...EMPTY_USAGE }, byModel: new Map(),
-        start: null, end: null, engineCost: 0,
+        start: null, end: null, samples: [], engineCost: 0,
       };
       run.usage = addUsage(run.usage, one);
       const model = data.modelID || "unknown";
@@ -431,6 +518,7 @@ async function opencodeRuns(engine, { since, cwd } = {}) {
       run.engineCost += num(data.cost);
       const at = num(row.time_created) || stamp(data.time?.created);
       if (at) { run.start = run.start == null ? at : Math.min(run.start, at); run.end = run.end == null ? at : Math.max(run.end, at); }
+      run.samples.push({ at: at || null, usage: one, model, engineCost: num(data.cost) || null });
       bySession.set(key, run);
     }
   } catch {
@@ -543,7 +631,7 @@ export function qwenRuns({ since, cwd } = {}) {
         run = {
           engine: "qwen", id, cwd: where,
           usage: { ...EMPTY_USAGE }, byModel: new Map(),
-          start: null, end: null, engineCost: null,
+          start: null, end: null, samples: [], engineCost: null,
         };
         sessions.set(id, run);
       }
@@ -551,6 +639,7 @@ export function qwenRuns({ since, cwd } = {}) {
       const model = record.model || "unknown";
       run.usage = addUsage(run.usage, one);
       run.byModel.set(model, addUsage(run.byModel.get(model) || EMPTY_USAGE, one));
+      run.samples.push({ at, usage: one, model, engineCost: null });
       if (at != null) {
         run.start = run.start == null ? at : Math.min(run.start, at);
         run.end = run.end == null ? at : Math.max(run.end, at);
@@ -585,7 +674,15 @@ export function parseAiderHistory(text, { since } = {}) {
   const runs = [];
   const lines = String(text).split("\n");
   let current = null;
-  const close = () => { if (current && (current.engineCost || current.usage.input || current.usage.output)) runs.push(current); current = null; };
+  // aider stamps the banner and nothing after it, so a run is one sample at
+  // its start: burn() can place it, and the README says the placement is coarse.
+  const close = () => {
+    if (current && (current.engineCost || current.usage.input || current.usage.output)) {
+      current.samples = [{ at: current.start, usage: current.usage, model: null, engineCost: current.engineCost || null }];
+      runs.push(current);
+    }
+    current = null;
+  };
 
   for (const line of lines) {
     const banner = /^#\s*aider chat started at\s+(.+?)\s*$/i.exec(line);
@@ -763,6 +860,82 @@ export function totals(items = []) {
     for (const m of item.unpriced || []) unpriced.add(m);
   }
   return { cost, usage, unpriced: [...unpriced] };
+}
+
+// ---------------------------------------------------------------------------
+// Burn — the same windows for every engine
+// ---------------------------------------------------------------------------
+
+/**
+ * One request's dollars, priced the way its run is: the engine's own figure
+ * when it wrote one for that request, the rate card otherwise, null when there
+ * is no rate. `source` says which, so a row can carry the `~`.
+ */
+function sampleCost(sample, options) {
+  const own = Number(sample.engineCost);
+  if (Number.isFinite(own) && own > 0) return { cost: own, source: "engine" };
+  const priced = priceUsage(sample.model, sample.usage, options);
+  return priced == null ? { cost: null, source: null } : { cost: priced, source: "rates" };
+}
+
+/**
+ * Spend per window, every engine on one clock.
+ *
+ * Each run carries the requests it was made of (`samples`), stamped with the
+ * time its engine recorded. A row is a window ending `now`: what the requests
+ * inside it cost, that cost per hour of window, and how many runs made them.
+ * The report window (`since`) is the last row — the figure the table already
+ * totals, now with its rate — and a standard window longer than the report
+ * window is left out rather than shown short, because "last 8 hours" over one
+ * hour of data is a number that lies.
+ *
+ * `perHour` divides by the window, not by the time the agents were busy: a run
+ * that worked ten minutes of the last hour shows a tenth of its pace, which is
+ * the pace the bill sees. A request with no price counts toward `runs` and
+ * `unpriced` and nothing toward `cost`; one with no timestamp cannot be placed
+ * and is left out.
+ */
+export function burn(runs = [], {
+  now = Date.now(), since = null, windows = BURN_WINDOWS, windowLabel = "window", userPricing = loadUserPricing(),
+} = {}) {
+  const rows = windows
+    .filter((w) => since == null || now - w.ms >= since)
+    .map((w) => ({ key: w.key, label: w.label, ms: w.ms, from: now - w.ms }));
+  if (since != null && now > since) rows.push({ key: "window", label: windowLabel, ms: now - since, from: since });
+  const acc = rows.map(() => ({ cost: null, ids: new Set(), engines: {}, unpriced: new Set(), sources: new Set() }));
+
+  for (const run of runs) {
+    for (const sample of run.samples || []) {
+      if (sample.at == null) continue;
+      const { cost, source } = sampleCost(sample, { userPricing });
+      rows.forEach((row, i) => {
+        if (sample.at < row.from) return;
+        const a = acc[i];
+        a.ids.add(`${run.engine}:${run.id}`);
+        if (cost == null) { if (sample.model) a.unpriced.add(sample.model); return; }
+        a.cost = (a.cost ?? 0) + cost;
+        a.engines[run.engine] = (a.engines[run.engine] ?? 0) + cost;
+        a.sources.add(source);
+      });
+    }
+  }
+
+  return rows.map((row, i) => {
+    const a = acc[i];
+    const hours = row.ms / 3600e3;
+    return {
+      key: row.key, label: row.label, ms: row.ms, from: row.from,
+      cost: a.cost,
+      perHour: a.cost == null ? null : a.cost / hours,
+      perMinute: a.cost == null ? null : a.cost / (hours * 60),
+      runs: a.ids.size,
+      engines: a.engines,
+      unpriced: [...a.unpriced],
+      // One source is that source; a measured price next to an estimated one
+      // is "mixed", and the weaker claim is the true one for the sum.
+      costSource: a.sources.size === 0 ? null : a.sources.size === 1 ? [...a.sources][0] : "mixed",
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
 // Nothing is sampled, nothing is proxied, and a number the engine itself
 // computed is never overwritten by our arithmetic.
 import {
-  DEFAULT_WINDOW_MS, UNCOSTED_ENGINES, attributeRuns, engineRuns,
+  DEFAULT_WINDOW_MS, UNCOSTED_ENGINES, attributeRuns, burn, engineRuns,
   formatTokens, formatUsd, totals,
 } from "./cost.mjs";
 import { pricingFile } from "./cost-pricing.mjs";
@@ -115,6 +115,29 @@ function renderRuns(runs, { indent = "  " } = {}) {
 }
 
 /**
+ * The burn block: the same windows for every engine, under whatever table was
+ * just printed and over the same runs. The table answers "what did it cost" at
+ * one horizon; this is the slope, which is the number that decides whether to
+ * kill something. Printed only when something in it could be priced — a block
+ * of dashes says nothing the footer's warning does not.
+ */
+export function renderBurn(rows, { indent = "  " } = {}) {
+  if (!rows.some((r) => r.cost != null)) return "";
+  const body = table(
+    rows.map((r) => [
+      bone(r.label),
+      costCell(r.cost, r.costSource),
+      r.perHour == null ? ash("—") : dim(`${formatUsd(r.perHour)}/h`),
+      dim(String(r.runs)),
+    ]),
+    { columns: ["burn", "cost", "rate", "runs"], header: true, indent: indent.length },
+  );
+  const window = rows.find((r) => r.key === "window");
+  if (window?.perMinute == null) return body;
+  return `${body}\n${indent}${dim(`${formatUsd(window.perMinute)} a minute over the window, on average`)}`;
+}
+
+/**
  * Gather everything once: the roster, the engine runs in the window, and the
  * attribution between them. Returned whole so `--json`, the table, and the
  * herd bar all read the same numbers.
@@ -157,6 +180,9 @@ export async function costCommand(argv = [], { write = console.log } = {}) {
   const asJson = argv.includes("--json");
   const all = argv.includes("--all");
   const since = Date.now() - parseWindow(flagValue(argv, "--since"));
+  // The last burn row is the report window, named the way it was asked for.
+  const windowLabel = `window (${flagValue(argv, "--since") || "24h"})`;
+  const burnOver = (runs) => burn(runs, { since, windowLabel });
   const engineFlag = flagValue(argv, "--engine");
   const engines = engineFlag ? engineFlag.split(",").map((s) => s.trim()).filter(Boolean) : null;
   const watch = argv.includes("--watch");
@@ -182,6 +208,7 @@ export async function costCommand(argv = [], { write = console.log } = {}) {
     if (asJson) {
       write(JSON.stringify({
         since,
+        burn: burnOver([...rows.flatMap((r) => r.runs), ...(name ? [] : report.unattributed)]),
         sessions: rows.map(({ name: n, engine, cwd, state, models, usage, cost, costSource, unpriced, pr, prs, runs }) => ({
           name: n, engine, cwd, state, models, usage, cost, costSource, unpriced, pr, prs,
           runs: runs.map((r) => ({ id: r.id, model: r.model, usage: r.usage, cost: r.cost, costSource: r.costSource, start: r.start, end: r.end, pr: r.pr ?? null })),
@@ -201,6 +228,8 @@ export async function costCommand(argv = [], { write = console.log } = {}) {
         return EXIT.matched;
       }
       write(renderRuns(runs));
+      const pace = renderBurn(burnOver(runs));
+      if (pace) { write(""); write(pace); }
       // The runs ARE the rows here, so they are what the total totals. And the
       // "not tied to a herd session" note would be describing the whole table
       // back at itself, so it stays off.
@@ -215,6 +244,8 @@ export async function costCommand(argv = [], { write = console.log } = {}) {
     }
 
     write(renderCost(rows));
+    const pace = renderBurn(burnOver(rows.flatMap((r) => r.runs)));
+    if (pace) { write(""); write(pace); }
     footer({ ...report, rows }, write);
     if (UNCOSTED_ENGINES.some((e) => rows.some((r) => r.engine === e))) {
       write(info(`${UNCOSTED_ENGINES.join(", ")} keep no usage log moshcode can read — those rows show no cost, not zero cost.`));

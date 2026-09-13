@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
-  attributeRuns, claudeProjectSlugs, engineRuns, formatTokens, formatUsd,
+  attributeRuns, burn, claudeProjectSlugs, engineRuns, formatTokens, formatUsd,
   parseAiderHistory, totals,
 } from "../src/cost.mjs";
 import { addUsage, priceUsage, rateFor, totalTokens } from "../src/cost-pricing.mjs";
@@ -63,6 +63,18 @@ test("pricing", async (t) => {
     assert.equal(priceUsage("claude-opus-5", { cacheRead: 1e6 }), 0.5);
     assert.equal(priceUsage("claude-opus-5", { cacheWrite5m: 1e6 }), 6.25);
     assert.equal(priceUsage("claude-opus-5", { cacheWrite1h: 1e6 }), 10);
+  });
+
+  await t.test("Claude Fable 5.1 reads the cache at a quarter cent, not a tenth of input", () => {
+    // Without its own entry the prefix match lands on claude-fable-5 and prices
+    // cache reads at $1.00/MTok — four times the published $0.25, on the token
+    // class that is most of a long agent session.
+    assert.equal(priceUsage("claude-fable-5-1", { cacheRead: 1e6 }), 0.25);
+    assert.equal(priceUsage("claude-fable-5-1[1m]", { cacheRead: 1e6 }), 0.25);
+    assert.equal(priceUsage("claude-fable-5-1", { input: 1e6, output: 1e6 }), 60);
+    // Writes still derive from the input rate: a one-hour write is double it.
+    assert.equal(priceUsage("claude-fable-5-1", { cacheWrite1h: 1e6 }), 20);
+    assert.equal(priceUsage("claude-fable-5", { cacheRead: 1e6 }), 1);
   });
 
   await t.test("matches dated snapshots and provider prefixes", () => {
@@ -191,6 +203,44 @@ test("claude transcripts", async (t) => {
     assert.equal(run.pr, null);
   }));
 
+  await t.test("every request is kept as a sample, on the engine's clock", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    const earlier = new Date(Date.now() - 600e3).toISOString();
+    const later = new Date().toISOString();
+    write(path.join(dir, "s.jsonl"), [
+      claudeAssistant({ id: "m1", requestId: "r1", at: earlier, cwd, sessionId: "s", usage: USAGE }),
+      claudeAssistant({ id: "m2", requestId: "r2", at: later, cwd, sessionId: "s", usage: USAGE }),
+    ].join("\n"));
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+    assert.equal(run.samples.length, 2);
+    assert.deepEqual(run.samples.map((s) => s.at), [Date.parse(earlier), Date.parse(later)]);
+    assert.equal(run.samples[0].model, "claude-opus-5");
+    assert.equal(run.samples[0].usage.output, 2000);
+    assert.equal(run.samples[0].engineCost, null);
+  }));
+
+  await t.test("a session's subagents and workflow agents fold into its run", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    const at = new Date().toISOString();
+    write(path.join(dir, "s.jsonl"), claudeAssistant({ id: "m1", requestId: "r1", at, cwd, sessionId: "s", usage: USAGE }));
+    write(path.join(dir, "s", "subagents", "agent-1.jsonl"), claudeAssistant({ id: "m2", requestId: "r2", at, cwd, sessionId: "s", usage: USAGE }));
+    write(path.join(dir, "s", "subagents", "workflows", "wf_1", "agent-2.jsonl"), [
+      claudeAssistant({ id: "m3", requestId: "r3", at, cwd, sessionId: "s", usage: USAGE }),
+      // The parent replays a subagent's message when it folds the output in:
+      // the same id across two files is still one request.
+      claudeAssistant({ id: "m1", requestId: "r1", at, cwd, sessionId: "s", usage: USAGE }),
+    ].join("\n"));
+
+    const runs = await engineRuns({ since: Date.now() - 3600e3, engines: ["claude"] });
+    assert.equal(runs.length, 1, "one session, however many agents it spawned");
+    assert.equal(runs[0].id, "s");
+    assert.equal(runs[0].usage.output, 6000);
+    assert.equal(runs[0].samples.length, 3);
+  }));
+
   await t.test("a replayed message is counted once", () => withHome(async (home) => {
     const cwd = "/home/anthony/src/api";
     const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
@@ -280,6 +330,27 @@ test("codex rollouts", async (t) => {
     // No published rate for a Codex model, so tokens stand and cost does not.
     assert.equal(run.cost, null);
     assert.deepEqual(run.unpriced, ["gpt-5.6-sol"]);
+  }));
+
+  await t.test("a turn is the difference between two running totals", () => withHome(async (home) => {
+    const at = new Date().toISOString();
+    const day = at.slice(0, 10).split("-");
+    write(
+      path.join(home, ".codex", "sessions", day[0], day[1], day[2], "rollout-x.jsonl"),
+      rollout({ cwd: "/home/anthony/src/api", at, total: { input_tokens: 1000, cached_input_tokens: 600, cache_write_input_tokens: 50, output_tokens: 200 } }),
+    );
+
+    const [run] = await engineRuns({ since: Date.now() - 3600e3, engines: ["codex"] });
+    assert.equal(run.samples.length, 2);
+    // First event: 10 in of which 5 cached → 5 fresh. Second: 400 fresh in all,
+    // so 395 for this turn — not 400 again.
+    assert.equal(run.samples[0].usage.input, 5);
+    assert.equal(run.samples[1].usage.input, 395);
+    assert.equal(run.samples[1].usage.output, 198);
+    assert.equal(run.samples[1].usage.cacheRead, 595);
+    assert.equal(run.samples[1].usage.cacheWrite5m, 49);
+    assert.equal(run.samples[0].model, "gpt-5.6-sol");
+    assert.equal(run.samples[0].at, Date.parse(at));
   }));
 
   await t.test("a rollout in another directory is not this directory's cost", () => withHome(async (home) => {
@@ -453,6 +524,67 @@ test("attribution", async (t) => {
   });
 });
 
+test("burn", async (t) => {
+  const NOW = Date.parse("2026-09-13T12:00:00Z");
+  const usage = { input: 1e6, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }; // $5 on claude-opus-5
+  const run = (id, samples, over = {}) => ({ engine: "claude", id, samples, ...over });
+  const sample = (minutesAgo, over = {}) => ({ at: NOW - minutesAgo * 60e3, usage, model: "claude-opus-5", engineCost: null, ...over });
+  const day = { now: NOW, since: NOW - 24 * 3600e3, userPricing: {} };
+
+  await t.test("every standard window is a row, the report window is last, a longer one is dropped", () => {
+    const rows = burn([], { now: NOW, since: NOW - 2 * 3600e3, windowLabel: "window (2h)", userPricing: {} });
+    assert.deepEqual(rows.map((r) => r.key), ["1m", "15m", "1h", "window"]);
+    assert.equal(rows.at(-1).label, "window (2h)");
+    assert.equal(rows.at(-1).ms, 2 * 3600e3);
+    assert.deepEqual(burn([], { now: NOW, userPricing: {} }).map((r) => r.key), ["1m", "15m", "1h", "4h", "8h"]);
+  });
+
+  await t.test("a request lands in every window that reaches back to it", () => {
+    const rows = burn([run("a", [sample(0.5), sample(10), sample(50), sample(200), sample(600)])], day);
+    const by = Object.fromEntries(rows.map((r) => [r.key, r]));
+    assert.equal(by["1m"].cost, 5);
+    assert.equal(by["15m"].cost, 10);
+    assert.equal(by["1h"].cost, 15);
+    assert.equal(by["4h"].cost, 20);
+    assert.equal(by["8h"].cost, 20); // 600 minutes is ten hours: outside
+    assert.equal(by.window.cost, 25);
+    // Per hour of window, not per hour of activity.
+    assert.equal(by["1h"].perHour, 15);
+    assert.equal(by["4h"].perHour, 5);
+    assert.equal(by.window.perMinute, 25 / (24 * 60));
+    assert.equal(by["1m"].costSource, "rates");
+    assert.equal(by["1m"].runs, 1);
+  });
+
+  await t.test("runs are counted per window and the engine's own price wins", () => {
+    const rows = burn([
+      run("a", [sample(5)]),
+      run("b", [sample(5, { engineCost: 0.75 })], { engine: "opencode" }),
+      run("c", [sample(300)]),
+    ], day);
+    const by = Object.fromEntries(rows.map((r) => [r.key, r]));
+    assert.equal(by["15m"].runs, 2);
+    assert.equal(by["15m"].cost, 5.75);
+    assert.equal(by["15m"].costSource, "mixed");
+    assert.deepEqual(by["15m"].engines, { claude: 5, opencode: 0.75 });
+    assert.equal(by.window.runs, 3);
+  });
+
+  await t.test("an unpriced request is counted and named, never billed as zero", () => {
+    const rows = burn([run("x", [sample(1, { model: "gpt-5.6-sol" })], { engine: "codex" })], { now: NOW, since: NOW - 3600e3, userPricing: {} });
+    const row = rows.find((r) => r.key === "15m");
+    assert.equal(row.cost, null);
+    assert.equal(row.perHour, null);
+    assert.equal(row.runs, 1);
+    assert.deepEqual(row.unpriced, ["gpt-5.6-sol"]);
+  });
+
+  await t.test("a sample with no timestamp cannot be placed and is left out", () => {
+    const rows = burn([run("a", [{ at: null, usage, model: "claude-opus-5", engineCost: null }])], { now: NOW, since: NOW - 3600e3, userPricing: {} });
+    assert.ok(rows.every((r) => r.cost == null && r.runs === 0));
+  });
+});
+
 test("moshcode cost", async (t) => {
   // The CLI is the only surface: `--json` is what a script reads, so it has to
   // survive the whole path — router, herd verb table, readers, pricing.
@@ -500,6 +632,40 @@ test("moshcode cost", async (t) => {
     assert.match(out, /total\s+\$\d/);
   }));
 
+  await t.test("--json carries the burn windows over the same runs", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), claudeAssistant({
+      id: "m", requestId: "r", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE,
+    }));
+
+    const { code, out } = await run(["cost", "--all", "--json", "--since", "1h"], home);
+    assert.equal(code, 0);
+    const report = JSON.parse(out);
+    assert.deepEqual(report.burn.map((b) => b.key), ["1m", "15m", "1h", "window"]);
+    assert.equal(report.burn.at(-1).label, "window (1h)");
+    // One request, written just now: every row holds it, and it is the total.
+    assert.equal(report.burn[0].cost, report.totals.cost);
+    assert.equal(report.burn[0].runs, 1);
+    assert.ok(report.burn[0].perHour > report.burn[0].cost);
+    assert.deepEqual(Object.keys(report.burn[0].engines), ["claude"]);
+  }));
+
+  await t.test("the table is followed by the burn block", () => withHome(async (home) => {
+    const cwd = "/home/anthony/src/api";
+    const dir = path.join(home, ".claude", "projects", claudeProjectSlugs(cwd)[0]);
+    write(path.join(dir, "s.jsonl"), claudeAssistant({
+      id: "m", requestId: "r", at: new Date().toISOString(), cwd, sessionId: "s", usage: USAGE,
+    }));
+
+    const { code, out } = await run(["cost", "--all", "--since", "1h"], home);
+    assert.equal(code, 0);
+    assert.match(out, /burn\s+cost\s+rate\s+runs/);
+    assert.match(out, /last 15 min\s+\$[\d.]+~\s+\$[\d.]+\/h\s+1/);
+    assert.match(out, /window \(1h\)/);
+    assert.match(out, /a minute over the window/);
+  }));
+
   await t.test("an unknown session name is an error, not an empty report", () => withHome(async (home) => {
     const { code, out } = await run(["cost", "nope"], home);
     assert.equal(code, 3);
@@ -524,9 +690,13 @@ test("moshcode cost", async (t) => {
     const asUsage = await run(["usage", "--all", "--json", "--since", "1h"], home);
     const asCost = await run(["cost", "--all", "--json", "--since", "1h"], home);
     assert.equal(asUsage.code, 0);
-    // `since` is the wall clock at the moment each ran, so it is the one field
-    // two identical reports are allowed to disagree about.
-    const body = ({ since, ...rest }) => rest;
+    // `since` is the wall clock at the moment each ran, and the burn rows are
+    // measured from it, so the clock-derived fields are the ones two identical
+    // reports are allowed to disagree about. Costs and counts are not.
+    const body = ({ since, burn, ...rest }) => ({
+      ...rest,
+      burn: burn.map(({ from, ms, perHour, perMinute, ...row }) => row),
+    });
     assert.deepEqual(body(JSON.parse(asUsage.out)), body(JSON.parse(asCost.out)));
   }));
 
