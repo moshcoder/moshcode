@@ -63,6 +63,36 @@ export MOSHCODE_API=https://app.moshcode.sh
 export MOSHCODE_API_KEY=mck_...        # sent as Authorization: Bearer
 ```
 
+## Organizations, teams, and shared sessions
+
+Open **Teams** in the app to create an organization, then a team. Add people by
+the email on their existing moshcode account. Membership defaults to `read`;
+`writer` can send terminal input, `admin` can manage membership within its
+organization or team, and `owner` can also change ownership. At least one owner
+must remain. Organization admins and owners inherit access to their teams;
+other organization members only access teams they have joined.
+
+A session stays private until its owner opens **Share this session with a team**
+on the session page. Teammates then see it in **Sessions** and on the team page.
+They watch the same output and writers use the same command queue as the owner.
+Only the owner's CLI key can publish output, claim commands, or end the session.
+Removing access closes the shared stream on its next event or heartbeat, and
+queued input from a removed or downgraded writer is cancelled before claim.
+
+The same operations accept CLI API keys as Bearer tokens:
+
+| Endpoint | Action |
+| --- | --- |
+| `GET/POST /api/organizations` | List or create your organizations |
+| `GET /api/organizations/:id` | Organization and accessible teams |
+| `POST /api/organizations/:id/teams` | Create a team (`name`) |
+| `GET /api/teams/:id` | Team members and shared sessions |
+| `POST /api/teams/:id/members` | Add an existing account (`email`, optional `role`) |
+| `POST /api/teams/:id/members/:userId` | Change `role`, or set `remove: true` |
+| `POST /api/organizations/:id/members/:userId` | Change organization role or remove a member |
+| `GET /api/sessions` | Your sessions and sessions shared with your teams |
+| `POST /api/sessions/:id/teams` | Share with `teamId`, or set `remove: true` to stop |
+
 ## Status / TODO
 
 Scaffold is functional end-to-end (register → API key → `ask()` ingest → approve

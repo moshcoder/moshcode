@@ -18,6 +18,7 @@ import { balance } from "../lib/credits.mjs";
 import { page, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { BASE_KEY_NAMES, EXTENDED_KEYS_FEATURE, KEY_NAMES as ALL_KEY_NAMES } from "../lib/session-keys.mjs";
+import { accessibleSession, sessionsFor, sharesFor, teamsFor, roleFor } from "../lib/organizations.mjs";
 
 export const sessionsRouter = Router();
 
@@ -250,6 +251,10 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
   await run(`UPDATE cli_sessions SET last_seen_at = ? WHERE id = ?`, [Date.now(), session.id]);
 
   const claim = async () => {
+    await run(`UPDATE session_commands SET status='cancelled' WHERE session_id=? AND status='queued' AND NOT (
+      actor_user_id IS NULL OR actor_user_id=(SELECT user_id FROM cli_sessions WHERE id=session_commands.session_id)
+      OR EXISTS (SELECT 1 FROM shared_session_access a WHERE a.session_id=session_commands.session_id
+        AND a.user_id=session_commands.actor_user_id AND a.permission>=2))`, [session.id]);
     await run(`UPDATE session_commands SET status='cancelled'
       WHERE session_id=? AND status='queued' AND (
         (mcp_share_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mcp_shares sh WHERE sh.id=session_commands.mcp_share_id
@@ -266,6 +271,10 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
       // The UPDATE is the lock — only the poll that flips 'queued' runs it.
       const claimed = await run(
         `UPDATE session_commands SET status='claimed', claimed_at=? WHERE id=? AND status='queued'
+          AND (actor_user_id IS NULL
+            OR actor_user_id=(SELECT user_id FROM cli_sessions WHERE id=session_commands.session_id)
+            OR EXISTS (SELECT 1 FROM shared_session_access a WHERE a.session_id=session_commands.session_id
+              AND a.user_id=session_commands.actor_user_id AND a.permission>=2))
           AND (mcp_share_id IS NULL OR EXISTS (SELECT 1 FROM mcp_shares sh
             WHERE sh.id=session_commands.mcp_share_id AND sh.session_id=session_commands.session_id
               AND sh.user_id=? AND sh.status='active' AND sh.expires_at>?))
@@ -321,10 +330,7 @@ sessionsRouter.post("/api/sessions/:id/commands/:cid", cliAuth, async (req, res)
 // ---- human side (cookie session) ----
 
 sessionsRouter.get("/sessions", requireAuth, async (req, res) => {
-  const rows = await all(
-    `SELECT * FROM cli_sessions WHERE user_id = ? ORDER BY last_seen_at DESC LIMIT 50`,
-    [req.user.id]
-  );
+  const rows = await sessionsFor(req.user.id);
   const items = rows.length ? rows.map((s) => {
     const live = isLive(s);
     return `<a class="card sess" href="/sessions/${esc(s.id)}">
@@ -332,6 +338,7 @@ sessionsRouter.get("/sessions", requireAuth, async (req, res) => {
         <div class="sess-top">
           <span class="dot ${live ? "on" : "off"}"></span>
           <b>${esc(s.name)}</b>
+          <span class="pill">${s.user_id === req.user.id ? "yours" : `shared · ${roleFor(s.permission)}`}</span>
           <span class="faint mono">${esc(s.version ? "v" + s.version : "")}</span>
         </div>
         <div class="dim mono sess-meta">${live ? (s.engine ? `▸ ${esc(s.engine)}` : "idle") : "offline"} · ${ago(s.last_seen_at)}${dim(s.cols) && dim(s.rows) ? ` · ${dim(s.cols)}×${dim(s.rows)}` : ""}${s.cwd ? ` · ${esc(s.cwd)}` : ""}</div>
@@ -347,21 +354,33 @@ sessionsRouter.get("/sessions", requireAuth, async (req, res) => {
     body: `${appBar(req.user, await balance(req.user.id), req.csrfToken)}
     <main class="wrap" style="max-width:760px;padding-top:5vh">
       <h1 style="font-size:1.3rem;margin-bottom:4px">Sessions</h1>
-      <p class="dim mono" style="font-size:.8rem;margin-bottom:16px">Live mirrors of your running mosh instances.</p>
+      <p class="dim mono" style="font-size:.8rem;margin-bottom:16px">Your running mosh instances and sessions shared with your teams. <a class="acid" href="/organizations">Manage teams →</a></p>
       ${items}
     </main>${footer}`,
   }));
 });
 
 sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
-  const s = await ownedSession(req.params.id, req.user.id);
+  const s = await accessibleSession(req.params.id, req.user.id);
   if (!s) return res.status(404).type("html").send(page({ body: `<main class="wrap" style="padding-top:12vh"><h1>No such session</h1></main>` }));
   const live = isLive(s);
+  const canWrite = Number(s.permission) >= 2;
+  const writable = live && canWrite;
+  const owner = s.user_id === req.user.id;
+  const shares = owner ? await sharesFor(s.id) : [];
+  const teams = owner ? await teamsFor(req.user.id) : [];
+  const sharing = owner ? `<details class="card" style="margin:16px 0"><summary class="card-body">Share this session with a team</summary><div class="card-body">
+    <p class="dim">Read members watch. Writers, admins, and owners can send input to this same terminal. Only teams you choose get access.</p>
+    ${shares.map((team) => `<form method="post" action="/sessions/${esc(s.id)}/teams" style="display:flex;gap:12px;align-items:center;margin:8px 0">${csrfInput(req)}
+      <input type="hidden" name="teamId" value="${esc(team.id)}"><span>${esc(team.organization_name)} → ${esc(team.name)}</span><button class="btn" name="remove" value="1">Stop sharing</button></form>`).join("")}
+    ${teams.length ? `<form method="post" action="/sessions/${esc(s.id)}/teams">${csrfInput(req)}<label class="field"><span>Team</span><select name="teamId">${teams.map((team) => `<option value="${esc(team.id)}">${esc(team.organization_name)} → ${esc(team.name)}</option>`).join("")}</select></label><button class="btn acid">Share session</button></form>` : `<a class="acid" href="/organizations">Create or join a team →</a>`}
+    </div></details>` : "";
   const geo = dim(s.cols) && dim(s.rows) ? `${dim(s.cols)}×${dim(s.rows)}` : "";
   const keys = supportsKeys(s);
-  const padOn = live && keys;
+  const padOn = writable && keys;
   const extendedOn = padOn && supportsExtendedKeys(s);
-  const padNote = !live
+  const padNote = !canWrite ? "Read-only · watch and copy output"
+    : !live
     ? "offline"
     : extendedOn
       ? "Ctrl / Shift apply to the next key · choose a letter or tap a key"
@@ -387,6 +406,8 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
         <span class="faint mono">${esc(s.version ? "v" + s.version : "")}${s.cwd ? " · " + esc(s.cwd) : ""}</span>
         <a class="faint mono" href="/sessions" style="margin-left:auto">← all sessions</a>
       </div>
+      <p class="dim mono">${owner ? "Your session" : `Shared session · ${roleFor(s.permission)}`}${canWrite ? " · Work together in this terminal." : " · You can watch; a team admin can grant writer access."}</p>
+      ${sharing}
       <div class="term ${live ? "" : "off"}" id="frame">
         <div id="term"></div>
       </div>
@@ -406,7 +427,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
             ${extraKey("shift+enter", "⇧ ⏎", "Shift+Enter")}
             ${extraKey("ctrl+c", "Ctrl+C", "Ctrl+C — interrupt")}
             <button type="button" class="padkey extrakey" id="copy" title="Copy selected terminal output or prompt text" aria-label="Copy selected text">${clipboardIcon('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>')}Copy</button>
-            <button type="button" class="padkey extrakey" id="paste" title="Paste into the command box" aria-label="Paste into command box"${live ? "" : " disabled"}>${clipboardIcon('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M8 4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3M8 12h8M8 16h5"/>')}Paste</button>
+            <button type="button" class="padkey extrakey" id="paste" title="Paste into the command box" aria-label="Paste into command box"${writable ? "" : " disabled"}>${clipboardIcon('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M8 4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3M8 12h8M8 16h5"/>')}Paste</button>
           </div>
           <div class="keyrow" role="group" aria-label="Send a key combination">
             <button type="button" class="padkey extrakey" data-modifier="ctrl" data-extended aria-pressed="false" title="Ctrl for the next remote key"${extendedOn ? "" : " disabled"}>Ctrl</button>
@@ -419,19 +440,20 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
       </div>
       <form id="send" method="post" action="/sessions/${esc(s.id)}/commands" class="sendbar">
         ${csrfInput(req)}
-        <button class="prompt acid mono" id="editor-toggle" type="button" aria-label="Expand multiline editor" title="Expand multiline editor" aria-expanded="false" aria-controls="body"${live ? "" : " disabled"}><span aria-hidden="true">❯</span></button>
+        <button class="prompt acid mono" id="editor-toggle" type="button" aria-label="Expand multiline editor" title="Expand multiline editor" aria-expanded="false" aria-controls="body"${writable ? "" : " disabled"}><span aria-hidden="true">❯</span></button>
         <span class="editor-note faint mono" id="editor-hint" hidden>Enter adds a line · Ctrl/⌘+Enter runs</span>
-        <textarea name="body" id="body" rows="1" aria-label="Command" aria-describedby="editor-hint" placeholder="Type a command…" autocomplete="off" spellcheck="false" autocapitalize="off" ${live ? "" : "disabled"}></textarea>
-        <button class="btn acid" type="submit" ${live ? "" : "disabled"}>run</button>
+        <textarea name="body" id="body" rows="1" aria-label="Command" aria-describedby="editor-hint" placeholder="Type a command…" autocomplete="off" spellcheck="false" autocapitalize="off" ${writable ? "" : "disabled"}></textarea>
+        <button class="btn acid" type="submit" ${writable ? "" : "disabled"}>run</button>
       </form>
       <div class="termbar">
         <span class="faint mono" id="sendstatus" role="status" aria-live="polite"></span>
         <span class="faint mono" id="geo" style="margin-left:auto">${esc(geo)}</span>
       </div>
       <p class="faint mono" style="font-size:.72rem;margin-top:8px">
-        Type anywhere on the terminal to reach the prompt. Commands run in the live mosh prompt.
+        ${canWrite ? `Type anywhere on the terminal to reach the prompt. Commands run in the live mosh prompt.
         Keyboard controls act on the remote terminal. Copy uses selected text; Paste inserts into
-        the command box so you can review it before pressing run. Click ❯ to open the multiline editor.
+        the command box so you can review it before pressing run. Click ❯ to open the multiline editor.`
+          : `You are watching the live terminal. Select output and use Copy to keep it. Ask a team admin for writer access when you want to participate.`}
       </p>
     </main>
     <script src="/vendor/xterm.js"></script>
@@ -443,7 +465,7 @@ sessionsRouter.get("/sessions/:id", requireAuth, async (req, res) => {
 });
 
 sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
-  const s = await ownedSession(req.params.id, req.user.id);
+  const s = await accessibleSession(req.params.id, req.user.id);
   if (!s) return res.status(404).end();
 
   res.writeHead(200, {
@@ -483,7 +505,28 @@ sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
     [s.id, since]
   );
 
-  const live = sseWatcher(res);
+  const wire = sseWatcher(res);
+  let pending = Promise.resolve();
+  let currentPermission = Number(s.permission);
+  // Recheck before every delivery, including scrollback. Serialize deliveries
+  // so slow permission checks cannot reorder terminal output.
+  const live = s.user_id === req.user.id ? wire : { send(event) {
+    pending = pending.then(async () => {
+      if (res.destroyed || res.writableEnded) return;
+      const access = await accessibleSession(s.id, req.user.id);
+      if (!access) {
+        wire.send({ type: "access-revoked" });
+        res.end();
+        return;
+      }
+      if (Number(access.permission) !== currentPermission) {
+        currentPermission = Number(access.permission);
+        wire.send({ type: "access-changed" });
+      }
+      if (event.type === "ping") res.write(": ping\n\n");
+      else wire.send(event);
+    }).catch(() => res.end());
+  } };
   let last = since;
   for (const row of back) {
     last = Number(row.seq);
@@ -503,12 +546,15 @@ sessionsRouter.get("/sessions/:id/stream", requireAuth, async (req, res) => {
   }
 
   // Proxies drop an idle stream; a comment every 25s is cheaper than a reconnect.
-  ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* gone */ } }, 25000);
+  ping = setInterval(() => {
+    if (s.user_id !== req.user.id) live.send({ type: "ping" });
+    else try { res.write(": ping\n\n"); } catch { /* gone */ }
+  }, 25000);
 });
 
 // Queue one key. Always answers JSON: keys come from the pad, which is script,
 // never from a plain form post the way a typed line can be.
-async function queueKey(res, s, name) {
+async function queueKey(res, s, name, actor) {
   if (!KEY_NAMES.has(name)) return res.status(400).json({ error: "unknown key" });
   if (!isLive(s)) return res.status(409).json({ error: "session offline" });
   if (!supportsKeys(s)) return res.status(409).json({ error: "this mosh is too old for keys — update it" });
@@ -517,20 +563,21 @@ async function queueKey(res, s, name) {
   }
   const cid = id();
   const body = keyCommand(name);
-  await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,?,'queued',?)`,
-    [cid, s.id, body, Date.now()]);
+  await run(`INSERT INTO session_commands (id,session_id,body,status,created_at,actor_user_id) VALUES (?,?,?,'queued',?,?)`,
+    [cid, s.id, body, Date.now(), actor.id]);
   // `key` rides the event so the page can report "▸ ↑" instead of the sentinel.
-  publish(s.id, { type: "queued", id: cid, body, key: name });
+  publish(s.id, { type: "queued", id: cid, body, key: name, actor: actor.display_name || actor.email || "Teammate" });
   wake(s.id);
   return res.json({ ok: true, id: cid, key: name });
 }
 
 sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {
-  const s = await ownedSession(req.params.id, req.user.id);
+  const s = await accessibleSession(req.params.id, req.user.id);
   if (!s) return res.status(404).json({ error: "no such session" });
+  if (Number(s.permission) < 2) return res.status(403).json({ error: "This session is read-only. Writer access is required to send input." });
   // A key is one keypress rather than text, so it takes its own path: the
   // splitting below is for lines, and a key has no line to split.
-  if (req.body?.key) return queueKey(res, s, String(req.body.key).toLowerCase());
+  if (req.body?.key) return queueKey(res, s, String(req.body.key).toLowerCase(), req.user);
   // A pasted block is queued a line at a time. The CLI hands exactly one line
   // to the prompt per turn — readline resolves on the first line it sees and
   // would swallow the rest — so splitting here is what makes paste work, and it
@@ -556,10 +603,10 @@ sessionsRouter.post("/sessions/:id/commands", requireAuth, async (req, res) => {
   const queued = [];
   for (const [i, body] of lines.entries()) {
     const cid = id();
-    await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,?,'queued',?)`,
-      [cid, s.id, body, at + i]);
+    await run(`INSERT INTO session_commands (id,session_id,body,status,created_at,actor_user_id) VALUES (?,?,?,'queued',?,?)`,
+      [cid, s.id, body, at + i, req.user.id]);
     queued.push({ id: cid, body });
-    publish(s.id, { type: "queued", id: cid, body });
+    publish(s.id, { type: "queued", id: cid, body, actor: req.user.display_name || req.user.email || "Teammate" });
   }
   wake(s.id); // release the CLI's long-poll immediately
   return wantsJson(req)
@@ -876,7 +923,9 @@ function mirror(opts) {
       // Queued commands are reported beside the terminal, never written into
       // it: the pit echoes the command itself when it runs, and injecting our
       // own text would shift whatever the CLI is redrawing out of place.
-      else if (d.type === "queued") { flash(d.key ? "▸ " + (GLYPH[d.key] || d.key) : "▸ queued: " + d.body); }
+      else if (d.type === "queued") { flash((d.actor ? d.actor + ": " : "") + (d.key ? "▸ " + (GLYPH[d.key] || d.key) : "▸ queued: " + d.body)); }
+      else if (d.type === "access-revoked") { offline(); es.close(); flash("Team access was removed."); }
+      else if (d.type === "access-changed") { window.location.reload(); }
       else if (d.type === "command-done") { flash(""); }
       else if (d.type === "end" || d.type === "offline") { offline(); }
     };
