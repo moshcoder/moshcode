@@ -524,15 +524,16 @@ first time — what is wrong with your `rules.json` instead of ignoring it.
 ### The engine's settings, the way a herd wants them
 
 An engine can also say how it would like to be configured. Claude Code's
-defaults are **ultracode on** (every substantive prompt runs as a workflow of
-agents), **small workflows** (Claude's own advisory tier, fewer than 5 agents
-each) and a **hard cap of 4 agents at once**, so one session cannot eat the box
-the rest of the herd is running on. `moshcode install claude` applies them;
-by hand:
+defaults are **ultracode off** (a prompt runs as a workflow of agents only when
+you ask for one in so many words; neither the setting nor the "ultracode"
+keyword turns it on by itself), **small workflows** (Claude's own advisory
+tier, fewer than 5 agents each) and a **hard cap of 4 agents at once**, so a
+workflow you do ask for cannot eat the box the rest of the herd is running on.
+`moshcode install claude` applies them; by hand:
 
 ```sh
 moshcode engines defaults apply claude
-✓ claude — 3 defaults applied (ultracode on by default, small workflows (under 5 agents), 4 agents at once, hard cap)
+✓ claude — 4 defaults applied (ultracode off by default, no ultracode keyword trigger, small workflows (under 5 agents), 4 agents at once, hard cap)
 ```
 
 Same rule as the hooks: the file is merged, never clobbered. A key you already

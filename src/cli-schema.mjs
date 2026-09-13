@@ -586,7 +586,7 @@ export const CORE_CLI_COMMANDS = [
     examples: [
       ["moshcode engines", "who is installed"],
       ["moshcode engines defaults", "per engine: which of its defaults are set, missing, or yours"],
-      ["moshcode engines defaults apply claude", "ultracode on, small workflows, 4 agents at once"],
+      ["moshcode engines defaults apply claude", "ultracode off, small workflows, 4 agents at once"],
       ["moshcode engines defaults remove claude", "take them back out"],
     ],
     seeAlso: ["agents", "install"],
