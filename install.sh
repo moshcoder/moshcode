@@ -145,8 +145,7 @@ fetch_and_unpack() {
     [ -n "$_src" ] && [ -f "$_src/bin/moshcode.mjs" ] || { rm -rf "$_tmp"; fail "unexpected tarball layout."; }
     # GitHub archives contain source, not node_modules. Prepare and check the
     # new release before removing a working installation.
-    info "installing runtime dependencies"
-    if ! (cd "$_src" && npm install --omit=dev --ignore-scripts --no-audit --no-fund --package-lock=false); then
+    if ! install_deps "$_src"; then
         rm -rf "$_tmp"; fail "runtime dependency installation failed — existing installation unchanged."
     fi
     if ! node "$_src/bin/moshcode.mjs" --version >/dev/null; then
@@ -170,21 +169,23 @@ fetch_and_unpack() {
 #
 # Read with node rather than grep: "devDependencies" contains the word too,
 # and a dev-only package.json must not drag npm in.
-install_deps() {
-    _pkg="$MOSHCODE_HOME/package.json"
+install_deps() (
+    # Run in a subshell so temporary paths cannot change the caller's install
+    # location. Only the checked staging directory is passed here.
+    _deps_dir="$1"
+    _pkg="$_deps_dir/package.json"
     [ -f "$_pkg" ] || return 0
-    if ! node -e 'const p=require(process.argv[1]);process.exit(Object.keys(p.dependencies||{}).length?0:1)' "$_pkg" 2>/dev/null; then
-        unset _pkg; return 0
-    fi
+    _needs_deps="$(node -e 'const p=require(process.argv[1]);console.log(Object.keys(p.dependencies||{}).length ? "yes" : "no")' "$_pkg")" \
+        || fail "cannot read the staged package.json."
+    [ "$_needs_deps" = yes ] || return 0
     command -v npm >/dev/null 2>&1 || fail "npm is required to install moshcode's dependencies (node was found, npm was not)."
     info "installing runtime dependencies"
-    if ( cd "$MOSHCODE_HOME" && npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1 ); then
+    if (cd "$_deps_dir" && npm install --omit=dev --ignore-scripts --no-audit --no-fund --package-lock=false); then
         ok "dependencies installed"
     else
-        fail "npm install failed in $MOSHCODE_HOME — moshcode would not start without its dependencies."
+        fail "npm install failed in staging — the new CLI would not start without its dependencies."
     fi
-    unset _pkg
-}
+)
 
 write_wrapper() {
     mkdir -p "$MOSHCODE_BIN"
@@ -281,11 +282,10 @@ install_proxy() {
 run_install() {
     printf '\n%smoshcode installer%s %s— code hard, mosh harder 🤘%s\n\n' "$BOLD" "$RESET" "$ASH" "$RESET"
     check_not_sudo
-    need curl; need tar; need npm
+    need curl; need tar
     check_node
     _ref="$(resolve_ref)"
     fetch_and_unpack "$_ref"
-    install_deps
     write_wrapper
     ensure_path
     install_proxy
