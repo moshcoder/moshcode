@@ -111,8 +111,29 @@ resolve_ref() {
     unset _tag
 }
 
+# The other installer (moshcoding.com/install.sh) keeps the package under
+# $MOSHCODE_HOME/pkg and uses $MOSHCODE_HOME itself for the operator's own
+# files: aliases.json, credentials.json, herd/, news.opml, sync.json. This one
+# replaces $MOSHCODE_HOME wholesale. Run by hand on a box the other installer
+# set up, that replaced the config directory — every alias, the account login
+# and the herd's ledger, gone in one `rm -rf`. So look before removing: a
+# directory that holds an operator's files, or a pkg/ package, is the config
+# directory, and the package belongs in pkg/ beneath it.
+config_dir_layout() {
+    [ -f "$MOSHCODE_HOME/pkg/bin/moshcode.mjs" ] && return 0
+    for _f in aliases.json credentials.json sync.json herd news.opml; do
+        [ -e "$MOSHCODE_HOME/$_f" ] && { unset _f; return 0; }
+    done
+    unset _f
+    return 1
+}
+
 fetch_and_unpack() {
     _ref="$1"
+    if config_dir_layout; then
+        info "$MOSHCODE_HOME holds your settings — installing the package under $MOSHCODE_HOME/pkg"
+        MOSHCODE_HOME="$MOSHCODE_HOME/pkg"
+    fi
     _url="https://codeload.github.com/$REPO/tar.gz/$_ref"
     info "downloading moshcode@$_ref"
     _tmp="$(mktemp -d 2>/dev/null || mktemp -d -t moshcode)"
