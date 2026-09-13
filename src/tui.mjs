@@ -826,6 +826,15 @@ function installTarget(key) {
       // exactly as it did before. Names you bound yourself are never touched.
       const added = Object.hasOwn(TOOLS, key) ? adoptToolAliases(key, TOOLS[key], { quiet: true }) : 0;
       if (added) console.log(ash(`   ${added} alias${added === 1 ? "" : "es"} from ${key} · /alias list for all of them`));
+      // An engine with settings defaults gets them too — holes only, and quiet
+      // when there are none (src/engine-settings.mjs).
+      if (Object.hasOwn(ENGINES, key)) {
+        import("./engine-settings.mjs")
+          .then(({ applyAfterInstall }) => applyAfterInstall(key, { write: (l) => console.log(ash(l)) }))
+          .catch((e) => console.log(err(`defaults not applied: ${String(e.message || e)}`)))
+          .finally(resolve);
+        return;
+      }
       resolve();
     });
   });
@@ -1142,6 +1151,11 @@ export async function tui() {
     if (cmd === "agents" || cmd === "agent" || cmd === "engines") {
       if (!rest[0] || (rest.length === 1 && rest[0] === "--json")) {
         printEngines(rest[0] === "--json");
+        continue;
+      }
+      if (cmd === "engines" && rest[0] === "defaults") {
+        const { enginesDefaults } = await import("./engine-settings.mjs");
+        await enginesDefaults(rest.slice(1), { write: (l) => console.log(`  ${l}`) });
         continue;
       }
       const resolved = resolveEngine(rest[0]);

@@ -309,6 +309,13 @@ async function main() {
   }
 
   if (cmd === "engines") {
+    // `engines defaults` — the engine's own settings, as moshcode wants them
+    // (src/engine-settings.mjs). Everything else is still the roster.
+    if (rest[0] === "defaults") {
+      const { enginesDefaults } = await import("../src/engine-settings.mjs");
+      process.exitCode = await enginesDefaults(rest.slice(1));
+      return;
+    }
     printEngineStatus(rest.includes("--json"));
     return;
   }
@@ -521,6 +528,12 @@ async function main() {
       // for everything that offers none, and a name already in the file is
       // reported by the adopter rather than replaced.
       for (const line of adoptAliasLines(target, entry, { isReserved })) console.log(line);
+      // And an engine that ships settings defaults gets them now, into holes
+      // only — see src/engine-settings.mjs. Silent when there is nothing to do.
+      if (Object.hasOwn(ENGINES, target)) {
+        const { applyAfterInstall } = await import("../src/engine-settings.mjs");
+        applyAfterInstall(target);
+      }
     }
     return backToPit(`install ${target}`, result.code);
   }

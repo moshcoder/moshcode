@@ -116,6 +116,31 @@ export const ENGINES = {
         { event: "UserPromptSubmit", state: "working", label: "prompt-submit" },
       ],
     },
+    // The engine's settings as moshcode would like to find them (PRD 0011's
+    // sibling: the engine speaks for itself here too). `moshcode install
+    // claude` and `moshcode engines defaults apply` merge these into the file
+    // above — a key the operator already set is never touched, so this is a
+    // floor under a fresh install and not a policy over an old one.
+    //
+    // Why these three: a coding session that fans out to a workflow by default
+    // is what a herd of agents is for, and the two caps keep one session from
+    // eating the box the rest of the herd is running on. "small" is Claude's
+    // own advisory tier (fewer than 5 agents per workflow); the env var is the
+    // hard gate on how many run at once, and 4 leaves room for the other three.
+    settings: {
+      format: "claude-settings",
+      file: () => path.join(homedir(), ".claude", "settings.json"),
+      defaults: {
+        ultracode: true,
+        workflowSizeGuideline: "small",
+        env: { CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS: "4" },
+      },
+      labels: {
+        "ultracode": "ultracode on by default",
+        "workflowSizeGuideline": "small workflows (under 5 agents)",
+        "env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS": "4 agents at once, hard cap",
+      },
+    },
     state: {
       // The permission dialog's own heading, and the selector on its first
       // option — the generic numbered-menu pattern would catch the second only

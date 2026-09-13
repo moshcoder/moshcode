@@ -68,7 +68,7 @@ export function isOurs(entry) {
 
 const HOOK_FILE_MODE = 0o600;
 
-function readJsonFile(file) {
+export function readJsonFile(file) {
   let text;
   try { text = fs.readFileSync(file, "utf8"); }
   catch (error) {
@@ -85,7 +85,7 @@ function readJsonFile(file) {
   }
 }
 
-function writeJsonFile(file, data, { mode = HOOK_FILE_MODE } = {}) {
+export function writeJsonFile(file, data, { mode = HOOK_FILE_MODE } = {}) {
   const body = `${JSON.stringify(data, null, 2)}\n`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   // Write-then-rename: a crash mid-write on the engine's own settings file
@@ -97,7 +97,7 @@ function writeJsonFile(file, data, { mode = HOOK_FILE_MODE } = {}) {
 }
 
 /** The mode an existing file already has, so an install does not tighten it. */
-function existingMode(file) {
+export function existingMode(file) {
   try { return fs.statSync(file).mode & 0o777; }
   catch { return HOOK_FILE_MODE; }
 }
