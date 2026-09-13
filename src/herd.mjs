@@ -266,8 +266,12 @@ export function tmux(args, { runner = spawnSync, env = process.env, encoding = "
 let pinTitleSupport;
 /**
  * Can this tmux stop an application from renaming its pane? `allow-set-title`
- * arrived in 3.4. Asked once per process: the answer is a property of the
- * binary, and a start plan is built for every member.
+ * arrived in 3.5 — not 3.4, which is what Ubuntu 24.04 (and so every
+ * ubuntu-latest runner) ships, and which answers `invalid option` and starts
+ * nothing. Asked once per process: the answer is a property of the binary,
+ * and a start plan is built for every member. startSession also learns the
+ * answer the hard way (below), so a wrong guess here costs one retry, never
+ * a member.
  */
 export function tmuxCanPinTitle({ runner = spawnSync, force = false } = {}) {
   if (pinTitleSupport !== undefined && !force) return pinTitleSupport;
@@ -275,9 +279,12 @@ export function tmuxCanPinTitle({ runner = spawnSync, force = false } = {}) {
   try { version = String(runner("tmux", ["-V"], { encoding: "utf8" })?.stdout || ""); }
   catch { version = ""; }
   const m = /tmux\s+(?:next-)?(\d+)\.(\d+)/.exec(version);
-  pinTitleSupport = Boolean(m) && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 4));
+  pinTitleSupport = Boolean(m) && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 5));
   return pinTitleSupport;
 }
+
+/** tmux's own words for "I do not have that option". */
+const UNKNOWN_PIN_OPTION = /invalid option:\s*allow-set-title/i;
 
 /**
  * The shell-command tmux runs for a session.
@@ -346,9 +353,10 @@ export function tmuxStartPlan({ name, cwd, command, pinTitle = true }) {
     // writes "1 awaiting input · claude agents" the moment it is up) would
     // otherwise overwrite the handle through OSC 0/2, and a member whose pane
     // no longer answers to its name reads as `gone` on the roster while it is
-    // sitting there waiting for you. tmux 3.4+; on an older tmux the option is
-    // unknown and the whole invocation would fail, so startSession asks
-    // tmuxCanPinTitle first and an old tmux keeps today's behaviour.
+    // sitting there waiting for you. tmux 3.5+; on an older tmux the option is
+    // unknown and the whole invocation fails, so startSession asks
+    // tmuxCanPinTitle first, retries without it if tmux still objects, and an
+    // old tmux keeps today's behaviour.
     ...(pinTitle ? [";", "set-option", "-w", "-t", name, "allow-set-title", "off"] : []),
   ];
 }
@@ -668,7 +676,17 @@ export function startSession({
 
   if (substrate === "tmux") {
     const command = sessionCommand({ bin, args, stripEnv, setEnv: sessionEnv(name) });
-    const started = tmux(tmuxStartPlan({ name, cwd, command, pinTitle: tmuxCanPinTitle({ runner }) }), { runner, env });
+    let started = tmux(tmuxStartPlan({ name, cwd, command, pinTitle: tmuxCanPinTitle({ runner }) }), { runner, env });
+    if (!started.ok && UNKNOWN_PIN_OPTION.test(started.stderr || "")) {
+      // The version guess was wrong (a distro build, a version string we did
+      // not expect). tmux runs the plan's commands in order and stops at the
+      // one it rejects, so the session may already exist; the retry must not
+      // see it as "already running". Remember the answer for the rest of the
+      // process, then start it the way an older tmux can.
+      pinTitleSupport = false;
+      tmux(["kill-session", "-t", name], { runner, env });
+      started = tmux(tmuxStartPlan({ name, cwd, command, pinTitle: false }), { runner, env });
+    }
     if (!started.ok) {
       return { ok: false, error: new Error(started.stderr.trim() || started.error?.message || "tmux could not start the session") };
     }
