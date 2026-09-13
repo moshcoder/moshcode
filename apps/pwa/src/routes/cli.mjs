@@ -12,6 +12,7 @@ import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { createApiKey, bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
 import { config } from "../config.mjs";
+import { auditMcp } from "../lib/mcp-audit.mjs";
 
 export const cliRouter = Router();
 
@@ -147,7 +148,7 @@ cliRouter.get("/device", requireAuth, async (req, res) => {
     : denied
       ? `<div class="notice">request denied — you can close this tab.</div>`
       : mcpRequest
-        ? `<p class="dim mono" style="font-size:.82rem"><b class="acid">${esc(mcpRequest.name || "MCP client")}</b> wants to control only <b>${esc(mcpRequest.share_name || "this Moshcode session")}</b> as ${esc(req.user.email || req.user.display_name)}.</p>
+        ? `<p class="dim mono" style="font-size:.82rem"><b class="acid">${esc(mcpRequest.name || "MCP client")}</b> wants to connect only to <b>${esc(mcpRequest.share_name || "this Moshcode session")}</b> as ${esc(req.user.email || req.user.display_name)}.</p>
         <p class="mono" style="font-size:.76rem">Scopes: ${esc(mcpRequest.scope || "")}</p>
         <form method="post" action="/device" style="margin-top:14px">${csrfInput(req)}
           <input type="hidden" name="user_code" value="${esc(prefill)}">
@@ -188,6 +189,8 @@ cliRouter.post("/device", requireAuth, async (req, res) => {
         `UPDATE device_codes SET status = 'denied', user_id = ? WHERE device_code = ? AND status = 'pending'`,
         [req.user.id, row.device_code]
       );
+      await auditMcp({ userId: req.user.id, clientId: row.client_id, shareId: row.share_id,
+        action: "oauth.device", outcome: "denied" });
       return res.redirect("/device?denied=1");
     }
     if (req.body.decision !== "approve") return res.redirect(`/device?code=${encodeURIComponent(userCode)}`);
@@ -199,6 +202,8 @@ cliRouter.post("/device", requireAuth, async (req, res) => {
   if (!approved.rowsAffected) {
     return res.redirect(`/device?bad=1${req.body.user_code ? "&code=" + encodeURIComponent(req.body.user_code) : ""}`);
   }
+  if (row.kind === "mcp") await auditMcp({ userId: req.user.id, clientId: row.client_id, shareId: row.share_id,
+    action: "oauth.device", outcome: "allowed" });
   res.redirect("/device?done=1");
 });
 

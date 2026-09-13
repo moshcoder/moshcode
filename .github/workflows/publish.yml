@@ -71,6 +71,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/pwa install --frozen-lockfile
 
       # Publishing is the one action here that cannot be taken back — npm will
       # not let a version be replaced — so the tests run first, on the exact

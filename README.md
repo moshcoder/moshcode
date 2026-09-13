@@ -1591,9 +1591,9 @@ session:
 
 ```sh
 moshcode
-/mcp answer                    # default: all session scopes for 8 hours
+/mcp answer                    # default: read-only for 8 hours
 /mcp answer --ttl 30m          # shorter share
-/mcp answer --scope sessions:read,sessions:control
+/mcp answer --scope sessions:read,sessions:write,sessions:approve,sessions:cancel
 ```
 
 Paste the printed `https://moshcode.sh/api/v1/mcp/mcs_…` endpoint into a remote
@@ -1602,10 +1602,28 @@ specific session and scopes in the browser, and its access token is bound to
 that one opaque share URL. OAuth authorization code + PKCE, rotating refresh
 tokens, and device authorization are supported.
 
-The shared server exposes `moshcode_session_read`, `moshcode_session_answer`,
-`moshcode_session_approve`, `moshcode_session_send`, and
-`moshcode_session_cancel`. Read and control access are separate scopes; the
-authorization page shows exactly which ones the client requested. Share
+- **ChatGPT:** in an account/workspace with custom MCP apps enabled, open
+  Settings → Apps → Create, enter the share URL, choose OAuth, and scan tools.
+  Complete the Moshcode consent page as the session owner. Availability and
+  write permissions depend on your plan and administrator settings; see
+  [OpenAI's setup guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta).
+- **Claude:** open Customize → Connectors → Add custom connector, enter the
+  share URL, then connect and complete Moshcode authorization. Team owners
+  configure the connector for their organization first. See
+  [Claude's setup guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+- **Chovy and other integrations:** use an OAuth-capable remote MCP client
+  with the same share URL. Chovy does not yet provide a native connector screen;
+  its adapter needs the discovery, PKCE, resource-bound token and refresh flow
+  described in [the server integration contract](apps/pwa/MCP.md).
+
+After connecting, ask the client to read this session before granting or using
+write tools. Removing a client-side connector does not replace revoking the
+Moshcode share when you want to end all access to that URL.
+
+The shared server exposes `session_read`, `session_answer`, `session_approve`,
+`session_send`, and `session_cancel`. Reading, writing, approval and interruption
+have separate scopes; the authorization page shows which ones the client
+requested. Each tool is bound to the shared session. Share
 management stays with the logged-in Moshcode operator:
 
 ```sh
@@ -1618,6 +1636,16 @@ moshcode mcp revoke mcs_…
 `/mcp share` is an alias for `/mcp answer`. Ending the live terminal makes tool
 writes fail, and revoking or expiring the share invalidates its access and
 refresh tokens.
+
+If you started the pit before signing in, `/mcp answer` signs you in and starts
+its live connection. `/mcp connect` also reconnects the current pit after login.
+An unreachable service can be retried without restarting the terminal. An
+explicit `MOSHCODE_NO_MIRROR` setting remains respected; unset it and restart
+before sharing. Remote approval sends a bounded yes/no to the terminal; it does
+not identify a particular engine prompt. Read the current output before acting.
+The write scope permits arbitrary terminal input, including commands and a
+typed "yes". The approval scope restricts the approval tool; it does not block
+someone who already has write permission from answering a prompt themselves.
 
 ### Known MCP servers
 

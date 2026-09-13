@@ -34,6 +34,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/pwa install --frozen-lockfile
 
       # typecheck / test default to `pnpm run --if-present <script>` so a repo
       # that hasn't defined these scripts yet gets a green workflow instead of
