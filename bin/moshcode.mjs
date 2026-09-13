@@ -363,6 +363,13 @@ async function main() {
     process.exitCode = (await swarmCommand(rest)) || 0;
     return;
   }
+  // The fleet (PRD 0016): the OpenFleet sysop tool over the records and the
+  // ledger a swarm writes. Lazy for the same reason as swarm.
+  if (cmd === "fleet") {
+    const { fleetCommand } = await import("../src/fleet-cli.mjs");
+    process.exitCode = (await fleetCommand(rest)) || 0;
+    return;
+  }
   if (["ps", "attach", "kill", "wait", "restore", "cost", "usage"].includes(cmd)) {
     process.exitCode = (await herdCommand([cmd === "usage" ? "cost" : cmd, ...rest])) || 0;
     return;

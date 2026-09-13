@@ -130,10 +130,38 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode swarm \"audit src/ for unhandled promise rejections\" --agents 8 --verify", "wider, and reviewed"],
       ["moshcode swarm \"…\" --plan-only", "see how it would split first"],
     ],
-    seeAlso: ["herd", "ps", "wait", "run"],
+    seeAlso: ["herd", "ps", "wait", "run", "fleet"],
     note: "the same thing claude code calls ultracode, on any engine moshcode can start: one headless call splits the task into pieces that "
       + "do not touch the same files, each piece runs in its own herd session (`moshcode herd task <id>` afterwards), and one more call "
-      + "folds the outputs into the answer. sessions are ended when it is done unless --keep. a plan that does not parse runs the task as one piece.",
+      + "folds the outputs into the answer. sessions are ended when it is done unless --keep. a plan that does not parse runs the task as one piece. "
+      + "every swarm is recorded as OpenFleet (PRD 0016): the swarm id is <slug>-<HHMM>, its members and panes are <swarm>-<n>, each member "
+      + "carries a record under $OPENFLEET_HOME and the four OPENFLEET_* variables, the ledger gets swarm.spawn before the first start, "
+      + "member.start on submit for a pane that cannot write its own, member.end and one swarm.end (synthesis as summary, --verify as verdict) "
+      + "before the kills, and a bypass flag the ceiling forbids is refused with ceiling.refuse. `moshcode fleet tree` shows it.",
+  },
+  {
+    name: "fleet",
+    group: "runtime",
+    description: "the OpenFleet sysop tool: open a fleet, cap it, see the tree, stop a swarm, read the ledger (PRD 0016)",
+    synopsis: [
+      ["moshcode fleet", "the tree, same as moshcode fleet tree"],
+      ["moshcode fleet <verb> [args…]", ""],
+    ],
+    verbs: "FLEET_VERBS",
+    flags: [["--json", "machine-readable, on every verb", ""]],
+    examples: [
+      ["moshcode fleet tree", "every fleet on this box: roots, swarms, members, who runs with approvals bypassed"],
+      ["moshcode fleet open --approvals bypass --depth 2 --until 2h", "a fleet with a ceiling; new root members join it"],
+      ["moshcode fleet log --swarm create-two-0541", "what one swarm did, in order, and who did it"],
+      ["moshcode fleet stop create-two-0541", "end a swarm as one unit, through each member's own engine"],
+      ["moshcode fleet cap create-two-0541 --approvals native", "narrow a running swarm; members above the new ceiling are stopped"],
+    ],
+    seeAlso: ["swarm", "herd", "ps"],
+    note: "the records and the ledger live under $OPENFLEET_HOME (default ~/.openfleet), the same files `logicsrc fleet` and claude code read. "
+      + "open and cap are the sysop's alone and refuse when OPENFLEET_MEMBER is set, because a process carrying it is an agent; "
+      + "stop refuses anything outside what that agent spawned. tree joins the herd roster for liveness, draws a herd session with no "
+      + "record as a root of the implicit fleet <user>@<host>, and marks a recorded member the roster no longer lists as lost. "
+      + "moshcode stops its own panes; a claude code member goes through `claude stop`, a `claude -p` through its pid.",
   },
   {
     name: "ps",
@@ -1259,6 +1287,7 @@ export const HERD_VERBS = [
       ["--name <slug>", "session name", "<engine>-<dir>"],
       ["--cwd <dir>", "where to run it", "this directory"],
       ["--agent", "autonomous mode — bypasses the engine's approvals", ""],
+      ["--env KEY=VALUE", "a variable for this session alone, repeatable; a swarm hands its members OPENFLEET_* this way", ""],
       ["--json", "machine-readable", ""],
     ] },
   { name: "tile", description: "every member on screen at once, in a tiled window",
@@ -1412,6 +1441,63 @@ export const HERD_VERBS = [
       + "CI has to tell a worse agent from a broken box." },
 ];
 
+/** `moshcode fleet`'s verbs (PRD 0016): the spec's five, over $OPENFLEET_HOME. */
+export const FLEET_VERBS = [
+  { name: "open", description: "sysop only: create a fleet, set its whole ceiling, make it current",
+    synopsis: [["moshcode fleet open [name] [--approvals native|bypass] [--budget \"20 USD\"] [--depth 2] [--fan-out 4] [--hosts a,b] [--until 2h]", "prints the fleet id, <name>-<yyyymmdd>"]],
+    flags: [
+      ["--approvals native|bypass", "the most a member may run with; absent means native", "native"],
+      ["--budget <amount unit>", "the most the fleet may spend in total, \"20 USD\" or \"5000 tokens\"", "uncapped"],
+      ["--depth <n>", "the deepest member allowed; 1 means roots may spawn and their members may not", "1"],
+      ["--fan-out <n>", "the most members one swarm may hold", "the engine's default"],
+      ["--hosts <a,b>", "hostnames members may run on", "this host"],
+      ["--until <dur|iso>", "when every member under it is stopped", "no deadline"],
+      ["--sysop <url>", "the human's OpenProfile.md URL", "<user>@<host>"],
+      ["--json", "machine-readable", ""],
+    ],
+    note: "writes fleet.open with by: sysop and the id to $OPENFLEET_HOME/current. refuses with exit 4 when OPENFLEET_MEMBER is set." },
+  { name: "cap", description: "sysop only: set a fleet's whole ceiling, or narrow a running swarm's",
+    synopsis: [["moshcode fleet cap <fleet|swarm> [--approvals …] [--budget …] [--depth …] [--fan-out …] [--hosts …] [--until …]", ""]],
+    flags: [
+      ["--approvals native|bypass", "", ""],
+      ["--budget <amount unit>", "", ""],
+      ["--depth <n>", "", ""],
+      ["--fan-out <n>", "", ""],
+      ["--hosts <a,b>", "", ""],
+      ["--until <dur|iso>", "", ""],
+      ["--fleet <id>", "look for the swarm in this fleet only", "every fleet"],
+      ["--json", "machine-readable", ""],
+    ],
+    note: "on a fleet the keys given are the whole new ceiling; on a swarm they must narrow what it has. members already above the new "
+      + "ceiling, a bypass member under a now-native ceiling or one on a now-forbidden host, are stopped with member.end stopped. "
+      + "refuses with exit 4 when OPENFLEET_MEMBER is set." },
+  { name: "tree", description: "one fleet, or every fleet on this host, as a tree",
+    synopsis: [["moshcode fleet tree [fleet] [--json]", ""]],
+    flags: [["--json", "the folded model: fleets, nodes, refusals, spend", ""]],
+    note: "fleet, its root members, each member's swarms, each swarm's members: state, engine, depth, spend against budget, owns, and a "
+      + "[bypass] mark on every member whose approvals are bypassed. a herd session with no record is a root of the implicit fleet "
+      + "marked [roster]; a recorded moshcode member the roster no longer lists gets member.end lost." },
+  { name: "stop", description: "end a member, a swarm, or a whole fleet as one unit",
+    synopsis: [
+      ["moshcode fleet stop <member|swarm>", "nested swarms first, each with its own swarm.end, then the members, then the target's swarm.end"],
+      ["moshcode fleet stop --fleet <fleet>", "everything in the fleet"],
+    ],
+    flags: [["--fleet <id>", "stop every swarm and root member of this fleet", ""], ["--json", "machine-readable", ""]],
+    note: "each member ends through its own engine: a moshcode pane through the herd, a claude code job through `claude stop`, a `claude -p` "
+      + "through its pid; one it cannot reach is reported, never faked. an agent (OPENFLEET_MEMBER set) may stop only a swarm it spawned "
+      + "or a member under one; --fleet, an ancestor or a sibling's swarm is refused with exit 4. a member already ended writes nothing." },
+  { name: "log", description: "the ledger for a fleet, a swarm or a member, in order",
+    synopsis: [["moshcode fleet log [fleet] [--since 1h] [--member <id>] [--swarm <id>] [--json]", ""]],
+    flags: [
+      ["--since <dur|iso>", "only lines from then on", "everything"],
+      ["--member <id>", "lines about, or by, one member", ""],
+      ["--swarm <id>", "one swarm: its spawn, its members' starts and ends, its end", ""],
+      ["--fleet <id>", "one fleet", "every fleet, merged by time"],
+      ["--json", "one JSON object per line, as the ledger holds them", ""],
+    ],
+    note: "who did what, in order: by is sysop or a member id; what each member spent, how each ended, what was refused and why." },
+];
+
 // The business layer's verbs. Flatter than the herd's on purpose: these are
 // commands somebody types between other work, and a verb that needs a paragraph
 // to explain itself is a verb in the wrong place.
@@ -1543,6 +1629,7 @@ export const PAYMENT_VERBS = [
 
 export const VERB_TABLES = {
   HERD_VERBS,
+  FLEET_VERBS,
   SSH_VERBS,
   TIMER_VERBS,
   CLIENT_VERBS,
@@ -1587,6 +1674,8 @@ export const PIT_COMMANDS = [
     description: "what the herd is running, and which one wants you" },
   { name: "swarm", args: "<task> [--agents 4] [--verify]", cli: "swarm",
     description: "one task, a herd of agents, one answer" },
+  { name: "fleet", args: "[verb] [args…]", cli: "fleet",
+    description: "the fleet tree, and the sysop's verbs over it" },
   { name: "cost", aliases: ["usage"], args: "[name] [--all]", cli: "cost",
     description: "what the herd is spending, from the engines' own logs" },
   { name: "attach", args: "<name>", cli: "attach",

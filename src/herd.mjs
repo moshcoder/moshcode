@@ -412,7 +412,7 @@ export function sessionEnv(name) {
   return { MOSHCODE_HERD_NAME: name, MOSHCODE_HERD_DIR: herdDir() };
 }
 
-function ptyStart({ name, cwd, bin, args, stripEnv, env, spawner = spawn, runner = spawnSync, size = {} }) {
+function ptyStart({ name, cwd, bin, args, stripEnv, env, extraEnv = {}, spawner = spawn, runner = spawnSync, size = {} }) {
   ensureDir();
   const cols = Number(size.cols) || Number(env.COLUMNS) || process.stdout.columns || 80;
   const rows = Number(size.rows) || Number(env.LINES) || process.stdout.rows || 24;
@@ -438,7 +438,7 @@ function ptyStart({ name, cwd, bin, args, stripEnv, env, spawner = spawn, runner
   // that a session which finishes on its own leaves proof it finished.
   const command = [
     `stty rows ${rows} cols ${cols} 2>/dev/null`,
-    sessionCommand({ bin, args, stripEnv, setEnv: sessionEnv(name), exec: false }),
+    sessionCommand({ bin, args, stripEnv, setEnv: { ...sessionEnv(name), ...extraEnv }, exec: false }),
     `printf '%s' "$?" > ${shQuote(exit)}`,
   ].join("; ");
   // Reuse ptySpec's flag knowledge rather than re-deriving it: util-linux and
@@ -457,7 +457,7 @@ function ptyStart({ name, cwd, bin, args, stripEnv, env, spawner = spawn, runner
       cwd,
       // Belt and braces with the stty above: some toolkits read COLUMNS/LINES
       // before they ever ask the terminal.
-      env: { ...env, COLUMNS: String(cols), LINES: String(rows), MOSHCODE_HERD_SESSION: name, ...sessionEnv(name) },
+      env: { ...env, COLUMNS: String(cols), LINES: String(rows), MOSHCODE_HERD_SESSION: name, ...sessionEnv(name), ...extraEnv },
       stdio: [stdin, "ignore", "ignore"],
       detached: true,
     });
@@ -655,6 +655,11 @@ export function startSession({
   cwd = process.cwd(),
   substrate = detectSubstrate(),
   env = process.env,
+  // Variables set for this session beside its herd ones, on the same `env`
+  // prefix: a fleet's OPENFLEET_* (PRD 0016). They ride the prefix rather than
+  // process.env because tmux does not inherit the caller's environment, and
+  // they survive the strip because the strip is an explicit `-u` list.
+  extraEnv = {},
   runner = spawnSync,
   spawner = spawn,
 } = {}) {
@@ -675,7 +680,7 @@ export function startSession({
   };
 
   if (substrate === "tmux") {
-    const command = sessionCommand({ bin, args, stripEnv, setEnv: sessionEnv(name) });
+    const command = sessionCommand({ bin, args, stripEnv, setEnv: { ...sessionEnv(name), ...extraEnv } });
     let started = tmux(tmuxStartPlan({ name, cwd, command, pinTitle: tmuxCanPinTitle({ runner }) }), { runner, env });
     if (!started.ok && UNKNOWN_PIN_OPTION.test(started.stderr || "")) {
       // The version guess was wrong (a distro build, a version string we did
@@ -694,7 +699,7 @@ export function startSession({
     return { ok: true, name, substrate };
   }
 
-  const started = ptyStart({ name, cwd, bin, args, stripEnv, env, spawner, runner });
+  const started = ptyStart({ name, cwd, bin, args, stripEnv, env, extraEnv, spawner, runner });
   if (!started.ok) return started;
   rememberSession(name, { ...entry, pid: started.pid });
   return { ok: true, name, substrate, pid: started.pid };
@@ -959,6 +964,14 @@ export function listSessions({ substrate = detectSubstrate(), runner = spawnSync
       // Sessions started before herds existed have none. They belong to `main`
       // rather than to a group rendered as "undefined".
       herd: meta.herd || "main",
+      // Where the member sits in its fleet (PRD 0016), when the starter said:
+      // a swarm names the fleet, the swarm and the member id it wrote the
+      // record under. `approvals` is truthful about the flags the engine
+      // runs with; entries older than the key fall back to the `agent` mark.
+      fleet: meta.fleet || null,
+      swarm: meta.swarm || null,
+      member: meta.member || null,
+      approvals: meta.approvals || (meta.agent ? "bypass" : "native"),
       cwd: meta.cwd || "",
       created: meta.created || null,
       age: meta.created ? now - meta.created : null,

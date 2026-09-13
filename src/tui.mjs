@@ -1126,6 +1126,11 @@ export async function tui() {
       await swarmCommand(rest, { write: (l) => console.log(`  ${l}`) });
       continue;
     }
+    if (cmd === "fleet") {
+      const { fleetCommand } = await import("./fleet-cli.mjs");
+      await fleetCommand(rest, { write: (l) => console.log(`  ${l}`) });
+      continue;
+    }
     if (cmd === "cost" || cmd === "usage") { await herdCommand(["cost", ...rest]); continue; }
     if (cmd === "kill") { await herdCommand(["kill", ...rest]); continue; }
     if (cmd === "wait") { await herdCommand(["wait", ...rest]); continue; }

@@ -7,8 +7,8 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  defaultName, detectSubstrate, forgetSession, NAME_RE, readManifest, rememberSession,
-  resetSubstrate, sessionCommand, slugifyName, substrateNote, tmuxStartPlan, validName,
+  defaultName, detectSubstrate, forgetSession, listSessions, NAME_RE, readManifest, rememberSession,
+  resetSubstrate, sessionCommand, sessionEnv, slugifyName, startSession, substrateNote, tmuxStartPlan, validName,
   writeManifest,
 } from "../src/herd.mjs";
 
@@ -183,4 +183,50 @@ test("the substrate note names a fix rather than only a problem", () => {
   assert.equal(substrateNote("tmux"), null, "nothing to say when everything works");
   assert.match(substrateNote("pty"), /tmux/, "say what would make it better");
   assert.match(substrateNote(null), /install tmux|apt|brew/, "and how to get it");
+});
+
+/* --------------------------------------------------------------- the fleet */
+
+test("OPENFLEET_* ride the session's env line beside the herd's own, and survive the strip", () => {
+  // tmux does not inherit the caller's environment, and the engine's strip is
+  // an explicit `-u` list, so the fleet's variables have to be on the same
+  // prefix as MOSHCODE_HERD_NAME to reach the pane at all (PRD 0016, rule 9).
+  withHerdDir(() => {
+    const calls = [];
+    const runner = (bin, args) => {
+      calls.push(args);
+      if (args[0] === "-V") return { status: 0, stdout: "tmux 3.5\n", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const result = startSession({
+      name: "create-two-0541-2", engine: "claude", bin: "/bin/true", cwd: "/tmp", substrate: "tmux", runner,
+      stripEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_SESSION_ID"],
+      extraEnv: { OPENFLEET_RECORD: "/x/fleets/anthony@dev/members/create-two-0541-2.json", OPENFLEET_MEMBER: "create-two-0541-2" },
+    });
+    assert.equal(result.ok, true);
+    const start = calls.find((a) => a.includes("new-session"));
+    const command = start[start.indexOf("-y") + 2];
+    assert.match(command, /'-u' 'CLAUDE_CODE_SESSION_ID'.*'MOSHCODE_HERD_NAME=create-two-0541-2'.*'OPENFLEET_RECORD=\/x\/fleets\/anthony@dev\/members\/create-two-0541-2\.json'/);
+    assert.match(command, /'OPENFLEET_MEMBER=create-two-0541-2'/);
+    assert.ok(!/'-u' 'OPENFLEET/.test(command), "the fleet's variables are never on the strip list");
+    const plain = sessionCommand({ bin: "claude", stripEnv: ["CLAUDE_CODE_SESSION_ID"], setEnv: { ...sessionEnv("api"), OPENFLEET_SWARM: "create-two-0541" } });
+    assert.match(plain, /'-u' 'CLAUDE_CODE_SESSION_ID' 'MOSHCODE_HERD_NAME=api' 'MOSHCODE_HERD_DIR=[^']+' 'OPENFLEET_SWARM=create-two-0541'/);
+  });
+});
+
+test("a roster row says where a member sits in its fleet, and whether its approvals are bypassed", () => {
+  withHerdDir(() => {
+    rememberSession("create-two-0541-2", { engine: "claude", cwd: "/x", created: 1, fleet: "anthony@dev", swarm: "create-two-0541", member: "create-two-0541-2", approvals: "bypass" });
+    rememberSession("old-agent", { engine: "claude", cwd: "/x", created: 1, agent: true });
+    rememberSession("plain", { engine: "codex", cwd: "/x", created: 1 });
+    const rows = listSessions({ substrate: "tmux", runner: () => ({ status: 0, stdout: "", stderr: "" }) });
+    const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+    assert.equal(by["create-two-0541-2"].fleet, "anthony@dev");
+    assert.equal(by["create-two-0541-2"].swarm, "create-two-0541");
+    assert.equal(by["create-two-0541-2"].member, "create-two-0541-2");
+    assert.equal(by["create-two-0541-2"].approvals, "bypass");
+    assert.equal(by["old-agent"].approvals, "bypass", "an entry from before the key still reads its agent mark");
+    assert.equal(by["old-agent"].fleet, null);
+    assert.equal(by.plain.approvals, "native");
+  });
 });

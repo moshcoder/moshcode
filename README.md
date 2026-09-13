@@ -30,6 +30,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode start` | engines | launch an engine with its native defaults |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
 | `moshcode swarm` | runtime | one task, a herd of agents, one answer — plan, fan out, verify, synthesise (PRD 0015) |
+| `moshcode fleet` | runtime | the OpenFleet sysop tool: open a fleet, cap it, see the tree, stop a swarm, read the ledger (PRD 0016) |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
 | `moshcode cost` <br>`usage` | runtime | what each session is spending, read from the engines' own logs |
 | `moshcode attach` | runtime | attach this terminal to a herd session |
@@ -482,13 +483,13 @@ on any engine moshcode can start:
 ```sh
 moshcode swarm "port the auth routes and the dashboard to the new API"
 · plan — claude is splitting the task into up to 4 pieces
-   1 auth routes
-   2 dashboard
-   3 shared API client
-· swarm — 3 sessions, 3 at a time (claude, herd swarm)
-  ✓ swarm-port-the-auth-1 idle · t-01
-  ✓ swarm-port-the-auth-2 idle · t-02
-  ✓ swarm-port-the-auth-3 idle · t-03
+   1 auth routes  owns src/auth/
+   2 dashboard  owns src/dashboard/
+   3 shared API client  owns src/api/client.js
+· swarm port-the-auth-routes-an-1412: 3 sessions, 3 at a time (claude, herd swarm, fleet anthony@dev)
+  ✓ port-the-auth-routes-an-1412-1 idle · t-01
+  ✓ port-the-auth-routes-an-1412-2 idle · t-02
+  ✓ port-the-auth-routes-an-1412-3 idle · t-03
 · synthesis — claude is folding 3 pieces into one answer
 ```
 
@@ -501,6 +502,35 @@ you read. `--verify` adds a skeptic per piece whose verdict the synthesis sees;
 `--plan-only` shows the split and starts nothing; `--keep` leaves the sessions
 in `moshcode ps`. A plan that does not parse runs the task as one piece rather
 than not at all.
+
+### The fleet: who started what, under whose approval
+
+Every swarm is recorded as [OpenFleet](https://logicsrc.com/docs/openfleet):
+the swarm id is minted before the plan, each member gets a record file and
+the `OPENFLEET_*` variables beside its herd ones, and the fleet's ledger says
+when the swarm was spawned, when each member started and ended, what the
+synthesis said, and what was refused. The pane names are the member ids. A
+bypass flag the ceiling forbids is refused before anything starts, and the
+refusal is a ledger line the human reads. `moshcode fleet` is the sysop tool
+over those files, the same files `logicsrc fleet` reads:
+
+```sh
+moshcode fleet tree
+anthony@dev  (implicit fleet, sysop anthony@dev, depth 1, hosts dev)
+└─ 460a4502  claude-code  running  [bypass]
+   └─ swarm create-two-0541  "create two ..."  2/4 members  until 06:11
+      ├─ create-two-0541-1 (172ffd83)  create hello.sh bash  claude-code  done  [bypass]  owns hello.sh
+      └─ create-two-0541-2  create bye.sh bash  moshcode/claude  working  [bypass]  owns bye.sh
+
+moshcode fleet log --swarm create-two-0541     # spawn, starts, ends, in order, who did each
+moshcode fleet stop create-two-0541            # end it as one unit, nested swarms first
+moshcode fleet open --approvals native --depth 2   # a fleet with a ceiling; new roots join it
+```
+
+`open` and `cap` are the sysop's alone: a process carrying `OPENFLEET_MEMBER`
+is an agent and is refused. `moshcode ps` groups its rows by fleet and swarm
+and marks every session whose approvals are bypassed. The records live under
+`$OPENFLEET_HOME`, default `~/.openfleet`.
 
 ### Let the engine say what it is doing
 

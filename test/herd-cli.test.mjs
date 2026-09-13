@@ -8,8 +8,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  EXIT, herdRun, humanAge, paintState, renderRoster, shouldNotify, splitDetachArgs, waitFor,
+  EXIT, carriesBypass, groupByFleet, herdRun, humanAge, paintState, parseStartArgs, renderRoster, shouldNotify, splitDetachArgs, waitFor,
 } from "../src/herd-cli.mjs";
+import { ENGINES } from "../src/engines.mjs";
+import { strip } from "../src/ui.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -210,4 +212,59 @@ test("ages read as durations, not milliseconds", () => {
   assert.equal(humanAge(72 * 60000), "1h12m");
   assert.equal(humanAge(50 * 3600000), "2d");
   assert.equal(humanAge(null), "", "an unknown age is blank, not NaN");
+});
+
+/* ------------------------------------------------------------- the fleet */
+
+test("carriesBypass is true for --agent and for the engine's own bypass flags passed as plain args", () => {
+  // The untruthful `agent: false` the spec called out: a swarm pane runs
+  // `claude --dangerously-skip-permissions` through plain args, and the
+  // manifest said it did not (PRD 0016).
+  assert.equal(carriesBypass(ENGINES.claude, ["--dangerously-skip-permissions"]), true);
+  assert.equal(carriesBypass("claude", ["--dangerously-skip-permissions", "--model", "opus"]), true);
+  assert.equal(carriesBypass(ENGINES.claude, ["--model", "opus"]), false);
+  assert.equal(carriesBypass(ENGINES.claude, []), false);
+  assert.equal(carriesBypass(ENGINES.claude, [], { agent: true }), true);
+  assert.equal(carriesBypass(ENGINES.codex, ["--dangerously-bypass-approvals-and-sandbox"]), true);
+  assert.equal(carriesBypass(ENGINES.kimi, ["--yolo"]), true);
+  assert.equal(carriesBypass({ bin: "sh" }, ["--yolo"]), false, "an engine with no bypass flags never bypasses");
+  assert.equal(carriesBypass("no-such-engine", ["--yolo"]), false);
+});
+
+test("herd start --env is repeatable, takes KEY=VALUE, and refuses anything else", () => {
+  const parsed = parseStartArgs(["claude", "--env", "OPENFLEET_MEMBER=create-two-0541-1", "--env=OPENFLEET_SWARM=create-two-0541", "--name", "create-two-0541-1", "--model", "opus"]);
+  assert.deepEqual(parsed.flags.env, { OPENFLEET_MEMBER: "create-two-0541-1", OPENFLEET_SWARM: "create-two-0541" });
+  assert.equal(parsed.flags.name, "create-two-0541-1");
+  assert.deepEqual(parsed.rest, ["claude", "--model", "opus"], "the herd's flags never reach the engine");
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parseStartArgs(["claude", "--env", "PATH=/x=y"]).flags.env, { PATH: "/x=y" }, "the first = splits; the value may hold more");
+  assert.match(parseStartArgs(["claude", "--env", "novalue"]).errors[0], /KEY=VALUE/);
+  assert.match(parseStartArgs(["claude", "--env", "1bad=x"]).errors[0], /KEY=VALUE/);
+  assert.deepEqual(parseStartArgs(["claude"]).flags.env, {});
+});
+
+test("the roster groups by fleet and swarm when a member carries one, and marks bypass", () => {
+  const rows = [
+    session(),
+    session({ name: "create-two-0541-1", fleet: "anthony@dev", swarm: "create-two-0541", approvals: "bypass" }),
+    session({ name: "create-two-0541-2", fleet: "anthony@dev", swarm: "create-two-0541", approvals: "bypass" }),
+    session({ name: "root-1", fleet: "anthony@dev", approvals: "native" }),
+  ];
+  const groups = groupByFleet(rows);
+  assert.deepEqual(groups.map((g) => g.fleet), [null, "anthony@dev"], "rows with no fleet come first");
+  assert.deepEqual(groups[1].swarms.map((s) => s.swarm), [null, "create-two-0541"], "members outside any swarm before the swarms");
+  const lines = strip(renderRoster(rows)).split("\n");
+  assert.match(lines[0], /^  api\s+claude\s+working/);
+  assert.equal(lines[1], "  anthony@dev fleet");
+  assert.match(lines[2], /^    root-1\s+claude/);
+  assert.ok(!/bypass/.test(lines[2]));
+  assert.equal(lines[3], "    swarm create-two-0541");
+  assert.match(lines[4], /^      create-two-0541-1\s+claude\s+working.*bypass$/);
+  assert.match(lines[5], /^      create-two-0541-2.*bypass$/);
+  assert.equal(lines.length, 6);
+  // Without a fleet anywhere the roster is the flat list it always was, with the mark still shown.
+  const flat = strip(renderRoster([session(), session({ name: "auto", approvals: "bypass" })])).split("\n");
+  assert.equal(flat.length, 2);
+  assert.match(flat[1], /auto.*bypass$/);
+  assert.ok(!/bypass/.test(flat[0]));
 });
