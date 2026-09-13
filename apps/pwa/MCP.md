@@ -66,7 +66,7 @@ Unknown protocol versions and tool calls disguised as notifications are rejected
 
 ## Client adapter contract
 
-ChatGPT and Claude setup links are in the root README. A Chovy adapter or another
+ChatGPT, Claude and native Chovy setup instructions are in the root README. A
 remote MCP client should accept the exact share URL, discover its protected
 resource metadata from the 401 challenge, and follow `authorization_servers`
 to the app authority. Register a redirect URI with the advertised registration
@@ -83,10 +83,16 @@ resource. A refresh failure requires reauthorization; never retry a consumed
 refresh token. Revocation or expiry must stop further tool calls. Disconnect can
 revoke the authorization grant through the advertised revocation endpoint.
 
-This is an integration contract, not a claim that Chovy already has a native
-remote MCP connector. Hosted ChatGPT/Claude account flows require their own
-account access to verify; local protocol and terminal tests do not establish
-that a particular hosted account or workspace policy permits a connector.
+Chovy provides a private per-account connector in Settings → Moshcode. Its
+server accepts only canonical Moshcode share URLs and the fixed Moshcode OAuth
+authority, encrypts credentials at rest, serializes rotating refreshes, and
+exposes explicit session controls according to the granted scopes. Disconnect
+revokes its grant; an uncertain revocation disables local use and remains
+retryable. The cross-project contract is tested against both implementations.
+
+Hosted ChatGPT/Claude account flows require their own account access to verify;
+protocol and terminal tests do not establish that a particular hosted account
+or workspace policy permits a connector.
 
 Validation uses isolated local databases and HTTP servers, including ownership,
 CSRF, scope separation, exact binding, replay, concurrency, queue revocation,
