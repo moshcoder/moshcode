@@ -248,6 +248,7 @@ export async function issueTokenPair(source) {
 async function revokeTokenFamily(family) {
   await run(`UPDATE mcp_oauth_grants SET revoked_at=COALESCE(revoked_at,?) WHERE id=?`, [Date.now(), family]);
   await run(`UPDATE mcp_oauth_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE family_id=?`, [Date.now(), family]);
+  await run(`UPDATE session_commands SET status='cancelled' WHERE mcp_grant_id=? AND status='queued'`, [family]);
 }
 
 export async function rotateRefreshToken({ refreshToken, clientId, resource = MCP_RESOURCE, scope }) {

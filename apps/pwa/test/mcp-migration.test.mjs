@@ -38,7 +38,8 @@ test("upgrade preserves existing consent, pairs access/refresh grants and leaves
   const access = await accessForToken("old-access", resource);
   assert.deepEqual(access.scope.split(" "), MCP_SHARE_SCOPES);
   assert.equal((await get(`SELECT family_id FROM mcp_oauth_tokens WHERE token_hash=?`, [sha256("old-refresh")])).family_id, access.family_id);
-  assert.equal((await get(`SELECT mcp_share_id FROM session_commands WHERE id='plain'`)).mcp_share_id, null);
+  const ordinary = await get(`SELECT mcp_share_id,mcp_grant_id FROM session_commands WHERE id='plain'`);
+  assert.equal(ordinary.mcp_share_id, null); assert.equal(ordinary.mcp_grant_id, null);
   let accepted = false;
   await requireMcpShareAccess({ params: { shareId: "mcs_old" }, get: (name) => name === "authorization" ? "Bearer old-access" : undefined },
     { set() { return this; }, status() { return this; }, json() { throw new Error("existing consent was lost"); } }, () => { accepted = true; });

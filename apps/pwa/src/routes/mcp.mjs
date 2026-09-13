@@ -137,9 +137,9 @@ async function sendSession(auth, args = {}) {
   for (const [index, body] of lines.entries()) {
     const commandId = id();
     await run(
-      `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id)
-       VALUES (?,?,?,'queued',?,?)`,
-      [commandId, row.id, body, now + index, mcpShareIdFromResource(auth.resource)]
+      `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id,mcp_grant_id)
+       VALUES (?,?,?,'queued',?,?,?)`,
+      [commandId, row.id, body, now + index, mcpShareIdFromResource(auth.resource), auth.family_id]
     );
     commands.push({ id: commandId, body });
   }
@@ -159,9 +159,9 @@ async function pressSessionKey(auth, args = {}) {
   if (!features(row).includes("keys")) throw new Error("this Moshcode session does not advertise remote key support");
   const commandId = id();
   await run(
-    `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id)
-     VALUES (?,?,?,'queued',?,?)`,
-    [commandId, row.id, KEY_PREFIX + key, Date.now(), mcpShareIdFromResource(auth.resource)]
+    `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id,mcp_grant_id)
+     VALUES (?,?,?,'queued',?,?,?)`,
+    [commandId, row.id, KEY_PREFIX + key, Date.now(), mcpShareIdFromResource(auth.resource), auth.family_id]
   );
   return { ok: true, session_id: row.id, command_id: commandId, key };
 }
@@ -185,9 +185,9 @@ async function cancelSession(auth, args = {}) {
   if (!features(row).includes("signals")) throw new Error("this Moshcode session does not advertise remote interrupt support");
   const commandId = id();
   await run(
-    `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id)
-     VALUES (?,?,?,'queued',?,?)`,
-    [commandId, row.id, SIGNAL_PREFIX + "interrupt", Date.now(), mcpShareIdFromResource(auth.resource)]
+    `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id,mcp_grant_id)
+     VALUES (?,?,?,'queued',?,?,?)`,
+    [commandId, row.id, SIGNAL_PREFIX + "interrupt", Date.now(), mcpShareIdFromResource(auth.resource), auth.family_id]
   );
   return { ok: true, session_id: row.id, command_id: commandId, signal: "interrupt" };
 }
@@ -321,7 +321,9 @@ export function toolsFor(auth) {
 async function invokeTool(auth, name, args) {
   const shared = Boolean(mcpShareIdFromResource(auth.resource));
   const def = TOOL_DEFS.find((tool) => tool.name === name || (shared && shareToolName(tool.name) === name));
-  if (!def) throw Object.assign(new Error(`unknown tool: ${name}`), { code: -32602 });
+  if (!def || (shared && !SHARE_TOOLS.has(shareToolName(def.name)))) {
+    throw Object.assign(new Error(`unknown tool: ${name}`), { code: -32602 });
+  }
   if (!hasScope(auth, def.requiredScope)) {
     throw Object.assign(new Error(`scope ${def.requiredScope} is required`), {
       code: -32003,

@@ -13,7 +13,9 @@ CREATE INDEX IF NOT EXISTS idx_mcp_token_family ON mcp_oauth_tokens(family_id);
 
 ALTER TABLE device_codes ADD COLUMN last_polled_at INTEGER;
 ALTER TABLE session_commands ADD COLUMN mcp_share_id TEXT REFERENCES mcp_shares(id);
+ALTER TABLE session_commands ADD COLUMN mcp_grant_id TEXT REFERENCES mcp_oauth_grants(id);
 CREATE INDEX IF NOT EXISTS idx_session_commands_mcp_share ON session_commands(mcp_share_id,status);
+CREATE INDEX IF NOT EXISTS idx_session_commands_mcp_grant ON session_commands(mcp_grant_id,status);
 
 -- Preserve existing broad consent; new shares require explicit granular scopes.
 UPDATE mcp_shares SET scopes=REPLACE(scopes,'sessions:control','sessions:write sessions:approve sessions:cancel');

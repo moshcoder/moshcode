@@ -17,7 +17,8 @@ New shares default to `sessions:read`. Request additional permissions explicitly
 
 Write, approval and cancellation also include read access. A share automatically
 binds tools to its session; a conflicting `session_id` is rejected. Legacy
-`moshcode_session_*` aliases remain accepted, while `/mcp` retains its old tool
+`moshcode_session_*` aliases for those five tools remain accepted. Other legacy
+tools, including navigation keys, are unavailable on a share. `/mcp` retains its old tool
 names and `sessions:control` compatibility. Broad control is rejected for new
 share grants. Migration 022 converts existing share control consent to the
 same explicit permissions. Existing tokens for the same owner, client, resource
@@ -44,9 +45,10 @@ access/refresh tokens. `POST /oauth/revoke` accepts `token` and `client_id` and
 revokes that grant without revealing whether an unknown token existed. Share
 revocation and expiry invalidate all access and further token issuance.
 
-Queued actions carry share provenance. The CLI's atomic queue claim rechecks the
-share's owner, session, expiry and revocation. Revocation cancels still-queued
-actions; an action already claimed by the CLI may finish. Revocation cannot
+Queued actions carry both share and OAuth grant provenance. The CLI's atomic
+queue claim rechecks the share's owner, session, expiry and revocation, and the
+grant's revocation state. Share revocation, OAuth revocation and refresh replay
+cancel still-queued actions; an action already claimed by the CLI may finish. Revocation cannot
 recall input already delivered to a terminal. The queue's `{id, body}` wire
 format is unchanged.
 

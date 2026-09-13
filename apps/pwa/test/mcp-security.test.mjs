@@ -220,3 +220,66 @@ test("browser origins, preflight, protocol versions and notifications are valida
   assert.equal((await request(f.route, { method: "POST", bearer: token.access_token, body: { jsonrpc: "2.0", method: "tools/call", params: { name: "session_send", arguments: { text: "must not queue" } } } })).status, 400);
   assert.equal((await all(`SELECT * FROM session_commands WHERE session_id=?`, [f.session])).length, 0);
 });
+
+test("bound shares reject unlisted navigation/list tools through canonical and legacy aliases", async () => {
+  const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
+  for (const name of ["session_key", "moshcode_session_key", "sessions_list", "moshcode_sessions_list"]) {
+    const result = await call(f, token.access_token, name, name.includes("key") ? { key: "enter" } : {});
+    assert.equal(result.data.error.code, -32602); assert.match(result.data.error.message, /unknown tool/);
+  }
+  assert.equal((await all(`SELECT * FROM session_commands WHERE session_id=?`, [f.session])).length, 0);
+  assert.equal((await call(f, token.access_token, "moshcode_session_answer", { text: "allowed alias" })).data.result.isError, undefined);
+});
+
+test("grant revocation and refresh replay cancel undelivered shared and legacy MCP input only", async () => {
+  for (const legacy of [false, true]) for (const replay of [false, true]) {
+    const f = await fixture();
+    const target = legacy ? { ...f, route: "/mcp", share: { endpoint: auth.MCP_RESOURCE } } : f;
+    const scope = legacy ? "sessions:read sessions:control" : "sessions:read sessions:write";
+    const name = legacy ? "moshcode_session_send" : "session_send";
+    const args = text => ({ text, ...(legacy ? { session_id: f.session } : {}) });
+    const token = await grant(target, scope);
+    await call(target, token.access_token, name, args("revoked fixture"));
+    const queued = await get(`SELECT * FROM session_commands WHERE session_id=?`, [f.session]);
+    assert.ok(queued.mcp_grant_id); assert.equal(queued.mcp_share_id, legacy ? null : f.share.id);
+    const independent = await grant(target, scope);
+    await call(target, independent.access_token, name, args("separate grant"));
+    await run(`INSERT INTO session_commands (id,session_id,body,status,created_at) VALUES (?,?,'ordinary input','queued',?)`, [crypto.randomUUID(), f.session, Date.now()]);
+    if (replay) {
+      const body = { grant_type: "refresh_token", client_id: client.client_id, resource: target.share.endpoint, refresh_token: token.refresh_token };
+      const rotated = await request("/oauth/token", { method: "POST", body }); assert.equal(rotated.status, 200);
+      await call(target, rotated.data.access_token, name, args("replacement grant input"));
+      assert.equal((await request("/oauth/token", { method: "POST", body })).status, 400);
+    } else {
+      assert.equal((await request("/oauth/revoke", { method: "POST", body: { token: token.refresh_token, client_id: client.client_id } })).status, 200);
+    }
+    assert.equal((await get(`SELECT status FROM session_commands WHERE id=?`, [queued.id])).status, "cancelled");
+    const polled = await request(`/api/sessions/${f.session}/commands`, { bearer: keys.owner });
+    assert.deepEqual(polled.data.commands.map((one) => one.body).sort(), ["ordinary input", "separate grant"]);
+    assert.equal((await call(target, independent.access_token, legacy ? "moshcode_session_read" : "session_read", legacy ? { session_id: f.session } : {})).status, 200);
+  }
+});
+
+test("claim rechecks grant revocation after reading the queue; already-claimed actions remain claimed", async () => {
+  const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
+  await call(f, token.access_token, "session_send", { text: "revoked during claim" });
+  const command = await get(`SELECT * FROM session_commands WHERE session_id=?`, [f.session]);
+  const execute = db.execute.bind(db); let raced = false;
+  db.execute = async (statement) => {
+    if (!raced && typeof statement === "object" && statement.sql.includes("SET status='claimed'") && statement.args.includes(command.id)) {
+      raced = true;
+      await execute({ sql: `UPDATE mcp_oauth_grants SET revoked_at=? WHERE id=?`, args: [Date.now(), command.mcp_grant_id] });
+    }
+    return execute(statement);
+  };
+  try {
+    const polled = await request(`/api/sessions/${f.session}/commands`, { bearer: keys.owner });
+    assert.equal(raced, true); assert.deepEqual(polled.data.commands, []);
+  } finally { db.execute = execute; }
+  const another = await grant(f, "sessions:read sessions:write");
+  await call(f, another.access_token, "session_send", { text: "already delivered" });
+  const polled = await request(`/api/sessions/${f.session}/commands`, { bearer: keys.owner });
+  assert.equal(polled.data.commands.length, 1);
+  await request("/oauth/revoke", { method: "POST", body: { token: another.refresh_token, client_id: client.client_id } });
+  assert.equal((await get(`SELECT status FROM session_commands WHERE id=?`, [polled.data.commands[0].id])).status, "claimed");
+});

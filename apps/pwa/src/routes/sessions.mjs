@@ -246,9 +246,11 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
 
   const claim = async () => {
     await run(`UPDATE session_commands SET status='cancelled'
-      WHERE session_id=? AND status='queued' AND mcp_share_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM mcp_shares sh WHERE sh.id=session_commands.mcp_share_id
-          AND sh.session_id=session_commands.session_id AND sh.user_id=? AND sh.status='active' AND sh.expires_at>?)`,
+      WHERE session_id=? AND status='queued' AND (
+        (mcp_share_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mcp_shares sh WHERE sh.id=session_commands.mcp_share_id
+          AND sh.session_id=session_commands.session_id AND sh.user_id=? AND sh.status='active' AND sh.expires_at>?))
+        OR (mcp_grant_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mcp_oauth_grants g
+          WHERE g.id=session_commands.mcp_grant_id AND g.revoked_at IS NULL)))`,
       [session.id, req.apiUser.id, Date.now()]);
     const queued = await all(
       `SELECT * FROM session_commands WHERE session_id = ? AND status = 'queued' ORDER BY created_at ASC LIMIT 10`,
@@ -261,7 +263,9 @@ sessionsRouter.get("/api/sessions/:id/commands", cliAuth, async (req, res) => {
         `UPDATE session_commands SET status='claimed', claimed_at=? WHERE id=? AND status='queued'
           AND (mcp_share_id IS NULL OR EXISTS (SELECT 1 FROM mcp_shares sh
             WHERE sh.id=session_commands.mcp_share_id AND sh.session_id=session_commands.session_id
-              AND sh.user_id=? AND sh.status='active' AND sh.expires_at>?))`,
+              AND sh.user_id=? AND sh.status='active' AND sh.expires_at>?))
+          AND (mcp_grant_id IS NULL OR EXISTS (SELECT 1 FROM mcp_oauth_grants g
+            WHERE g.id=session_commands.mcp_grant_id AND g.revoked_at IS NULL))`,
         [Date.now(), c.id, req.apiUser.id, Date.now()]
       );
       if (claimed.rowsAffected) mine.push({ id: c.id, body: c.body });
