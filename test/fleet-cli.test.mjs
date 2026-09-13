@@ -85,7 +85,8 @@ test("open mints <name>-<yyyymmdd>, writes fleet.open by sysop with the ceiling,
     const [line] = h.ledger("fleet-20260913");
     assert.equal(line.event, "fleet.open");
     assert.equal(line.by, "sysop");
-    assert.equal(line.sysop, fleet.implicitFleet(h.opts.env));
+    // The harness injects the implicit fleet, so the sysop is that, not this machine's user@host.
+    assert.equal(line.sysop, FLEET);
     assert.equal(line.host, "dev");
     assert.deepEqual(line.ceiling, { approvals: "bypass", depth: 2, hosts: ["dev", "netcup"], until: at("07:42:00") });
     assert.equal(fleet.currentFleet(h.opts.env), "fleet-20260913");
