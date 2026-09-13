@@ -5,8 +5,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  DEFAULT_AGENTS, MAX_AGENTS, parsePlan, parseSwarmArgs, parseVerdict, planPrompt, runSwarm,
-  swarmCommand, swarmPrefix, synthesisPrompt, throttled, verifyPrompt,
+  DEFAULT_AGENTS, MAX_AGENTS, bootAnswer, parsePlan, parseSwarmArgs, parseVerdict, planPrompt, runSwarm,
+  swarmCommand, swarmPrefix, synthesisPrompt, throttled, verifyPrompt, waitForPrompt,
 } from "../src/swarm.mjs";
 import { ENGINES } from "../src/engines.mjs";
 
@@ -54,6 +54,49 @@ test("session names come from the task and fit the herd's name rule", () => {
   assert.equal(swarmPrefix("!!!"), "swarm-agent", "the herd's own fallback name for a task with no letters");
 });
 
+test("claude's trust dialog is answered with Down then Enter, never a bare Enter", () => {
+  // Seen live: the dialog's default is "No, exit". A swarm that pressed Enter
+  // on "something is blocking at boot" ended its own engine.
+  const screen = " Quick safety check: Is this a project you created or one you trust? \n ❯ No, exit\n   Yes, I trust this folder\n";
+  const answer = bootAnswer("claude", screen);
+  assert.ok(answer, "the trust dialog was not recognised");
+  assert.deepEqual(answer.keys, ["Down", "Enter"]);
+  assert.equal(bootAnswer("claude", "? for shortcuts"), null);
+  assert.equal(bootAnswer("codex", screen), null, "an engine with no boot spec answers nothing");
+});
+
+test("waiting for the prompt answers a boot dialog once and then sees idle", async () => {
+  const trust = " Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder";
+  let screens = [trust, trust, "? for shortcuts"];
+  let states = ["unknown", "unknown", "idle"];
+  const answers = [];
+  let t = 0;
+  const result = await waitForPrompt("s", {
+    engine: "claude", timeoutMs: 10000, intervalMs: 1, now: () => (t += 1),
+    look: () => ({ name: "s", alive: true, state: states.shift() ?? "idle" }),
+    screen: () => screens.shift() ?? "",
+    answer: (name, keys) => answers.push(keys),
+  });
+  assert.deepEqual(result, { outcome: "matched", state: "idle" });
+  assert.deepEqual(answers, [["Down", "Enter"]], "the same dialog is never answered twice");
+});
+
+test("waiting for the prompt gives up on a session that ends or times out", async () => {
+  const ended = await waitForPrompt("s", {
+    engine: "claude", timeoutMs: 10000, intervalMs: 1,
+    look: () => ({ name: "s", alive: false, state: "done" }), screen: () => "", answer: () => {},
+  });
+  assert.equal(ended.outcome, "ended");
+  let t = 0;
+  const late = await waitForPrompt("s", {
+    engine: "claude", timeoutMs: 5, intervalMs: 1, now: () => (t += 3),
+    look: () => ({ name: "s", alive: true, state: "unknown" }), screen: () => "", answer: () => {},
+  });
+  assert.equal(late.outcome, "timeout");
+  const gone = await waitForPrompt("s", { engine: "claude", look: () => null, screen: () => "", answer: () => {} });
+  assert.equal(gone.outcome, "gone");
+});
+
 /* ------------------------------------------------------------ the readers */
 
 test("the plan is the first JSON array in the reply, whatever surrounds it", () => {
@@ -91,6 +134,15 @@ test("the planning prompt asks for pieces that do not collide, as bare JSON", ()
   assert.match(p, /SUMMARY:/);
   assert.match(p, /\/x/);
   assert.ok(p.endsWith("T"));
+});
+
+test("the headless calls are told to think, not act", () => {
+  // Seen live: a synthesis run in the working directory did the task itself
+  // instead of summarising what the agents had done.
+  const guard = /Do not run commands, read or write files, or use any tool/;
+  assert.match(planPrompt({ task: "T", agents: 2, cwd: "/x" }), guard);
+  assert.match(verifyPrompt({ task: "T", piece: { title: "a", prompt: "a" }, output: "o" }), guard);
+  assert.match(synthesisPrompt({ task: "T", results: [] }), guard);
 });
 
 test("the verifier is told to refute and to default to refuted", () => {

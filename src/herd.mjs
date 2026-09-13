@@ -263,6 +263,22 @@ export function tmux(args, { runner = spawnSync, env = process.env, encoding = "
   }
 }
 
+let pinTitleSupport;
+/**
+ * Can this tmux stop an application from renaming its pane? `allow-set-title`
+ * arrived in 3.4. Asked once per process: the answer is a property of the
+ * binary, and a start plan is built for every member.
+ */
+export function tmuxCanPinTitle({ runner = spawnSync, force = false } = {}) {
+  if (pinTitleSupport !== undefined && !force) return pinTitleSupport;
+  let version = "";
+  try { version = String(runner("tmux", ["-V"], { encoding: "utf8" })?.stdout || ""); }
+  catch { version = ""; }
+  const m = /tmux\s+(?:next-)?(\d+)\.(\d+)/.exec(version);
+  pinTitleSupport = Boolean(m) && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 4));
+  return pinTitleSupport;
+}
+
 /**
  * The shell-command tmux runs for a session.
  *
@@ -300,7 +316,7 @@ export function sessionCommand({ bin, args = [], stripEnv = [], setEnv = {}, exe
  * moshcode's, and the detach key we print has to be the one that works even
  * when the user's own tmux.conf rebinds prefix.
  */
-export function tmuxStartPlan({ name, cwd, command }) {
+export function tmuxStartPlan({ name, cwd, command, pinTitle = true }) {
   // ONE tmux invocation, not two. A finished agent must stay readable — "which
   // one is done?" is half the reason the roster exists, and a session that
   // evaporates on exit can only ever answer "gone". But a short-lived command
@@ -310,7 +326,12 @@ export function tmuxStartPlan({ name, cwd, command }) {
   // the session exist without the option.
   return [
     "-f", "/dev/null",
-    "new-session", "-d", "-s", name, "-c", cwd, command,
+    // A detached session is 80x24 unless told otherwise, and an engine's
+    // status line truncates at 80 — Claude's "? for shortcuts", which the
+    // idle rule reads, arrived as "? for shortc…". A client that attaches
+    // resizes it to the real terminal; until then it is sized for a screen
+    // the classifier can read.
+    "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50", command,
     ";", "set-option", "-t", name, "remain-on-exit", "on",
     // Mouse on, so a click selects a pane and the status line's window list is
     // clickable once you are inside. This server is moshcode's and starts from
@@ -321,6 +342,14 @@ export function tmuxStartPlan({ name, cwd, command }) {
     // Set in the same invocation as the rest so a fast-exiting command cannot
     // finish before it lands.
     ";", "select-pane", "-t", name, "-T", name,
+    // And keep it. An engine that sets its own terminal title (Claude Code
+    // writes "1 awaiting input · claude agents" the moment it is up) would
+    // otherwise overwrite the handle through OSC 0/2, and a member whose pane
+    // no longer answers to its name reads as `gone` on the roster while it is
+    // sitting there waiting for you. tmux 3.4+; on an older tmux the option is
+    // unknown and the whole invocation would fail, so startSession asks
+    // tmuxCanPinTitle first and an old tmux keeps today's behaviour.
+    ...(pinTitle ? [";", "set-option", "-w", "-t", name, "allow-set-title", "off"] : []),
   ];
 }
 
@@ -639,7 +668,7 @@ export function startSession({
 
   if (substrate === "tmux") {
     const command = sessionCommand({ bin, args, stripEnv, setEnv: sessionEnv(name) });
-    const started = tmux(tmuxStartPlan({ name, cwd, command }), { runner, env });
+    const started = tmux(tmuxStartPlan({ name, cwd, command, pinTitle: tmuxCanPinTitle({ runner }) }), { runner, env });
     if (!started.ok) {
       return { ok: false, error: new Error(started.stderr.trim() || started.error?.message || "tmux could not start the session") };
     }
@@ -685,11 +714,29 @@ export function sendKeys(name, keys, { substrate = detectSubstrate(), runner = s
  * text and regularly contains `;`, `$` or a bare `Enter`, all of which tmux
  * would otherwise read as key names rather than characters.
  */
-export function sendPrompt(name, text, { substrate = detectSubstrate(), runner = spawnSync } = {}) {
+/**
+ * How long to let a typed prompt settle before Enter. An engine's composer
+ * treats keys that arrive within one tick as a paste, and the Enter on the
+ * heels of a long prompt lands *inside* the paste as its "+1 lines" — the
+ * screen shows "[Pasted text #1 +1 lines]" and nothing is ever submitted.
+ * Seen live with Claude Code 2.1 and a one-line prompt of a few hundred
+ * characters. A quarter second is longer than any paste window and shorter
+ * than anyone notices.
+ */
+export const PROMPT_SETTLE_MS = 250;
+
+function settle(ms) {
+  // Synchronous on purpose: sendPrompt is sync, and its callers are too.
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { /* no SharedArrayBuffer here — send without the pause */ }
+}
+
+export function sendPrompt(name, text, { substrate = detectSubstrate(), runner = spawnSync, settleMs = PROMPT_SETTLE_MS } = {}) {
   if (substrate === "tmux") {
     const pane = target(name, { runner });
     const typed = tmux(["send-keys", "-t", pane, "-l", String(text)], { runner });
     if (!typed.ok) return { ok: false, error: new Error(typed.stderr.trim() || "send-keys failed") };
+    if (settleMs > 0) settle(settleMs);
     const entered = tmux(["send-keys", "-t", pane, "Enter"], { runner });
     return entered.ok ? { ok: true } : { ok: false, error: new Error(entered.stderr.trim() || "send-keys failed") };
   }

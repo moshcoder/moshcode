@@ -33,9 +33,10 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { ENGINES, aiExecArgs, pickAiEngine, resolveEngine, resolveExecutable } from "./engines.mjs";
-import { EXIT, herdKill, herdPrompt, herdStart, waitFor } from "./herd-cli.mjs";
-import { findTask } from "./herd-tasks.mjs";
-import { sendKeys, slugifyName } from "./herd.mjs";
+import { EXIT, herdKill, herdStart, ledgerRecorder, roster, waitFor } from "./herd-cli.mjs";
+import { stripAnsi } from "./herd-state.mjs";
+import { endTask, screenDelta, startTask } from "./herd-tasks.mjs";
+import { capture, sendKeys, sendPrompt, slugifyName } from "./herd.mjs";
 import { acid, amber, ash, bone, err, info, ok, warn } from "./ui.mjs";
 
 export const DEFAULT_AGENTS = 4;
@@ -87,12 +88,20 @@ export function parseSwarmArgs(argv = []) {
 
 /* ------------------------------------------------------------- the prompts */
 
+// The headless calls run in the operator's working directory, and an engine
+// in print mode still has its tools. Seen live: a synthesis asked to fold two
+// failed pieces into an answer went and did the task itself instead. The
+// planner, the skeptic and the synthesis are asked to think, not act — the
+// agents in the herd are the ones that act.
+const NO_TOOLS = "Do not run commands, read or write files, or use any tool for this: answer from the text you are given, and nothing else.";
+
 export function planPrompt({ task, agents, cwd }) {
   return [
     `You are planning a swarm of up to ${agents} autonomous coding agents. Each will work IN PARALLEL in its own session, in the directory ${cwd}, and cannot see the others.`,
     `Split the task below into at most ${agents} independent pieces that do not edit the same files. Fewer pieces is better than pieces that overlap; one piece is fine when the task does not split.`,
     'Reply with ONLY a JSON array and nothing else — no prose, no code fence: [{"title": "short name", "prompt": "the full instructions for that agent"}].',
     "Each prompt must be self-contained, name the files it may touch, and tell the agent to end its work with a section headed SUMMARY: saying what it did and what it found.",
+    NO_TOOLS,
     "",
     "TASK:",
     task,
@@ -103,6 +112,7 @@ export function verifyPrompt({ task, piece, output }) {
   return [
     "You are a skeptical reviewer. Another agent was given one piece of a larger task and reports the output below. Try to refute it: look for claims that are not backed by what it shows, work it says it did but did not, and anything that would break the larger task.",
     'Reply with ONLY a JSON object and nothing else: {"refuted": true|false, "reason": "one or two sentences"}. Default to refuted=true when you are not sure.',
+    NO_TOOLS,
     "",
     `LARGER TASK: ${task}`,
     `PIECE: ${piece.title}`,
@@ -120,6 +130,7 @@ export function synthesisPrompt({ task, results }) {
   ].join("\n"));
   return [
     `A swarm of ${results.length} agents worked in parallel on the task below, one piece each. Their outputs follow. Write the single answer the operator should read: what was done, what was found, what is unfinished or contradicted, and what to do next. Plain prose, no preamble, no restating the task.`,
+    NO_TOOLS,
     "",
     `TASK: ${task}`,
     "",
@@ -180,46 +191,96 @@ export function runHeadless(engine, prompt, { cwd = process.cwd(), runner = spaw
   return String(res.stdout || "").trim();
 }
 
+/** The boot-spec entry this screen matches, or null. Answered once each. */
+export function bootAnswer(engine, screen) {
+  const text = stripAnsi(String(screen || ""));
+  return (ENGINES[engine]?.boot || []).find((entry) => entry.pattern.test(text)) || null;
+}
+
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+
+/**
+ * Wait for an engine to draw its prompt, answering the dialogs its spec
+ * names on the way. Same shape of result as herd-cli's waitFor.
+ */
+export async function waitForPrompt(name, {
+  engine, timeoutMs = BOOT_TIMEOUT_MS, intervalMs = 500, now = () => Date.now(),
+  look = (n) => roster().find((s) => s.name === n) || null,
+  screen = (n) => capture(n, { lines: 40 }),
+  answer = (n, keys) => sendKeys(n, keys),
+} = {}) {
+  const deadline = now() + timeoutMs;
+  const answered = new Set();
+  let state = "unknown";
+  for (;;) {
+    const session = look(name);
+    if (!session) return { outcome: "gone", state: "gone" };
+    state = session.state;
+    if (state === "idle") return { outcome: "matched", state };
+    const dialog = bootAnswer(engine, screen(name));
+    if (dialog && !answered.has(dialog.pattern.source)) {
+      answered.add(dialog.pattern.source);
+      answer(name, dialog.keys);
+      await sleep(intervalMs * 3);
+      continue;
+    }
+    if (!session.alive || state === "done") return { outcome: "ended", state };
+    if (now() >= deadline) return { outcome: "timeout", state };
+    await sleep(intervalMs);
+  }
+}
+
 /** What a swarm needs from the outside world. Tests hand in fakes. */
 export function liveDeps() {
   const quiet = () => {};
-  const lastJson = (lines) => {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try { return JSON.parse(lines[i]); } catch { /* not this line */ }
-    }
-    return null;
-  };
+  const look = (name) => roster().find((s) => s.name === name) || null;
   return {
     ai: (engine, prompt, { cwd }) => runHeadless(engine, prompt, { cwd }),
+    // The engine's autonomous-session flags, spelled out. NOT `--agent`: for
+    // an engine with an `agentsView` that opens its agents *overview* — the
+    // right screen for `/agents claude`, and a screen where a typed prompt
+    // starts a background job somewhere else instead of working here. Seen
+    // live: two pieces "finished" in 8s with a roster for output.
     start: (name, { engine, cwd, herd }) => {
       const lines = [];
-      const code = herdStart([engine, "--agent", "--name", name, "--cwd", cwd, "--herd", herd, "--json"], { write: (l) => lines.push(l) });
+      const argv = [engine, "--name", name, "--cwd", cwd, "--herd", herd, "--json", ...(ENGINES[engine]?.agentArgs || [])];
+      const code = herdStart(argv, { write: (l) => lines.push(l) });
       return code === EXIT.matched ? { ok: true } : { ok: false, error: lines.join(" ") || "could not start the session" };
     },
     // An engine takes a moment to draw its prompt; keystrokes typed before
-    // that are lost. Idle is "ready". Blocked at boot is a dialog before any
-    // work — "trust this folder?" on a directory the engine has not seen —
-    // and its default answer is the one a swarm wants, so Enter once and wait
-    // for the prompt. Anything still blocked after that is reported, not
-    // answered: guessing at a second dialog is how an agent ends up saying
-    // yes to something it should not have.
-    boot: async (name) => {
-      const first = await waitFor(name, ["idle", "blocked"], { timeoutMs: BOOT_TIMEOUT_MS, intervalMs: 500 });
-      if (first.outcome !== "matched" || first.state !== "blocked") return first;
-      sendKeys(name, "Enter");
-      const second = await waitFor(name, ["idle"], { timeoutMs: 30 * 1000, intervalMs: 500 });
-      return second.outcome === "matched" ? second : { outcome: "blocked", state: second.state };
-    },
+    // that are lost. Idle is "ready". A dialog before any work — "trust this
+    // folder?" on a directory the engine has not seen — is answered from the
+    // engine's own boot spec, each one once, and then the wait resumes.
+    // Anything the spec does not name is left alone and reported: guessing
+    // at a dialog is how an agent ends up saying yes to something it should
+    // not have — or, with Claude's trust check, "No, exit".
+    boot: (name, { engine }) => waitForPrompt(name, { engine }),
+    // `herd prompt --wait`, with one difference: it will not take an idle
+    // screen as "finished" until it has seen the engine work. herd prompt
+    // gives an engine eight seconds to notice its input; a member that is
+    // still settling when the text lands needs longer, and an idle screen
+    // seen before the engine has read a word is not an answer. Same ledger,
+    // same task ids, same `moshcode herd task <id>` afterwards.
     prompt: async (name, text, { timeoutMs }) => {
-      const lines = [];
-      await herdPrompt([name, text, "--wait", "--timeout", `${Math.ceil(timeoutMs / 1000)}s`, "--json"], { write: (l) => lines.push(l) });
-      const result = lastJson(lines) || {};
-      const task = result.task ? findTask(result.task) : null;
-      return {
-        ok: Boolean(result.sent), task: result.task || null,
-        outcome: result.outcome || (result.sent ? "sent" : "failed"), state: result.state || null,
-        artifact: task?.artifact || "", error: result.sent ? null : lines.join(" "),
-      };
+      const session = look(name);
+      if (!session?.alive) return { ok: false, task: null, outcome: "gone", state: "gone", artifact: "", error: `no live session named ${JSON.stringify(name)}` };
+      const at = Date.now();
+      const baseline = capture(name, { lines: 60 });
+      const task = startTask(name, text, { screen: baseline, now: at, state: session.state });
+      const sent = sendPrompt(name, text);
+      if (!sent.ok) {
+        const error = `moshcode could not type into ${name}: ${sent.error?.message || sent.error}`;
+        endTask(name, task, { state: "done", artifact: error });
+        return { ok: false, task, outcome: "failed", state: session.state, artifact: "", error };
+      }
+      const record = ledgerRecorder(name);
+      const began = await waitFor(name, ["working", "blocked", "done"], { timeoutMs: 30 * 1000, intervalMs: 500, onState: record });
+      const result = began.outcome === "gone" || (began.outcome === "matched" && began.state !== "working")
+        ? began
+        : await waitFor(name, ["blocked", "done", "idle"], { timeoutMs, onState: record });
+      const artifact = result.outcome === "gone" ? "" : screenDelta(baseline, capture(name, { lines: 400 }));
+      endTask(name, task, { state: result.state, artifact });
+      return { ok: true, task, outcome: result.outcome, state: result.state, artifact, error: null };
     },
     kill: async (name) => { await herdKill([name], { write: quiet }); },
   };
@@ -280,7 +341,7 @@ export async function runSwarm(options, { write = () => {}, deps = liveDeps(), e
       write(err(`${name} — could not start: ${started.error}`));
       return { ...piece, session: name, task: null, state: "failed", outcome: "failed", artifact: "", error: String(started.error) };
     }
-    const boot = await deps.boot(name);
+    const boot = await deps.boot(name, { engine });
     if (boot.outcome !== "matched") {
       write(err(`${name} — never became ready (${boot.outcome}, ${boot.state})`));
       if (!keep) await deps.kill(name);

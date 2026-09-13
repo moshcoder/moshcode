@@ -486,9 +486,9 @@ moshcode swarm "port the auth routes and the dashboard to the new API"
    2 dashboard
    3 shared API client
 · swarm — 3 sessions, 3 at a time (claude, herd swarm)
-  ✓ swarm-port-the-auth-1 done · t-…
-  ✓ swarm-port-the-auth-2 done · t-…
-  ✓ swarm-port-the-auth-3 done · t-…
+  ✓ swarm-port-the-auth-1 idle · t-01
+  ✓ swarm-port-the-auth-2 idle · t-02
+  ✓ swarm-port-the-auth-3 idle · t-03
 · synthesis — claude is folding 3 pieces into one answer
 ```
 
