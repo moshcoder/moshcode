@@ -7,7 +7,7 @@
 // curl serves the fixture, npm records how it was called.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -68,12 +68,13 @@ esac`);
   return { code, output, home, npm };
 }
 
-test("a package.json with dependencies gets `npm install --omit=dev` inside MOSHCODE_HOME", () => {
+test("a package.json with dependencies gets `npm install --omit=dev` in staging before replacement", () => {
   try {
     const r = runInstall({ pkg: { name: "moshcode", version: "9.9.9", dependencies: { "@profullstack/synconfig": "^0.1.1" } } });
     assert.equal(r.code, 0, r.output);
     assert.ok(r.npm, "npm was never called — the CLI would die on its first import");
-    assert.equal(realpathSync(r.npm[0]), realpathSync(join(r.home, ".moshcode")), "dependencies must land in the install dir");
+    assert.match(r.npm[0], /moshcode-v9\.9\.9$/, "dependencies must be prepared in the extracted release");
+    assert.notEqual(r.npm[0], join(r.home, ".moshcode"), "npm must not mutate the active install");
     assert.match(r.npm[1], /^install --omit=dev\b/);
     assert.match(r.output, /dependencies installed/);
   } finally { cleanup(); }

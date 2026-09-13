@@ -10,10 +10,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/moshcoder/moshcode/main/install.sh | sh
 #
 # What it does — dead simple, no build step:
-#   1. Checks for Node.js 18+ (moshcode is zero-dependency ESM — needs a node).
+#   1. Checks for Node.js 18+ and npm (for runtime dependencies).
 #   2. Downloads the latest release tarball of moshcoder/moshcode from GitHub
 #      (falls back to the main branch if no release is published yet).
-#   3. Unpacks it to $MOSHCODE_HOME (default: $HOME/.moshcode).
+#   3. Installs runtime dependencies and checks startup before replacing the CLI.
 #   4. Drops a `moshcode` wrapper at $MOSHCODE_BIN (default: $HOME/.local/bin)
 #      that just exec's `node $MOSHCODE_HOME/bin/moshcode.mjs "$@"`.
 #   5. Ensures that bin dir is on your PATH.
@@ -143,6 +143,14 @@ fetch_and_unpack() {
     # Tarball extracts to a single top-level dir (e.g. moshcode-main/).
     _src="$(find "$_tmp" -maxdepth 1 -type d -name 'moshcode-*' | head -1)"
     [ -n "$_src" ] && [ -f "$_src/bin/moshcode.mjs" ] || { rm -rf "$_tmp"; fail "unexpected tarball layout."; }
+    # GitHub archives contain source, not node_modules. Prepare and check the
+    # new release before removing a working installation.
+    if ! install_deps "$_src"; then
+        rm -rf "$_tmp"; fail "runtime dependency installation failed — existing installation unchanged."
+    fi
+    if ! node "$_src/bin/moshcode.mjs" --version >/dev/null; then
+        rm -rf "$_tmp"; fail "CLI startup check failed — existing installation unchanged."
+    fi
     rm -rf "$MOSHCODE_HOME"
     mkdir -p "$(dirname "$MOSHCODE_HOME")"
     mv "$_src" "$MOSHCODE_HOME"
@@ -161,21 +169,23 @@ fetch_and_unpack() {
 #
 # Read with node rather than grep: "devDependencies" contains the word too,
 # and a dev-only package.json must not drag npm in.
-install_deps() {
-    _pkg="$MOSHCODE_HOME/package.json"
+install_deps() (
+    # Run in a subshell so temporary paths cannot change the caller's install
+    # location. Only the checked staging directory is passed here.
+    _deps_dir="$1"
+    _pkg="$_deps_dir/package.json"
     [ -f "$_pkg" ] || return 0
-    if ! node -e 'const p=require(process.argv[1]);process.exit(Object.keys(p.dependencies||{}).length?0:1)' "$_pkg" 2>/dev/null; then
-        unset _pkg; return 0
-    fi
+    _needs_deps="$(node -e 'const p=require(process.argv[1]);console.log(Object.keys(p.dependencies||{}).length ? "yes" : "no")' "$_pkg")" \
+        || fail "cannot read the staged package.json."
+    [ "$_needs_deps" = yes ] || return 0
     command -v npm >/dev/null 2>&1 || fail "npm is required to install moshcode's dependencies (node was found, npm was not)."
     info "installing runtime dependencies"
-    if ( cd "$MOSHCODE_HOME" && npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1 ); then
+    if (cd "$_deps_dir" && npm install --omit=dev --ignore-scripts --no-audit --no-fund --package-lock=false); then
         ok "dependencies installed"
     else
-        fail "npm install failed in $MOSHCODE_HOME — moshcode would not start without its dependencies."
+        fail "npm install failed in staging — the new CLI would not start without its dependencies."
     fi
-    unset _pkg
-}
+)
 
 write_wrapper() {
     mkdir -p "$MOSHCODE_BIN"
@@ -276,7 +286,6 @@ run_install() {
     check_node
     _ref="$(resolve_ref)"
     fetch_and_unpack "$_ref"
-    install_deps
     write_wrapper
     ensure_path
     install_proxy
