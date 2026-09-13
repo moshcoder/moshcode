@@ -131,6 +131,31 @@ fetch_and_unpack() {
     unset _ref _url _tmp _src
 }
 
+# ---- runtime dependencies -------------------------------------------------
+# moshcode was dependency-free ESM until 0.96.0, and this installer was built
+# on that: the source tarball carries package.json and nothing under
+# node_modules. Anything package.json lists has to be fetched here — or the
+# CLI dies on its first import, which is exactly what 0.96.0 through 0.98.0
+# did for everyone who installed or upgraded through this script.
+#
+# Read with node rather than grep: "devDependencies" contains the word too,
+# and a dev-only package.json must not drag npm in.
+install_deps() {
+    _pkg="$MOSHCODE_HOME/package.json"
+    [ -f "$_pkg" ] || return 0
+    if ! node -e 'const p=require(process.argv[1]);process.exit(Object.keys(p.dependencies||{}).length?0:1)' "$_pkg" 2>/dev/null; then
+        unset _pkg; return 0
+    fi
+    command -v npm >/dev/null 2>&1 || fail "npm is required to install moshcode's dependencies (node was found, npm was not)."
+    info "installing runtime dependencies"
+    if ( cd "$MOSHCODE_HOME" && npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1 ); then
+        ok "dependencies installed"
+    else
+        fail "npm install failed in $MOSHCODE_HOME — moshcode would not start without its dependencies."
+    fi
+    unset _pkg
+}
+
 write_wrapper() {
     mkdir -p "$MOSHCODE_BIN"
     cat > "$WRAPPER" <<WRAP_EOF
@@ -230,6 +255,7 @@ run_install() {
     check_node
     _ref="$(resolve_ref)"
     fetch_and_unpack "$_ref"
+    install_deps
     write_wrapper
     ensure_path
     install_proxy
