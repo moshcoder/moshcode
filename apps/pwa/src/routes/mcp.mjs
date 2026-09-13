@@ -9,8 +9,11 @@ import { all, get, run } from "../db.mjs";
 import { id, token } from "../lib/crypto.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { config } from "../config.mjs";
+import { auditMcp, finishMcpAudit } from "../lib/mcp-audit.mjs";
 import {
-  MCP_SCOPES,
+  MCP_SHARE_SCOPES,
+  mcpShareIdFromResource,
+  mcpCors,
   hasScope,
   mcpShareResource,
   normalizeScopes,
@@ -20,6 +23,7 @@ import {
 } from "../lib/mcp-auth.mjs";
 
 export const mcpRouter = Router();
+mcpRouter.use(mcpCors);
 
 export const MODERN_VERSION = "2026-07-28";
 export const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -113,13 +117,14 @@ async function readSession(auth, args = {}) {
 }
 
 function splitCommands(text) {
-  return String(text ?? "")
-    .split(/\r\n|\r|\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith(KEY_PREFIX) && !line.startsWith(SIGNAL_PREFIX))
-    .slice(0, 50)
-    .map((line) => line.slice(0, 500));
+  if (typeof text !== "string" || text.length > 25000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) {
+    throw new Error("text must be at most 25000 characters without terminal control bytes");
+  }
+  const lines = text.split(/\r\n|\r|\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 50 || lines.some((line) => line.length > 500)) {
+    throw new Error("text must contain at most 50 lines of 500 characters each");
+  }
+  return lines;
 }
 
 async function sendSession(auth, args = {}) {
@@ -132,9 +137,9 @@ async function sendSession(auth, args = {}) {
   for (const [index, body] of lines.entries()) {
     const commandId = id();
     await run(
-      `INSERT INTO session_commands (id,session_id,body,status,created_at)
-       VALUES (?,?,?,'queued',?)`,
-      [commandId, row.id, body, now + index]
+      `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id)
+       VALUES (?,?,?,'queued',?,?)`,
+      [commandId, row.id, body, now + index, mcpShareIdFromResource(auth.resource)]
     );
     commands.push({ id: commandId, body });
   }
@@ -154,15 +159,15 @@ async function pressSessionKey(auth, args = {}) {
   if (!features(row).includes("keys")) throw new Error("this Moshcode session does not advertise remote key support");
   const commandId = id();
   await run(
-    `INSERT INTO session_commands (id,session_id,body,status,created_at)
-     VALUES (?,?,?,'queued',?)`,
-    [commandId, row.id, KEY_PREFIX + key, Date.now()]
+    `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id)
+     VALUES (?,?,?,'queued',?,?)`,
+    [commandId, row.id, KEY_PREFIX + key, Date.now(), mcpShareIdFromResource(auth.resource)]
   );
   return { ok: true, session_id: row.id, command_id: commandId, key };
 }
 
 async function answerSession(auth, args = {}) {
-  const text = String(args.text || "").trim();
+  const text = typeof args.text === "string" ? args.text.trim() : "";
   if (!text || text.includes("\n") || text.includes("\r") || text.length > 500) {
     throw new Error("text must be one line between 1 and 500 characters");
   }
@@ -180,9 +185,9 @@ async function cancelSession(auth, args = {}) {
   if (!features(row).includes("signals")) throw new Error("this Moshcode session does not advertise remote interrupt support");
   const commandId = id();
   await run(
-    `INSERT INTO session_commands (id,session_id,body,status,created_at)
-     VALUES (?,?,?,'queued',?)`,
-    [commandId, row.id, SIGNAL_PREFIX + "interrupt", Date.now()]
+    `INSERT INTO session_commands (id,session_id,body,status,created_at,mcp_share_id)
+     VALUES (?,?,?,'queued',?,?)`,
+    [commandId, row.id, SIGNAL_PREFIX + "interrupt", Date.now(), mcpShareIdFromResource(auth.resource)]
   );
   return { ok: true, session_id: row.id, command_id: commandId, signal: "interrupt" };
 }
@@ -234,7 +239,7 @@ const TOOL_DEFS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    requiredScope: "sessions:control",
+    requiredScope: "sessions:write",
   },
   {
     name: "moshcode_session_key",
@@ -250,7 +255,7 @@ const TOOL_DEFS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    requiredScope: "sessions:control",
+    requiredScope: "sessions:write",
   },
   {
     name: "moshcode_session_answer",
@@ -266,7 +271,7 @@ const TOOL_DEFS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    requiredScope: "sessions:control",
+    requiredScope: "sessions:write",
   },
   {
     name: "moshcode_session_approve",
@@ -282,7 +287,7 @@ const TOOL_DEFS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    requiredScope: "sessions:control",
+    requiredScope: "sessions:approve",
   },
   {
     name: "moshcode_session_cancel",
@@ -295,18 +300,27 @@ const TOOL_DEFS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-    requiredScope: "sessions:control",
+    requiredScope: "sessions:cancel",
   },
 ];
 
+const shareToolName = (name) => name.replace(/^moshcode_/, "");
+const SHARE_TOOLS = new Set(["session_read", "session_send", "session_answer", "session_approve", "session_cancel"]);
+
 export function toolsFor(auth) {
-  return TOOL_DEFS
-    .filter((tool) => hasScope(auth, tool.requiredScope))
-    .map(({ requiredScope, ...tool }) => tool);
+  const shared = Boolean(mcpShareIdFromResource(auth.resource));
+  return TOOL_DEFS.filter((tool) => hasScope(auth, tool.requiredScope) && (!shared || SHARE_TOOLS.has(shareToolName(tool.name))))
+    .map(({ requiredScope, ...tool }) => {
+      if (!shared) return tool;
+      const { session_id, ...properties } = tool.inputSchema.properties;
+      return { ...tool, name: shareToolName(tool.name), inputSchema: { ...tool.inputSchema, properties,
+        required: (tool.inputSchema.required || []).filter((name) => name !== "session_id") } };
+    });
 }
 
 async function invokeTool(auth, name, args) {
-  const def = TOOL_DEFS.find((tool) => tool.name === name);
+  const shared = Boolean(mcpShareIdFromResource(auth.resource));
+  const def = TOOL_DEFS.find((tool) => tool.name === name || (shared && shareToolName(tool.name) === name));
   if (!def) throw Object.assign(new Error(`unknown tool: ${name}`), { code: -32602 });
   if (!hasScope(auth, def.requiredScope)) {
     throw Object.assign(new Error(`scope ${def.requiredScope} is required`), {
@@ -314,6 +328,13 @@ async function invokeTool(auth, name, args) {
       requiredScope: def.requiredScope,
     });
   }
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("arguments must be an object");
+  if (Object.keys(args).some((key) => !Object.hasOwn(def.inputSchema.properties, key))) throw new Error("unknown tool argument");
+  if (shared) {
+    if (args.session_id !== undefined && args.session_id !== auth.session_id) throw new Error("this token is bound to a different session");
+    args = { ...args, session_id: auth.session_id };
+  }
+  name = def.name;
   if (name === "moshcode_sessions_list") return listSessions(auth, args);
   if (name === "moshcode_session_read") return readSession(auth, args);
   if (name === "moshcode_session_send") return sendSession(auth, args);
@@ -381,6 +402,7 @@ async function dispatch(req, auth, body) {
     throw Object.assign(new Error("invalid JSON-RPC request"), { code: -32600 });
   }
   const version = versionFor(req, body);
+  if (version && version !== MODERN_VERSION && !LEGACY_VERSIONS.includes(version)) throw headerMismatch("Unsupported MCP protocol version");
   const modern = version === MODERN_VERSION;
 
   if (modern) validateModernHeaders(req, body);
@@ -414,9 +436,16 @@ async function dispatch(req, auth, body) {
 
   if (body.method === "tools/call") {
     const name = String(body.params?.name || "");
+    const known = TOOL_DEFS.find((tool) => tool.name === name || shareToolName(tool.name) === name);
+    const eventId = await auditMcp({ userId: auth.user_id, clientId: auth.client_id,
+      shareId: mcpShareIdFromResource(auth.resource), sessionId: auth.session_id,
+      action: known ? shareToolName(known.name) : "tool.unknown", outcome: "started" });
     try {
-      return toolResult(await invokeTool(auth, name, body.params?.arguments || {}), modern);
+      const data = await invokeTool(auth, name, body.params?.arguments ?? {});
+      await finishMcpAudit(eventId, "allowed");
+      return toolResult(data, modern);
     } catch (error) {
+      await finishMcpAudit(eventId, error.requiredScope ? "denied" : "failed");
       if (error.requiredScope || Number.isInteger(error.code)) throw error;
       return {
         ...(modern ? modernResult({}) : {}),
@@ -429,7 +458,7 @@ async function dispatch(req, auth, body) {
   throw Object.assign(new Error(`method not found: ${body.method}`), { code: -32601 });
 }
 
-mcpRouter.get("/mcp", (_req, res) => {
+mcpRouter.get("/mcp", requireMcpAccess, (_req, res) => {
   res.set("Allow", "POST");
   res.status(405).json({ error: "Moshcode MCP uses stateless HTTP POST." });
 });
@@ -437,11 +466,14 @@ mcpRouter.get("/mcp", (_req, res) => {
 async function handleMcp(req, res) {
   const body = req.body;
   // initialized is a JSON-RPC notification in legacy clients and has no response.
-  if (body?.method === "notifications/initialized" && body?.id === undefined) {
-    return res.status(202).end();
-  }
-
   try {
+    const version = versionFor(req, body);
+    if (version && version !== MODERN_VERSION && !LEGACY_VERSIONS.includes(version)) throw headerMismatch("Unsupported MCP protocol version");
+    if (version === MODERN_VERSION) validateModernHeaders(req, body);
+    if (body?.jsonrpc === "2.0" && typeof body.method === "string" && body.method.startsWith("notifications/") && body.id === undefined) return res.status(202).end();
+    if (body?.id === undefined || (typeof body.id !== "string" && typeof body.id !== "number")) {
+      throw Object.assign(new Error("invalid JSON-RPC request id"), { code: -32600, httpStatus: 400 });
+    }
     const result = await dispatch(req, req.mcpAuth, body);
     // A notification has no JSON-RPC response.
     if (body?.id === undefined) return res.status(202).end();
@@ -472,9 +504,9 @@ async function apiUser(req, res, next) {
 
 function requestedShareScopes(value) {
   const raw = String(value || "").replace(/,/g, " ").trim();
-  const requested = raw ? raw.split(/\s+/) : [...MCP_SCOPES];
-  if (requested.some((scope) => !MCP_SCOPES.includes(scope))) return null;
-  return normalizeScopes(requested.join(" "), { fallback: MCP_SCOPES });
+  const requested = raw ? raw.split(/\s+/) : ["sessions:read"];
+  if (requested.some((scope) => !MCP_SHARE_SCOPES.includes(scope))) return null;
+  return normalizeScopes(requested.join(" "));
 }
 
 mcpRouter.post("/api/v1/mcp/shares", apiUser, async (req, res) => {
@@ -484,7 +516,7 @@ mcpRouter.post("/api/v1/mcp/shares", apiUser, async (req, res) => {
   );
   if (!session) return res.status(404).json({ error: "no such session" });
   const scopes = requestedShareScopes(req.body?.scope);
-  if (!scopes?.length) return res.status(400).json({ error: "invalid scope" });
+  if (!scopes?.length) return res.status(400).json({ error: "invalid scope; use sessions:read, sessions:write, sessions:approve or sessions:cancel" });
   const requestedSeconds = Number(req.body?.ttl_seconds);
   const ttlMs = Number.isFinite(requestedSeconds)
     ? Math.min(config.mcp.maxShareTtlMs, Math.max(60_000, Math.floor(requestedSeconds * 1000)))
@@ -497,6 +529,7 @@ mcpRouter.post("/api/v1/mcp/shares", apiUser, async (req, res) => {
     [shareId, session.id, req.apiUser.id, String(req.body?.name || session.name || "Moshcode session").slice(0, 100),
       scopes.join(" "), now, now + ttlMs]
   );
+  await auditMcp({ userId: req.apiUser.id, shareId, sessionId: session.id, action: "share.create", outcome: "allowed" });
   res.status(201).json({
     id: shareId,
     session_id: session.id,
@@ -520,7 +553,7 @@ mcpRouter.get("/api/v1/mcp/shares", apiUser, async (req, res) => {
       name: row.name,
       endpoint: mcpShareResource(row.id),
       scopes: String(row.scopes).split(/\s+/).filter(Boolean),
-      status: row.status,
+      status: row.status === "active" && Number(row.expires_at) <= Date.now() ? "expired" : row.status,
       expires_at: Number(row.expires_at),
       session_live: row.session_status === "live" && Date.now() - Number(row.last_seen_at) < STALE_MS,
     })),
@@ -539,10 +572,12 @@ mcpRouter.delete("/api/v1/mcp/shares/:shareId", apiUser, async (req, res) => {
     `UPDATE mcp_oauth_tokens SET revoked_at=COALESCE(revoked_at,?) WHERE resource=?`,
     [now, mcpShareResource(req.params.shareId)]
   );
+  await run(`UPDATE session_commands SET status='cancelled' WHERE mcp_share_id=? AND status='queued'`, [req.params.shareId]);
+  await auditMcp({ userId: req.apiUser.id, shareId: req.params.shareId, action: "share.revoke", outcome: "allowed" });
   res.json({ ok: true });
 });
 
-mcpRouter.get("/api/v1/mcp/:shareId", (_req, res) => {
+mcpRouter.get("/api/v1/mcp/:shareId", requireMcpShareAccess, (_req, res) => {
   res.set("Allow", "POST");
   res.status(405).json({ error: "Moshcode MCP uses stateless HTTP POST." });
 });
