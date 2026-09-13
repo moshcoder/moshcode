@@ -615,7 +615,7 @@ export const CORE_CLI_COMMANDS = [
     examples: [
       ["moshcode engines", "who is installed"],
       ["moshcode engines defaults", "per engine: which of its defaults are set, missing, or yours"],
-      ["moshcode engines defaults apply claude", "ultracode on, small workflows, 4 agents at once"],
+      ["moshcode engines defaults apply claude", "ultracode off, small workflows, 4 agents at once"],
       ["moshcode engines defaults remove claude", "take them back out"],
     ],
     seeAlso: ["agents", "install"],
@@ -841,7 +841,7 @@ export const CORE_CLI_COMMANDS = [
     group: "business",
     description: "what an hour of agent time costs",
     synopsis: [
-      ["moshcode rate set <client|default> <spec>", "$100/hour/agent/upto:4"],
+      ["moshcode rate set <client|default> <spec>", "$400/hour/agent/upto:4"],
       ["moshcode rate [list] | show <client> | rm <client>", ""],
     ],
     verbs: "RATE_VERBS",
@@ -851,7 +851,7 @@ export const CORE_CLI_COMMANDS = [
       ["--json", "machine-readable", ""],
     ],
     examples: [
-      ["moshcode rate set default $100/hour/agent/upto:4", "four agents cost four hundred; six also cost four hundred"],
+      ["moshcode rate set default '$400/hour/agent'", "four agents cost $1,600/hour; six cost $2,400/hour"],
       ["moshcode rate set acme 0.5 SOL/day --prefer SOL,USDC --accept fiat", ""],
       ["moshcode rate set acme $5000/project", "a flat fee, added once per invoice"],
     ],
@@ -1018,7 +1018,7 @@ export const MCP_VERBS = [
     flags: [
       ["--ttl <duration>", "60s to 7d", "8h"],
       ["--name <name>", "label shown during authorization", "session name"],
-      ["--scope <scopes>", "comma or space-separated session scopes", "all"],
+      ["--scope <scopes>", "sessions:read, sessions:write, sessions:approve, sessions:cancel", "sessions:read"],
       ["--json", "machine-readable", ""],
     ],
   },

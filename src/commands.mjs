@@ -878,7 +878,7 @@ const COMMANDS = [
   cliVerb("timer", "track time (timer(\"on\", client) … timer(\"off\"))"),
   cliVerb("client", "clients/businesses/merchants — create, list, set, payee"),
   cliVerb("team", "who may do what (create, add, grant, revoke, can)"),
-  cliVerb("rate", "what agent time costs (rate(\"set\", \"acme\", \"$100/hour/agent/upto:4\"))"),
+  cliVerb("rate", "what agent time costs (rate(\"set\", \"acme\", \"$400/hour/agent/upto:4\"))"),
   cliVerb("billing", "turn tracked time into an invoice (--mark claims it, --send hands it over)"),
   cliVerb("payments", "the rail invoices go out on (connect, default, disconnect)"),
   cliVerb("plugin", "install/manage moshcode plugins from the marketplace"),

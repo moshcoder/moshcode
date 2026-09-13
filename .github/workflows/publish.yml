@@ -71,6 +71,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/pwa install --frozen-lockfile
 
       # Publishing is the one action here that cannot be taken back — npm will
       # not let a version be replaced — so the tests run first, on the exact
@@ -134,18 +135,23 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Confirm the registry has it
-        if: steps.published.outputs.already == 'false'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          NPM_CONFIG_FETCH_RETRIES: 0
+          NPM_CONFIG_FETCH_TIMEOUT: 10000
         run: |
-          # The registry is read-through cached, so a fresh publish can 404 for
-          # a moment. Retry rather than report a good publish as a failure.
-          for _ in 1 2 3 4 5; do
-            if [ "$(npm view "moshcode@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
-              echo "moshcode@$VERSION is on the registry"
+          # Metadata and tarballs propagate separately. Recent releases took
+          # minutes, exceeding the previous 25-second window. Check both for
+          # up to ten minutes, including reruns of an already published version.
+          VERIFY_UNTIL=$(( $(date +%s) + 600 ))
+          while [ "$(date +%s)" -lt "$VERIFY_UNTIL" ]; do
+            if [ "$(npm view "moshcode@$VERSION" version 2>/dev/null)" = "$VERSION" ] \
+              && curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+                --output /dev/null "https://registry.npmjs.org/moshcode/-/moshcode-$VERSION.tgz"; then
+              echo "moshcode@$VERSION metadata and tarball are publicly available"
               exit 0
             fi
-            sleep 5
+            sleep 10
           done
-          echo "::error::published, but the registry does not report moshcode@$VERSION yet"
+          echo "::error::published, but moshcode@$VERSION metadata or tarball is not publicly available after ten minutes"
           exit 1

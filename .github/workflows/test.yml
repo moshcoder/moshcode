@@ -30,6 +30,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/pwa install --frozen-lockfile
 
       # test defaults to `pnpm run --if-present test` so a repo that hasn't
       # defined a test script yet gets a green workflow instead of failing on

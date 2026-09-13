@@ -556,15 +556,16 @@ first time — what is wrong with your `rules.json` instead of ignoring it.
 ### The engine's settings, the way a herd wants them
 
 An engine can also say how it would like to be configured. Claude Code's
-defaults are **ultracode on** (every substantive prompt runs as a workflow of
-agents), **small workflows** (Claude's own advisory tier, fewer than 5 agents
-each) and a **hard cap of 4 agents at once**, so one session cannot eat the box
-the rest of the herd is running on. `moshcode install claude` applies them;
-by hand:
+defaults are **ultracode off** (a prompt runs as a workflow of agents only when
+you ask for one in so many words; neither the setting nor the "ultracode"
+keyword turns it on by itself), **small workflows** (Claude's own advisory
+tier, fewer than 5 agents each) and a **hard cap of 4 agents at once**, so a
+workflow you do ask for cannot eat the box the rest of the herd is running on.
+`moshcode install claude` applies them; by hand:
 
 ```sh
 moshcode engines defaults apply claude
-✓ claude — 3 defaults applied (ultracode on by default, small workflows (under 5 agents), 4 agents at once, hard cap)
+✓ claude — 4 defaults applied (ultracode off by default, no ultracode keyword trigger, small workflows (under 5 agents), 4 agents at once, hard cap)
 ```
 
 Same rule as the hooks: the file is merged, never clobbered. A key you already
@@ -1331,7 +1332,7 @@ each useful on its own — the timer needs no client, the rate needs no gateway
 > not exist. `billing import` is what closes that gap, which is why it comes
 > first.
 >
-> The standalone billing carries the same rate model (`$100/hour/agent/upto:4`)
+> The standalone billing carries the same rate model (`$400/hour/agent/upto:4`)
 > and bills **agent-hours**.
 
 ```sh
@@ -1357,14 +1358,14 @@ fixed field list — `--billing.po` works because it says what it means.
 `/business`, `/merchant` and `/customer` are the same command.
 
 ```sh
-moshcode rate set default $100/hour/agent/upto:4
+moshcode rate set default '$400/hour/agent'
 moshcode rate set acme-inc 0.5 SOL/day --prefer SOL,USDC --accept fiat
 moshcode rate set initech $5000/project
 ```
 
-`$100/hour/agent/upto:4` is the sentence from the contract, parsed: price,
-period, unit, and the cap that made the client sign. Four agents cost four
-hundred an hour and **so do six**. Order after the price does not matter.
+`$400/hour/agent/upto:4` is the sentence from the contract, parsed: price,
+period, unit, and the cap that made the client sign. Four agents cost $1,600
+an hour and **so do six** when the contract explicitly caps billing at four. Order after the price does not matter.
 
 ```sh
 moshcode billing acme-inc                 # a preview — writes nothing
@@ -1622,9 +1623,9 @@ session:
 
 ```sh
 moshcode
-/mcp answer                    # default: all session scopes for 8 hours
+/mcp answer                    # default: read-only for 8 hours
 /mcp answer --ttl 30m          # shorter share
-/mcp answer --scope sessions:read,sessions:control
+/mcp answer --scope sessions:read,sessions:write,sessions:approve,sessions:cancel
 ```
 
 Paste the printed `https://moshcode.sh/api/v1/mcp/mcs_…` endpoint into a remote
@@ -1633,10 +1634,28 @@ specific session and scopes in the browser, and its access token is bound to
 that one opaque share URL. OAuth authorization code + PKCE, rotating refresh
 tokens, and device authorization are supported.
 
-The shared server exposes `moshcode_session_read`, `moshcode_session_answer`,
-`moshcode_session_approve`, `moshcode_session_send`, and
-`moshcode_session_cancel`. Read and control access are separate scopes; the
-authorization page shows exactly which ones the client requested. Share
+- **ChatGPT:** in an account/workspace with custom MCP apps enabled, open
+  Settings → Apps → Create, enter the share URL, choose OAuth, and scan tools.
+  Complete the Moshcode consent page as the session owner. Availability and
+  write permissions depend on your plan and administrator settings; see
+  [OpenAI's setup guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt-beta).
+- **Claude:** open Customize → Connectors → Add custom connector, enter the
+  share URL, then connect and complete Moshcode authorization. Team owners
+  configure the connector for their organization first. See
+  [Claude's setup guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+- **Chovy and other integrations:** use an OAuth-capable remote MCP client
+  with the same share URL. Chovy does not yet provide a native connector screen;
+  its adapter needs the discovery, PKCE, resource-bound token and refresh flow
+  described in [the server integration contract](apps/pwa/MCP.md).
+
+After connecting, ask the client to read this session before granting or using
+write tools. Removing a client-side connector does not replace revoking the
+Moshcode share when you want to end all access to that URL.
+
+The shared server exposes `session_read`, `session_answer`, `session_approve`,
+`session_send`, and `session_cancel`. Reading, writing, approval and interruption
+have separate scopes; the authorization page shows which ones the client
+requested. Each tool is bound to the shared session. Share
 management stays with the logged-in Moshcode operator:
 
 ```sh
@@ -1649,6 +1668,16 @@ moshcode mcp revoke mcs_…
 `/mcp share` is an alias for `/mcp answer`. Ending the live terminal makes tool
 writes fail, and revoking or expiring the share invalidates its access and
 refresh tokens.
+
+If you started the pit before signing in, `/mcp answer` signs you in and starts
+its live connection. `/mcp connect` also reconnects the current pit after login.
+An unreachable service can be retried without restarting the terminal. An
+explicit `MOSHCODE_NO_MIRROR` setting remains respected; unset it and restart
+before sharing. Remote approval sends a bounded yes/no to the terminal; it does
+not identify a particular engine prompt. Read the current output before acting.
+The write scope permits arbitrary terminal input, including commands and a
+typed "yes". The approval scope restricts the approval tool; it does not block
+someone who already has write permission from answering a prompt themselves.
 
 ### Known MCP servers
 

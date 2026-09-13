@@ -1,6 +1,6 @@
 ---
 description: Read or set what your time costs, written the way the contract says it.
-argument-hint: "[set <client|default> '$100/hour/agent/upto:4']"
+argument-hint: "[set <client|default> '$400/hour/agent/upto:4']"
 allowed-tools: Bash(billing rate:*), Bash(billing client:*)
 ---
 
@@ -21,7 +21,7 @@ A price, then any of these in any order:
 - a unit that gets multiplied: `agent`, `seat`, `person`, `team`
 - `upto:N` to cap the multiplier, `min:N` for a minimum billed period
 
-`$100/hour/agent/upto:4` means four agents cost four hundred an hour, and so do
+`$400/hour/agent/upto:4` means four agents cost sixteen hundred an hour, and so do
 six. `0.5 SOL/day`, `250 USDC/task` and `$5000/project` all parse too.
 
 ## Rules

@@ -5,7 +5,7 @@ Slash commands for
 rates and invoices, built on the hours `@profullstack/timer` tracked.
 
 ```
-/billing:rate set acme '$100/hour/agent/upto:4'
+/billing:rate set acme '$400/hour/agent/upto:4'
 /billing:hours --client acme --month
 /billing:invoice --client acme --from-timer --month
 /billing:report
@@ -25,8 +25,8 @@ moshcode install billing
 
 ## What it is for
 
-A rate is the sentence from the contract, parsed. `$100/hour/agent/upto:4` means
-four agents cost four hundred an hour and so do six, and the invoice bills
+A rate is the sentence from the contract, parsed. `$400/hour/agent/upto:4` means
+four agents cost sixteen hundred an hour and so do six, and the invoice bills
 **agent-hours** so the client can check the line by hand: `quantity × rate`
 always equals `amount`.
 

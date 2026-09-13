@@ -7,6 +7,7 @@ import { Router } from "express";
 import { config } from "../config.mjs";
 import { page, esc } from "../lib/html.mjs";
 import { csrfInput, requireAuth } from "../lib/session.mjs";
+import { auditMcp } from "../lib/mcp-audit.mjs";
 import {
   MCP_RESOURCE,
   MCP_SCOPES,
@@ -19,6 +20,8 @@ import {
   normalizeScopes,
   registerOAuthClient,
   rotateRefreshToken,
+  revokeOAuthToken,
+  mcpCors,
   sessionsForAuthorization,
   userOwnsSession,
   validateAuthorizationRequest,
@@ -26,6 +29,7 @@ import {
 
 export const mcpOAuthMachineRouter = Router();
 export const mcpOAuthBrowserRouter = Router();
+mcpOAuthMachineRouter.use(mcpCors);
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
 const AS_METADATA = () => ({
@@ -34,6 +38,8 @@ const AS_METADATA = () => ({
   token_endpoint: `${config.origin}/oauth/token`,
   device_authorization_endpoint: `${config.origin}/oauth/device_authorization`,
   registration_endpoint: `${config.origin}/oauth/register`,
+  revocation_endpoint: `${config.origin}/oauth/revoke`,
+  revocation_endpoint_auth_methods_supported: ["none"],
   response_types_supported: ["code"],
   response_modes_supported: ["query"],
   grant_types_supported: ["authorization_code", "refresh_token", DEVICE_GRANT],
@@ -121,6 +127,7 @@ mcpOAuthMachineRouter.post("/oauth/token", async (req, res) => {
       const tokens = await exchangeMcpDeviceCode({
         deviceCode: req.body?.device_code,
         clientId: req.body?.client_id,
+        resource: req.body?.resource,
       });
       return res.json(tokens);
     }
@@ -138,6 +145,8 @@ mcpOAuthMachineRouter.post("/oauth/token", async (req, res) => {
       const tokens = await rotateRefreshToken({
         refreshToken: req.body?.refresh_token,
         clientId: req.body?.client_id,
+        resource: req.body?.resource || MCP_RESOURCE,
+        scope: req.body?.scope,
       });
       return res.json(tokens);
     }
@@ -153,6 +162,12 @@ mcpOAuthMachineRouter.post("/oauth/token", async (req, res) => {
   }
 });
 
+mcpOAuthMachineRouter.post("/oauth/revoke", async (req, res) => {
+  await revokeOAuthToken({ rawToken: req.body?.token, clientId: req.body?.client_id });
+  // Revocation does not reveal whether a supplied credential ever existed.
+  res.set("Cache-Control", "no-store").status(200).end();
+});
+
 function authRedirect(redirectUri, values) {
   const url = new URL(redirectUri);
   for (const [key, value] of Object.entries(values)) {
@@ -163,6 +178,9 @@ function authRedirect(redirectUri, values) {
 
 function describeScope(scope) {
   if (scope === "sessions:read") return "See your Moshcode sessions and read mirrored terminal output.";
+  if (scope === "sessions:write") return "Send bounded text input or answer a prompt in this session.";
+  if (scope === "sessions:approve") return "Send an explicit approve or deny response to this session.";
+  if (scope === "sessions:cancel") return "Interrupt work running in this session.";
   if (scope === "sessions:control") return "Queue commands or supported key presses into the selected live session.";
   return scope;
 }
@@ -250,7 +268,12 @@ mcpOAuthBrowserRouter.post("/oauth/authorize", requireAuth, async (req, res) => 
     return res.status(400).type("text").send(`invalid authorization request: ${error.message}\n`);
   }
 
+  if (auth.share && auth.share.user_id !== req.user.id) {
+    return res.status(400).type("text").send("That session share does not belong to this account.\n");
+  }
   if (req.body?.decision !== "allow") {
+    await auditMcp({ userId: req.user.id, clientId: auth.clientId, shareId: auth.share?.id, sessionId: auth.share?.session_id,
+      action: "oauth.authorize", outcome: "denied" });
     return res.redirect(authRedirect(auth.redirectUri, {
       error: "access_denied",
       state: auth.state,
@@ -258,9 +281,6 @@ mcpOAuthBrowserRouter.post("/oauth/authorize", requireAuth, async (req, res) => 
     }));
   }
 
-  if (auth.share && auth.share.user_id !== req.user.id) {
-    return res.status(400).type("text").send("That session share does not belong to this account.\n");
-  }
   const sessionId = auth.share?.session_id || String(req.body?.session_id || "").trim() || null;
   if (sessionId && !(await userOwnsSession(req.user.id, sessionId))) {
     return res.status(400).type("text").send("That session does not belong to this account.\n");
@@ -276,6 +296,8 @@ mcpOAuthBrowserRouter.post("/oauth/authorize", requireAuth, async (req, res) => 
     codeChallenge: auth.codeChallenge,
   });
 
+  await auditMcp({ userId: req.user.id, clientId: auth.clientId, shareId: auth.share?.id, sessionId,
+    action: "oauth.authorize", outcome: "allowed" });
   return res.redirect(authRedirect(auth.redirectUri, {
     code,
     state: auth.state,

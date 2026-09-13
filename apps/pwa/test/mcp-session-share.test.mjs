@@ -77,7 +77,7 @@ test("session share: device OAuth binds one opaque endpoint and revocation kills
   const share = await request("/api/v1/mcp/shares", {
     method: "POST",
     bearer: apiKey,
-    body: { session_id: session.body.id, scope: "sessions:read sessions:control", ttl_seconds: 3600 },
+    body: { session_id: session.body.id, scope: "sessions:read sessions:write sessions:approve sessions:cancel", ttl_seconds: 3600 },
   });
   assert.equal(share.response.status, 201);
   assert.match(share.body.endpoint, /^https:\/\/moshcode\.example\.test\/api\/v1\/mcp\/mcs_/);
@@ -97,7 +97,7 @@ test("session share: device OAuth binds one opaque endpoint and revocation kills
     code_challenge_method: "S256",
     code_challenge: "a".repeat(43),
     resource: share.body.endpoint,
-    scope: "sessions:read sessions:control",
+    scope: "sessions:read sessions:write sessions:approve sessions:cancel",
   });
   assert.equal(browserGrant.share.session_id, session.body.id);
   const device = await request("/oauth/device_authorization", {
@@ -105,7 +105,7 @@ test("session share: device OAuth binds one opaque endpoint and revocation kills
     body: {
       client_id: client.body.client_id,
       resource: share.body.endpoint,
-      scope: "sessions:read sessions:control",
+      scope: "sessions:read sessions:write sessions:approve sessions:cancel",
     },
   });
   assert.equal(device.response.status, 200);
@@ -117,17 +117,19 @@ test("session share: device OAuth binds one opaque endpoint and revocation kills
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       client_id: client.body.client_id,
       device_code: device.body.device_code,
+      resource: share.body.endpoint,
     },
   });
   assert.equal(pending.body.error, "authorization_pending");
 
-  await run(`UPDATE device_codes SET status='approved', user_id='u1' WHERE device_code=?`, [device.body.device_code]);
+  await run(`UPDATE device_codes SET status='approved', user_id='u1', last_polled_at=NULL WHERE user_code=?`, [device.body.user_code]);
   const issued = await request("/oauth/token", {
     method: "POST",
     body: {
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       client_id: client.body.client_id,
       device_code: device.body.device_code,
+      resource: share.body.endpoint,
     },
   });
   assert.equal(issued.response.status, 200);
@@ -138,6 +140,7 @@ test("session share: device OAuth binds one opaque endpoint and revocation kills
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       client_id: client.body.client_id,
       device_code: device.body.device_code,
+      resource: share.body.endpoint,
     },
   });
   assert.equal(replay.body.error, "expired_token");
@@ -148,7 +151,7 @@ test("session share: device OAuth binds one opaque endpoint and revocation kills
     body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
   });
   assert.equal(listed.response.status, 200);
-  assert.equal(listed.body.result.tools.some((tool) => tool.name === "moshcode_session_cancel"), true);
+  assert.equal(listed.body.result.tools.some((tool) => tool.name === "session_cancel"), true);
 
   const cancelled = await request(`/api/v1/mcp/${share.body.id}`, {
     method: "POST",
