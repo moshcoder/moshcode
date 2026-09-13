@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@profullstack/synconfig':
+        specifier: ^0.1.1
+        version: 0.1.1
     devDependencies:
       '@moshcoder/moshpit-dns':
         specifier: ^0.5.0
@@ -19,6 +23,12 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
+  '@profullstack/synconfig@0.1.1':
+    resolution: {integrity: sha512-gX/tZ0j0QShtAf2/Mpr40Fev0h7HVoh5jl3tVbFVrSfuQHalthiwVgZ8lQKzhv+0kpxvVex4qkT8xMFHSopklA==}
+    engines: {node: '>=22'}
+
 snapshots:
 
   '@moshcoder/moshpit-dns@0.5.0': {}
+
+  '@profullstack/synconfig@0.1.1': {}

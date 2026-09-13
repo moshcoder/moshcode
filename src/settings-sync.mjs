@@ -27,13 +27,30 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  SNAPSHOT_VERSION as PACKAGE_SNAPSHOT_VERSION,
+  applyFiles as applySnapshotFiles,
+  collectSnapshot as collectPolicyFiles,
+  digestFiles as digestPolicyFiles,
+  isSyncable as policyAllows,
+  planApply as planPolicyApply,
+  validateSnapshot as validatePolicySnapshot,
+} from "@profullstack/synconfig";
 import { loadCreds } from "./auth.mjs";
 import { engineStatus } from "./engines.mjs";
 import { toolStatus } from "./tools.mjs";
 import { ash, moshcodeVersion } from "./ui.mjs";
 
-/** The snapshot shape this build writes and is willing to read. */
-export const SNAPSHOT_VERSION = 1;
+/**
+ * The snapshot shape this build writes and is willing to read.
+ *
+ * Since 0.96 the primitives here (the allowlist check, collecting, validating,
+ * planning, applying, the digest) are @profullstack/synconfig, the package
+ * this file was extracted into so myna and the rest could sync the same way.
+ * What stays here is moshcode's own: which files, the marker, the transport,
+ * and the two verbs with their messages.
+ */
+export const SNAPSHOT_VERSION = PACKAGE_SNAPSHOT_VERSION;
 
 /** Owner-only, like everything else moshcode keeps under ~/.moshcode. */
 const FILE_MODE = 0o600;
@@ -164,13 +181,24 @@ export const NEVER_SYNCED_PREFIXES = [
  */
 export const NEVER_SYNCED_SUFFIXES = [".transcript", ".stdin", ".exit", ".sock", ".pid", ".log"];
 
+/**
+ * The three lists above as the policy @profullstack/synconfig applies, on the
+ * way out and on the way in. The server keeps its own copy of the size caps
+ * (apps/pwa/src/routes/settings-sync.mjs) and never this list.
+ */
+export const SYNC_POLICY = {
+  files: SYNCED_FILES.map(({ path: file, json, label }) => ({ path: file, json, label })),
+  never: NEVER_SYNCED,
+  neverPrefixes: NEVER_SYNCED_PREFIXES.map((prefix) => prefix.replace(/\/+$/, "")),
+  neverSuffixes: NEVER_SYNCED_SUFFIXES,
+  maxFileBytes: MAX_FILE_BYTES,
+  maxTotalBytes: MAX_TOTAL_BYTES,
+  maxFiles: 32,
+};
+
 /** True for a path this build is willing to read or write. */
 export function isSyncable(relative) {
-  const name = String(relative ?? "");
-  if (NEVER_SYNCED.includes(name)) return false;
-  if (NEVER_SYNCED_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
-  if (NEVER_SYNCED_SUFFIXES.some((suffix) => name.endsWith(suffix))) return false;
-  return SYNCED_FILES.some((f) => f.path === name);
+  return policyAllows(SYNC_POLICY, String(relative ?? ""));
 }
 
 export function moshcodeDir(home = os.homedir()) {
@@ -208,26 +236,12 @@ export function saveMarker(marker, home = os.homedir()) {
 /**
  * The digest of a set of files, over their names and contents.
  *
- * Canonical by construction — names sorted, every field framed by a NUL and
- * preceded by its byte length — so the same files digest the same on every
- * machine regardless of the order they were read in, and no content can be
- * arranged to look like a different file list. NUL rather than a space because a
- * space appears in file contents and a NUL does not appear in text config at
- * all.
- *
- * The app computes the same digest over the same bytes
- * (apps/pwa/src/routes/settings-sync.mjs). Both sides pin the value for a fixed
- * input in their tests, because two implementations of one hash that quietly
- * disagree is a comparison that silently stops meaning anything.
+ * @profullstack/synconfig's construction: names sorted, every field framed by
+ * a NUL and preceded by its byte length. The app computes the same through
+ * the package's server half, and both suites still pin the value for a fixed
+ * input, because that is the catch that found the drift the first time.
  */
-export function digestFiles(files) {
-  const hash = crypto.createHash("sha256");
-  for (const name of Object.keys(files).sort()) {
-    const content = String(files[name]?.content ?? "");
-    hash.update(`${name}\0${Buffer.byteLength(content)}\0${content}\0`);
-  }
-  return hash.digest("hex");
-}
+export const digestFiles = digestPolicyFiles;
 
 /** Engines and tools this machine has, by name. Informational, never applied. */
 function installedHere() {
@@ -251,41 +265,23 @@ export function collectSnapshot({
   version = moshcodeVersion(),
   installed = installedHere(),
 } = {}) {
-  const dir = moshcodeDir(home);
-  const files = {};
-  const included = [];
-  const skipped = [];
-  let total = 0;
-
-  for (const entry of SYNCED_FILES) {
-    const file = path.join(dir, entry.path);
-    let content;
-    try { content = fs.readFileSync(file, "utf8"); }
-    catch { continue; } // not here — nothing to say about it
-    const bytes = Buffer.byteLength(content);
-    if (bytes > MAX_FILE_BYTES) {
-      skipped.push({ path: entry.path, reason: `${bytes} bytes — the cap is ${MAX_FILE_BYTES}` });
-      continue;
-    }
-    if (entry.json) {
-      try { JSON.parse(content); }
-      catch { skipped.push({ path: entry.path, reason: "not valid JSON — fix it locally first" }); continue; }
-    }
-    if (total + bytes > MAX_TOTAL_BYTES) {
-      skipped.push({ path: entry.path, reason: "the snapshot is already at its size cap" });
-      continue;
-    }
-    total += bytes;
-    files[entry.path] = { content };
-    included.push({ path: entry.path, bytes, label: entry.label });
-  }
-
+  const host = String(hostname || "").slice(0, 60);
+  const { snapshot: collected, skipped } = collectPolicyFiles(moshcodeDir(home), SYNC_POLICY, {
+    host,
+    app: version ? `moshcode ${version}` : "moshcode",
+  });
+  const included = Object.keys(collected.files).map((name) => ({
+    path: name,
+    bytes: Buffer.byteLength(collected.files[name].content),
+    label: SYNCED_FILES.find((f) => f.path === name)?.label,
+  }));
   const snapshot = {
     version: SNAPSHOT_VERSION,
-    host: String(hostname || "").slice(0, 60) || null,
+    host: host || null,
     moshcode: version || null,
+    app: collected.app,
     installed,
-    files,
+    files: collected.files,
   };
   return { snapshot, included, skipped };
 }
@@ -302,44 +298,18 @@ export function validateSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     return { ok: false, error: "the saved settings are not a snapshot", files: {}, rejected: [] };
   }
-  if (Number(snapshot.version) > SNAPSHOT_VERSION) {
+  const { files, rejected, newer } = validatePolicySnapshot(snapshot, SYNC_POLICY);
+  if (newer) {
     return {
       ok: false,
       files: {},
       rejected: [],
-      error: `these settings were saved by a newer moshcode (snapshot v${snapshot.version}) — run \`moshcode upgrade\` first`,
+      error: `these settings were saved by a newer moshcode (snapshot v${newer}) — run \`moshcode upgrade\` first`,
     };
   }
   const raw = snapshot.files;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "the snapshot carries no files", files: {}, rejected: [] };
-  }
-
-  const files = {};
-  const rejected = [];
-  let total = 0;
-  for (const [name, value] of Object.entries(raw)) {
-    // Every reason a name can be refused, in one place. `isSyncable` is the
-    // allowlist; the checks around it catch the shapes that never reach it —
-    // an absolute path, a traversal, a non-string body.
-    if (typeof name !== "string" || !name || name !== path.posix.normalize(name)
-        || path.posix.isAbsolute(name) || name.includes("..") || name.includes("\\")) {
-      rejected.push({ path: String(name), reason: "not a settings path" });
-      continue;
-    }
-    if (!isSyncable(name)) { rejected.push({ path: name, reason: "this moshcode does not sync that file" }); continue; }
-    const content = value?.content;
-    if (typeof content !== "string") { rejected.push({ path: name, reason: "no contents" }); continue; }
-    const bytes = Buffer.byteLength(content);
-    if (bytes > MAX_FILE_BYTES) { rejected.push({ path: name, reason: `${bytes} bytes — the cap is ${MAX_FILE_BYTES}` }); continue; }
-    if (total + bytes > MAX_TOTAL_BYTES) { rejected.push({ path: name, reason: "past the snapshot size cap" }); continue; }
-    const entry = SYNCED_FILES.find((f) => f.path === name);
-    if (entry?.json) {
-      try { JSON.parse(content); }
-      catch { rejected.push({ path: name, reason: "not valid JSON — refusing to write it" }); continue; }
-    }
-    total += bytes;
-    files[name] = { content };
   }
   return { ok: true, error: null, files, rejected };
 }
@@ -351,34 +321,25 @@ export function validateSnapshot(snapshot) {
  * same plan, and so "nothing to do" is an answer rather than four no-op writes.
  */
 export function planApply(files, { home = os.homedir() } = {}) {
-  const dir = moshcodeDir(home);
-  return Object.keys(files).sort().map((name) => {
-    let current = null;
-    try { current = fs.readFileSync(path.join(dir, name), "utf8"); } catch { /* absent */ }
-    const content = files[name].content;
-    return {
-      path: name,
-      action: current === null ? "new" : current === content ? "same" : "changed",
-      bytes: Buffer.byteLength(content),
-    };
-  });
+  return planPolicyApply(moshcodeDir(home), files).map((entry) => ({
+    path: entry.path,
+    action: entry.status,
+    bytes: Buffer.byteLength(files[entry.path].content),
+  }));
 }
 
 /** Write the snapshot's files. Returns the plan, with `written` marked. */
 export function applyFiles(files, { home = os.homedir() } = {}) {
-  const dir = moshcodeDir(home);
   const plan = planApply(files, { home });
+  const written = new Set(
+    applySnapshotFiles(
+      moshcodeDir(home),
+      files,
+      plan.map((item) => ({ path: item.path, status: item.action })),
+    ),
+  );
   for (const item of plan) {
-    if (item.action === "same") continue;
-    const file = path.join(dir, item.path);
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: DIR_MODE });
-    // Written beside the target and renamed over it: a settings file truncated
-    // by a full disk halfway through a write is a prompt that no longer starts.
-    const temp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(temp, files[item.path].content, { mode: FILE_MODE });
-    fs.renameSync(temp, file);
-    try { fs.chmodSync(file, FILE_MODE); } catch { /* best effort */ }
-    item.written = true;
+    if (written.has(item.path)) item.written = true;
   }
   return plan;
 }

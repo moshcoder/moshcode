@@ -15,6 +15,14 @@
 // no name in it is a path traversal, and that two machines saving at once cannot
 // silently overwrite each other.
 import { Router } from "express";
+import {
+  KEEP_REVISIONS as PACKAGE_KEEP_REVISIONS,
+  digestSnapshot as digestPackageSnapshot,
+  handleGet,
+  handlePut,
+  handleRevisions,
+  snapshotProblem as packageSnapshotProblem,
+} from "@profullstack/synconfig/server";
 import { get, all, run } from "../db.mjs";
 import { id, sha256 } from "../lib/crypto.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
@@ -31,57 +39,33 @@ export const settingsSyncRouter = Router();
  * the page and pressing a button, few enough that a scripted save loop can't
  * grow one account's row count without bound.
  */
-export const KEEP_REVISIONS = 10;
+export const KEEP_REVISIONS = PACKAGE_KEEP_REVISIONS;
 
 /** Total snapshot size, and how many files one may carry. */
 export const MAX_SNAPSHOT_BYTES = 256 * 1024;
 export const MAX_FILES = 32;
 
+/** The caps as @profullstack/synconfig takes them. Per-file matches the CLI's MAX_FILE_BYTES. */
+const LIMITS = { maxFileBytes: 64 * 1024, maxTotalBytes: MAX_SNAPSHOT_BYTES, maxFiles: MAX_FILES };
+
 /**
  * Is this shaped like a snapshot? Returns null when it is, else the reason.
  *
- * Structural only — see the header. The one substantive rule is on names: a
- * snapshot is applied by writing its keys as paths under ~/.moshcode, so a name
- * carrying `..`, a leading slash, a backslash or a NUL has no honest reading and
- * is refused at the door rather than stored for a client to refuse later.
+ * Structural only, and the package's: the body is small, it is shaped like a
+ * snapshot, no name in it is a path traversal. moshcode's own list of which
+ * files sync stays in the CLI, so a release that syncs one more file needs
+ * no deploy here.
  */
 export function snapshotProblem(snapshot, { maxBytes = MAX_SNAPSHOT_BYTES } = {}) {
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return "not a snapshot";
-  const files = snapshot.files;
-  if (!files || typeof files !== "object" || Array.isArray(files)) return "no files in the snapshot";
-  const names = Object.keys(files);
-  if (!names.length) return "no files in the snapshot";
-  if (names.length > MAX_FILES) return `too many files (${names.length}, the cap is ${MAX_FILES})`;
-  for (const name of names) {
-    if (!name || name.length > 200) return "a file name is empty or absurdly long";
-    if (name.startsWith("/") || name.includes("..") || name.includes("\\") || name.includes("\0")) {
-      return `"${name}" is not a settings path`;
-    }
-    if (typeof files[name]?.content !== "string") return `"${name}" has no contents`;
-  }
-  const bytes = Buffer.byteLength(JSON.stringify(snapshot));
-  if (bytes > maxBytes) return `snapshot is ${bytes} bytes — the cap is ${maxBytes}`;
-  return null;
+  return packageSnapshotProblem(snapshot, { ...LIMITS, maxTotalBytes: maxBytes });
 }
 
 /**
  * The digest the CLI computes, recomputed here so the stored one is ours.
- *
- * Byte-for-byte the same construction as `digestFiles` in
- * src/settings-sync.mjs: names sorted, each field framed by a NUL and preceded
- * by its byte length. Two implementations of one hash is a drift risk, so both
- * sides pin the digest of a fixed input in their tests — this one in
- * apps/pwa/test/settings-sync.test.mjs, the CLI's in test/settings-sync.test.mjs
- * — and any change to either framing fails both.
+ * Both sides are the package now; the pinned fixture in both suites stays.
  */
 export function digestSnapshot(snapshot) {
-  const files = snapshot.files;
-  let material = "";
-  for (const name of Object.keys(files).sort()) {
-    const content = String(files[name].content);
-    material += `${name}\0${Buffer.byteLength(content)}\0${content}\0`;
-  }
-  return sha256(material);
+  return digestPackageSnapshot(snapshot);
 }
 
 async function cliAuth(req, res, next) {
@@ -109,154 +93,116 @@ export async function latestSnapshotMeta(userId) {
     : null;
 }
 
-/** An older body promoted to a new revision, or a fresh save — one code path. */
-async function insertRevision({ userId, body, digest, host, version, ifRevision }) {
-  const size = Buffer.byteLength(body);
-  const row = { id: id(), created_at: Date.now() };
-
-  // The revision is chosen inside the INSERT, and `ifRevision` is checked there
-  // too, by a HAVING on the same aggregate. Reading MAX(revision) first and then
-  // inserting is not enough against a network database: both requests see the
-  // same maximum and one save silently replaces the other. Here the second one
-  // either trips the HAVING (no row inserted — a conflict we can report) or the
-  // unique index (an error we retry as a conflict).
-  const sql = ifRevision === null
-    ? `INSERT INTO settings_snapshots (id,user_id,revision,digest,host,version,size,body,created_at)
-       SELECT ?, ?, COALESCE(MAX(revision),0) + 1, ?, ?, ?, ?, ?, ?
-       FROM settings_snapshots WHERE user_id = ?
-       RETURNING revision`
-    // GROUP BY user_id is not decoration. A bare HAVING on an implicit
-    // single-group aggregate is accepted by the SQLite that backs a `file:`
-    // database and *rejected by Turso's parser*:
-    //
-    //   SQL string could not be parsed: near HAVING, "None": syntax error
-    //
-    // So this statement worked in every test and threw on every deployment,
-    // which is what `/save` returning 502 actually was. `--force` sends
-    // ifRevision: null and takes the branch above, which is why forcing was the
-    // only way to save. The rows always exist here — the caller sets ifRevision
-    // to null when the account has no current revision — so grouping by the
-    // user cannot lose the row the HAVING is meant to test.
-    : `INSERT INTO settings_snapshots (id,user_id,revision,digest,host,version,size,body,created_at)
-       SELECT ?, ?, COALESCE(MAX(revision),0) + 1, ?, ?, ?, ?, ?, ?
-       FROM settings_snapshots WHERE user_id = ?
-       GROUP BY user_id
-       HAVING COALESCE(MAX(revision),0) = ?
-       RETURNING revision`;
-  const args = [row.id, userId, digest, host, version, size, body, row.created_at, userId];
-  if (ifRevision !== null) args.push(ifRevision);
-
-  let inserted;
-  try { inserted = await get(sql, args); }
-  catch (e) {
-    // The unique index fired: another save took this revision between our
-    // aggregate and our insert. Same answer as a failed HAVING.
-    if (/UNIQUE|constraint/i.test(String(e?.message || e))) return { conflict: true };
-    throw e;
-  }
-  if (!inserted) return { conflict: true };
-
-  const revision = Number(inserted.revision);
-  // Prune by revision rather than by count: the index makes this one range
-  // delete, and it cannot race with a concurrent save the way "delete all but
-  // the newest N" can.
-  await run(`DELETE FROM settings_snapshots WHERE user_id = ? AND revision <= ?`,
-    [userId, revision - KEEP_REVISIONS]);
-  return { revision, digest, savedAt: row.created_at, size };
-}
-
-/* --------------------------------------------------------------- CLI (Bearer) */
-
-settingsSyncRouter.put("/api/settings", cliAuth, async (req, res) => {
-  const snapshot = req.body?.snapshot;
-  const problem = snapshotProblem(snapshot);
-  if (problem) return res.status(400).json({ error: problem });
-
-  // `ifRevision` absent or null means "save regardless" — `/save --force`, or a
-  // machine that has never synced. A number means "only if the account is still
-  // where I left it".
-  const asked = req.body?.ifRevision;
-  let ifRevision = asked === null || asked === undefined ? null : Number(asked);
-  if (ifRevision !== null && !Number.isSafeInteger(ifRevision)) {
-    return res.status(400).json({ error: "ifRevision must be an integer or null" });
-  }
-
-  const digest = digestSnapshot(snapshot);
-  const current = await latest(req.apiUser.id);
-
-  // Byte-identical to what is already current: answer with that revision and
-  // insert nothing. The check lives here rather than in the CLI because only the
-  // account knows what it holds — a CLI that skipped the request on the strength
-  // of its own marker reported "already saved" to someone who had just deleted
-  // everything from the web, and left them stuck behind a --force.
-  if (current && current.digest === digest) {
-    return res.json({
-      revision: Number(current.revision),
-      digest,
-      savedAt: Number(current.created_at),
-      unchanged: true,
-    });
-  }
-
-  // A precondition against an account with nothing in it cannot be protecting
-  // anything: the revisions it names are gone (forgotten from the web), so there
-  // is no other machine's save to lose. Refusing here would strand every machine
-  // behind --force after a perfectly deliberate delete.
-  if (!current) ifRevision = null;
-
-  const result = await insertRevision({
-    userId: req.apiUser.id,
-    body: JSON.stringify(snapshot),
-    digest,
-    host: snapshot.host ? String(snapshot.host).slice(0, 60) : null,
-    version: snapshot.moshcode ? String(snapshot.moshcode).slice(0, 20) : null,
-    ifRevision,
-  });
-
-  if (result.conflict) {
-    const current = await latest(req.apiUser.id);
-    return res.status(409).json({
-      error: "the account has been saved from another machine since then",
-      revision: current ? Number(current.revision) : 0,
-    });
-  }
-  res.json({ revision: result.revision, digest: result.digest, savedAt: result.savedAt });
+const shape = (row) => ({
+  revision: Number(row.revision),
+  digest: row.digest,
+  host: row.host,
+  version: row.version,
+  size: Number(row.size),
+  body: JSON.parse(row.body),
+  savedAt: Number(row.created_at),
 });
 
-settingsSyncRouter.get("/api/settings", cliAuth, async (req, res) => {
-  const row = await latest(req.apiUser.id);
-  if (!row) return res.status(404).json({ error: "nothing saved yet" });
-  let snapshot;
-  // Stored as the CLI sent it, so a body that will not parse is a bug on this
-  // side of the wire — say so rather than handing the CLI a 200 it can't use.
-  try { snapshot = JSON.parse(row.body); }
-  catch { return res.status(500).json({ error: "the stored snapshot is unreadable" }); }
-  res.json({
-    revision: Number(row.revision),
-    digest: row.digest,
-    savedAt: Number(row.created_at),
-    host: row.host,
-    version: row.version,
-    snapshot,
-  });
-});
+/**
+ * The package's SnapshotStore over this app's database.
+ *
+ * The revision is chosen inside the INSERT, and `ifRevision` is checked there
+ * too, by a HAVING on the same aggregate. Reading MAX(revision) first and then
+ * inserting is not enough against a network database: both requests see the
+ * same maximum and one save silently replaces the other. Here the second one
+ * either trips the HAVING (no row inserted — a conflict we can report) or the
+ * unique index (an error we retry as a conflict).
+ *
+ * GROUP BY user_id is not decoration. A bare HAVING on an implicit
+ * single-group aggregate is accepted by the SQLite that backs a `file:`
+ * database and *rejected by Turso's parser*:
+ *
+ *   SQL string could not be parsed: near HAVING, "None": syntax error
+ *
+ * So the unconditional insert takes the branch with no HAVING at all.
+ */
+export const snapshotStore = {
+  async latest(userId) {
+    const row = await latest(userId);
+    return row ? shape(row) : null;
+  },
 
-settingsSyncRouter.get("/api/settings/revisions", cliAuth, async (req, res) => {
-  const rows = await all(
-    `SELECT revision, digest, host, version, size, created_at FROM settings_snapshots
-     WHERE user_id = ? ORDER BY revision DESC`,
-    [req.apiUser.id]
-  );
-  res.json({
-    revisions: rows.map((r) => ({
+  async insert(userId, entry, ifRevision) {
+    const body = JSON.stringify(entry.body);
+    const row = { id: id(), created_at: Date.now() };
+    const sql = ifRevision === null
+      ? `INSERT INTO settings_snapshots (id,user_id,revision,digest,host,version,size,body,created_at)
+         SELECT ?, ?, COALESCE(MAX(revision),0) + 1, ?, ?, ?, ?, ?, ?
+         FROM settings_snapshots WHERE user_id = ?
+         RETURNING revision`
+      : `INSERT INTO settings_snapshots (id,user_id,revision,digest,host,version,size,body,created_at)
+         SELECT ?, ?, COALESCE(MAX(revision),0) + 1, ?, ?, ?, ?, ?, ?
+         FROM settings_snapshots WHERE user_id = ?
+         GROUP BY user_id
+         HAVING COALESCE(MAX(revision),0) = ?
+         RETURNING revision`;
+    const args = [row.id, userId, entry.digest, entry.host, entry.version, entry.size, body, row.created_at, userId];
+    if (ifRevision !== null) args.push(ifRevision);
+
+    let inserted;
+    try { inserted = await get(sql, args); }
+    catch (e) {
+      if (/UNIQUE|constraint/i.test(String(e?.message || e))) inserted = null;
+      else throw e;
+    }
+    if (!inserted) {
+      const current = await latest(userId);
+      return { conflict: true, revision: current ? Number(current.revision) : 0 };
+    }
+    const revision = Number(inserted.revision);
+    // Prune by revision rather than by count: the index makes this one range
+    // delete, and it cannot race with a concurrent save the way "delete all but
+    // the newest N" can.
+    await run(`DELETE FROM settings_snapshots WHERE user_id = ? AND revision <= ?`,
+      [userId, revision - KEEP_REVISIONS]);
+    return { revision, savedAt: row.created_at };
+  },
+
+  async list(userId, limit) {
+    const rows = await all(
+      `SELECT revision, digest, host, version, size, created_at FROM settings_snapshots
+       WHERE user_id = ? ORDER BY revision DESC LIMIT ?`,
+      [userId, limit]
+    );
+    return rows.map((r) => ({
       revision: Number(r.revision),
       digest: r.digest,
       host: r.host,
       version: r.version,
       size: Number(r.size),
       savedAt: Number(r.created_at),
-    })),
-  });
+    }));
+  },
+};
+
+/** An older body promoted to a new revision: the store's insert, unconditional. */
+async function insertRevision({ userId, body, digest, host, version, ifRevision }) {
+  return snapshotStore.insert(userId, { digest, host, version, size: Buffer.byteLength(body), body: JSON.parse(body) }, ifRevision);
+}
+
+/** Where moshcode keeps its version in a snapshot; `app` is what newer clients also send. */
+const versionOf = (snapshot) => (snapshot.moshcode ? String(snapshot.moshcode).slice(0, 20) : snapshot.app ? String(snapshot.app).slice(0, 20) : null);
+
+/* --------------------------------------------------------------- CLI (Bearer) */
+
+settingsSyncRouter.put("/api/settings", cliAuth, async (req, res) => {
+  const reply = await handlePut(snapshotStore, req.apiUser.id, req.body, { limits: LIMITS, versionOf });
+  res.status(reply.status).json(reply.body);
+});
+
+settingsSyncRouter.get("/api/settings", cliAuth, async (req, res) => {
+  const reply = await handleGet(snapshotStore, req.apiUser.id);
+  res.status(reply.status).json(reply.body);
+});
+
+settingsSyncRouter.get("/api/settings/revisions", cliAuth, async (req, res) => {
+  const reply = await handleRevisions(snapshotStore, req.apiUser.id, KEEP_REVISIONS);
+  res.status(reply.status).json(reply.body);
 });
 
 /* ------------------------------------------------------------ human (cookies) */
