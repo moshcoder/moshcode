@@ -465,6 +465,42 @@ test("/load refuses to overwrite a file edited since the last sync", async () =>
   assert.equal(code2, 0);
   assert.equal(read(dir, "aliases.json"), '{"gs":"git log"}');
   assert.equal(loadMarker(dir).revision, 6);
+  // And the edit it overwrote is still on disk, beside the file, and named.
+  assert.equal(read(dir, "aliases.bak-001.json"), '{"gs":"git status --short"}', "a forced load must leave the previous content behind");
+  assert.match(forced.text(), /replaced aliases\.json.*previous copy: aliases\.bak-001\.json/);
+});
+
+test("a replaced file is copied to <name>.bak-NNN.<ext> first, numbered and never reused", () => {
+  // The house rule, as synconfig applies it: a load can never be the thing
+  // that loses an edit. A new file has nothing to back up; a second
+  // replacement takes the next number and leaves the first copy alone.
+  const dir = home({ aliases: '{"gs":"git status"}' });
+  const first = applyFiles({ "aliases.json": { content: '{"gs":"git log"}' }, "herd/rules.json": { content: "{}" } }, { home: dir });
+  assert.equal(first.find((p) => p.path === "aliases.json").backup, "aliases.bak-001.json");
+  assert.equal(first.find((p) => p.path === "herd/rules.json").backup, undefined, "a new file has no previous content");
+  assert.equal(read(dir, "aliases.bak-001.json"), '{"gs":"git status"}');
+  assert.equal(fs.statSync(path.join(dir, ".moshcode", "aliases.bak-001.json")).mode & 0o777, 0o600);
+
+  const second = applyFiles({ "aliases.json": { content: '{"gs":"git diff"}' } }, { home: dir });
+  assert.equal(second[0].backup, "aliases.bak-002.json");
+  assert.equal(read(dir, "aliases.bak-001.json"), '{"gs":"git status"}', "the first copy must survive the second");
+  assert.equal(read(dir, "aliases.bak-002.json"), '{"gs":"git log"}');
+  // A backup is never a synced file: the allowlist names files exactly.
+  assert.equal(isSyncable("aliases.bak-001.json"), false);
+});
+
+test("/load --json lists the backups it made", async () => {
+  const dir = home({ aliases: '{"gs":"git status"}' });
+  const write = lines();
+  const code = await loadCommand(["--json", "--force"], {
+    home: dir, creds: CREDS, write,
+    fetchImpl: stubFetch([[200, { revision: 7, snapshot: snapshotFor({ "aliases.json": { content: '{"gs":"git log"}' } }) }]]),
+    installed: { engines: [], tools: [] },
+  });
+  assert.equal(code, 0);
+  const out = JSON.parse(write.text());
+  assert.equal(out.status, "loaded");
+  assert.deepEqual(out.backups, [{ path: "aliases.json", backup: "aliases.bak-001.json" }]);
 });
 
 test("/load --dry-run reports the plan and writes nothing", async () => {

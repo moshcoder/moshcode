@@ -328,18 +328,26 @@ export function planApply(files, { home = os.homedir() } = {}) {
   }));
 }
 
-/** Write the snapshot's files. Returns the plan, with `written` marked. */
+/**
+ * Write the snapshot's files. Returns the plan, with `written` marked and,
+ * for a file that existed with other content, `backup`: where its previous
+ * content went (`aliases.bak-001.json`, beside it — synconfig's rule, so a
+ * load can never be the thing that loses an edit).
+ */
 export function applyFiles(files, { home = os.homedir() } = {}) {
   const plan = planApply(files, { home });
+  const backups = new Map();
   const written = new Set(
     applySnapshotFiles(
       moshcodeDir(home),
       files,
       plan.map((item) => ({ path: item.path, status: item.action })),
+      { onBackup: (path, backup) => backups.set(path, backup) },
     ),
   );
   for (const item of plan) {
     if (written.has(item.path)) item.written = true;
+    if (backups.has(item.path)) item.backup = backups.get(item.path);
   }
   return plan;
 }
@@ -714,12 +722,15 @@ export async function loadCommand(argv = [], {
   saveMarker(markerFor({ revision, digest: digestFiles(files), files, host: hostname, api: endpoint(creds) }), home);
 
   const written = applied.filter((p) => p.written);
+  const backups = written.filter((w) => w.backup).map((w) => ({ path: w.path, backup: w.backup }));
   if (json) {
-    emit({ status: "loaded", revision, from, files: written.map((w) => w.path), rejected });
+    emit({ status: "loaded", revision, from, files: written.map((w) => w.path), backups, rejected });
     return 0;
   }
   write(`loaded revision ${revision}${from ? ` from ${from}` : ""} — ${plural(written.length, "file")} written`);
-  for (const item of written) write(`   ${item.action === "new" ? "added   " : "replaced"} ${item.path}`);
+  for (const item of written) {
+    write(`   ${item.action === "new" ? "added   " : "replaced"} ${item.path}${item.backup ? ash(`  (previous copy: ${item.backup})`) : ""}`);
+  }
   for (const r of rejected) write(`   ignored  ${r.path} — ${r.reason}`);
 
   // Names only, and only the missing ones. The snapshot records what the source

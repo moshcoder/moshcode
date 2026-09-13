@@ -1,6 +1,6 @@
 {
   "name": "moshcode",
-  "version": "0.98.1",
+  "version": "0.98.2",
   "type": "module",
   "description": "moshcode — a metal wrapper for coding engines and native UGig/CoinPay workflow CLIs, with OpenPRD and moshscript",
   "repository": {
@@ -36,6 +36,6 @@
     "@moshcoder/moshpit-dns": "^0.5.0"
   },
   "dependencies": {
-    "@profullstack/synconfig": "^0.1.1"
+    "@profullstack/synconfig": "^0.1.3"
   }
 }
