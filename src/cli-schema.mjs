@@ -548,10 +548,24 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "engines",
     group: "engines",
-    description: "list engines and installation status",
-    synopsis: [["moshcode engines [--json]", ""]],
-    flags: [["--json", "machine-readable", ""]],
+    description: "list engines and installation status, or apply an engine's settings defaults",
+    synopsis: [
+      ["moshcode engines [--json]", ""],
+      ["moshcode engines defaults [status|apply|remove] [<engine>|all]", ""],
+    ],
+    flags: [
+      ["--json", "machine-readable", ""],
+      ["--dry-run", "defaults apply/remove: print the change to the engine's settings file and write nothing", ""],
+    ],
+    examples: [
+      ["moshcode engines", "who is installed"],
+      ["moshcode engines defaults", "per engine: which of its defaults are set, missing, or yours"],
+      ["moshcode engines defaults apply claude", "ultracode on, small workflows, 4 agents at once"],
+      ["moshcode engines defaults remove claude", "take them back out"],
+    ],
     seeAlso: ["agents", "install"],
+    note: "`moshcode install <engine>` applies its defaults for you. the file is merged, never clobbered: "
+      + "a key you already set — to anything — stays yours, and remove takes out only a value that is still ours.",
   },
   {
     name: "tools",

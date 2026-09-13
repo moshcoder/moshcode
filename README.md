@@ -56,7 +56,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode shorten` <br>`short` `link` | hosting | mint a short link on the pit — /f/<code> follows to your url |
 | `moshcode games` <br>`game` `arcade` | arcade | the moshcode arcade — twenty-two games, no menus |
 | `moshcode pwd` <br>`where` | system | show the current directory and git context |
-| `moshcode engines` | engines | list engines and installation status |
+| `moshcode engines` | engines | list engines and installation status, or apply an engine's settings defaults |
 | `moshcode tools` | tools | list workflow tools and installation status |
 | `moshcode trade` | tools | look up markets and trade through Alpaca |
 | `moshcode stocks` <br>`advisor` | tools | equity research from advis0r.com |
@@ -490,6 +490,24 @@ does nothing and exits 0, so installing one cannot break an engine you run by
 hand, and the screen rules stay as the fallback for everything else.
 `moshcode herd doctor` says what is installed, what has drifted, and — for the
 first time — what is wrong with your `rules.json` instead of ignoring it.
+
+### The engine's settings, the way a herd wants them
+
+An engine can also say how it would like to be configured. Claude Code's
+defaults are **ultracode on** (every substantive prompt runs as a workflow of
+agents), **small workflows** (Claude's own advisory tier, fewer than 5 agents
+each) and a **hard cap of 4 agents at once**, so one session cannot eat the box
+the rest of the herd is running on. `moshcode install claude` applies them;
+by hand:
+
+```sh
+moshcode engines defaults apply claude
+✓ claude — 3 defaults applied (ultracode on by default, small workflows (under 5 agents), 4 agents at once, hard cap)
+```
+
+Same rule as the hooks: the file is merged, never clobbered. A key you already
+set — to anything — stays yours, `defaults` shows which ones those are, and
+`defaults remove` takes out only a value that is still the one moshcode wrote.
 
 ### What happened while you slept
 
