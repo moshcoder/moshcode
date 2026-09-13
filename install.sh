@@ -10,10 +10,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/moshcoder/moshcode/main/install.sh | sh
 #
 # What it does — dead simple, no build step:
-#   1. Checks for Node.js 18+ (moshcode is zero-dependency ESM — needs a node).
+#   1. Checks for Node.js 18+ and npm (for runtime dependencies).
 #   2. Downloads the latest release tarball of moshcoder/moshcode from GitHub
 #      (falls back to the main branch if no release is published yet).
-#   3. Unpacks it to $MOSHCODE_HOME (default: $HOME/.moshcode).
+#   3. Installs runtime dependencies and checks startup before replacing the CLI.
 #   4. Drops a `moshcode` wrapper at $MOSHCODE_BIN (default: $HOME/.local/bin)
 #      that just exec's `node $MOSHCODE_HOME/bin/moshcode.mjs "$@"`.
 #   5. Ensures that bin dir is on your PATH.
@@ -143,6 +143,15 @@ fetch_and_unpack() {
     # Tarball extracts to a single top-level dir (e.g. moshcode-main/).
     _src="$(find "$_tmp" -maxdepth 1 -type d -name 'moshcode-*' | head -1)"
     [ -n "$_src" ] && [ -f "$_src/bin/moshcode.mjs" ] || { rm -rf "$_tmp"; fail "unexpected tarball layout."; }
+    # GitHub archives contain source, not node_modules. Prepare and check the
+    # new release before removing a working installation.
+    info "installing runtime dependencies"
+    if ! (cd "$_src" && npm install --omit=dev --ignore-scripts --no-audit --no-fund --package-lock=false); then
+        rm -rf "$_tmp"; fail "runtime dependency installation failed — existing installation unchanged."
+    fi
+    if ! node "$_src/bin/moshcode.mjs" --version >/dev/null; then
+        rm -rf "$_tmp"; fail "CLI startup check failed — existing installation unchanged."
+    fi
     rm -rf "$MOSHCODE_HOME"
     mkdir -p "$(dirname "$MOSHCODE_HOME")"
     mv "$_src" "$MOSHCODE_HOME"
@@ -272,7 +281,7 @@ install_proxy() {
 run_install() {
     printf '\n%smoshcode installer%s %s— code hard, mosh harder 🤘%s\n\n' "$BOLD" "$RESET" "$ASH" "$RESET"
     check_not_sudo
-    need curl; need tar
+    need curl; need tar; need npm
     check_node
     _ref="$(resolve_ref)"
     fetch_and_unpack "$_ref"
