@@ -20,6 +20,7 @@
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import { IANA_TLDS } from "./iana-tlds.mjs";
 
 /** Where moshpit-proxy generates its root on first run. */
@@ -255,8 +256,15 @@ export function summarise(items, show = 8) {
  * that says "installed" when curl still cannot verify is how someone concludes
  * the whole thing is broken again.
  */
-export function trustStores({ platform = process.platform, home = os.homedir(), caFile } = {}) {
+export function trustStores({
+  platform = process.platform,
+  home = os.homedir(),
+  caFile,
+  nickname = "Moshpit Local CA",
+  systemFile = "moshpit-local-ca.crt",
+} = {}) {
   const file = caFile || caPath({ home });
+  const systemCopy = `/usr/local/share/ca-certificates/${systemFile}`;
   const stores = [];
 
   if (platform === "darwin") {
@@ -292,13 +300,13 @@ export function trustStores({ platform = process.platform, home = os.homedir(), 
       // to update its own store.
       ownedDir: path.join(home, ".pki", "nssdb"),
       command: "certutil",
-      args: ["-d", `sql:${path.join(home, ".pki", "nssdb")}`, "-A", "-t", "C,,", "-n", "Moshpit Local CA", "-i", file],
+      args: ["-d", `sql:${path.join(home, ".pki", "nssdb")}`, "-A", "-t", "C,,", "-n", nickname, "-i", file],
       // By nickname, so the anchor can still be withdrawn after the root file
       // itself is gone — which is the ordinary case, since a person who wants
       // rid of this deletes the certificate first and asks questions after.
       remove: {
         command: "certutil",
-        args: ["-d", `sql:${path.join(home, ".pki", "nssdb")}`, "-D", "-n", "Moshpit Local CA"],
+        args: ["-d", `sql:${path.join(home, ".pki", "nssdb")}`, "-D", "-n", nickname],
       },
     });
     stores.push({
@@ -308,14 +316,14 @@ export function trustStores({ platform = process.platform, home = os.homedir(), 
       // Two steps rather than one: the copy is the install, and the refresh is
       // what makes it take effect. Reporting them together would hide which
       // one failed.
-      copyTo: "/usr/local/share/ca-certificates/moshpit-local-ca.crt",
+      copyTo: systemCopy,
       command: "update-ca-certificates",
       args: [],
       // Delete the copy, then rebuild. `--fresh` rather than a bare refresh:
       // the bare form adds what is new, and it is the rebuild that drops the
       // symlink for a source file that is no longer there.
       remove: {
-        removeFile: "/usr/local/share/ca-certificates/moshpit-local-ca.crt",
+        removeFile: systemCopy,
         command: "update-ca-certificates",
         args: ["--fresh"],
       },
@@ -398,12 +406,14 @@ export function untrustPlan({
   isRoot = false,
   haveCertutil = true,
   haveFile = true,
+  nickname = undefined,
+  systemFile = undefined,
 } = {}) {
   const file = caFile || caPath({ home });
   const steps = [];
   const skipped = [];
 
-  for (const store of trustStores({ platform, home, caFile: file })) {
+  for (const store of trustStores({ platform, home, caFile: file, nickname, systemFile })) {
     if (!store.remove) {
       skipped.push({ ...store, why: "this build knows how to install it but not how to remove it" });
       continue;
@@ -987,4 +997,235 @@ export async function verifyStockTls(name, { fetchImpl = fetch, timeoutMs = 8000
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* ------------------------------------------------------ the registry's root */
+
+/*
+ * The registry now signs a certificate for every name it holds (moshcode
+ * apps/pwa/docs/moshpit-ca.md), so a machine that trusts its root once trusts
+ * every Moshpit name over https: curl, Firefox, Chromium, git, all of it. That
+ * makes the per-machine local CA above, and `dns trust <name>`, the fallbacks
+ * rather than the way in.
+ *
+ * The root carries no name constraints: there are seventeen thousand endings
+ * and more every day, and X.509 cannot say "everything except the ICANN root".
+ * What bounds it instead is the signer: the registry refuses to sign any name
+ * whose ending is a real TLD, signs only for the account that controls a name,
+ * and issues thirty-day leaves. That is a policy promise rather than a
+ * certificate extension, which is why installing it is an explicit act here
+ * (`dns enable`, or `dns ca`) and never something a resolver does on its own.
+ */
+
+export const REGISTRY_ROOT_NICKNAME = "Moshpit Root CA";
+export const REGISTRY_ROOT_SYSTEM_FILE = "moshpit-root-ca.crt";
+const DEFAULT_REGISTRY = "https://pit.moshcode.sh";
+
+/** Where the fetched root is kept, beside the local one. */
+export function registryRootPath({ home = os.homedir(), dir = null } = {}) {
+  return path.join(dir || path.join(home, ".moshpit"), "ca", "registry-root.crt");
+}
+
+/**
+ * Is this PEM the root the registry says it is? Pure.
+ *
+ * Two fetches over HTTPS, `/api/moshpit/ca` for the fingerprint and `/ca.crt`
+ * for the bytes, and the bytes must hash to the fingerprint: a truncated or
+ * substituted download fails here rather than being installed as an anchor.
+ */
+export function checkRegistryRoot(pem, { fingerprint = null, now = Date.now() } = {}) {
+  let cert;
+  try {
+    cert = new X509Certificate(String(pem || ""));
+  } catch {
+    return { ok: false, why: "the registry served something that is not a certificate" };
+  }
+  if (!cert.ca) return { ok: false, why: "the registry's root is not marked CA:TRUE" };
+  if (!cert.verify(cert.publicKey)) return { ok: false, why: "the registry's root is not self-signed" };
+  const bare = (s) => String(s || "").replace(/:/g, "").toLowerCase();
+  if (fingerprint && bare(cert.fingerprint256) !== bare(fingerprint)) {
+    return { ok: false, why: "the root served does not match the fingerprint the registry reports for it" };
+  }
+  if (new Date(cert.validTo).getTime() < now) return { ok: false, why: "the registry's root has expired" };
+  // node prints one RDN per line; one line reads better in a report.
+  return { ok: true, subject: cert.subject.replace(/\n/g, ", "), fingerprint: cert.fingerprint256, notAfter: cert.validTo };
+}
+
+/** Ask the registry for its root. { enabled:false } when it publishes none. */
+export async function fetchRegistryRoot({ registryBase = DEFAULT_REGISTRY, fetchImpl = fetch, timeoutMs = 8000 } = {}) {
+  const base = registryBase.replace(/\/+$/, "");
+  const opts = { signal: AbortSignal.timeout(timeoutMs), headers: { accept: "application/json, application/x-pem-file" } };
+  const status = await fetchImpl(`${base}/api/moshpit/ca`, opts);
+  if (!status.ok) throw new Error(`${base}/api/moshpit/ca answered ${status.status}`);
+  const json = await status.json();
+  if (!json?.enabled) return { enabled: false };
+  const res = await fetchImpl(`${base}/api/moshpit/ca.crt`, opts);
+  if (!res.ok) throw new Error(`${base}/api/moshpit/ca.crt answered ${res.status}`);
+  return {
+    enabled: true,
+    pem: await res.text(),
+    fingerprint: json.root?.fingerprint_sha256 || null,
+    subject: json.root?.subject || null,
+    notAfter: json.root?.not_after || null,
+  };
+}
+
+/** The stores to install the registry root into. Pure; same shape as trustPlan. */
+export function registryTrustPlan({ platform = process.platform, home = os.homedir(), file, isRoot = false, haveCertutil = true } = {}) {
+  const steps = [];
+  const skipped = [];
+  for (const store of trustStores({ platform, home, caFile: file, nickname: REGISTRY_ROOT_NICKNAME, systemFile: REGISTRY_ROOT_SYSTEM_FILE })) {
+    if (store.id === "nss" && !haveCertutil) {
+      skipped.push({ ...store, why: "certutil is not installed (Debian/Ubuntu: libnss3-tools)" });
+      continue;
+    }
+    if (store.needsRoot && !isRoot) {
+      skipped.push({ ...store, why: "needs root" });
+      continue;
+    }
+    steps.push(store);
+  }
+  return { ok: true, steps, skipped, file };
+}
+
+/**
+ * Fetch, check and install the registry's root. Non-fatal throughout: names
+ * already resolve by the time this runs, and a trust store that could not be
+ * written is a line of output, not a reason to undo working DNS.
+ */
+export async function applyRegistryTrust(out, deps = {}) {
+  const {
+    runner = run,
+    env = process.env,
+    home = operatorHome({ env }),
+    platform = process.platform,
+    uid = typeof process.getuid === "function" ? process.getuid() : 0,
+    registryBase = DEFAULT_REGISTRY,
+    fetchImpl = fetch,
+    writeFile = async (f, body) => (await import("node:fs/promises")).writeFile(f, body, { mode: 0o644 }),
+  } = deps;
+  const owner = env.SUDO_USER || env.DOAS_USER || null;
+  const file = registryRootPath({ home });
+
+  out("");
+  out("trust  (the registry's root, so every Moshpit name is trusted at once)");
+
+  let got;
+  try {
+    got = await fetchRegistryRoot({ registryBase, fetchImpl });
+  } catch (err) {
+    out(`  --   could not reach the registry for its root: ${err?.message || err}`);
+    return { ok: false, why: "registry unreachable" };
+  }
+  if (!got.enabled) {
+    out("  --   the registry publishes no root yet — names are trusted one at a time (dns trust <name>)");
+    return { ok: false, why: "no registry root" };
+  }
+  const check = checkRegistryRoot(got.pem, { fingerprint: got.fingerprint });
+  if (!check.ok) {
+    out(`  STOP ${check.why}`);
+    return { ok: false, refused: true, why: check.why };
+  }
+
+  const dir = path.dirname(file);
+  const made = await runner("mkdir", ["-p", dir]);
+  if (!made.ok) {
+    out(`  FAIL could not create ${dir} — ${made.stderr.split("\n")[0]}`);
+    return { ok: false, why: "could not write the root" };
+  }
+  try {
+    await writeFile(file, got.pem);
+  } catch (err) {
+    out(`  FAIL could not write ${file} — ${err?.message || err}`);
+    return { ok: false, why: "could not write the root" };
+  }
+  if (owner && uid === 0) await runner("chown", ["-R", `${owner}:`, dir]);
+  out(`  ok   ${file} — ${check.subject}, ${check.fingerprint.slice(0, 23)}…, until ${String(check.notAfter).slice(0, 15)}`);
+
+  const haveCertutil = (await runner("which", ["certutil"])).ok;
+  const plan = registryTrustPlan({ platform, home, file, isRoot: uid === 0, haveCertutil });
+  let installed = 0;
+  for (const step of plan.steps) {
+    if (step.copyTo) {
+      const copied = await runner("cp", [file, step.copyTo]);
+      if (!copied.ok) {
+        out(`  FAIL ${step.label} — ${copied.stderr.split("\n")[0] || "could not copy the root"}`);
+        continue;
+      }
+    }
+    const done = await runner(step.command, step.args);
+    if (!done.ok) {
+      out(`  FAIL ${step.label} — ${done.stderr.split("\n")[0] || `${step.command} failed`}`);
+      continue;
+    }
+    if (step.ownedDir && owner && uid === 0) {
+      const owned = await runner("chown", ["-R", `${owner}:`, step.ownedDir]);
+      if (!owned.ok) out(`  --   ${step.ownedDir} is left owned by root — chown -R ${owner}: ${step.ownedDir}`);
+    }
+    installed++;
+    out(`  ok   installed into ${step.label}`);
+  }
+  for (const step of plan.skipped) {
+    out(`  --   ${step.label} — ${step.why}`);
+    if (step.needsRoot) out("       re-run with root to cover it: sudo moshcode dns ca");
+  }
+  return { ok: true, installed, skipped: plan.skipped.length, file };
+}
+
+/** Take the registry's root back out of every store `applyRegistryTrust` writes. */
+export async function removeRegistryTrust(out, deps = {}) {
+  const {
+    runner = run,
+    env = process.env,
+    home = operatorHome({ env }),
+    platform = process.platform,
+    uid = typeof process.getuid === "function" ? process.getuid() : 0,
+    readFile = async (f) => (await import("node:fs/promises")).readFile(f, "utf8"),
+  } = deps;
+  const owner = env.SUDO_USER || env.DOAS_USER || null;
+  const file = registryRootPath({ home });
+  const haveFile = await readFile(file).then(() => true, () => false);
+  const plan = untrustPlan({
+    platform, home, caFile: file, isRoot: uid === 0,
+    haveCertutil: (await runner("which", ["certutil"])).ok,
+    haveFile,
+    nickname: REGISTRY_ROOT_NICKNAME, systemFile: REGISTRY_ROOT_SYSTEM_FILE,
+  });
+  if (!plan.steps.length && !plan.skipped.length) return { ok: true, removed: 0, skipped: 0 };
+
+  out("");
+  out("trust  (taking the registry's root back out)");
+  let removed = 0;
+  for (const step of plan.steps) {
+    const undo = step.remove;
+    if (undo.removeFile) {
+      const gone = await runner("rm", ["-f", undo.removeFile]);
+      if (!gone.ok) {
+        out(`  FAIL ${step.label} — ${gone.stderr.split("\n")[0] || `could not remove ${undo.removeFile}`}`);
+        continue;
+      }
+    }
+    const done = await runner(undo.command, undo.args);
+    if (!done.ok) {
+      const first = done.stderr.split("\n")[0] || "";
+      if (/SEC_ERROR_BAD_DATA|not found|PR_FILE_NOT_FOUND/i.test(first)) {
+        out(`  ok   ${step.label} — was not there`);
+        continue;
+      }
+      out(`  FAIL ${step.label} — ${first || `${undo.command} failed`}`);
+      continue;
+    }
+    if (step.ownedDir && owner && uid === 0) {
+      const owned = await runner("chown", ["-R", `${owner}:`, step.ownedDir]);
+      if (!owned.ok) out(`  --   ${step.ownedDir} is left owned by root — chown -R ${owner}: ${step.ownedDir}`);
+    }
+    removed++;
+    out(`  ok   removed from ${step.label}`);
+  }
+  if (haveFile) await runner("rm", ["-f", file]);
+  for (const step of plan.skipped) {
+    out(`  --   ${step.label} — ${step.why}`);
+    if (step.needsRoot && uid !== 0) out("       re-run with root to cover it: sudo moshcode dns ca --remove");
+  }
+  return { ok: true, removed, skipped: plan.skipped.length };
 }
