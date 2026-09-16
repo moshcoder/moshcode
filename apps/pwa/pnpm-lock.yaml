@@ -11,6 +11,9 @@ importers:
       '@libsql/client':
         specifier: ^0.14.0
         version: 0.14.0
+      '@peculiar/x509':
+        specifier: ^1.14.3
+        version: 1.14.3
       '@profullstack/synconfig':
         specifier: ^0.1.1
         version: 0.1.1

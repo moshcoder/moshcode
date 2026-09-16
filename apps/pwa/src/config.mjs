@@ -112,6 +112,17 @@ export const config = {
     subject: process.env.VAPID_SUBJECT || "mailto:anthony@profullstack.com",
   },
   telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN || "" },
+  // The Moshpit certificate authority (src/lib/moshpit-ca.mjs). PEM, or base64
+  // of PEM (Railway variables are single-line). All three absent = the CA is off
+  // and its endpoints answer 503; the rest of the registry is unaffected. The
+  // root's private key is never configured anywhere: it signs the issuer once,
+  // offline, and stays in the vault.
+  moshpitCa: {
+    cert: process.env.MOSHPIT_CA_CERT || "",
+    key: process.env.MOSHPIT_CA_KEY || "",
+    root: process.env.MOSHPIT_CA_ROOT || "",
+    leafDays: Number(process.env.MOSHPIT_CA_LEAF_DAYS) || 30,
+  },
   slack: { defaultWebhook: process.env.SLACK_WEBHOOK_URL || "" },
   coinpay: {
     apiBase: (process.env.COINPAY_API_BASE || "https://coinpayportal.com").replace(/\/+$/, ""),

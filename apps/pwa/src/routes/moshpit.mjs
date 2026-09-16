@@ -175,6 +175,8 @@ import {
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
 import { shortLinkUrl } from "../lib/moshpit-links.mjs";
+import { caEnabled, caMaterial } from "../lib/moshpit-ca.mjs";
+import { getNameCertificate, issueNameCertificate, listNameCertificates } from "../lib/moshpit-certs.mjs";
 
 export const moshpitRouter = Router();
 
@@ -1765,6 +1767,102 @@ moshpitRouter.get("/api/moshpit/tlds/:tld/pins", async (req, res) => {
   if (requested && !kind) return bad(res, `kind must be one of ${PIN_KINDS.join(", ")}`);
 
   res.json({ tld, label, pins: await listPins(tld, label, kind) });
+});
+
+/* ---------- the certificate authority ---------- */
+
+/**
+ * GET /api/moshpit/ca — public. Whether the pit signs, and what to install.
+ *
+ * `enabled: false` is a real answer, not an outage: a registry without a
+ * configured CA still resolves and still publishes pins. Clients that want
+ * https on pit names read this, install the root from /api/moshpit/ca.crt, and
+ * from then on trust every name at once instead of one pin at a time.
+ */
+moshpitRouter.get("/api/moshpit/ca", async (_req, res) => {
+  const m = await caMaterial();
+  if (!m) return res.json({ enabled: false });
+  res.json({
+    enabled: true,
+    root: { subject: m.rootSubject, fingerprint_sha256: m.rootFingerprint, not_after: m.rootNotAfter, url: "/api/moshpit/ca.crt" },
+    issuer: { subject: m.issuerSubject },
+    chain_url: "/api/moshpit/ca-chain.crt",
+    leaf_days: m.leafDays,
+    issue: "POST /api/moshpit/tlds/:tld/certs { label, csr }",
+  });
+});
+
+const pem = (res, body, filename) => {
+  res.setHeader("content-type", "application/x-pem-file; charset=utf-8");
+  res.setHeader("content-disposition", `inline; filename="${filename}"`);
+  res.setHeader("cache-control", "public, max-age=3600");
+  res.send(body);
+};
+
+/** GET /api/moshpit/ca.crt — the root, PEM. What a client installs. */
+moshpitRouter.get("/api/moshpit/ca.crt", async (_req, res) => {
+  const m = await caMaterial();
+  if (!m) return res.status(503).json({ error: "certificate authority is not configured" });
+  pem(res, m.root, "moshpit-root-ca.crt");
+});
+
+/** GET /api/moshpit/ca-chain.crt — issuer then root, PEM. What an origin serves after its leaf. */
+moshpitRouter.get("/api/moshpit/ca-chain.crt", async (_req, res) => {
+  const m = await caMaterial();
+  if (!m) return res.status(503).json({ error: "certificate authority is not configured" });
+  pem(res, m.chain, "moshpit-ca-chain.crt");
+});
+
+/**
+ * POST /api/moshpit/tlds/:tld/certs { label, csr } — sign a certificate.
+ *
+ * The caller proves control of the name by being who they are: the same rule
+ * as pins, the holder or the current tenant. The CSR proves they hold the key.
+ * Nothing in the CSR names the certificate -- the name does -- so a request for
+ * blue.eggs cannot come out naming red.eggs however the CSR is written.
+ *
+ * Answers with the leaf, the chain to serve (leaf + issuer + root), the root on
+ * its own, and the pin the leaf's key was published under.
+ */
+moshpitRouter.post("/api/moshpit/tlds/:tld/certs", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  if (!(await caEnabled())) return res.status(503).json({ error: "certificate authority is not configured" });
+  const csr = typeof req.body?.csr === "string" ? req.body.csr : "";
+  if (csr.length > 16384) return bad(res, "csr is too large");
+  const result = await issueNameCertificate({
+    tld: req.params.tld,
+    label: req.body?.label,
+    userId: req.user.id,
+    csr,
+  });
+  if (!result.ok) return bad(res, result.error, result.status || 400);
+  const m = await caMaterial();
+  res.status(201).json({
+    name: result.name,
+    serial: result.serial,
+    cert: result.cert,
+    chain: result.chain,
+    root: m?.root ?? null,
+    not_before: result.notBefore,
+    not_after: result.notAfter,
+    pin: result.pin,
+    pin_published: result.pinPublished,
+  });
+});
+
+/** GET /api/moshpit/tlds/:tld/certs?label=blue — public; what has been issued under a name. */
+moshpitRouter.get("/api/moshpit/tlds/:tld/certs", async (req, res) => {
+  const tld = normalizeTld(req.params.tld);
+  const label = normalizeLabel(req.query.label);
+  if (!tld || !label) return bad(res, "tld and label are required");
+  res.json({ tld, label, certs: await listNameCertificates(tld, label) });
+});
+
+/** GET /api/moshpit/certs/:serial — one issued certificate, PEM. */
+moshpitRouter.get("/api/moshpit/certs/:serial", async (req, res) => {
+  const row = await getNameCertificate(req.params.serial);
+  if (!row) return res.status(404).json({ error: "no such certificate" });
+  pem(res, row.cert, `${row.label}.${row.tld}.crt`);
 });
 
 /**
