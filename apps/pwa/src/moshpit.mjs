@@ -230,7 +230,7 @@ export async function registerTld({ tld: input, userId, ownerEmail = null, owner
   return created ? { ok: true, tld: created } : { ok: false, error: "registered but could not be read back" };
 }
 
-const logAction = (tld, userId, action) =>
+export const logAction = (tld, userId, action) =>
   run(`INSERT INTO moshpit_tld_log (tld, user_id, action, at) VALUES (?,?,?,?)`, [tld, userId, action, Date.now()]);
 
 /**
@@ -2367,7 +2367,7 @@ export async function listLeasesForUser(userId) {
  * or change who is contacted about buying it. Those stay with the holder, and
  * they stay on `ownedName`.
  */
-async function controlledName(tldInput, labelInput, userId, now = Date.now()) {
+export async function controlledName(tldInput, labelInput, userId, now = Date.now()) {
   const tld = normalizeTld(tldInput);
   const label = normalizeLabel(labelInput);
   if (!tld || !label) return { ok: false, error: "not a valid name" };
