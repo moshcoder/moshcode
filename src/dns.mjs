@@ -2455,7 +2455,7 @@ import { createParkingServer, DEFAULT_PARKING_HTTP_PORT } from "./parking-http.m
 // use it without importing this one back.
 export { pitNameUrl } from "./pit-url.mjs";
 import { pitNameUrl } from "./pit-url.mjs";
-import { applyTrust, applyUntrust, createAutoTrust, trustName, verifyStockTls } from "./trust.mjs";
+import { applyRegistryTrust, applyTrust, applyUntrust, createAutoTrust, removeRegistryTrust, trustName, verifyStockTls } from "./trust.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -2617,6 +2617,20 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
     const tlds = await fetchTlds({ registryBase });
     out(tlds.length ? tlds.map((t) => `.${t}`).join("\n") : "no TLDs claimed yet");
     return 0;
+  }
+
+  // `moshcode dns ca` — trust the registry's root on this machine, and nothing
+  // else: no bridge, no resolver change. The half of `dns enable` a machine
+  // needs when its resolution comes from elsewhere (a router running the
+  // bridge, DoH in the browser, TronBrowser's own resolver) but its clients
+  // still refuse the certificates. `--remove` takes it back out.
+  if (sub === "ca") {
+    if (rest.includes("--remove")) {
+      const r = await removeRegistryTrust(out, deps);
+      return r.ok ? 0 : 1;
+    }
+    const r = await applyRegistryTrust(out, { ...deps, registryBase });
+    return r.ok ? 0 : 1;
   }
 
   if (sub === "trust") {
@@ -3332,7 +3346,10 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       // Removing it by default is what makes `disable` mean "as it was".
       // `--keep-trust` is for turning resolution off for an afternoon without
       // paying for a re-install of the root afterwards.
-      if (!rest.includes("--keep-trust")) await applyUntrust(out, deps);
+      if (!rest.includes("--keep-trust")) {
+        await applyUntrust(out, deps);
+        await removeRegistryTrust(out, deps);
+      }
       out("");
 
       // The line the old implementation printed unconditionally, now only when
@@ -3580,6 +3597,11 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
       // no CA will ever sign for a Moshpit name — so the local root that
       // moshpit-proxy generates is the only thing that closes it.
       if (!rest.includes("--no-trust")) {
+        // The registry's root first: one anchor that covers every name, and
+        // the one a stock client is meant to end up with. The local root that
+        // follows is what the pinned proxy needs and what a machine without a
+        // signing registry falls back to.
+        await applyRegistryTrust(out, { ...deps, registryBase });
         const trusted = await applyTrust(tlds, out, deps);
         // The claim this whole feature makes is that an ordinary client now
         // works, so check it as an ordinary client would — a plain HTTPS GET

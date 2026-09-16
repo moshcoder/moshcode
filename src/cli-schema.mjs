@@ -1145,6 +1145,14 @@ export const DNS_VERBS = [
   { name: "resolve", description: "what a name resolves to, and why" },
   { name: "trust", description: "trust one name's certificate, after checking it against the registry pin" },
   {
+    name: "ca",
+    description: "trust the registry's root here, so every Moshpit name is trusted at once",
+    synopsis: [
+      ["moshcode dns ca", "fetch the registry's root, check it, install it (NSS without root, the system store with sudo)"],
+      ["moshcode dns ca --remove", "take it back out of every store"],
+    ],
+  },
+  {
     name: "filter",
     description: "block ads, trackers, malware and phishing at the resolver",
     synopsis: [
