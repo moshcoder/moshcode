@@ -1167,7 +1167,7 @@ export async function applyRegistryTrust(out, deps = {}) {
   }
   for (const step of plan.skipped) {
     out(`  --   ${step.label} — ${step.why}`);
-    if (step.needsRoot) out("       re-run with root to cover it: sudo moshcode dns ca");
+    if (step.needsRoot) out("       run `moshcode dns ca` from a terminal to cover it — it asks for sudo itself");
   }
   return { ok: true, installed, skipped: plan.skipped.length, file };
 }
@@ -1225,7 +1225,7 @@ export async function removeRegistryTrust(out, deps = {}) {
   if (haveFile) await runner("rm", ["-f", file]);
   for (const step of plan.skipped) {
     out(`  --   ${step.label} — ${step.why}`);
-    if (step.needsRoot && uid !== 0) out("       re-run with root to cover it: sudo moshcode dns ca --remove");
+    if (step.needsRoot && uid !== 0) out("       run `moshcode dns ca --remove` from a terminal to cover it — it asks for sudo itself");
   }
   return { ok: true, removed, skipped: plan.skipped.length };
 }

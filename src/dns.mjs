@@ -2625,6 +2625,23 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
   // bridge, DoH in the browser, TronBrowser's own resolver) but its clients
   // still refuse the certificates. `--remove` takes it back out.
   if (sub === "ca") {
+    // Half of this needs root (the system store) and half must not run as
+    // root's own user (the operator's NSS database), which is exactly the
+    // shape `dns enable` already handles: escalate this one command, and let
+    // operatorHome() find the person behind sudo. `sudo moshcode dns ca` from
+    // a shell is what bonita hit: moshcode lives in the operator's PATH, not
+    // root's, so "command not found". Escalating from inside carries the path.
+    // --user-only keeps it to the browser store, no prompt, for a machine
+    // where sudo is not on offer.
+    if (uid !== 0 && !rest.includes("--user-only")) {
+      const escalated = escalate({
+        args: ["dns", "ca", ...rest],
+        what: "dns ca",
+        out,
+      });
+      if (escalated.ran) return escalated.code;
+      out("(no sudo here — installing into the browser store only; the system store needs root)");
+    }
     if (rest.includes("--remove")) {
       const r = await removeRegistryTrust(out, deps);
       return r.ok ? 0 : 1;
