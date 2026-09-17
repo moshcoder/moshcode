@@ -1148,7 +1148,8 @@ export const DNS_VERBS = [
     name: "ca",
     description: "trust the registry's root here, so every Moshpit name is trusted at once",
     synopsis: [
-      ["moshcode dns ca", "fetch the registry's root, check it, install it (NSS without root, the system store with sudo)"],
+      ["moshcode dns ca", "fetch the registry's root, check it, install it everywhere (asks for sudo for the system store)"],
+      ["moshcode dns ca --user-only", "the browser store only; no prompt"],
       ["moshcode dns ca --remove", "take it back out of every store"],
     ],
   },
