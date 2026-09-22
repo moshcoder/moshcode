@@ -361,6 +361,38 @@ export const ENGINES = {
 };
 
 /**
+ * An explicit path to a build of one engine, from the environment.
+ *
+ * `MOSHCODE_ENGINE_BIN_<KEY>` (for example `MOSHCODE_ENGINE_BIN_CODEX`) names
+ * the executable to launch for that engine instead of searching for its usual
+ * name. It exists for the case where you are running your own build of an
+ * engine — a fork carrying a patch its upstream has not taken, a debug build
+ * you are bisecting — and want moshcode to open *that* rather than whichever
+ * copy happens to come first on PATH.
+ *
+ * It is unset by default, and deliberately so: with no override the name below
+ * is resolved against PATH exactly as before, which is the behaviour every
+ * engine here documents and every test relies on. An override is a statement
+ * that you know better than PATH for this one engine, so it is only ever made
+ * out loud.
+ *
+ * The value is used as-is, including `~`-free absolute paths; an empty or
+ * whitespace-only value is treated as unset rather than as an empty command.
+ */
+export function engineBinOverride(key, env = process.env) {
+  const value = env[`MOSHCODE_ENGINE_BIN_${key.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+// Applied once, here, rather than at each launch site: `bin` is read directly
+// by the CLI, the TUI's error messages, the swarm and the MCP bridge, and an
+// override that only some of them honoured would be worse than none.
+for (const [key, engine] of Object.entries(ENGINES)) {
+  const override = engineBinOverride(key);
+  if (override) engine.bin = override;
+}
+
+/**
  * The command that upgrades an already-installed engine in place: its native
  * updater if it has one, else re-run the installer (they're idempotent and
  * fetch the latest — claude/codex/gemini are `npm i -g` which upgrades).

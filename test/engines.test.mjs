@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { ENGINES, agentLaunchArgs, aiExecArgs, exitReason, isInstalled, openPassthrough, pickAiEngine, ranOk, resolveEngine, runCmd } from "../src/engines.mjs";
+import { ENGINES, agentLaunchArgs, aiExecArgs, engineBinOverride, exitReason, isInstalled, openPassthrough, pickAiEngine, ranOk, resolveEngine, runCmd } from "../src/engines.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 // The autonomous-session bypass flags each engine declares (engine.agentArgs).
@@ -62,7 +62,7 @@ process.stdout.write(JSON.stringify(process.argv.slice(2)));
   chmodSync(file, 0o755);
 }
 
-function run(args, binDir) {
+function run(args, binDir, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const ioDir = tempDir("moshcode-engine-stdio-");
     const stdinFile = path.join(ioDir, "stdin");
@@ -77,6 +77,7 @@ function run(args, binDir) {
       env: {
         ...process.env,
         PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+        ...extraEnv,
       },
     });
     let failed = false;
@@ -273,4 +274,38 @@ test("PATH still wins over a tool's install dir", async () => {
   } finally {
     process.env.PATH = previous;
   }
+});
+
+test("an engine bin override is read from the environment, and only when it says something", () => {
+  assert.deepEqual(
+    [
+      engineBinOverride("codex", {}),
+      engineBinOverride("codex", { MOSHCODE_ENGINE_BIN_CODEX: "" }),
+      engineBinOverride("codex", { MOSHCODE_ENGINE_BIN_CODEX: "   " }),
+      engineBinOverride("codex", { MOSHCODE_ENGINE_BIN_CODEX: " /opt/codex " }),
+      engineBinOverride("privacycode", { MOSHCODE_ENGINE_BIN_PRIVACYCODE: "/opt/pc" }),
+    ],
+    [null, null, null, "/opt/codex", "/opt/pc"],
+  );
+});
+
+test("an engine bin override launches that build instead of the copy on PATH", async () => {
+  // The name every other test would get: first on PATH, and not what we asked for.
+  const pathDir = tempDir();
+  mkdirSync(pathDir, { recursive: true });
+  writeEngine(pathDir, "codex");
+
+  // Our own build, deliberately somewhere PATH would never find it.
+  const buildDir = tempDir("moshcode-engine-build-");
+  mkdirSync(buildDir, { recursive: true });
+  const build = path.join(buildDir, "codex-fork");
+  writeFileSync(build, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify(["override", ...process.argv.slice(2)]));
+`);
+  chmodSync(build, 0o755);
+
+  const result = await run(["agents", "codex"], pathDir, { MOSHCODE_ENGINE_BIN_CODEX: build });
+
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.stdout), ["override", ...EXPECTED_LAUNCH_ARGS.codex]);
 });
