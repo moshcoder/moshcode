@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
-import { TOOLS, resolveTool, resolveInstallable, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
+import { TOOLS, resolveTool, resolveInstallable, suggestTargets, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { postSocial, socialRoster } from "./socials.mjs";
 import { shortenCommand } from "./shorten.mjs";
@@ -796,7 +796,17 @@ function installTarget(token) {
     // the resolvers check own properties only — `/install constructor` prints
     // the unknown-target line, not a TypeError that kills the pit.
     const resolved = resolveInstallable(token);
-    if (!resolved) { console.log(err(`unknown engine or tool "${token}"`)); return resolve(); }
+    if (!resolved) {
+      // A bare "unknown" is a dead end in the pit, where there is no usage text
+      // to fall back to the way `moshcode install` has one. Point at the
+      // nearest names when there are any, and at the rosters when there are not.
+      const near = suggestTargets(token, [...Object.keys(ENGINES), ...Object.keys(TOOLS)]);
+      console.log(err(`unknown engine or tool "${token}"`));
+      console.log(info(near.length
+        ? `did you mean ${near.map((n) => `\`${n}\``).join(" or ")}?`
+        : "try `/engines` or `/tools` for what can be installed"));
+      return resolve();
+    }
     const [key, target] = resolved;
     console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
     // Before the rule, so the prompt reads as the pit asking rather than as
