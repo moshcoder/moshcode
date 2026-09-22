@@ -262,6 +262,58 @@ export const ENGINES = {
     agentArgs: ["--turbo"],
     install: { cmd: "npm", args: ["install", "-g", "@serjm/deepseek-code"] },
   },
+  mimocode: {
+    desc: "MiMo Code — Xiaomi's agentic coding CLI (binary: mimo)",
+    // The installer names the binary `mimo`, not `mimocode`: the product is
+    // MiMo Code, the model family is MiMo, and the shell command is the short
+    // one. Its aliases below accept every spelling.
+    bin: "mimo",
+    // An opencode derivative (same `run`/`serve`/`acp`/`mcp` verbs, `--continue`,
+    // sessions, `--pure`) with a Claude-shaped permissions layer bolted on:
+    // `--dangerously-skip-permissions` (alias `--yolo`) auto-approves every
+    // tool call the config does not explicitly deny. `--never-ask` is the step
+    // past that — it also answers the agent's own questions — which is more
+    // than /agents means for every other engine here, so it stays off.
+    //
+    // `--trust` skips the workspace trust check. Without it a fresh directory
+    // opens on "Is this a project you created or one you trust?" and an
+    // autonomous session is not autonomous until someone presses Enter. The
+    // bypass flag then puts up a second dialog of its own on EVERY launch
+    // ("WARNING: Bypass Permissions mode", default "No, exit") that no flag
+    // suppresses; `boot` below answers it for swarms, and a human at
+    // `/agents mimocode` answers it once by hand.
+    agentArgs: ["--dangerously-skip-permissions", "--trust"],
+    // No agentsView: `mimo agent` is a management subcommand (create/list) that
+    // prints and exits, not a live view to land on.
+    install: { cmd: "bash", args: ["-c", "curl -fsSL https://mimo.xiaomi.com/install | bash"] },
+    // Its own updater knows it was installed by the curl script ("Using method:
+    // curl") and swaps the binary in place; on the current version it says so
+    // and exits 0 rather than re-downloading. Verified with 0.1.14.
+    upgrade: { cmd: "mimo", args: ["upgrade"] },
+    // The installer drops the binary in ~/.mimocode/bin and only appends that
+    // to a shell rc, so PATH will not see `mimo` until the next shell —
+    // including in the moshcode session that just installed it.
+    binDirs: [path.join(homedir(), ".mimocode", "bin")],
+    resume: ["--continue"],
+    // Dialogs the engine puts up BEFORE any work (PRD 0015), and the keys that
+    // answer them. Both observed on 0.1.14 under a pty. The trust check defaults
+    // to "Yes, I trust this folder", so Enter alone takes it — the opposite of
+    // Claude Code's, where Enter exits. The bypass warning defaults to "No,
+    // exit (recommended)", so it needs Down first.
+    boot: [
+      { pattern: /\bIs this a project you created or one you trust\b/i, keys: ["Enter"], label: "trust this folder" },
+      { pattern: /\bYes, I accept the risks and want to skip permissions\b/i, keys: ["Down", "Enter"], label: "accept bypass permissions" },
+    ],
+    state: {
+      // opencode lineage, so opencode's permission wording — plus the two boot
+      // dialogs above, which wait on a human exactly as a permission prompt does.
+      blocked: [
+        /\bpermission (?:request|required)\b/i, /\ballow this (?:command|tool)\b/i,
+        /\bIs this a project you created or one you trust\b/i,
+        /\bWARNING: Bypass Permissions mode\b/i,
+      ],
+    },
+  },
   openagents: {
     desc: "OpenAgents — multi-agent launcher + dashboard (openagents.org)",
     // The package installs three identical bins — `agn`, `openagents`, and
@@ -326,6 +378,9 @@ export const ENGINE_ALIASES = {
   // `dsc` and `deepseek-code` are the binary names the package installs; accept
   // both as engine names so whichever one someone has seen resolves.
   ds: "deepseek", dsc: "deepseek", "deepseek-code": "deepseek",
+  // `mimo` is the binary the installer writes; the rest are how the product is
+  // spelled on mimo.xiaomi.com and in its own docs ("MiMo Code").
+  mimo: "mimocode", "mimo-code": "mimocode", xiaomi: "mimocode",
   // Same idea for openagents: `agn` and `agent-connector` are the other two
   // binary names its package installs, and the domain is how it's advertised.
   oa: "openagents", agn: "openagents", "agent-connector": "openagents", "openagents.org": "openagents",
@@ -445,6 +500,7 @@ const AI_EXEC = {
   kimi: (p) => ["-p", p],                                    // kimi prompt mode (prints the response, text by default)
   qwen: (p) => ["-p", p],                                    // qwen prompt mode (gemini-derived)
   deepseek: (p) => ["--headless", "-p", p],                  // deepseek: -p runs one prompt and exits; --headless drops the TUI so stdout is pipe-clean
+  mimocode: (p) => ["run", p],                               // mimocode one-shot (opencode-derived: `mimo run <message>`)
   // openagents is absent on purpose: it answers no prompts itself, it starts
   // the engines that do. ai() throws a named error rather than picking it.
 };
@@ -468,7 +524,7 @@ export function aiExecArgs(engine, prompt) {
  */
 export function pickAiEngine(preferred) {
   const wanted = preferred ? resolveEngine(preferred)?.[0] : null;
-  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "aider"];
+  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "mimocode", "aider"];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin, ENGINES[key].binDirs)) return key;
   }
