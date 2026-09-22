@@ -16,9 +16,9 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { isInstalled, primaryBin, resolveEngine } from "../src/engines.mjs";
+import { isInstalled, primaryBin, resolveEngine, ENGINES } from "../src/engines.mjs";
 import { needsRootHere } from "../src/escalate.mjs";
-import { TOOLS, resolveTool, retry, toolList, toolUpgradeSpec } from "../src/tools.mjs";
+import { TOOLS, resolveInstallable, resolveTool, retry, toolList, toolUpgradeSpec } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -670,4 +670,17 @@ test("imagemagick is found under either of the names it ships as", () => {
 test("primaryBin names one command, so a list never reaches a message or a spawn", () => {
   assert.equal(primaryBin(["magick", "convert"]), "magick");
   assert.equal(primaryBin("ffmpeg"), "ffmpeg");
+});
+
+test("install targets resolve engine aliases the way every other engine surface does", () => {
+  // `/install mimo` and `moshcode install cc` looked the token up as a raw
+  // ENGINES key and printed "unknown engine" while `/agents mimo` worked.
+  assert.deepEqual(resolveInstallable("mimo"), ["mimocode", ENGINES.mimocode]);
+  assert.deepEqual(resolveInstallable("cc"), ["claude", ENGINES.claude]);
+  assert.deepEqual(resolveInstallable("MIMOCODE"), ["mimocode", ENGINES.mimocode]);
+  // tools still resolve by their own key
+  assert.deepEqual(resolveInstallable("ugig"), ["ugig", TOOLS.ugig]);
+  // and an Object.prototype name is still nothing
+  assert.equal(resolveInstallable("constructor"), null);
+  assert.equal(resolveInstallable(""), null);
 });
