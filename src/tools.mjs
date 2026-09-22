@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { mergeAliases } from "./aliases.mjs";
-import { isInstalled, openPassthrough } from "./engines.mjs";
+import { isInstalled, openPassthrough, resolveEngine } from "./engines.mjs";
 
 // gh, supabase, and doctl publish only GitHub release binaries — no official
 // cross-platform install script between them — so their install spec runs our
@@ -462,6 +462,20 @@ export function resolveTool(token) {
   // `constructor` or `__proto__` would otherwise resolve to something off
   // Object.prototype and be handed on as a tool with no bin/install.
   return Object.hasOwn(TOOLS, key) ? [key, TOOLS[key]] : null;
+}
+
+/**
+ * Resolve an install/uninstall target — an engine (by name or alias) or a
+ * tool — to `[key, entry]`, or null.
+ *
+ * `/install mimo` and `moshcode install cc` used to look the token up as a
+ * raw ENGINES key and print "unknown engine", while `/agents mimo`,
+ * `moshcode start cc` and `moshcode upgrade cc` all took the alias. One
+ * resolver for both install paths, so the name that starts an engine is also
+ * the name that installs it.
+ */
+export function resolveInstallable(token) {
+  return resolveEngine(token) || resolveTool(token);
 }
 
 /** Tool entries annotated with native executable install status. */

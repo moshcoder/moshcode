@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
-import { TOOLS, resolveTool, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
+import { TOOLS, resolveTool, resolveInstallable, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { postSocial, socialRoster } from "./socials.mjs";
 import { shortenCommand } from "./shorten.mjs";
@@ -790,12 +790,14 @@ async function openShell(rawCmd) {
   }
 }
 
-function installTarget(key) {
+function installTarget(token) {
   return new Promise((resolve) => {
-    // Own properties only — `/install constructor` must print the unknown-target
-    // line, not resolve to something off Object.prototype and crash the pit.
-    const target = (Object.hasOwn(ENGINES, key) && ENGINES[key]) || (Object.hasOwn(TOOLS, key) && TOOLS[key]);
-    if (!target) { console.log(err(`unknown engine or tool "${key}"`)); return resolve(); }
+    // Aliases resolve here as they do for `/agents mimo` and `/start cc`, and
+    // the resolvers check own properties only — `/install constructor` prints
+    // the unknown-target line, not a TypeError that kills the pit.
+    const resolved = resolveInstallable(token);
+    if (!resolved) { console.log(err(`unknown engine or tool "${token}"`)); return resolve(); }
+    const [key, target] = resolved;
     console.log(info(`installing ${key}: ${target.install.cmd} ${target.install.args.join(" ")}`));
     // Before the rule, so the prompt reads as the pit asking rather than as
     // something the installer's output scrolled into view.
