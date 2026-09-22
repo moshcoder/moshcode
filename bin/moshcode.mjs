@@ -370,6 +370,14 @@ async function main() {
     process.exitCode = (await fleetCommand(rest)) || 0;
     return;
   }
+  // The Omarchy bar (PRD 0017). `status` is the snapshot a QML widget polls;
+  // the rest is what makes the plugin shippable from a box that is not Omarchy.
+  // Lazy like swarm and fleet: a plain launch never reads a manifest.
+  if (cmd === "omarchy") {
+    const { omarchyCommand } = await import("../src/omarchy.mjs");
+    process.exitCode = (await omarchyCommand(rest)) || 0;
+    return;
+  }
   if (["ps", "attach", "kill", "wait", "restore", "cost", "usage"].includes(cmd)) {
     process.exitCode = (await herdCommand([cmd === "usage" ? "cost" : cmd, ...rest])) || 0;
     return;

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "sh.moshcode.herd",
+  "name": "Moshcode Herd",
+  "version": "0.1.0",
+  "author": "Anthony Ettinger",
+  "license": "MIT",
+  "description": "The agents you have running, the ones that are blocked waiting on you, and what the last hour cost.",
+  "kinds": ["bar-widget", "panel"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Moshcode Herd",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

@@ -30,6 +30,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode start` | engines | launch an engine with its native defaults |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
 | `moshcode swarm` | runtime | one task, a herd of agents, one answer — plan, fan out, verify, synthesise (PRD 0015) |
+| `moshcode omarchy` | runtime | the herd on the Omarchy bar: the snapshot a QML widget polls, and the plugin around it (PRD 0017) |
 | `moshcode fleet` | runtime | the OpenFleet sysop tool: open a fleet, cap it, see the tree, stop a swarm, read the ledger (PRD 0016) |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
 | `moshcode cost` <br>`usage` | runtime | what each session is spending, read from the engines' own logs |
