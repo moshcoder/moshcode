@@ -15,7 +15,7 @@ import {
   resolveExecutable,
   runCmd,
 } from "../src/engines.mjs";
-import { TOOLS, toolList, toolStatus, resolveTool, openTool, adoptAliasLines } from "../src/tools.mjs";
+import { TOOLS, toolList, toolStatus, resolveTool, resolveInstallable, openTool, adoptAliasLines } from "../src/tools.mjs";
 import { tradeArgs, tradeUsage } from "../src/trade.mjs";
 import { runUpgrade } from "../src/upgrade.mjs";
 import { selfUpdateCommand } from "../src/selfupdate.mjs";
@@ -514,14 +514,16 @@ async function main() {
     return;
   }
   if (cmd === "install") {
-    const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
-    // Own properties only — `install constructor` must print usage, not resolve
-    // to something off Object.prototype and crash on its missing install spec.
-    const entry = target
-      && ((Object.hasOwn(ENGINES, target) && ENGINES[target]) || (Object.hasOwn(TOOLS, target) && TOOLS[target]));
-    if (!target || !entry) {
+    const token = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
+    // Aliases resolve here as on every other engine surface (`install mimo`,
+    // `install cc`), and the resolvers check own properties only — `install
+    // constructor` prints usage rather than crashing on a missing install spec.
+    const resolved = token ? resolveInstallable(token) : null;
+    const target = resolved?.[0];
+    const entry = resolved?.[1];
+    if (!token || !entry) {
       console.error(`usage: moshcode install <engine|tool>\nengines:\n${engineList()}\ntools:\n${toolList()}`);
-      process.exit(target ? 1 : 0);
+      process.exit(token ? 1 : 0);
     }
     const { install, desc, bin } = entry;
     console.log(`🎸 installing ${target} — ${desc}\n$ ${install.cmd} ${install.args.join(" ")}\n`);
@@ -552,12 +554,13 @@ async function main() {
     return backToPit(`install ${target}`, result.code);
   }
   if (cmd === "uninstall" || cmd === "remove") {
-    const target = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
-    const entry = target
-      && ((Object.hasOwn(ENGINES, target) && ENGINES[target]) || (Object.hasOwn(TOOLS, target) && TOOLS[target]));
-    if (!target || !entry) {
+    const token = rest.find((a) => !a.startsWith("-"))?.toLowerCase();
+    const resolved = token ? resolveInstallable(token) : null;
+    const target = resolved?.[0];
+    const entry = resolved?.[1];
+    if (!token || !entry) {
       console.error(`usage: moshcode uninstall <engine|tool>\nengines:\n${engineList()}\ntools:\n${toolList()}`);
-      process.exit(target ? 1 : 0);
+      process.exit(token ? 1 : 0);
     }
 
     const binPath = resolveExecutable(entry.bin, entry.binDirs);
