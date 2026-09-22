@@ -454,14 +454,83 @@ export const TOOLS = {
   },
 };
 
-/** Resolve a name to `[key, tool]`, or null. */
+/**
+ * Aliases so a tool resolves under the name people actually say, the way
+ * ENGINE_ALIASES does for engines.
+ *
+ * `cli-tools` is the one that catches everyone: the set is published under the
+ * Profullstack name and installs from github.com/profullstack/cli-tools, so
+ * `/install profullstack` is the first thing anyone types — and it is the only
+ * key here whose registry name mentions neither the brand nor the binary.
+ */
+export const TOOL_ALIASES = {
+  profullstack: "cli-tools", "profullstack/cli-tools": "cli-tools",
+  clitools: "cli-tools", "cli_tools": "cli-tools", tools: "cli-tools",
+  // The binaries the set symlinks. Someone who has only ever run `blog-post`
+  // has no reason to know the dispatcher is what installs it.
+  "blog-post": "cli-tools", domainfree: "cli-tools", "gh-prs": "cli-tools",
+  // `bo` is the registry key; BufferOverride is how the product is spelled.
+  bufferoverride: "bo", "buffer-override": "bo",
+  // Spellings of the rest that differ from their key.
+  compute: "c0mpute", coupons: "c0upons",
+  "crawl-proof": "crawlproof", eleven: "elevenlabs", "eleven-labs": "elevenlabs",
+  im: "imagemagick", "image-magick": "imagemagick", convert: "imagemagick",
+  "digitalocean": "doctl", do: "doctl",
+};
+
+/** Resolve a name or alias to `[key, tool]`, or null. */
 export function resolveTool(token) {
   if (!token) return null;
-  const key = String(token).trim().toLowerCase();
-  // Own properties only: TOOLS is a plain object literal, so a name like
-  // `constructor` or `__proto__` would otherwise resolve to something off
+  const token_ = String(token).trim().toLowerCase();
+  // Own properties only: TOOLS/TOOL_ALIASES are plain object literals, so a name
+  // like `constructor` or `__proto__` would otherwise resolve to something off
   // Object.prototype and be handed on as a tool with no bin/install.
-  return Object.hasOwn(TOOLS, key) ? [key, TOOLS[key]] : null;
+  const key = Object.hasOwn(TOOLS, token_)
+    ? token_
+    : Object.hasOwn(TOOL_ALIASES, token_)
+      ? TOOL_ALIASES[token_]
+      : null;
+  return key ? [key, TOOLS[key]] : null;
+}
+
+/**
+ * The closest install targets to a name that resolved to nothing, so the error
+ * can point somewhere instead of only saying no. Substring both ways first
+ * (`profullstack` is a substring of no key, but `mosh` is of several), then a
+ * cheap edit-distance pass for a typo like `crawlprof`.
+ */
+export function suggestTargets(token, names, limit = 3) {
+  const t = String(token || "").trim().toLowerCase();
+  if (!t) return [];
+  const scored = [];
+  for (const name of names) {
+    if (name === t) continue;
+    if (name.includes(t) || t.includes(name)) scored.push([0, name]);
+    else {
+      const d = editDistance(t, name);
+      // Only a near miss is worth printing; an unrelated word should get
+      // nothing rather than a confusing "did you mean".
+      if (d <= Math.max(2, Math.floor(name.length / 3))) scored.push([d, name]);
+    }
+  }
+  return scored.sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1])).slice(0, limit).map(([, n]) => n);
+}
+
+/** Levenshtein, two rows — these are command names, not documents. */
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      row[j] = Math.min(
+        prev[j] + 1,
+        row[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = row;
+  }
+  return prev[b.length];
 }
 
 /**

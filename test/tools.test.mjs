@@ -18,7 +18,7 @@ import test from "node:test";
 
 import { isInstalled, primaryBin, resolveEngine, ENGINES } from "../src/engines.mjs";
 import { needsRootHere } from "../src/escalate.mjs";
-import { TOOLS, resolveInstallable, resolveTool, retry, toolList, toolUpgradeSpec } from "../src/tools.mjs";
+import { TOOLS, TOOL_ALIASES, resolveInstallable, resolveTool, retry, suggestTargets, toolList, toolUpgradeSpec } from "../src/tools.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
@@ -683,4 +683,50 @@ test("install targets resolve engine aliases the way every other engine surface 
   // and an Object.prototype name is still nothing
   assert.equal(resolveInstallable("constructor"), null);
   assert.equal(resolveInstallable(""), null);
+});
+
+/* --------------------------------------------- tool aliases + suggestions */
+
+test("a tool resolves under the name people actually say", () => {
+  // The one that started this: the set is published under the Profullstack
+  // name and installs from profullstack/cli-tools, so `/install profullstack`
+  // is what gets typed — but the registry key is `cli-tools`.
+  assert.equal(resolveTool("profullstack")?.[0], "cli-tools");
+  assert.equal(resolveTool("PROFULLSTACK")?.[0], "cli-tools");
+  assert.equal(resolveTool("  profullstack  ")?.[0], "cli-tools");
+  assert.equal(resolveTool("profullstack/cli-tools")?.[0], "cli-tools");
+  assert.equal(resolveTool("bufferoverride")?.[0], "bo");
+  assert.equal(resolveTool("compute")?.[0], "c0mpute");
+});
+
+test("a binary the set symlinks resolves to the dispatcher that installs it", () => {
+  for (const name of ["blog-post", "domainfree", "gh-prs"])
+    assert.equal(resolveTool(name)?.[0], "cli-tools", name);
+});
+
+test("every tool alias points at a real tool and shadows no key", () => {
+  for (const [alias, key] of Object.entries(TOOL_ALIASES)) {
+    assert.ok(Object.hasOwn(TOOLS, key), `${alias} -> ${key} is not a tool`);
+    assert.ok(!Object.hasOwn(TOOLS, alias), `${alias} is already a tool key`);
+  }
+});
+
+test("tool aliases do not resolve off Object.prototype", () => {
+  for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"])
+    assert.equal(resolveTool(name), null, name);
+});
+
+test("install targets resolve tool aliases too", () => {
+  assert.deepEqual(resolveInstallable("profullstack"), ["cli-tools", TOOLS["cli-tools"]]);
+  assert.deepEqual(resolveInstallable("cli-tools"), ["cli-tools", TOOLS["cli-tools"]]);
+});
+
+test("suggestTargets points at the nearest names, and stays quiet otherwise", () => {
+  const names = Object.keys(TOOLS);
+  assert.deepEqual(suggestTargets("crawlprof", names), ["crawlproof"]);
+  assert.ok(suggestTargets("elevenlab", names).includes("elevenlabs"));
+  // An unrelated word gets nothing rather than a confusing near miss.
+  assert.deepEqual(suggestTargets("zzzzzzzzzzqqq", names), []);
+  assert.deepEqual(suggestTargets("", names), []);
+  assert.ok(suggestTargets("tool", names).length <= 3);
 });
