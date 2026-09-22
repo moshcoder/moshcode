@@ -196,7 +196,7 @@ export const CORE_CLI_COMMANDS = [
       + "codex's rollout token counts, opencode's per-message cost, aider's chat history. a figure marked "
       + "`~` was worked out from published rates and is what the tokens WOULD cost on the api; unmarked "
       + "figures are the engine's own arithmetic. models with no rate show tokens and no cost — add yours "
-      + "to ~/.moshcode/pricing.json. gemini, kimi, deepseek and openagents log nothing readable, "
+      + "to ~/.moshcode/pricing.json. gemini, kimi, deepseek, mimocode and openagents log nothing readable, "
       + "so they report no cost rather than zero. under the table, `burn` is the same windows for every "
       + "engine — last 1 min, 15 min, 1 hour, 4 hours, 8 hours and the report window — with what the "
       + "requests inside each cost, that cost per hour, and the runs behind it; --json carries them as `burn`.",
