@@ -140,6 +140,25 @@ export const CORE_CLI_COMMANDS = [
       + "before the kills, and a bypass flag the ceiling forbids is refused with ceiling.refuse. `moshcode fleet tree` shows it.",
   },
   {
+    name: "omarchy",
+    group: "runtime",
+    description: "the herd on the Omarchy bar: the snapshot a QML widget polls, and the plugin around it (PRD 0017)",
+    synopsis: [
+      ["moshcode omarchy <verb> [args…]", ""],
+    ],
+    verbs: "OMARCHY_VERBS",
+    flags: [["--json", "machine-readable, on every verb", ""]],
+    examples: [
+      ["moshcode omarchy status --json", "the snapshot: agents, counts, burn windows, alerts"],
+      ["moshcode omarchy validate", "the marketplace's checks, with no Omarchy installed"],
+      ["moshcode omarchy install", "copy the plugin into ~/.config/omarchy/plugins and rescan"],
+      ["moshcode omarchy doctor", "what is present on this box, and what that rules out"],
+    ],
+    seeAlso: ["ps", "cost", "fleet", "herd"],
+    note: "the plugin runs unsandboxed inside Omarchy's shared Quickshell process, so `status` is read-only, bounded and cached: "
+      + "a cost reading is held for 5s, or a minute when it was slow, and the snapshot says which it gave you.",
+  },
+  {
     name: "fleet",
     group: "runtime",
     description: "the OpenFleet sysop tool: open a fleet, cap it, see the tree, stop a swarm, read the ledger (PRD 0016)",
@@ -1644,9 +1663,25 @@ export const PAYMENT_VERBS = [
   { name: "disconnect", description: "forget a rail (the CLI stays logged in)", synopsis: [["moshcode payments disconnect <gateway>", ""]] },
 ];
 
+export const OMARCHY_VERBS = [
+  { name: "status", description: "the snapshot the bar polls: agents, counts, burn, alerts",
+    synopsis: [["moshcode omarchy status [--json] [--ttl <secs>] [--no-cache]", ""]],
+    flags: [
+      ["--ttl <secs>", "how long a cost reading stays good", "5"],
+      ["--no-cache", "read cost fresh, whatever it costs", ""],
+    ] },
+  { name: "validate", description: "the marketplace's manifest and layout checks, in JS",
+    synopsis: [["moshcode omarchy validate [dir] [--json]", "defaults to the plugin this package ships"]] },
+  { name: "install", description: "copy the plugin into ~/.config/omarchy/plugins and ask the shell to rescan",
+    synopsis: [["moshcode omarchy install [--link] [--json]", "--link is the development path"]] },
+  { name: "doctor", description: "omarchy, omarchy-shell, qmllint, the plugin dir, and the installed version",
+    synopsis: [["moshcode omarchy doctor [--json]", ""]] },
+];
+
 export const VERB_TABLES = {
   HERD_VERBS,
   FLEET_VERBS,
+  OMARCHY_VERBS,
   SSH_VERBS,
   TIMER_VERBS,
   CLIENT_VERBS,
@@ -1693,6 +1728,8 @@ export const PIT_COMMANDS = [
     description: "one task, a herd of agents, one answer" },
   { name: "fleet", args: "[verb] [args…]", cli: "fleet",
     description: "the fleet tree, and the sysop's verbs over it" },
+  { name: "omarchy", args: "[verb] [args…]", cli: "omarchy",
+    description: "the herd on the Omarchy bar: the snapshot, and the plugin around it" },
   { name: "cost", aliases: ["usage"], args: "[name] [--all]", cli: "cost",
     description: "what the herd is spending, from the engines' own logs" },
   { name: "attach", args: "<name>", cli: "attach",
