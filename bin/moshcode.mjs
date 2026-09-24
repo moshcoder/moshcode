@@ -747,6 +747,13 @@ async function main() {
     return;
   }
   if (cmd === "logout") { logout(); return; }
+  // Operator-only, and the app is what enforces that: a non-operator key gets
+  // a 403 back. Lazy like fleet: nothing else needs it.
+  if (cmd === "export") {
+    const { exportCommand } = await import("../src/export-users.mjs");
+    process.exitCode = await exportCommand(rest);
+    return;
+  }
   if (cmd === "save") { process.exitCode = await saveCommand(rest); return; }
   if (cmd === "load") { process.exitCode = await loadCommand(rest); return; }
   if (cmd === "run") {

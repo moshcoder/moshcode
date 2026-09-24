@@ -471,6 +471,38 @@ export const CORE_CLI_COMMANDS = [
       + "`moshcode save` to keep it, or --force to replace it.",
   },
   {
+    name: "export",
+    group: "account",
+    description: "operator only: export the app's users as CSV, optionally cleaned",
+    synopsis: [
+      ["moshcode export users [--format csv|json] [-o file]", ""],
+      ["moshcode export users --clean [cleaner flags] [-o file]", ""],
+    ],
+    flags: [
+      ["--clean", "run the list through cli-tools' email-cleaner and keep the valid rows", ""],
+      ["--format <csv|json>", "output format", "csv"],
+      ["-o, --output <file>", "write here (mode 0600) instead of stdout; an existing file is backed up first", ""],
+      ["--allow-role", "email-cleaner: keep role addresses (after --clean)", ""],
+      ["--allow-disposable", "email-cleaner: keep disposable domains (after --clean)", ""],
+      ["--allow-duplicates", "email-cleaner: keep duplicates (after --clean)", ""],
+      ["--allow-unlikely", "email-cleaner: keep unlikely-looking addresses (after --clean)", ""],
+      ["--allow-no-website", "email-cleaner: keep domains with no website (after --clean)", ""],
+      ["--no-dns", "email-cleaner: skip the MX lookups (after --clean)", ""],
+      ["--fix-typos", "email-cleaner: correct gmial.com and friends (after --clean)", ""],
+    ],
+    examples: [
+      ["moshcode export users -o users.csv", "the whole list"],
+      ["moshcode export users --clean -o users.csv", "plus users.rejected.csv"],
+      ["moshcode export users --clean --no-dns", "offline, CSV on stdout"],
+    ],
+    seeAlso: ["login", "whoami"],
+    note: "needs `moshcode login` as an account listed in ADMIN_EMAILS on app.moshcode.sh; everyone else gets a 403. "
+      + "columns: email, display_name, created_at (ISO), id, signup_method (password, passkey or coinpay). "
+      + "accounts without an email are counted, never listed. --clean fails rather than skipping when email-cleaner "
+      + "is not on PATH (`moshcode install cli-tools`). counts go to stderr, so stdout stays pure CSV. "
+      + "in the pit, /export users always writes a file (~/.moshcode/exports/ unless -o) and prints only its path and the counts.",
+  },
+  {
     name: "console",
     group: "account",
     description: "serve or connect to the browser terminal",
@@ -1793,6 +1825,8 @@ export const PIT_COMMANDS = [
   { name: "whoami", cli: "whoami", description: "who this machine is logged in as" },
   // Dispatched since forever and missing from /help until now.
   { name: "logout", cli: "logout", description: "clear the logged-in account" },
+  { name: "export", args: "users [--clean] [--format csv|json] [-o file]", cli: "export",
+    description: "operator only: export users to a file, optionally cleaned" },
   { name: "save", args: "[--dry-run] [--force]", cli: "save",
     description: "save this pit's settings to your moshcode.sh account" },
   { name: "load", args: "[--dry-run] [--force]", cli: "load",

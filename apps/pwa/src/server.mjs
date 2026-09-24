@@ -19,6 +19,7 @@ import { pagesRouter } from "./routes/pages.mjs";
 import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
 import { socialsRouter } from "./routes/socials.mjs";
+import { adminRouter } from "./routes/admin.mjs";
 import { MAX_BATCH, MAX_PUBLISH_BYTES } from "./lib/moshpit-content.mjs";
 import { endExpiredLeases, expireOffers } from "./moshpit.mjs";
 
@@ -81,6 +82,7 @@ app.use(coinpayRouter);
 app.use(approvalsRouter);
 app.use(creditsRouter);
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
+app.use(adminRouter);     // /api/admin/*, ADMIN_EMAILS operators only
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
 app.use(organizationsRouter); // organizations, teams, membership, and session sharing
 app.use(mcpOAuthBrowserRouter); // /oauth/authorize — logged-in consent + CSRF
