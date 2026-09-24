@@ -2,17 +2,17 @@
 //   email    → Resend
 //   slack    → Slack incoming webhook (channel target = webhook URL)
 //   telegram → Telegram bot sendMessage (channel target = chat id; needs bot token)
-//   push     → Web Push (VAPID) to the user's subscribed devices
+//   push     → Web Push (VAPID, @profullstack/notifications) to the user's subscribed devices
 //   sms      → stubbed (wire a provider next)
 // Returns the channel kinds that actually accepted.
-import webpush from "web-push";
+import { sendPushToMany } from "@profullstack/notifications/server";
 import { all, run } from "../db.mjs";
 import { config } from "../config.mjs";
 import { esc } from "./html.mjs";
 
-if (config.push.vapidPublic && config.push.vapidPrivate) {
-  webpush.setVapidDetails(config.push.subject, config.push.vapidPublic, config.push.vapidPrivate);
-}
+// web-push's default TTL (4 weeks), kept so an approval still reaches a phone
+// that was off for a while.
+const PUSH_TTL = 60 * 60 * 24 * 7 * 4;
 
 async function sendEmail(to, a) {
   if (!config.resend.apiKey) { console.log(`[email:stub] → ${to}: ${a.message}`); return true; }
@@ -82,20 +82,22 @@ async function sendTelegram(chatId, a) {
   return res.ok;
 }
 
-async function sendPush(user, a) {
+async function sendPushToUser(user, a) {
   const subs = await all(`SELECT * FROM push_subscriptions WHERE user_id = ?`, [user.id]);
-  if (!subs.length || !config.push.vapidPublic) { console.log(`[push:stub] ${a.message}`); return subs.length ? true : false; }
+  if (!subs.length || !config.push.keys) { console.log(`[push:stub] ${a.message}`); return subs.length ? true : false; }
   const payload = JSON.stringify({ title: "moshcode needs you 🤘", body: a.message, url: a.url });
-  let any = false;
-  for (const s of subs) {
-    try {
-      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
-      any = true;
-    } catch (e) {
-      if (e.statusCode === 404 || e.statusCode === 410) await run(`DELETE FROM push_subscriptions WHERE id = ?`, [s.id]);
-    }
-  }
-  return any;
+  const results = await sendPushToMany(
+    subs.map((s) => ({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } })),
+    payload,
+    {
+      keys: config.push.keys,
+      subject: config.push.subject,
+      ttl: PUSH_TTL,
+      // 404/410: the browser dropped this subscription — forget it.
+      onGone: (endpoint) => run(`DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?`, [endpoint, user.id]),
+    },
+  );
+  return results.some((r) => r.sent);
 }
 
 // Deliver to enabled channels (optionally limited to `onlyKinds`); returns kinds
@@ -110,7 +112,7 @@ export async function fanOut(user, approval, onlyKinds = null) {
       if (c.kind === "email") ok = await sendEmail(c.target || user.email, approval);
       else if (c.kind === "slack") ok = await sendSlack(c.target || config.slack.defaultWebhook, approval);
       else if (c.kind === "telegram") ok = await sendTelegram(c.target, approval);
-      else if (c.kind === "push") ok = await sendPush(user, approval);
+      else if (c.kind === "push") ok = await sendPushToUser(user, approval);
       else if (c.kind === "webhook") ok = await sendWebhook(c.target, approval);
       else if (c.kind === "sms" && c.target) {
         console.log(`[sms:stub] → ${c.target}: ${approval.message}`);
