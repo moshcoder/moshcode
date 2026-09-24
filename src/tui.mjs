@@ -1079,6 +1079,12 @@ export async function tui() {
     // printing, and the prompt is where you were about to type `/load` again.
     if (cmd === "save") { await saveCommand(rest, { write: (l) => console.log(`  ${l}`) }); continue; }
     if (cmd === "load") { await loadCommand(rest, { write: (l) => console.log(`  ${l}`) }); continue; }
+    // `/export users [--clean]`: always to a file, never the addresses on screen.
+    if (cmd === "export") {
+      const { exportCommand } = await import("./export-users.mjs");
+      await exportCommand(rest, { pit: true, write: (l) => console.log(`  ${l}`) });
+      continue;
+    }
     if (cmd === "run") {
       await runFile(rest);
       continue;

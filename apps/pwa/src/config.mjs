@@ -149,5 +149,21 @@ export const config = {
   get coinpayLoginEnabled() {
     return Boolean(this.coinpay.oauth.authorizeUrl && this.coinpay.oauth.clientId);
   },
+  /**
+   * Operators: the accounts allowed to reach /api/admin/*.
+   *
+   * `ADMIN_EMAILS`, a comma- or space-separated list of account emails. Read
+   * on every call rather than once at boot, so a test (or a restart-free env
+   * change on a dev box) sees the current value. Unset means nobody is an
+   * operator, which is the safe default: the admin routes answer 403 to all.
+   */
+  get adminEmails() {
+    return parseAdminEmails(process.env.ADMIN_EMAILS);
+  },
   secure: (process.env.NODE_ENV || "development") === "production",
 };
+
+/** `"a@x.com, B@y.com"` to a Set of lowercased addresses. Blank entries dropped. */
+export function parseAdminEmails(value = "") {
+  return new Set(String(value || "").split(/[\s,;]+/).map((s) => s.trim().toLowerCase()).filter((s) => s.includes("@")));
+}

@@ -50,6 +50,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode logout` | account | clear the logged-in account |
 | `moshcode save` | account | save this machine's pit settings to your account |
 | `moshcode load` | account | bring your saved pit settings onto this machine |
+| `moshcode export` | account | operator only: export the app's users as CSV, optionally cleaned |
 | `moshcode console` | account | serve or connect to the browser terminal |
 | `moshcode dns` | hosting | resolve Moshpit names on this machine |
 | `moshcode name` | hosting | prove you hold a Moshpit name, so an app can use it as your identity |
@@ -1591,6 +1592,37 @@ this machine pushed, a conflict, and a credential the app rejected.
 MOSHCODE_NO_AUTOSYNC=1 moshcode      # turn it off for this pit
 MOSHCODE_AUTOSYNC_MS=900000 moshcode # every fifteen minutes instead
 ```
+
+## Exporting users (`moshcode export users`, operators only)
+
+The app's operators can pull the list of accounts that signed up with an email,
+without touching the database:
+
+```sh
+moshcode export users -o users.csv                  # email, display_name, created_at, id, signup_method
+moshcode export users --format json -o users.json   # the same rows, plus counts
+moshcode export users --clean -o users.csv          # only the addresses worth mailing
+```
+
+Who counts as an operator is decided by the app, not the CLI: the account you
+are logged in as (`moshcode login`) must be listed in `ADMIN_EMAILS` on
+app.moshcode.sh. Everyone else gets a 403. Accounts with no email (passkey or
+CoinPay sign-ups that never added one) are counted, never listed.
+
+`--clean` pipes the CSV through `email-cleaner` from
+[cli-tools](https://github.com/profullstack/cli-tools)
+(`moshcode install cli-tools`). If it is not on your PATH the export fails
+instead of quietly skipping the cleaning. The valid rows come out in the same
+columns; with `-o users.csv` the rejected ones go to `users.rejected.csv` with a
+`reasons` column. Any of email-cleaner's own flags given after `--clean`
+(`--allow-role`, `--allow-disposable`, `--allow-duplicates`, `--allow-unlikely`,
+`--allow-no-website`, `--no-dns`, `--fix-typos`) are passed straight through.
+
+Files are written owner-readable only (0600), and a file already at that path
+is copied to `<name>.bak-NNN.csv` first. Counts and paths go to stderr, so
+stdout stays pure CSV for a pipe. In the pit, `/export users` always writes a
+file (`~/.moshcode/exports/` unless you give `-o`) and prints only where it
+went and the counts, never the addresses.
 
 ## Browser terminal (`moshcode console`)
 

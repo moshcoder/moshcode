@@ -32,6 +32,9 @@ CLI: `doppler run -- npm start`.
   + token), `SESSION_SECRET`, `MOSHCODE_WEBHOOK_SECRET`, `RESEND_API_KEY`,
   `PUBLIC_ORIGIN=https://app.moshcode.sh`, `MCP_PUBLIC_ORIGIN=https://moshcode.sh`,
   and the `COINPAY_*` values.
+- `ADMIN_EMAILS`: comma-separated account emails allowed to call `/api/admin/*`
+  (the operator user export behind `moshcode export users`). Unset means
+  nobody: every admin route answers 403.
 - Point the domain **app.moshcode.sh** at the service. Root `moshcode.sh` stays a
   marketing site, but must proxy `/.well-known/oauth-*`, `/oauth/*`, `/device`,
   and `/api/v1/mcp/*` to this service so canonical MCP URLs work at the apex.
@@ -51,6 +54,7 @@ CLI: `doppler run -- npm start`.
 | `GET/POST /oauth/authorize` | user | authorize one MCP client, share, and scope set |
 | `POST /oauth/device_authorization` | MCP client | begin RFC 8628 device authorization |
 | `POST /webhooks/coinpay` | CoinPay | confirm a top-up → credit balance |
+| `GET /api/admin/users/export?format=csv\|json` | operator (Bearer key or session, `ADMIN_EMAILS`) | every account with an email: email, display_name, created_at, id, signup_method; counts of the rest |
 | `GET /healthz` | Railway | health check |
 
 ## Wiring the CLI
