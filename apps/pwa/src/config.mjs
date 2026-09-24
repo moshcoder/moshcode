@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { vapidKeysFromEnv } from "@profullstack/notifications/server";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -106,9 +107,15 @@ export const config = {
     apiBase: (process.env.FORWARDEMAIL_API_BASE || "https://api.forwardemail.net").replace(/\/+$/, ""),
     domain: (process.env.MOSHPIT_GUARD_DOMAIN || "names.moshcode.sh").trim().toLowerCase(),
   },
+  // Web Push (@profullstack/notifications). The public key reaches browsers at
+  // run time from GET /api/push/vapid-public-key, never rendered into a page.
+  // VAPID_PUBLIC / VAPID_PRIVATE are this app's historic names; the package's
+  // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY work too. null when either is missing.
   push: {
-    vapidPublic: process.env.VAPID_PUBLIC || "",
-    vapidPrivate: process.env.VAPID_PRIVATE || "",
+    keys: vapidKeysFromEnv({
+      VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC,
+      VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY || process.env.VAPID_PRIVATE,
+    }),
     subject: process.env.VAPID_SUBJECT || "mailto:anthony@profullstack.com",
   },
   telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN || "" },

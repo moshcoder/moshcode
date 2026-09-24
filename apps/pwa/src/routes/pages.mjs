@@ -9,6 +9,7 @@ import { createApiKey, listApiKeys, revokeApiKey } from "../lib/apikey.mjs";
 import { PACKS } from "./credits.mjs";
 import { latestSnapshotMeta } from "./settings-sync.mjs";
 import { config } from "../config.mjs";
+import { parseSubscription, vapidPublicKeyResponse } from "@profullstack/notifications/server";
 
 export const pagesRouter = Router();
 
@@ -89,12 +90,13 @@ export async function dashboardHandler(req, res) {
         <div class="card-head"><span class="h">Channels</span><a class="pill" href="/settings">manage</a></div>
         <div class="card-body">
           <p class="dim mono" style="font-size:.8rem;margin-top:0">where your pings land — email, Slack, Telegram, SMS, push. Configure in <a class="acid" href="/settings">settings</a>.</p>
-          <button class="btn block" id="push-btn" data-vapid="${esc(config.push.vapidPublic)}" style="margin-top:6px">🔔 Enable push on this device</button>
+          <button class="btn block" id="push-btn" style="margin-top:6px">🔔 Enable push on this device</button>
+          <p class="faint mono" id="push-why" hidden style="font-size:.72rem;margin:8px 0 0"></p>
         </div>
       </div>
     </div>
   </div></main>${footer}
-  <script src="/push.js"></script>`;
+  <script type="module" src="/push.js"></script>`;
   res.type("html").send(page({ title: "moshcode ▸ dashboard", body }));
 }
 
@@ -264,10 +266,22 @@ pagesRouter.post("/settings/apikeys/:id/delete", requireAuth, async (req, res) =
   res.redirect("/settings");
 });
 
-// web push subscription for this device (session-authed; CSRF via x-csrf-token)
+// The VAPID public key, served at run time so the browser never depends on a
+// key rendered into the page. 503 + { publicKey: null } when push is not set up.
+pagesRouter.get("/api/push/vapid-public-key", async (_req, res) => {
+  const out = vapidPublicKeyResponse(config.push.keys);
+  res.status(out.status).set(Object.fromEntries(out.headers)).send(await out.text());
+});
+
+// web push subscription for this device (session-authed; CSRF via x-csrf-token).
+// Takes a PushSubscription's toJSON() ({ endpoint, keys: { p256dh, auth } }),
+// as @profullstack/notifications/client sends it; the older flat { endpoint,
+// p256dh, auth } shape is still accepted.
 pagesRouter.post("/push/subscribe", requireAuth, async (req, res) => {
-  const { endpoint, p256dh, auth } = req.body || {};
-  if (!endpoint || !p256dh || !auth) return res.status(400).json({ error: "bad subscription" });
+  const body = req.body || {};
+  const sub = parseSubscription(body.keys ? body : { endpoint: body.endpoint, keys: { p256dh: body.p256dh, auth: body.auth } });
+  if (!sub) return res.status(400).json({ error: "bad subscription" });
+  const { endpoint, keys: { p256dh, auth } } = sub;
   const existing = await get(`SELECT id FROM push_subscriptions WHERE endpoint = ?`, [endpoint]);
   if (existing) await run(`UPDATE push_subscriptions SET user_id=?, p256dh=?, auth=? WHERE endpoint=?`, [req.user.id, p256dh, auth, endpoint]);
   else await run(`INSERT INTO push_subscriptions (id,user_id,endpoint,p256dh,auth,created_at) VALUES (?,?,?,?,?,?)`,
@@ -275,7 +289,11 @@ pagesRouter.post("/push/subscribe", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-pagesRouter.post("/push/unsubscribe", requireAuth, async (req, res) => {
+// POST is the original form; DELETE is what @profullstack/notifications/client's
+// unsubscribe({ removeUrl }) sends.
+async function forgetSubscription(req, res) {
   if (req.body?.endpoint) await run(`DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?`, [req.body.endpoint, req.user.id]);
   res.json({ ok: true });
-});
+}
+pagesRouter.post("/push/unsubscribe", requireAuth, forgetSubscription);
+pagesRouter.delete("/push/unsubscribe", requireAuth, forgetSubscription);

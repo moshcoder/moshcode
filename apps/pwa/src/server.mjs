@@ -58,6 +58,8 @@ const vendor = {
   "/vendor/xterm.js": "node_modules/@xterm/xterm/lib/xterm.js",
   "/vendor/xterm.css": "node_modules/@xterm/xterm/css/xterm.css",
   "/vendor/xterm-addon-fit.js": "node_modules/@xterm/addon-fit/lib/addon-fit.js",
+  // the Web Push browser client (an ES module) that public/push.js imports
+  "/vendor/notifications-client.js": "node_modules/@profullstack/notifications/src/client.js",
 };
 for (const [route, file] of Object.entries(vendor)) {
   app.get(route, (_req, res) => res.sendFile(path.join(config.root, file), { maxAge: "1h" }));
