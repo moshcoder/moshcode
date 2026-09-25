@@ -135,7 +135,9 @@ test("a bad sub-verb prints that command's usage, not the whole wall", async () 
   assert.equal(code, 1);
   assert.equal(stdout, "");
   assert.match(stderr, /has no verb "nonsense"/);
-  assert.ok(stderr.split("\n").length <= 24, "usage block should be the command's own, and short");
+  // A ceiling, not a target: the whole wall is 127 lines. It moves when a verb
+  // is added, which is why it is loose rather than exact.
+  assert.ok(stderr.split("\n").length <= 30, "usage block should be the command's own, and short");
 });
 
 test("an unknown help topic suggests rather than dumping", async () => {

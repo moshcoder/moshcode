@@ -650,6 +650,10 @@ export function fold({ fleets = [], roster = null, host: h = host(), implicit = 
         lost: false,
         rosterOnly: false,
         swarms: [],
+        // Members handed this one's conversation (PRD 0018 R2). A swarm member
+        // hangs under its swarm; a handoff has no swarm, and its parent is the
+        // session it came from.
+        handoffs: [],
       };
     };
     for (const r of records) if (r?.member && !members.has(r.member)) members.set(r.member, node(r, null));
@@ -713,7 +717,29 @@ export function fold({ fleets = [], roster = null, host: h = host(), implicit = 
       if (spawner) spawner.swarms.push(s);
       else top.push(s);
     }
-    const roots = [...members.values()].filter((m) => !m.swarm).sort(byStart);
+    // A handoff records the member it came from and joins no swarm, so it is
+    // the one member that hangs under another member. Nesting it here is what
+    // puts the edge in the tree; a parent that is not in this fleet leaves the
+    // child a root, which is a truthful drawing of a record whose other half is
+    // missing. The walk up guards against a pair that name each other, which a
+    // hand-written record can do and a cycle in the draw would hang on.
+    const nested = new Set();
+    for (const m of members.values()) {
+      if (m.swarm || !m.parent) continue;
+      const p = members.get(m.parent);
+      if (!p || p === m) continue;
+      let up = p;
+      let depth = 0;
+      while (up && depth++ < 64) {
+        if (up === m) break;
+        up = up.parent && !up.swarm ? members.get(up.parent) : null;
+      }
+      if (up === m) continue;
+      p.handoffs.push(m);
+      nested.add(m.member);
+    }
+    for (const m of members.values()) m.handoffs.sort(byStart);
+    const roots = [...members.values()].filter((m) => !m.swarm && !nested.has(m.member)).sort(byStart);
     out.push({
       fleet, sysop, implicit: !open, ceiling,
       nodes: [...roots, ...top],
@@ -738,7 +764,7 @@ export function fold({ fleets = [], roster = null, host: h = host(), implicit = 
         kind: "member", member: row.name, session: row.name, title: null, task: null, engine: row.engine || null, host: h, cwd: row.cwd || null,
         depth: 0, parent: null, swarm: null, approvals: row.approvals || "native", owns: null, orphan: false, recorded: false, claimed: false,
         started: null, end: null, state: row.state || (row.alive ? "working" : "gone"), spend: null, live: Boolean(row.alive), herdState: row.state || null,
-        lost: false, rosterOnly: true, swarms: [],
+        lost: false, rosterOnly: true, swarms: [], handoffs: [],
       });
     }
   }
@@ -829,7 +855,7 @@ export function renderTree(model, { host: h = host() } = {}) {
       nodes.forEach((n, i) => {
         const last = i === nodes.length - 1;
         rows.push({ prefix: `${prefix}${last ? "└─ " : "├─ "}`, ...(n.kind === "swarm" ? swarmRow(n) : memberRow(n, h)) });
-        const children = n.kind === "swarm" ? n.members : n.swarms;
+        const children = n.kind === "swarm" ? n.members : [...(n.swarms || []), ...(n.handoffs || [])];
         if (children?.length) draw(children, `${prefix}${last ? "   " : "│  "}`);
       });
     };

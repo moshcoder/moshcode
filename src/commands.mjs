@@ -830,6 +830,7 @@ const COMMANDS = [
   cliVerb("herd", "drive the herd (moshcode herd <verb>) — see herdStart/herdWait for values"),
   cliVerb("ps", "print the herd roster"),
   cliVerb("swarm", "one task, a herd of agents, one answer (moshcode swarm \"<task>\" [--agents 4])"),
+  cliVerb("handoff", "move a conversation to another engine (moshcode handoff <from> <to>)"),
   cliVerb("fleet", "the OpenFleet sysop tool: open, cap, tree, stop, log (moshcode fleet <verb>)"),
   cliVerb("omarchy", "the herd on the Omarchy bar: status, validate, install, doctor (moshcode omarchy <verb>)"),
   cliVerb("cost", "print what the herd is spending (moshcode cost [name] [--all])"),

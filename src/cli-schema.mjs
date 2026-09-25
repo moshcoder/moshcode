@@ -184,6 +184,34 @@ export const CORE_CLI_COMMANDS = [
       + "a `claude -p` through its pid.",
   },
   {
+    name: "handoff",
+    group: "runtime",
+    description: "move a conversation from one engine to another, with its history (PRD 0018)",
+    synopsis: [
+      ["moshcode handoff <from-engine> <to-engine> [--session <id>]", "read one engine's session, launch the other seeded with it"],
+    ],
+    flags: [
+      ["--session <id>", "which source session, by id or a unique prefix", "the newest for this directory"],
+      ["--cwd <dir>", "the directory whose session to read", "."],
+      ["--max <n>", "how many messages to carry, newest kept", "200"],
+      ["--dry-run", "do everything but launch: the transcript, the fleet record, the argv", ""],
+      ["--json", "machine-readable: the transcript path, the argv, the fleet edge", ""],
+    ],
+    examples: [
+      ["moshcode handoff claude codex", "continue in Codex what Claude Code was doing here"],
+      ["moshcode handoff codex omp --session 01a01818", "a particular session, by the start of its id"],
+      ["moshcode handoff opencode claude --dry-run", "see what would be carried, and where"],
+    ],
+    seeAlso: ["cost", "fleet", "agents", "start"],
+    note: "reads from claude, codex, opencode and privacycode, the four engines whose session logs hold the conversation and not just "
+      + "token counts. launches claude, codex, opencode, privacycode, qwen, gemini or omp, the engines that take a first prompt and stay "
+      + "interactive. anything else is refused by name with the reason. the conversation and a list of the files that changed travel; "
+      + "the edits do not, because the working tree is already the real state. a transcript that parses to nothing is a refusal, never "
+      + "an empty conversation. the rendered file is ~/.moshcode/handoffs/<id>.json in the format documented at "
+      + "docs/portable-transcript.md, and each handoff writes an OpenFleet record linking the new session to the old one so "
+      + "`moshcode fleet tree` shows the edge.",
+  },
+  {
     name: "ps",
     group: "runtime",
     description: "list herd sessions and what each one is doing",
@@ -1106,6 +1134,11 @@ export const MCP_VERBS = [
     acceptsServerSpec: true,
     synopsis: [["moshcode mcp add --name <n> <target>", ""]],
   },
+  {
+    name: "bridge",
+    description: "serve moshcode's verbs over MCP, on stdio",
+    synopsis: [["moshcode mcp bridge", "speaks MCP on stdin/stdout; register it with any engine"]],
+  },
   { name: "catalog", description: "show known MCP servers", synopsis: [["moshcode mcp catalog", ""]] },
   {
     name: "list",
@@ -1762,6 +1795,8 @@ export const PIT_COMMANDS = [
     description: "the fleet tree, and the sysop's verbs over it" },
   { name: "omarchy", args: "[verb] [args…]", cli: "omarchy",
     description: "the herd on the Omarchy bar: the snapshot, and the plugin around it" },
+  { name: "handoff", args: "<from> <to> [--session <id>]", cli: "handoff",
+    description: "move a conversation to another engine, with its history" },
   { name: "cost", aliases: ["usage"], args: "[name] [--all]", cli: "cost",
     description: "what the herd is spending, from the engines' own logs" },
   { name: "attach", args: "<name>", cli: "attach",

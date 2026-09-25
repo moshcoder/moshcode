@@ -1144,6 +1144,15 @@ export async function tui() {
       await swarmCommand(rest, { write: (l) => console.log(`  ${l}`) });
       continue;
     }
+    // A handoff (PRD 0018) ends by handing the terminal to the target engine,
+    // so readline has to let go of stdin first, exactly as /attach does.
+    if (cmd === "handoff") {
+      const { handoffCommand } = await import("./handoff.mjs");
+      rl.close();
+      await handoffCommand(rest, { write: (l) => console.log(`  ${l}`) });
+      rl = mkrl();
+      continue;
+    }
     if (cmd === "fleet") {
       const { fleetCommand } = await import("./fleet-cli.mjs");
       await fleetCommand(rest, { write: (l) => console.log(`  ${l}`) });
