@@ -35,6 +35,7 @@ const EXPECTED_AGENT_ARGS = {
   qwen: ["--approval-mode=yolo"],
   deepseek: ["--turbo"],
   mimocode: ["--dangerously-skip-permissions", "--trust"],
+  omp: ["--auto-approve"],
   openagents: [], // a launcher, not an agent: nothing of its own to auto-approve
   aider: ["--yes-always"],
 };
@@ -53,6 +54,7 @@ const EXPECTED_LAUNCH_ARGS = {
   qwen: ["--approval-mode=yolo"],
   deepseek: ["--turbo"],
   mimocode: ["--dangerously-skip-permissions", "--trust"], // no agents view — `mimo agent` prints and exits
+  omp: ["--auto-approve"], // no agents view — `omp agents` manages bundled agent files and exits
   openagents: [], // bare launch opens the dashboard, which is its agent list
   aider: ["--yes-always"],
 };
