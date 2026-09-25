@@ -53,6 +53,11 @@ export function completionModel() {
     ]),
     mcp: uniqueEntries(MCP_VERBS),
     mcpServerSpecs: uniqueEntries(MCP_VERBS.filter(({ acceptsServerSpec }) => acceptsServerSpec)),
+    // The verbs that take an already-registered server NAME rather than a whole
+    // spec. Their flag list below is the union of what the group accepts.
+    // Offering `--listen` after `mcp remove` is a wasted keystroke; offering
+    // nothing after `mcp test` is a wasted feature.
+    mcpServerVerbs: uniqueEntries(MCP_VERBS.filter(({ takesServerName }) => takesServerName)),
     skills: uniqueEntries(SKILL_VERBS),
     trade: uniqueEntries(TRADE_VERBS),
     tradeOrderOptions: uniqueEntries([
@@ -129,6 +134,7 @@ ${powershellEntries("MoshcodeCompletionUninstall", model.uninstall)}
 ${powershellEntries("MoshcodeCompletionUpgrade", model.upgrade)}
 ${powershellEntries("MoshcodeCompletionMcp", model.mcp)}
 ${powershellEntries("MoshcodeCompletionMcpServerSpecs", model.mcpServerSpecs)}
+${powershellEntries("MoshcodeCompletionMcpServerVerbs", model.mcpServerVerbs)}
 ${powershellEntries("MoshcodeCompletionSkills", model.skills)}
 ${powershellEntries("MoshcodeCompletionTrade", model.trade)}
 ${powershellEntries("MoshcodeCompletionTradeOrderOptions", model.tradeOrderOptions)}
@@ -143,7 +149,8 @@ ${powershellEntries("MoshcodeCompletionConsole", optionEntries("serve --url", "c
 ${powershellEntries("MoshcodeCompletionConsoleServe", optionEntries("--port --ttyd --bind", "console serve option"))}
 ${powershellEntries("MoshcodeCompletionTemplate", optionEntries("list install", "template command"))}
 ${powershellEntries("MoshcodeCompletionTemplateInstall", optionEntries("--into --force --dry-run", "template install option"))}
-${powershellEntries("MoshcodeCompletionMcpOptions", optionEntries("--name --transport -t --env -e --header -H", "MCP option"))}
+${powershellEntries("MoshcodeCompletionMcpOptions", optionEntries("--name --url --transport -t --token --engine-scope --engines --env -e --header -H", "MCP option"))}
+${powershellEntries("MoshcodeCompletionMcpNameOptions", optionEntries("--engine-scope --engines --json --listen --for --all", "MCP option"))}
 ${powershellEntries("MoshcodeCompletionSkillOptions", optionEntries("--name", "skill option"))}
 
 Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
@@ -196,6 +203,8 @@ Register-ArgumentCompleter -Native -CommandName moshcode -ScriptBlock {
           $choices = $script:MoshcodeCompletionJson
         } elseif ($script:MoshcodeCompletionMcpServerSpecs.Name -contains $nested -and $wordToComplete.StartsWith('-')) {
           $choices = $script:MoshcodeCompletionMcpOptions
+        } elseif ($script:MoshcodeCompletionMcpServerVerbs.Name -contains $nested -and $wordToComplete.StartsWith('-')) {
+          $choices = $script:MoshcodeCompletionMcpNameOptions
         }
       }
       { $_ -in @('skill', 'skills') } {
@@ -299,7 +308,9 @@ _moshcode_completion() {
         elif [[ "$nested" == "list" && "$cur" == -* ]]; then
           choices="--json"
         elif ${shellMatches("nested", model.mcpServerSpecs)} && [[ "$cur" == -* ]]; then
-          choices="--name --transport -t --env -e --header -H --"
+          choices="--name --url --transport -t --token --engine-scope --engines --env -e --header -H --"
+        elif ${shellMatches("nested", model.mcpServerVerbs)} && [[ "$cur" == -* ]]; then
+          choices="--engine-scope --engines --json --listen --for --all"
         fi
         ;;
       skill|skills)
@@ -434,10 +445,12 @@ _moshcode() {
         _values "mcp list option" --json
       elif ${shellMatches("{words[3]}", model.mcpServerSpecs)}; then
         if [[ "$PREFIX" == -* ]]; then
-          _values "mcp option" --name --transport -t --env -e --header -H --
+          _values "mcp option" --name --url --transport -t --token --engine-scope --engines --env -e --header -H --
         else
           _files
         fi
+      elif ${shellMatches("{words[3]}", model.mcpServerVerbs)} && [[ "$PREFIX" == -* ]]; then
+        _values "mcp option" --engine-scope --engines --json --listen --for --all
       fi
       ;;
     skill|skills)
@@ -579,6 +592,16 @@ complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l nam
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l transport -s t -r -d 'MCP transport'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l env -s e -r -d 'environment KEY=VALUE'
 complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l header -s H -r -d 'HTTP Name: Value header'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l url -r -d 'remote server URL'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l token -r -d 'bearer token, or env:VAR'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l engine-scope -r -d 'user or project'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerSpecs)}' -l engines -r -d 'only these engines'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerVerbs)}' -l engine-scope -r -d 'user or project'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerVerbs)}' -l engines -r -d 'only these engines'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerVerbs)}' -l json -d 'print JSON'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerVerbs)}' -l listen -d 'stream notifications'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerVerbs)}' -l for -r -d 'stop listening after N ms'
+complete -c moshcode -n '${nestedCondition("mcp", model.mcpServerVerbs)}' -l all -s a -d 'every configured server'
 complete -c moshcode -n '${nestedCondition("skill", model.skillSources)}; or ${nestedCondition("skills", model.skillSources)}' -l name -r -d 'installed skill name'
 `;
 }

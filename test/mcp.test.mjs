@@ -139,7 +139,17 @@ function run(args, { binDir, env = {} }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args], {
       stdio: ["ignore", "ignore", "ignore"],
-      env: { ...process.env, ...env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+      env: {
+        ...process.env,
+        // A successful fan-out records the server in moshcode's own list. Left
+        // to the default that is ~/.moshcode/mcp.json, the operator's real
+        // one, so the suite would file a fictional Sentry server on the box
+        // that ran it. Same reason the MOSHCODE_ENGINE_BIN_ guard at the top of
+        // this file exists.
+        MOSHCODE_MCP_FILE: path.join(tempDir("moshcode-mcp-registry-"), "mcp.json"),
+        ...env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+      },
     });
     child.on("error", reject);
     child.on("exit", (code) => resolve({ code }));
