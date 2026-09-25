@@ -1,4 +1,4 @@
-// Semantic state for herd sessions (PRD 0009 R6–R8).
+// Semantic state for herd sessions (PRD 0009 R6–R8, PRD 0019 R2).
 //
 // The roster's whole value is the state column. Everything else it shows —
 // name, engine, cwd — you already knew when you started the session; "which one
@@ -10,9 +10,26 @@
 // them is worse than one that says `unknown`. So a session with a live hook
 // report is read from the hook and the screen rules are not consulted at all.
 //
-// Screen rules are the fallback, and they are the part that rots — engines
-// change their prompts between releases and nothing tells us. Three things make
-// that survivable: rules ship next to each engine's install spec in
+// THE HEARTBEAT COMES FIRST. PRD 0019 R2. A run moshcode started writes a beat
+// under $OPENFLEET_HOME, and a beat that carries a state is that run saying
+// what it is doing. That is a fact. Everything below it in the order is the
+// herd working out what an engine probably meant by what it drew on a screen,
+// which is a guess, and the guess expires whenever a vendor ships a new
+// footer: Claude Code 2.1 overwrote the pane title and dropped "? for
+// shortcuts" and detection broke, which is the failure this ordering exists to
+// stop mattering.
+//
+// KNOWN VERSUS INFERRED, PERMANENTLY. Heartbeats exist only for runs moshcode
+// starts. An engine somebody launched by hand in a pane has nothing to report
+// with and has to be inferred from its screen forever, so the two tiers are
+// the shape of the world rather than a migration. Every answer therefore
+// carries `confidence`: `known` when a run, a hook or the runtime said so,
+// `inferred` when a regular expression decided. A roster that shows both the
+// same way is showing a confident lie roughly as often as it shows a fact.
+//
+// Screen rules stay, and they are the part that rots. Engines change their
+// prompts between releases and nothing tells us. Three things make that
+// survivable: rules ship next to each engine's install spec in
 // src/engines.mjs so they version together, `unknown` is always a safe answer
 // and never blocks anything, and a user can add or override a pattern in
 // ~/.moshcode/herd/rules.json without waiting for a release.
@@ -21,6 +38,7 @@ import path from "node:path";
 
 import { ENGINES } from "./engines.mjs";
 import { capture, herdDir, remoteStatus, sessionExited } from "./herd.mjs";
+import { liveBeats } from "./run-record.mjs";
 import { TOOLS } from "./tools.mjs";
 
 /** The vocabulary the roster, notifications, and `wait` all share. */
@@ -62,6 +80,50 @@ export const ALL_STATES = [...STATES, "gone"];
 
 /** How long a hook's report stays authoritative before the screen takes over. */
 export const HOOK_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Where an answer came from, and whether it is a fact (PRD 0019 R2).
+ *
+ * `runtime` is the process itself: exited or not, which nothing can argue
+ * with. `heartbeat` is the run moshcode started saying what it is doing.
+ * `hook` is the engine's own lifecycle event. Those three are reports, and
+ * all three expire, so a stale one becomes an absence rather than a claim.
+ *
+ * `screen` is a regular expression looking at a terminal and deciding. It is
+ * the only source that can be wrong while nothing has gone wrong, which is
+ * why it is the one this whole requirement exists to label.
+ *
+ * `remote` is `inferred` and the choice is deliberate. A remote's claim is a
+ * report, but it is that herd's report, worked out over there by a heartbeat
+ * or by a screen rule, and the protocol does not carry which. The cached
+ * status also never expires (see remoteStatus in herd.mjs), so the claim can
+ * be an hour old. Two things we cannot see add up to something we should not
+ * call a fact. When the remote protocol carries its own confidence, this can
+ * carry it through.
+ */
+export const AUTHORITY_CONFIDENCE = {
+  runtime: "known",
+  heartbeat: "known",
+  hook: "known",
+  remote: "inferred",
+  screen: "inferred",
+};
+
+/** The two tiers the roster shows. Nothing is ever a third thing. */
+export const CONFIDENCE = ["known", "inferred"];
+
+/**
+ * The tier for an authority. Anything unrecognised is `inferred`, because a
+ * source we cannot name is not one we get to call a fact.
+ */
+export function confidenceOf(authority) {
+  return AUTHORITY_CONFIDENCE[authority] === "known" ? "known" : "inferred";
+}
+
+/** An answer with its tier attached. Every return from sessionState goes through here. */
+const answer = (state, authority, extra = {}) => ({
+  state, authority, confidence: confidenceOf(authority), ...extra,
+});
 
 const statusDir = () => path.join(herdDir(), "status");
 const statusFile = (name) => path.join(statusDir(), `${name}.json`);
@@ -357,7 +419,16 @@ export function clearReport(name) {
  * first useful question is "was anything even reading the screen?", and a
  * roster that cannot answer it sends people to read this file instead.
  */
-export function sessionState(session, { now = Date.now(), userRules = loadUserRules(), read = capture, remote = remoteStatus } = {}) {
+export function sessionState(session, {
+  now = Date.now(),
+  userRules = loadUserRules(),
+  read = capture,
+  remote = remoteStatus,
+  // The beats for the whole box, computed once by withState and handed down.
+  // A lone sessionState call reads them itself, which costs one readdir per
+  // fleet and is only ever paid by a caller asking about one session.
+  beats = null,
+} = {}) {
   const name = typeof session === "string" ? session : session.name;
   const meta = typeof session === "string" ? {} : session;
 
@@ -366,37 +437,60 @@ export function sessionState(session, { now = Date.now(), userRules = loadUserRu
   // that answered five minutes ago for something this box just verified.
   if (meta.kind === "remote") {
     const claim = remote(name, { now });
-    return claim?.state
-      ? { state: claim.state, authority: "remote" }
-      : { state: "unknown", authority: "remote" };
+    return answer(claim?.state || "unknown", "remote");
   }
 
-  if (meta.alive === false) return { state: "gone", authority: "runtime" };
+  if (meta.alive === false) return answer("gone", "runtime");
 
   // A finished process is done, and no screen rule gets a vote on that. This is
-  // the one thing the runtime knows for certain.
+  // the one thing the runtime knows for certain, so it stays ahead of the
+  // heartbeat: a beat written two minutes before the process exited would
+  // otherwise report a dead run as working for the rest of its ttl.
   const exited = meta.exited ?? sessionExited(name);
-  if (exited === true) return { state: "done", authority: "runtime" };
-  if (exited === null && meta.alive === undefined) return { state: "gone", authority: "runtime" };
+  if (exited === true) return answer("done", "runtime");
+  if (exited === null && meta.alive === undefined) return answer("gone", "runtime");
+
+  // Tier 0: the run's own heartbeat (PRD 0019 R2). A beat that carries a state
+  // is the run saying what it is doing, which no screen rule gets to overrule.
+  // A beat with no state still proves the run is alive, and the answer falls
+  // through to the hook and then the screen for what it is doing, labelled
+  // `inferred` when it lands there, because liveness and activity are two
+  // different facts and only one of them was reported.
+  const beat = (beats || liveBeats({ now })).get?.(name) || null;
+  if (beat && STATES.includes(beat.state)) {
+    return beat.state === "blocked" && BLOCKED_KINDS.includes(beat.kind)
+      ? answer(beat.state, "heartbeat", { blockedOn: beat.kind, run: beat.run })
+      : answer(beat.state, "heartbeat", { run: beat.run });
+  }
 
   const hook = hookReport(name, { now });
-  if (hook) return hook.kind ? { state: hook.state, authority: "hook", blockedOn: hook.kind } : { state: hook.state, authority: "hook" };
+  if (hook) {
+    const extra = beat?.run ? { run: beat.run } : {};
+    return hook.kind
+      ? answer(hook.state, "hook", { ...extra, blockedOn: hook.kind })
+      : answer(hook.state, "hook", extra);
+  }
 
+  const withRun = beat?.run ? { run: beat.run } : {};
   const screen = read(name);
-  if (!screen) return { state: "unknown", authority: "screen" };
+  if (!screen) return answer("unknown", "screen", withRun);
   const state = classify(screen, rulesFor(meta.engine, { userRules }));
   // `blockedOn` is only ever added when there is one to add: this object is
   // spread over every roster row, so an always-present `blockedOn: undefined`
   // would be a new key on every row for the benefit of none. It is also not
   // called `kind` — that name already belongs to the row, where it says whether
   // the member is a local pty or a URL.
-  if (state !== "blocked") return { state, authority: "screen" };
+  if (state !== "blocked") return answer(state, "screen", withRun);
   const kind = blockedKind(screen);
-  return kind ? { state, authority: "screen", blockedOn: kind } : { state, authority: "screen" };
+  return answer(state, "screen", kind ? { ...withRun, blockedOn: kind } : withRun);
 }
 
 /** listSessions() output, each row carrying its state. */
 export function withState(sessions, options = {}) {
   const userRules = options.userRules ?? loadUserRules();
-  return sessions.map((s) => ({ ...s, ...sessionState(s, { ...options, userRules }) }));
+  // One scan of the fleet's beat files for the whole roster rather than one
+  // per row. A box with forty sessions used to cost forty screen captures and
+  // now costs those plus a single readdir.
+  const beats = options.beats ?? liveBeats({ now: options.now ?? Date.now() });
+  return sessions.map((s) => ({ ...s, ...sessionState(s, { ...options, userRules, beats }) }));
 }

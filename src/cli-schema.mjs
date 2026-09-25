@@ -1597,6 +1597,31 @@ export const FLEET_VERBS = [
       ["--json", "one JSON object per line, as the ledger holds them", ""],
     ],
     note: "who did what, in order: by is sysop or a member id; what each member spent, how each ended, what was refused and why." },
+  // PRD 0019 R2 and R3. Two verbs, additive to the spec's five: one an engine's
+  // hook calls on every turn, one a person runs when the record has grown.
+  { name: "beat", description: "record that a run is alive, and what it is doing (PRD 0019 R2)",
+    synopsis: [["moshcode fleet beat <run> [--state working|blocked|done|idle] [--session <name>] [--ttl 10m] [--json]", ""]],
+    flags: [
+      ["--state <state>", "what the run is doing. a beat with a state is reported as known rather than inferred", "liveness only"],
+      ["--kind <kind>", "for a blocked state: permission, question or menu", ""],
+      ["--fleet <id>", "the fleet the run belongs to", "$MOSHCODE_RUN_FLEET, else this process's fleet"],
+      ["--session <name>", "the herd session the run drives", "$MOSHCODE_HERD_NAME"],
+      ["--ttl <dur>", "how long the beat is worth believing, capped at 10m", "10m"],
+      ["--json", "the beat as written", ""],
+    ],
+    note: "the verb an engine's lifecycle hook calls. a run that beats is shown on the roster as known; a session with no run is inferred "
+      + "from its screen and prints a trailing ?. heartbeats exist only for runs moshcode started, so both tiers are permanent." },
+  { name: "gc", description: "prune ended runs, newest first per working directory (PRD 0019 retention)",
+    synopsis: [["moshcode fleet gc [fleet] [--keep 20] [--older-than 30d] [--dry-run] [--json]", ""]],
+    flags: [
+      ["--keep <n>", "ended runs to keep per working directory", "20"],
+      ["--older-than <dur>", "drop any ended run older than this, however few there are", "30d"],
+      ["--dry-run", "say what would go and remove nothing", ""],
+      ["--json", "the report: what was removed, why, and what was kept", ""],
+    ],
+    note: "an immutable run record grows without bound, so this is how it is allowed to be immutable. a run with no run.end is never a "
+      + "candidate at any age, only this host's ledger is rewritten, and only run.* lines are dropped: member.start, swarm.end and "
+      + "ceiling.refuse are the record of what agents were allowed to do and no retention policy removes those." },
 ];
 
 // The business layer's verbs. Flatter than the herd's on purpose: these are

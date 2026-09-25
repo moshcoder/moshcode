@@ -99,9 +99,15 @@ for leaving precedence undocumented.
   landing directory searched. Done in this change.
 - R2 [P0] Heartbeat liveness. A moshcode-started run records a heartbeat, and herd state
   is derived from it first. Output pattern matching stays as a fallback for engines that
-  cannot report, and is labelled as inference rather than fact.
+  cannot report, and is labelled as inference rather than fact. Done: `moshcode fleet
+  beat` writes it, the engine's lifecycle hook calls it, `sessionState` reads it ahead of
+  the hook and the screen, and every answer carries `confidence`, `known` or `inferred`.
+  The roster marks an inferred state with a trailing `?`.
 - R3 [P0] A run record is immutable and versioned: inputs, the engine and model, every
   step, and outputs. It extends the OpenFleet ledger rather than opening a second store.
+  Done: an immutable `wx` header under `fleets/<fleet>/runs/` carrying `record_version`,
+  and `run.start`, `run.step`, `run.end` on the fleet's existing ledger. See the resolved
+  storage question below. Retention ships with it as `moshcode fleet gc`.
 - R4 [P1] Run history is searchable from the CLI, the TUI and the MCP bridge, per the
   house agent-surfaces rule. Any dashboard is hqtui, not a localhost web page.
 - R5 [P1] Swarm pieces declare dependencies, and the runner derives concurrency from the
@@ -158,6 +164,14 @@ interactive session, so it lives with railway, gh and supabase instead.
   transitional.
 - An immutable run record grows without bound. It needs a retention story before it
   ships, not after. omp's `gc` with per-directory retention is the shape to copy.
+  ANSWERED 2026-09-25: `moshcode fleet gc` keeps the newest 20 ended runs per working
+  directory and drops anything ended more than 30 days ago, with `--dry-run` to preview.
+  Per directory rather than globally, so one busy checkout cannot evict every other one.
+  A run with no `run.end` is never a candidate at any age. Only this host's `ledger.jsonl`
+  is rewritten, never a `ledger.<host>.jsonl` copied in from a box running its own
+  retention. And only `run.*` lines are dropped: `member.start`, `swarm.end` and
+  `ceiling.refuse` are the spec's record of what agents were allowed to do, and no
+  retention policy of ours decides those have expired.
 - A DAG is more expressive than the current phase list, which means a planner can now
   author a cycle or a deadlock. The runner must reject a cyclic graph up front with the
   cycle named.
@@ -165,9 +179,48 @@ interactive session, so it lives with railway, gh and supabase instead.
   reading swamp's YAML schemas while implementing R5 or R11. Requirements here describe
   behaviour on purpose and name no swamp file. If an implementation needs their schema,
   that is the moment to stop and take legal advice instead.
-- Open question: does the run record belong in SQLite like swamp's, or in the JSON and
-  append-only files OpenFleet already uses? SQLite buys search cheaply. Files keep the
-  "no daemon, no database, one host" property PRD 0016 chose deliberately. Deciding this
-  is the first task, because R3 and R4 both depend on it.
+- RESOLVED 2026-09-25: the run record lives in the files OpenFleet already writes, not
+  in SQLite. Implemented in `src/run-record.mjs`.
+
+  Four reasons, in the order they decided it.
+
+  PRD 0016 chose "no daemon, no database, one host" on purpose and named it a goal, not
+  an accident of what was easy. A database is the one change that takes that property
+  away, and nothing in R3 or R4 needs it taken away. Reversing a deliberate design
+  decision wants a concrete reason and there was not one.
+
+  The record is append-only by nature. What a run produces is a start, a sequence of
+  steps and an end, written once each and never updated. That is the exact shape a JSONL
+  ledger is already good at and the shape a relational store is least rewarded for. The
+  ledger also already carries `member.start` and `swarm.end` for the same runs, so
+  putting the steps anywhere else would mean two stores to read and two clocks to merge
+  for one question.
+
+  Other tools read these files. `logicsrc fleet` reads the same ledger, and so does a
+  shell script, and so does a person with `cat` on a box where moshcode is not
+  installed. That reach survives only while the files stay plain. A SQLite file is
+  readable by anything with the library and by nothing without it.
+
+  The search R4 wants is small. The volume here is hundreds of runs on one host, not
+  millions, and a full scan of a JSONL ledger at that size is faster than the process
+  start that would open a database. If a box ever holds enough runs for that to stop
+  being true, an index derived from the files is an addition rather than a migration,
+  because the files would still be the source of truth.
+
+  What the decision costs, stated rather than hidden: no transactions, so a torn line is
+  skipped rather than rolled back, which is what `readLedger` already does; no query
+  language, so R4 writes its own filters; and a retention policy that has to rewrite a
+  file rather than issue a delete, which `moshcode fleet gc` does with a write and a
+  rename. None of those is a correctness problem at this size.
+
+  Three consequences of the shape, since they are what a reader of the code will meet:
+  a run's header is one immutable JSON file under `fleets/<fleet>/runs/`, written with
+  `wx` exactly the way a member's record is; its steps are `run.start`, `run.step` and
+  `run.end` lines on the fleet's existing `ledger.jsonl`, so `moshcode fleet log` reads
+  them with no second tool; and a heartbeat is deliberately NOT in the ledger, because
+  it is the one fact here that is worthless the moment it is superseded. A beat is a
+  small mutable file under `fleets/<fleet>/beats/` that is rewritten in place and deleted
+  when the run ends. Appending every beat would grow the ledger without bound to hold a
+  value only its last line ever answers.
 - Open question: `.agents/skills` is a convention, not a standard. Worth checking whether
   anything beyond swamp reads it before treating it as a destination.

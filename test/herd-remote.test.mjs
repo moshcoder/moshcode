@@ -130,7 +130,11 @@ test("a remote's state is reported as the remote's claim, never as ours", async 
   await withHerdDir(() => {
     addRemote("research", "https://example.com", { kind: "run" });
     const before = sessionState({ name: "research", kind: "remote" });
-    assert.deepEqual(before, { state: "unknown", authority: "remote" },
+    // `confidence: inferred` since PRD 0019 R2. A remote's claim is that
+    // herd's answer, worked out over there by a heartbeat or by a screen rule
+    // with nothing in the protocol saying which, and the cached status never
+    // expires. Two things this box cannot see do not add up to a fact.
+    assert.deepEqual(before, { state: "unknown", authority: "remote", confidence: "inferred" },
       "a remote nobody has asked yet is unknown, not idle");
   });
 });

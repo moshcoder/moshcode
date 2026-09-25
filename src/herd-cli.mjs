@@ -20,6 +20,8 @@ import {
   recordTransition, screenDelta, startTask, stats as taskStats,
 } from "./herd-tasks.mjs";
 import { ingestApproval, pollApproval } from "./notify.mjs";
+import * as fleetIO from "./openfleet.mjs";
+import { beat as recordBeat, openRun, runId } from "./run-record.mjs";
 import { acid, amber, ash, bone, danger, dim, err, info, ok, table, warn } from "./ui.mjs";
 
 /**
@@ -81,6 +83,23 @@ export function paintState(state) {
 }
 
 /**
+ * The state column, with the tier the answer came from (PRD 0019 R2).
+ *
+ * A trailing `?` means nobody reported this and a regular expression worked it
+ * out from what the engine drew. A bare word means a run, a hook or the
+ * process itself said so. One character, because the roster is read at a
+ * glance and a second column saying "inferred" forty times is not read at all.
+ *
+ * This is the whole two-tier display. It is permanent: a pane somebody started
+ * by hand has nothing to beat with and will carry the `?` forever, which is the
+ * true answer rather than a gap waiting to be closed.
+ */
+export function paintStateWithConfidence(state, confidence) {
+  const painted = paintState(state);
+  return confidence === "inferred" ? `${painted}${dim("?")}` : painted;
+}
+
+/**
  * The roster. Shared by `moshcode ps`, `/ps`, and the pit's own front door, so
  * they cannot drift into three different answers to the same question.
  */
@@ -115,7 +134,7 @@ function rosterTable(rows, indent) {
     rows.map((r) => [
       bone(r.name),
       ash(String(r.engine)),
-      paintState(r.state),
+      paintStateWithConfidence(r.state, r.confidence),
       // A remote member's cwd is the host it answers on, set when it was added:
       // "where is this thing" is the same question for both, and the answer is
       // a directory for one and a hostname for the other.
@@ -232,6 +251,49 @@ export function parseStartArgs(argv = []) {
   return { flags, rest, errors };
 }
 
+/**
+ * Open a run record for a session moshcode is about to start (PRD 0019 R2, R3).
+ *
+ * Two things come out of this and they are not the same thing. The record is
+ * the history: what was asked for, on which engine, in which directory, kept
+ * immutably so the run can be read back after the engine has changed its
+ * output format twice. The beat is the present tense: proof this run exists
+ * and moshcode started it, which is what lets the roster stop guessing.
+ *
+ * The first beat carries no state on purpose. moshcode knows the session is
+ * alive because it just started it; it does not know whether the engine is
+ * working or waiting, and claiming otherwise here would be the same confident
+ * lie as a stale screen rule. The state arrives on the engine's first hook,
+ * which beats as well as reports (see src/herd-hooks.mjs).
+ *
+ * `MOSHCODE_RUN` and `MOSHCODE_RUN_FLEET` are separate from the OPENFLEET_*
+ * set rather than folded into it, because OPENFLEET_FLEET in a pane's
+ * environment means "this member belongs to that fleet" to every other tool
+ * that reads it, and a plain `herd start` has not joined a fleet.
+ *
+ * Never throws and never fails a start. A box where $OPENFLEET_HOME is not
+ * writable gets the herd it had before heartbeats existed.
+ */
+function openSessionRun({ name, engine, bin, args, cwd, env = {}, agent = false, now = Date.now() }) {
+  try {
+    const fleet = env.OPENFLEET_FLEET || fleetIO.currentFleet() || fleetIO.implicitFleet();
+    const run = runId(name, { now });
+    const opened = openRun({
+      run, fleet, session: name, member: env.OPENFLEET_MEMBER || null, swarm: env.OPENFLEET_SWARM || null,
+      engine: `moshcode/${engine}`,
+      // Inputs are what a reader needs to know what was asked for. The argv is
+      // the whole of it for an interactive start: there is no prompt yet.
+      inputs: { bin, args, agent },
+      cwd, by: env.OPENFLEET_MEMBER || "sysop", started: fleetIO.iso(now),
+    }, { now });
+    if (!opened.ok) return null;
+    recordBeat(fleet, run, { session: name }, { now });
+    return { run, fleet };
+  } catch {
+    return null;
+  }
+}
+
 /** The fleet keys a member's env names, for the manifest entry. */
 function fleetMeta(env = {}) {
   const meta = {};
@@ -267,8 +329,15 @@ export function herdStart(argv, { write = console.log } = {}) {
   const bin = resolveExecutable(engine.bin, engine.binDirs || []) || engine.bin;
   const args = flags.agent ? agentLaunchArgs(engine, rest) : rest;
   const bypass = carriesBypass(engine, args, { agent: flags.agent });
+  // The run is opened before the session starts, for the same reason PRD 0016
+  // writes a member's record before its pane exists: a session that begins
+  // without a record is one nothing can ever say anything true about.
+  const opened = openSessionRun({
+    name, engine: key, bin, args, cwd: flags.cwd, env: flags.env, agent: flags.agent,
+  });
   const started = startSession({
-    name, engine: key, bin, args, stripEnv: engine.stripEnv || [], cwd: flags.cwd, substrate, extraEnv: flags.env,
+    name, engine: key, bin, args, stripEnv: engine.stripEnv || [], cwd: flags.cwd, substrate,
+    extraEnv: opened ? { ...flags.env, MOSHCODE_RUN: opened.run, MOSHCODE_RUN_FLEET: opened.fleet } : flags.env,
   });
 
   if (!started.ok) {
@@ -278,6 +347,10 @@ export function herdStart(argv, { write = console.log } = {}) {
   const fleet = fleetMeta(flags.env);
   rememberSession(name, {
     agent: bypass, approvals: bypass ? "bypass" : "native", herd: flags.herd, ...fleet,
+    // The run this session records into (PRD 0019 R3). Kept on the manifest so
+    // a reader that has the roster can find the record without scanning every
+    // fleet for a beat that may already have expired.
+    ...(opened ? { run: opened.run, runFleet: opened.fleet } : {}),
     // Kept so `herd restore` can hand the same variables back to the session
     // it rebuilds. Paths and ids, never a credential: the manifest is 0600
     // regardless, because args already carry worse.
@@ -285,7 +358,7 @@ export function herdStart(argv, { write = console.log } = {}) {
   });
 
   if (flags.json) {
-    write(JSON.stringify({ name, engine: key, herd: flags.herd, cwd: flags.cwd, substrate, agent: bypass, approvals: bypass ? "bypass" : "native", ...fleet }, null, 2));
+    write(JSON.stringify({ name, engine: key, herd: flags.herd, cwd: flags.cwd, substrate, agent: bypass, approvals: bypass ? "bypass" : "native", ...fleet, ...(opened ? { run: opened.run } : {}) }, null, 2));
     return EXIT.matched;
   }
   write(ok(`${bone(name)} — ${key} running in the herd. the prompt is yours.`));
@@ -399,8 +472,13 @@ export function splitDetachArgs(args = []) {
 export function herdPs(argv, { write = console.log } = {}) {
   const rows = roster();
   if (argv.includes("--json")) {
-    write(JSON.stringify(rows.map(({ name, engine, herd, fleet, swarm, member, approvals, state, authority, blockedOn, kind, url, cwd, age, alive, attached, substrate }) => ({
-      name, engine, herd, state, authority, kind, ...(url ? { url } : {}),
+    write(JSON.stringify(rows.map(({ name, engine, herd, fleet, swarm, member, approvals, state, authority, confidence, run, blockedOn, kind, url, cwd, age, alive, attached, substrate }) => ({
+      // `confidence` is the two-tier answer (PRD 0019 R2): `known` when the run,
+      // a hook or the process reported it, `inferred` when a screen rule
+      // decided. A consumer that acts on state has to be able to tell those
+      // apart, and until now nothing could. `run` is the run record the beat
+      // came from, so a caller can go and read what it actually did.
+      name, engine, herd, state, authority, confidence: confidence || "inferred", ...(run ? { run } : {}), kind, ...(url ? { url } : {}),
       // The blocked sub-kind (R4) rides here and not in the roster's own
       // column: `--ask` needs to know whether a menu or a sentence is wanted,
       // and a person glancing at six rows does not.
@@ -895,8 +973,41 @@ export function herdReport(argv, { write = console.log } = {}) {
   }
   const result = reportState(name, state, ttl ? { ttl } : {});
   if (!result.ok) { write(err(String(result.error?.message || result.error))); return EXIT.usage; }
+  // The same report beats for the run, when there is one (PRD 0019 R2).
+  //
+  // Deliberately not a second channel. This verb is already the one socket any
+  // process with $MOSHCODE_HERD_NAME can call, it is already TTL-bounded, and
+  // it is already what the engine hooks are wired to. What the run record
+  // needed was for the report to also land somewhere a sysop tool can read
+  // months later, and adding a second command for an engine to call would have
+  // meant two things to install and two ways for one of them to be missing.
+  //
+  // $MOSHCODE_RUN is set only for sessions moshcode started and opened a run
+  // for, so an engine somebody launched by hand writes the herd report and no
+  // beat, which is the permanent two-tier split rather than a gap.
+  beatForRun(name, result, { ttl });
   write(ok(`${name} → ${state} (authoritative)`));
   return EXIT.matched;
+}
+
+/**
+ * Write the run's beat beside a herd report. Best effort, always.
+ *
+ * A failed beat must never fail the report: the report is what the roster
+ * reads right now, the beat is what the record reads later, and losing the
+ * second one costs a line of history rather than a wrong answer on screen.
+ */
+function beatForRun(name, reported, { ttl, env = process.env, now = Date.now() } = {}) {
+  const run = env.MOSHCODE_RUN;
+  if (!run) return null;
+  try {
+    const fleet = env.MOSHCODE_RUN_FLEET || env.OPENFLEET_FLEET
+      || fleetIO.currentFleet(env) || fleetIO.implicitFleet(env);
+    return recordBeat(fleet, run, {
+      session: name, state: reported.state, kind: reported.kind,
+      member: env.OPENFLEET_MEMBER, ttl,
+    }, { env, now });
+  } catch { return null; }
 }
 
 export function herdStatus(argv, { write = console.log } = {}) {

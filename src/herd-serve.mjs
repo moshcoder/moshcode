@@ -140,7 +140,11 @@ export function sessionCard(session, { base }) {
     metadata: {
       "sh.moshcode.herd": {
         session: session.name, engine: session.engine, state: session.state,
-        authority: session.authority, cwd: session.cwd,
+        // A remote agent reading this card is the caller least able to check
+        // the claim for itself, so the tier travels with the state (PRD 0019
+        // R2). `inferred` means a screen rule guessed it.
+        authority: session.authority, confidence: session.confidence || "inferred",
+        cwd: session.cwd,
       },
     },
   };

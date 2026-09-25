@@ -48,6 +48,12 @@ export function hookableEngines() {
  *   `>/dev/null 2>&1` — a status report has nothing to say to the operator; its
  *      whole output belongs in the roster, not in the middle of a session.
  *   `; exit 0` — whatever happened above, the engine carries on.
+ *
+ * Since PRD 0019 R2 this one call does two things, and it is one call on
+ * purpose: `herd report` writes the herd's tier-1 state AND beats for the run
+ * when $MOSHCODE_RUN names one. Adding a second command here would have meant
+ * two things to install in somebody else's settings file and two ways for one
+ * of them to go missing.
  */
 export function hookCommand(state) {
   return `[ -n "$MOSHCODE_HERD_NAME" ] && command -v moshcode >/dev/null 2>&1 `
