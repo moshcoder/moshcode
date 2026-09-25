@@ -32,7 +32,10 @@ const ESC = {
   // 1000 = report button press/release, 1006 = SGR encoding, which is the only
   // one that survives past column 95 — the older scheme packs coordinates into
   // single bytes and simply cannot express a click on a wide terminal.
-  mouseOn: "\x1b[?1000h\x1b[?1006h", mouseOff: "\x1b[?1006l\x1b[?1000l",
+  // 1003 as well, so the pointer's position is reported while no button is
+  // held. Without it there is no hover, and with no hover a click has to be
+  // spent moving the highlight before a second one can open anything.
+  mouseOn: "\x1b[?1000h\x1b[?1003h\x1b[?1006h", mouseOff: "\x1b[?1006l\x1b[?1003l\x1b[?1000l",
   clear: "\x1b[2J\x1b[H",
 };
 
@@ -125,7 +128,7 @@ export function render(rows, { selected = 0, width = 80, substrate = "tmux" } = 
   // ever go in. The old single crammed line never mentioned it at all, so
   // clicking into a session was a one-way door as far as the screen was
   // concerned.
-  out.push(`  ${ash("move")}  ${dim("click · ↑↓ · wheel")}     ${ash("open")}  ${dim("enter or double-click")}`);
+  out.push(`  ${ash("move")}  ${dim("hover · ↑↓ · wheel")}     ${ash("open")}  ${dim("one click, or enter")}`);
   out.push(`  ${ash("back")}  ${dim("Ctrl-b d from inside")}   ${ash("also")}  ${dim("t tile all · r refresh · q quit")}`);
   if (substrate !== "tmux") out.push(`  ${dim(substrateNote(substrate) || "")}`);
   return out.join("\r\n");
@@ -151,12 +154,29 @@ export function parseMouse(sequence) {
   const b = Number(button);
   if (b === 64) return { kind: "wheel", direction: -1 };
   if (b === 65) return { kind: "wheel", direction: 1 };
+  // Bit 5 (32) means "this is motion, not a press". Only a program that asked
+  // for 1002 or 1003 ever sees these, so decoding them here costs the list
+  // nothing and is the whole of what a hover highlight needs: the sidebar turns
+  // motion reporting on and lights the row the pointer is over.
+  if (b & 32) return { kind: "move", col: Number(col), row: Number(row) };
   if (b !== 0) return null;
   return { kind: "click", col: Number(col), row: Number(row) };
 }
 
-/** Every mouse report in a chunk, so a fast click-drag cannot desync the parser. */
-export function parseInput(buffer) {
+/** The keys the list reads. A surface with different shortcuts passes its own. */
+export const LIST_KEYS = ["\x1b[A", "\x1b[B", "\r", "\n", "q", "\x03", "r", "t", "j", "k"];
+
+/**
+ * Every mouse report in a chunk, so a fast click-drag cannot desync the parser.
+ *
+ * `keys` is a parameter rather than the constant it used to be because the
+ * sidebar advertises shortcuts the list has never had (`s`, `a`, `x`), and a
+ * shared hard-coded list meant those rows printed a key that did nothing: the
+ * sidebar's own handler was reached for a letter this function never emitted.
+ * Passing the set in keeps one parser without giving one surface the other's
+ * bindings.
+ */
+export function parseInput(buffer, { keys = LIST_KEYS } = {}) {
   const events = [];
   const text = String(buffer);
   const mouse = /\x1b\[<\d+;\d+;\d+[Mm]/g;
@@ -166,7 +186,7 @@ export function parseInput(buffer) {
     if (parsed) events.push(parsed);
   }
   if (events.length) return events;
-  for (const key of ["\x1b[A", "\x1b[B", "\r", "\n", "q", "\x03", "r", "t", "j", "k"]) {
+  for (const key of keys) {
     if (text.includes(key)) events.push({ kind: "key", key });
   }
   return events;
@@ -285,18 +305,28 @@ export async function herdUi({
           continue;
         }
         else if (event.kind === "wheel") selected = moveSelection(rows, selected, event.direction);
+        else if (event.kind === "move") {
+          // Hover. This is what pointing at a row to read it looks like, and it
+          // is the reason a click no longer has to be spent on selecting: the
+          // highlight follows the pointer for free.
+          const over = rows.find((r) => r.kind === "session" && r.line === event.row);
+          if (!over) continue;
+          const index = rows.indexOf(over);
+          if (index === selected) continue;
+          selected = index;
+          draw();
+          continue;
+        }
         else if (event.kind === "click") {
           const hit = rows.find((r) => r.kind === "session" && r.line === event.row);
           if (!hit) continue;
-          const index = rows.indexOf(hit);
-          // A single click SELECTS; only a second click on the row already
-          // selected opens it. Opening on first click made one stray click a
-          // one-way trip into a session, which is most of why this felt bad to
-          // navigate — you could not point at a row to read it.
-          const opening = index === selected;
-          selected = index;
+          // ONE click opens it. This used to select on the first click and open
+          // on a second click of the same row, which is the double-click
+          // affordance Anthony rejected outright in diskpush 0.7.0. Hover above
+          // does the browsing that argument was really about.
+          selected = rows.indexOf(hit);
           draw();
-          if (opening) await openSelected();
+          await openSelected();
           continue;
         }
         else if (event.kind === "key") { await openSelected(); continue; }

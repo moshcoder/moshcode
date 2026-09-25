@@ -600,8 +600,14 @@ export function paneIndex({ runner = spawnSync } = {}) {
   for (const line of r.stdout.split("\n")) {
     if (!line.trim()) continue;
     const [title, paneId, session, windowId, dead] = line.split("\t");
-    if (!title) continue;
-    index.set(title, { paneId, session, windowId, dead: dead.trim() === "1" });
+    if (!title || !paneId) continue;
+    // `dead` is read defensively rather than as `dead.trim()`, and the reason is
+    // worth the line: every caller of this runs it inside an async handler with
+    // no try/catch, so one short line out of tmux does not print a warning, it
+    // throws a TypeError that becomes an unhandled promise rejection and takes
+    // the whole process down. A format string that loses a field is a cosmetic
+    // problem; it must never be a fatal one.
+    index.set(title, { paneId, session, windowId, dead: String(dead ?? "").trim() === "1" });
   }
   return index;
 }

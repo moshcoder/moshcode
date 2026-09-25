@@ -24,6 +24,17 @@ export const danger = rgb(255, 77, 61);
 export const amber = rgb(255, 213, 61);
 export const spotify = rgb(29, 185, 84);
 export const dim = wrap(2, 22);
+// The row under the pointer. Reverse video rather than another hue, because a
+// hover has to read as "this one" against a list where colour already means
+// something else (a member's state).
+//
+// Not gated on useColor, unlike everything above it, and the reason is the
+// point of the attribute: reverse video is not a colour, it is the only channel
+// a full-screen pane has for saying where the pointer is. Honouring NO_COLOR
+// here would not make the output plainer, it would delete the feedback. The
+// only caller is a program that is already writing cursor and mouse escapes to
+// a real terminal, so there is no pipe for this to leak into.
+export const reverse = (s) => `\x1b[7m${s}\x1b[27m`;
 
 export const ok = (s) => acid("✓ ") + s;
 export const err = (s) => danger("✗ ") + s;

@@ -39,7 +39,7 @@ import { CORE_CLI_COMMAND_NAMES } from "./cli-schema.mjs";
 import { RENAMED_COMMANDS, findPitCommand, pitHelpModel, renderPitCommand, suggest, wantsHelp } from "./help.mjs";
 import { openNewTab } from "./tabs.mjs";
 import { MAX_EXPANSIONS, expandAlias, getAlias, loadAliases, mergeAliases, removeAlias, setAlias } from "./aliases.mjs";
-import { herdCommand, herdStart, renderRoster, roster, splitDetachArgs } from "./herd-cli.mjs";
+import { herdCommand, herdStart, renderRoster, roster, splitDetachArgs, takesTerminal } from "./herd-cli.mjs";
 import { detectSubstrate, substrateNote } from "./herd.mjs";
 
 const PROMPT = () => acid("mosh ") + dim("▸ ");
@@ -1134,10 +1134,21 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
-    // The herd (PRD 0009). These never close the readline interface, because
-    // that is the entire point of them: the pit keeps its prompt while the
-    // sessions run somewhere that outlives it.
-    if (cmd === "herd") { await herdCommand(rest); continue; }
+    // The herd (PRD 0009). Most of these never close the readline interface,
+    // because that is the entire point of them: the pit keeps its prompt while
+    // the sessions run somewhere that outlives it.
+    //
+    // The exceptions are the verbs that paint the whole screen, and bare
+    // `/herd`, which is now one of them. Those hand the terminal to tmux, so
+    // readline has to let go of stdin first or the two fight over every
+    // keystroke, exactly as with `/attach` below.
+    if (cmd === "herd") {
+      if (!takesTerminal(rest)) { await herdCommand(rest); continue; }
+      rl.close();
+      await herdCommand(rest);
+      rl = mkrl();
+      continue;
+    }
     if (cmd === "ps") { await herdCommand(["ps", ...rest]); continue; }
     if (cmd === "swarm") {
       const { swarmCommand } = await import("./swarm.mjs");
