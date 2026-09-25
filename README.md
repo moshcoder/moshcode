@@ -94,6 +94,7 @@ moshcode install kimi       # curl -fsSL https://code.kimi.com/kimi-code/install
 moshcode install qwen       # npm i -g @qwen-code/qwen-code
 moshcode install deepseek   # npm i -g @serjm/deepseek-code
 moshcode install mimocode   # curl -fsSL https://mimo.xiaomi.com/install | bash   (binary: mimo)
+moshcode install omp        # curl -fsSL https://omp.sh/install | sh
 moshcode install openagents # curl -fsSL https://openagents.org/install.sh | bash
 ```
 
@@ -118,6 +119,7 @@ moshcode agents kimi        # kimi --yolo                                       
 moshcode agents qwen        # qwen --approval-mode=yolo                         (autonomous)
 moshcode agents deepseek    # deepseek-code --turbo                             (autonomous)
 moshcode agents mimocode    # mimo --dangerously-skip-permissions --trust       (autonomous)
+moshcode agents omp         # omp --auto-approve                                (autonomous)
 moshcode agents aider       # aider --yes-always                                (autonomous)
 moshcode agents openagents  # openagents                                        (dashboard)
 ```
@@ -461,8 +463,8 @@ of the traffic and a tenth of the price; folding them into `in` makes a $3
 session look like a $60 one. Attribution is engine + directory + "started before
 this run did", so a session that shares a directory with another agent can pick
 up its neighbour's work — `--json` carries the run list when you need to check.
-gemini, kimi, qwen, deepseek, mimocode and openagents keep no readable usage
-log, so they report no cost rather than zero cost.
+gemini, kimi, qwen, deepseek, mimocode, omp and openagents keep no readable
+usage log, so they report no cost rather than zero cost.
 
 ### Driving it from a script or another agent
 

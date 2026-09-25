@@ -314,6 +314,29 @@ export const ENGINES = {
       ],
     },
   },
+  omp: {
+    desc: "omp — Stencil Labs' coding agent with LSP, DAP and subagents (omp.sh)",
+    bin: "omp",
+    // `--auto-approve` skips every tool approval prompt; the agent can still
+    // ask a question, the same shape as kimi's --yolo. `--approval-mode=yolo`
+    // reaches the same place through a settings override, so this stays on the
+    // flag that says what it does.
+    agentArgs: ["--auto-approve"],
+    // No agentsView: `omp agents` manages the bundled task-agent definitions
+    // (`omp agents unpack`) — it prints and exits, not a live view to land on.
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://omp.sh/install | sh"] },
+    // Its own updater, which handles both install shapes below and the
+    // stable/canary channel.
+    upgrade: { cmd: "omp", args: ["update"] },
+    // The installer runs `bun install -g` when a native-arch bun is present,
+    // landing in ~/.bun/bin, and otherwise downloads a prebuilt binary to
+    // ~/.local/bin (PI_INSTALL_DIR). It edits no shell rc and neither directory
+    // is guaranteed to be on PATH, so search both.
+    binDirs: [path.join(homedir(), ".bun", "bin"), path.join(homedir(), ".local", "bin")],
+    resume: ["--continue"],
+    // No `state`: the TUI's approval and question wording is not verified
+    // here, and a guessed pattern is worse than the shared ones.
+  },
   openagents: {
     desc: "OpenAgents — multi-agent launcher + dashboard (openagents.org)",
     // The package installs three identical bins — `agn`, `openagents`, and
@@ -416,6 +439,8 @@ export const ENGINE_ALIASES = {
   // Same idea for openagents: `agn` and `agent-connector` are the other two
   // binary names its package installs, and the domain is how it's advertised.
   oa: "openagents", agn: "openagents", "agent-connector": "openagents", "openagents.org": "openagents",
+  // omp is oh-my-pi upstream (can1357/oh-my-pi); the domain is how it's advertised.
+  "oh-my-pi": "omp", ohmypi: "omp", "omp.sh": "omp",
 };
 
 /** Resolve a name/alias to `[key, engine]`, or null. */
@@ -533,6 +558,7 @@ const AI_EXEC = {
   qwen: (p) => ["-p", p],                                    // qwen prompt mode (gemini-derived)
   deepseek: (p) => ["--headless", "-p", p],                  // deepseek: -p runs one prompt and exits; --headless drops the TUI so stdout is pipe-clean
   mimocode: (p) => ["run", p],                               // mimocode one-shot (opencode-derived: `mimo run <message>`)
+  omp: (p) => ["-p", p],                                     // omp print mode: process the prompt and exit
   // openagents is absent on purpose: it answers no prompts itself, it starts
   // the engines that do. ai() throws a named error rather than picking it.
 };
@@ -556,7 +582,7 @@ export function aiExecArgs(engine, prompt) {
  */
 export function pickAiEngine(preferred) {
   const wanted = preferred ? resolveEngine(preferred)?.[0] : null;
-  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "mimocode", "aider"];
+  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "mimocode", "omp", "aider"];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin, ENGINES[key].binDirs)) return key;
   }

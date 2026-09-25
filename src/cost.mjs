@@ -740,7 +740,7 @@ export const COST_READERS = {
 };
 
 /** Engines moshcode can launch but cannot cost — named so the report can say so. */
-export const UNCOSTED_ENGINES = ["gemini", "kimi", "deepseek", "mimocode", "openagents"];
+export const UNCOSTED_ENGINES = ["gemini", "kimi", "deepseek", "mimocode", "omp", "openagents"];
 
 /**
  * Finish a run: price it, and record where the price came from.
