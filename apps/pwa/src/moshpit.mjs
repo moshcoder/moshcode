@@ -609,11 +609,14 @@ export async function setTldPrice({ tld: tldInput, userId, priceUsd }) {
  *
  * `tld` breaks the tie for the same reason it does in listTldsForUser: a bulk
  * claim shares one timestamp, and paging through a partial order loses rows.
+ *
+ * `IS DISTINCT FROM` rather than SQLite's `IS NOT ?`: Postgres only has IS NOT
+ * NULL/TRUE/FALSE, and SQLite (3.39+, which libSQL ships) accepts both forms.
  */
 export async function listTldsNotOwnedBy(userId, { forSale = false, limit = 200, offset = 0 } = {}) {
   const sql = `SELECT tld, user_id, owner_email, alias_of, price_usd, created_at
                FROM moshpit_tlds
-               WHERE user_id IS NOT ?${forSale ? " AND price_usd IS NOT NULL" : ""}
+               WHERE user_id IS DISTINCT FROM ?${forSale ? " AND price_usd IS NOT NULL" : ""}
                ORDER BY price_usd IS NULL, created_at DESC, tld LIMIT ? OFFSET ?`;
   return all(sql, [userId ?? "", limit, offset]);
 }
@@ -622,7 +625,7 @@ export async function listTldsNotOwnedBy(userId, { forSale = false, limit = 200,
 export async function countTldsNotOwnedBy(userId, { forSale = false } = {}) {
   const row = await get(
     `SELECT COUNT(*) AS n FROM moshpit_tlds
-     WHERE user_id IS NOT ?${forSale ? " AND price_usd IS NOT NULL" : ""}`,
+     WHERE user_id IS DISTINCT FROM ?${forSale ? " AND price_usd IS NOT NULL" : ""}`,
     [userId ?? ""],
   );
   return Number(row?.n ?? 0);
@@ -637,7 +640,7 @@ export async function countTldsNotOwnedBy(userId, { forSale = false } = {}) {
  */
 const searchScope = (scope, userId) =>
   scope === "mine" ? { where: " AND user_id = ?", args: [userId ?? ""] }
-  : scope === "theirs" ? { where: " AND user_id IS NOT ?", args: [userId ?? ""] }
+  : scope === "theirs" ? { where: " AND user_id IS DISTINCT FROM ?", args: [userId ?? ""] }
   : { where: "", args: [] };
 
 /**

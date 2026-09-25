@@ -11,7 +11,7 @@
 //   GET  /sessions/:id/stream               human: SSE (scrollback, then live)
 //   POST /sessions/:id/commands             human: queue a command, or one key
 import { Router } from "express";
-import { get, all, run } from "../db.mjs";
+import { db, get, all, run, isPostgres } from "../db.mjs";
 import { id } from "../lib/crypto.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
@@ -179,6 +179,37 @@ sessionsRouter.post("/api/sessions", cliAuth, async (req, res) => {
   res.json({ id: row.id, url: `/sessions/${row.id}` });
 });
 
+const APPEND_OUTPUT = `INSERT INTO session_output (session_id,seq,chunk,created_at)
+   SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? FROM session_output WHERE session_id = ?
+   RETURNING seq`;
+
+/**
+ * Append one chunk with the next seq for its session, and return that seq.
+ *
+ * On SQLite the single INSERT ... SELECT MAX(seq)+1 is atomic: one writer at a
+ * time. Postgres runs READ COMMITTED with a connection per request, so two
+ * chunks in flight both read the same MAX(seq) and both write it — seen as
+ * [1,1,2,3,3] for a burst of five. There the row of the owning session is
+ * locked first (FOR UPDATE), which serialises appends per session and nothing
+ * else; the unique index on (session_id, seq) is the backstop.
+ */
+async function appendOutput(sessionId, part, now) {
+  const args = [sessionId, part, now, sessionId];
+  if (!isPostgres) return (await run(APPEND_OUTPUT, args)).rows[0];
+  const tx = await db.transaction("write");
+  try {
+    await tx.execute({ sql: `SELECT id FROM cli_sessions WHERE id = ? FOR UPDATE`, args: [sessionId] });
+    const r = await tx.execute({ sql: APPEND_OUTPUT, args });
+    await tx.commit();
+    return r.rows[0];
+  } catch (error) {
+    await tx.rollback().catch(() => {});
+    throw error;
+  } finally {
+    tx.close();
+  }
+}
+
 sessionsRouter.post("/api/sessions/:id/output", cliAuth, async (req, res) => {
   const session = await ownedSession(req.params.id, req.apiUser.id);
   if (!session) return res.status(404).json({ error: "no such session" });
@@ -216,12 +247,7 @@ sessionsRouter.post("/api/sessions/:id/output", cliAuth, async (req, res) => {
     // then write the same seq — and a browser resuming from `?since=<that seq>`
     // asks for `seq > since`, so the chunk it had not received yet is skipped
     // for good.
-    const inserted = await get(
-      `INSERT INTO session_output (session_id,seq,chunk,created_at)
-       SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? FROM session_output WHERE session_id = ?
-       RETURNING seq`,
-      [session.id, part, now, session.id]
-    );
+    const inserted = await appendOutput(session.id, part, now);
     const seq = Number(inserted.seq);
     await run(
       `DELETE FROM session_output WHERE session_id = ? AND seq <= ?`,
