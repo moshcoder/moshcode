@@ -1788,8 +1788,46 @@ const VERBS = {
   remote: herdRemote, serve: herdServe, eval: herdEval,
 };
 
+/**
+ * Can a full-screen UI safely take this terminal?
+ *
+ * Three questions, and all three have to be yes. `--json` and a named verb are
+ * handled by the caller; this is only about the surface the answer goes to.
+ *
+ * `write` is the interesting one. herdCommand takes an injected writer, and
+ * everything that injects one is a place where output is CAPTURED rather than
+ * shown: the mosh bar renders herd output into a one-row pane, tests collect it
+ * into an array, and a caller collecting lines cannot be handed a program that
+ * paints the whole screen and waits for a click. So a writer that is not the
+ * default is treated exactly like a pipe.
+ */
+export function canOpenUi({ write = console.log, stdout = process.stdout } = {}) {
+  return write === console.log && Boolean(stdout.isTTY) && Boolean(process.stdin.isTTY);
+}
+
+/** The verbs that hand this terminal to something full screen. */
+export const TERMINAL_VERBS = new Set(["ui", "sidebar", "bar", "tile", "attach"]);
+
+/**
+ * Does this argv take the terminal? The pit asks before dispatching, because a
+ * readline interface still holding stdin fights tmux for every keystroke, the
+ * same reason `/attach` and `/ssh shell` close it first. Bare `herd` is on this
+ * list exactly when it would open the workspace, which is the same question
+ * canOpenUi answers.
+ */
+export function takesTerminal(argv = [], options = {}) {
+  const [verb] = argv;
+  if (!verb) return canOpenUi(options);
+  return TERMINAL_VERBS.has(verb);
+}
+
 export async function herdCommand(argv = [], { write = console.log } = {}) {
   const [verb, ...rest] = argv;
+  // Bare `moshcode herd` opens the workspace. Someone typing the noun with no
+  // verb wants to SEE the herd, and the roster is the answer to that question
+  // only for something that cannot show them a herd: a pipe, a CI log, the
+  // bar. `moshcode ps` is still the roster, and still one word.
+  if (!verb && canOpenUi({ write })) return VERBS.ui([], { write });
   if (!verb || verb === "--json") return herdPs(argv, { write });
   const run = VERBS[verb];
   if (!run) {
