@@ -26,9 +26,20 @@
 // attribution is inspectable rather than implied.
 import fs from "node:fs";
 import path from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 
 import { EMPTY_USAGE, addUsage, priceUsage, loadUserPricing } from "./cost-pricing.mjs";
+import {
+  OPENCODE_DBS, claudeProjectSlugs, claudeProjectsDir, claudeTranscripts, codexSessionsDir,
+  headLines, listDir, openReadonly, parseJson, safeStat, samePath, stamp, tailLines,
+} from "./transcript.mjs";
+
+// The readers below say what a session cost. Where that session lives on disk,
+// and how to get a line out of it, is src/transcript.mjs: one module per
+// question, because `moshcode handoff` asks the same question of the same files
+// (PRD 0018 R1) and two copies of "where does Codex keep a rollout" would drift
+// the first time one of them moved.
+export { claudeProjectSlugs };
 
 /** Default reporting window: today's work, not the whole history on disk. */
 export const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -52,74 +63,6 @@ export const BURN_WINDOWS = [
 const home = () => homedir();
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// ---------------------------------------------------------------------------
-// File plumbing
-// ---------------------------------------------------------------------------
-
-function safeStat(file) {
-  try { return fs.statSync(file); } catch { return null; }
-}
-
-function listDir(dir) {
-  try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
-}
-
-/**
- * The last `bytes` of a file as whole lines.
- *
- * Codex writes one cumulative `token_count` event per turn, so the answer is
- * always near the end of a rollout that can be tens of megabytes. Reading the
- * tail keeps a cost report cheap enough to put in front of `moshcode ps`.
- */
-function tailLines(file, bytes = 256 * 1024) {
-  const stat = safeStat(file);
-  if (!stat) return [];
-  const start = Math.max(0, stat.size - bytes);
-  let fd;
-  try {
-    fd = fs.openSync(file, "r");
-    const buf = Buffer.alloc(Math.min(bytes, stat.size));
-    fs.readSync(fd, buf, 0, buf.length, start);
-    const text = buf.toString("utf8");
-    // A read that began mid-file almost certainly began mid-line; that first
-    // fragment is not parseable JSON and must not be handed on as if it were.
-    return (start > 0 ? text.slice(text.indexOf("\n") + 1) : text).split("\n");
-  } catch {
-    return [];
-  } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already gone */ } }
-  }
-}
-
-/** The first `bytes` of a file as whole lines (the trailing fragment dropped). */
-function headLines(file, bytes = 512 * 1024) {
-  const stat = safeStat(file);
-  if (!stat) return [];
-  let fd;
-  try {
-    fd = fs.openSync(file, "r");
-    const buf = Buffer.alloc(Math.min(bytes, stat.size));
-    fs.readSync(fd, buf, 0, buf.length, 0);
-    const text = buf.toString("utf8");
-    const lines = text.split("\n");
-    if (stat.size > buf.length) lines.pop();
-    return lines;
-  } catch {
-    return [];
-  } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already gone */ } }
-  }
-}
-
-const parseJson = (line) => {
-  try { return JSON.parse(line); } catch { return null; }
-};
-
-const stamp = (value) => {
-  const t = typeof value === "number" ? value : Date.parse(value);
-  return Number.isFinite(t) ? t : null;
-};
-
 /** a − b per field, floored at zero: a running total that restarts must not bill negative tokens. */
 const diffUsage = (a, b) => {
   const out = {};
@@ -127,31 +70,9 @@ const diffUsage = (a, b) => {
   return out;
 };
 
-/** Paths compare after resolution, so `~/src/api` and `~/src/api/` are one place. */
-const samePath = (a, b) => {
-  if (!a || !b) return false;
-  const norm = (p) => path.resolve(String(p)).replace(/\/+$/, "");
-  return norm(a) === norm(b);
-};
-
 // ---------------------------------------------------------------------------
 // Claude Code — ~/.claude/projects/<slug>/<session>.jsonl
 // ---------------------------------------------------------------------------
-
-/**
- * Claude Code names a project directory after the working directory with every
- * character that isn't a letter or digit replaced by a dash, so `/home/a/.x`
- * becomes `-home-a--x`. Both spellings are produced here because the exact
- * character class has changed across releases and an unreadable transcript is
- * indistinguishable from a free session — guessing one slug and finding nothing
- * would silently report $0.
- */
-export function claudeProjectSlugs(cwd) {
-  const p = path.resolve(String(cwd || ""));
-  return [...new Set([p.replace(/[^A-Za-z0-9]/g, "-"), p.replace(/[/.]/g, "-")])];
-}
-
-const claudeProjectsDir = () => path.join(home(), ".claude", "projects");
 
 /** Claude Code's stand-in model id for a turn it produced without an API call. */
 const SYNTHETIC_MODEL = "<synthetic>";
@@ -271,26 +192,6 @@ function readClaudeTranscript(file, { since, seen = new Set() }) {
   return { engine: "claude", id, cwd, usage, byModel, start, end, pr, samples, engineCost: hasEngineCost ? engineCost : null };
 }
 
-/**
- * Every transcript under a project directory, the sessions and what their
- * subagents wrote. A session is `<id>.jsonl` beside a directory `<id>/`, and
- * that directory holds `subagents/<agent>.jsonl` plus, for a workflow,
- * `subagents/workflows/<run>/<agent>.jsonl`. The depth cap is that shape and
- * one to spare, so an unexpected tree cannot turn a cost report into a crawl.
- */
-function claudeTranscripts(dir) {
-  const out = [];
-  const walk = (d, depth) => {
-    for (const entry of listDir(d)) {
-      const p = path.join(d, entry.name);
-      if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(p);
-      else if (entry.isDirectory() && depth < 5) walk(p, depth + 1);
-    }
-  };
-  walk(dir, 0);
-  return out;
-}
-
 /** Fold one transcript's run into another's: a session and its subagents are one bill. */
 function mergeClaudeRun(into, run) {
   into.usage = addUsage(into.usage, run.usage);
@@ -340,8 +241,6 @@ function claudeRuns({ since, cwd } = {}) {
 // ---------------------------------------------------------------------------
 // Codex — ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
 // ---------------------------------------------------------------------------
-
-const codexSessionsDir = () => path.join(home(), ".codex", "sessions");
 
 /**
  * Codex's `total_token_usage` is cumulative for the whole rollout, so the last
@@ -445,42 +344,6 @@ function codexRuns({ since, cwd } = {}) {
 // ---------------------------------------------------------------------------
 // opencode / privacycode — SQLite, and it priced the messages itself
 // ---------------------------------------------------------------------------
-
-const OPENCODE_DBS = {
-  opencode: () => path.join(home(), ".local", "share", "opencode", "opencode.db"),
-  // A fork that kept the schema and the file name, under its own data dir.
-  privacycode: () => path.join(home(), ".local", "share", "privacycode", "opencode.db"),
-};
-
-/**
- * Open a live SQLite database without disturbing it.
- *
- * Read-only is the first attempt and usually works. When the database is in WAL
- * mode and its shared-memory file is missing, SQLite cannot open it read-only
- * at all — so the fallback copies the three files somewhere private and reads
- * the copy. Never write to the original: opencode may be running on it.
- */
-async function openReadonly(file) {
-  if (!safeStat(file)) return null;
-  let DatabaseSync;
-  try { ({ DatabaseSync } = await import("node:sqlite")); }
-  catch { return null; } // no built-in sqlite on this runtime; opencode is simply not reported
-  try {
-    return { db: new DatabaseSync(file, { readOnly: true }), cleanup: () => {} };
-  } catch { /* fall through to the copy */ }
-  let dir;
-  try {
-    dir = fs.mkdtempSync(path.join(tmpdir(), "moshcode-cost-"));
-    for (const suffix of ["", "-wal", "-shm"]) {
-      if (safeStat(file + suffix)) fs.copyFileSync(file + suffix, path.join(dir, path.basename(file) + suffix));
-    }
-    const db = new DatabaseSync(path.join(dir, path.basename(file)));
-    return { db, cleanup: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } } };
-  } catch {
-    if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* temp */ } }
-    return null;
-  }
-}
 
 async function opencodeRuns(engine, { since, cwd } = {}) {
   const handle = await openReadonly(OPENCODE_DBS[engine]());

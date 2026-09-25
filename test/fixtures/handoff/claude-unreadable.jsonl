@@ -1,0 +1,2 @@
+{"kind": "user", "sessionId": "c41b501f-de0a-411d-90a9-1e858636a4c2", "cwd": "/work/api", "body": {"role": "user", "content": "move the queue off redis"}}
+{"kind": "assistant", "sessionId": "c41b501f-de0a-411d-90a9-1e858636a4c2", "cwd": "/work/api", "body": {"role": "assistant", "content": "on it"}}

@@ -178,3 +178,133 @@ export async function runMcpAdd(plan, { run = runCmd } = {}) {
   }
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// The bridge: moshcode's own verbs, served to an engine over MCP
+// ---------------------------------------------------------------------------
+//
+// Everything above registers OTHER people's servers with the engines. This is
+// the other direction, and the house rule behind PRD 0018 R12: a CLI ships an
+// MCP bridge, so the agent in the chair can reach the same verbs a person
+// types. It is stdio JSON-RPC and nothing else, which is what an engine's `mcp
+// add -- <cmd>` expects and the reason it needs no transport of its own:
+//
+//     moshcode mcp install --name moshcode -- moshcode mcp bridge
+//
+// SCOPE, deliberately small. `initialize`, `tools/list`, `tools/call`, and one
+// tool. A bridge that grew a verb per release without a table like this one
+// would drift from the CLI the same way the old hand-written help drifted from
+// the dispatcher, so every tool here is a thin call onto the module that also
+// backs the CLI verb. There is no second implementation to keep in step.
+//
+// NOTHING HERE LAUNCHES A TERMINAL. `handoff` over MCP stops at the transcript:
+// it reads the source session, writes the portable transcript and the OpenFleet
+// edge, and hands back the argv that would start the target engine. An engine
+// calling this tool has no terminal to give another engine, and a bridge that
+// spawned an interactive session into a pipe would hang both of them.
+
+/** The protocol version this bridge speaks. */
+export const BRIDGE_PROTOCOL_VERSION = "2025-06-18";
+
+/**
+ * The tools the bridge serves.
+ *
+ * `run` returns a JSON-serialisable result, or throws with a message an engine
+ * can read. One entry per CLI verb this PRD adds, and the import is lazy so a
+ * bridge that is only listing tools never loads a transcript reader.
+ */
+export const BRIDGE_TOOLS = [
+  {
+    name: "moshcode_handoff",
+    description:
+      "Move a conversation from one coding engine to another. Reads the source engine's session log, "
+      + "writes a portable transcript, records the OpenFleet edge, and returns the command that starts "
+      + "the target engine seeded with it. Does not launch anything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "the engine to read: claude, codex, opencode or privacycode" },
+        to: { type: "string", description: "the engine to hand it to: claude, codex, opencode, privacycode, qwen, gemini or omp" },
+        session: { type: "string", description: "which source session, by id or a unique prefix; the newest by default" },
+        cwd: { type: "string", description: "the directory whose session to read; the current one by default" },
+        max: { type: "integer", description: "how many messages to carry, newest kept" },
+      },
+      required: ["from", "to"],
+    },
+    async run(args = {}) {
+      const { handoffCommand } = await import("./handoff.mjs");
+      const out = [];
+      const errors = [];
+      const tokens = ["--json", "--dry-run", String(args.from ?? ""), String(args.to ?? "")];
+      if (args.session) tokens.push("--session", String(args.session));
+      if (args.cwd) tokens.push("--cwd", String(args.cwd));
+      if (args.max) tokens.push("--max", String(args.max));
+      const code = await handoffCommand(tokens, {
+        write: (line) => out.push(line),
+        fail: (line) => errors.push(line),
+      });
+      if (code !== 0) throw new Error(errors.join("\n") || "handoff failed");
+      return JSON.parse(out.join("\n"));
+    },
+  },
+];
+
+/** One JSON-RPC request to one response, or null for a notification. */
+export async function bridgeHandle(request, { tools = BRIDGE_TOOLS, version = "" } = {}) {
+  const { id, method, params } = request || {};
+  const reply = (result) => ({ jsonrpc: "2.0", id, result });
+  // A notification has no id and takes no answer. `notifications/initialized`
+  // is the one every client sends, and answering it is a protocol error.
+  if (id === undefined || id === null) return null;
+
+  if (method === "initialize") {
+    return reply({
+      protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      capabilities: { tools: {} },
+      serverInfo: { name: "moshcode", version: version || "0.0.0" },
+    });
+  }
+  if (method === "tools/list") {
+    return reply({ tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+  }
+  if (method === "tools/call") {
+    const tool = tools.find((t) => t.name === params?.name);
+    if (!tool) return { jsonrpc: "2.0", id, error: { code: -32602, message: `no such tool "${params?.name}"` } };
+    try {
+      const result = await tool.run(params?.arguments || {});
+      return reply({ content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: false });
+    } catch (error) {
+      // A refused handoff is an answer, not a transport failure: the engine
+      // that called it should read the reason and try something else, which
+      // it cannot do with a JSON-RPC error it is not obliged to surface.
+      return reply({ content: [{ type: "text", text: String(error?.message || error) }], isError: true });
+    }
+  }
+  return { jsonrpc: "2.0", id, error: { code: -32601, message: `unknown method "${method}"` } };
+}
+
+/**
+ * Serve the bridge over a stream of newline-delimited JSON-RPC.
+ *
+ * Line-delimited because that is what stdio MCP is, and a line that does not
+ * parse is skipped rather than fatal: a client that writes a stray byte must
+ * not take the session down with it.
+ */
+export async function serveBridge({ input = process.stdin, output = process.stdout, version = "" } = {}) {
+  input.setEncoding("utf8");
+  let buffer = "";
+  for await (const chunk of input) {
+    buffer += chunk;
+    let cut;
+    while ((cut = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, cut).trim();
+      buffer = buffer.slice(cut + 1);
+      if (!line) continue;
+      let request;
+      try { request = JSON.parse(line); } catch { continue; }
+      const response = await bridgeHandle(request, { version });
+      if (response) output.write(`${JSON.stringify(response)}\n`);
+    }
+  }
+  return 0;
+}

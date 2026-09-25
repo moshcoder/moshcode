@@ -40,9 +40,16 @@ moshcode is already positioned to do across all eleven engines.
 
 Three things make this cheap rather than speculative:
 
-- `src/cost.mjs` already parses every engine's transcript format, because that is how
-  burn windows and folded subagent transcripts work. The expensive half of a
-  cross-engine session handoff is written and tested.
+- `src/cost.mjs` already knows where every engine writes its session log, because that
+  is how burn windows and folded subagent transcripts work. That is the half of a
+  cross-engine handoff worth reusing, and it is smaller than it first looked: cost.mjs
+  reads usage and throws the conversation away on purpose. Its Claude reader skips every
+  record that is not an assistant turn and never opens `message.content`; its Codex
+  reader loads only the head and the tail of a rollout, so the middle, which is the
+  conversation, is never read; its opencode reader takes the token columns and never
+  joins the table the text lives in; its qwen reader is pointed at a usage log with no
+  message text in it at all. So the path discovery and the file plumbing are reusable
+  and are reused, and the conversation readers are new. See R1.
 - `src/pty.mjs` and the herd panes already sit between the user and the engine's output
   stream. Stream rules belong at that layer, where they are engine-agnostic by
   construction.
@@ -94,13 +101,21 @@ name.
 ## Requirements
 
 - R1 [P0] `moshcode handoff <from-engine> <to-engine> [--session <id>]` reads the source
-  engine's transcript with the existing `cost.mjs` reader, renders it to a portable
-  transcript, and launches the target engine seeded with it. Defaults to the source
-  engine's most recent session for the current directory.
+  engine's transcript, renders it to a portable transcript, and launches the target
+  engine seeded with it. Defaults to the source engine's most recent session for the
+  current directory. The reader lives in `src/transcript.mjs`, which takes cost.mjs's
+  path discovery and file plumbing (`claudeProjectSlugs`, `claudeTranscripts`,
+  `codexSessionsDir`, `OPENCODE_DBS`, and the head/tail line readers) and adds the
+  conversation readers cost.mjs does not have, because cost.mjs discards message content
+  by design. cost.mjs imports the shared half back, so there is one place that knows
+  where an engine writes. Source coverage is narrower than target coverage and both are
+  stated by name: an engine moshcode cannot read, and an engine that takes a prompt only
+  headlessly, are each refused with the reason rather than half-supported.
 - R2 [P0] A handoff writes an OpenFleet record linking child to parent, so the edge shows
   up in `moshcode fleet tree` without a separate lineage feature.
 - R3 [P0] The portable transcript is a documented format under `prd/` or `docs/`, not an
-  internal shape, so a twelfth engine only needs a reader and a writer to join.
+  internal shape, so a twelfth engine only needs a reader and a writer to join. Written
+  down at [docs/portable-transcript.md](../docs/portable-transcript.md).
 - R4 [P0] `moshcode cost limits` reports remaining provider headroom per account, across
   engines, alongside the burn rows already there. Credentials come from the vault, never
   from the environment.
@@ -170,9 +185,16 @@ fires is visible in the pane rather than invisible.
 - Provider limit reporting is not uniform. Some providers publish headroom, some only
   report after a refusal. `cost limits` should say which of the two it is showing rather
   than presenting a guess as a reading.
-- Open question: does handoff carry tool results and file edits, or only the conversation?
-  Carrying edits risks replaying them. The proposal is conversation plus a summary of what
-  was changed, with the working tree as the real state.
+- Open question, now settled: handoff carries the conversation plus the list of files the
+  source session wrote, and no edits. Carrying edits risks replaying them, and the working
+  tree is already the real state. The format says so as a rule rather than as a default.
+- No engine can reopen an arbitrary session from the command line. Every `resume` argv in
+  `engines.mjs` reopens that engine's own last conversation and nothing else, so a handoff
+  always starts a new session on the target and hands it the old conversation to read.
+- Seeding is bounded twice over. An engine takes its first prompt as one argv value, and
+  argv is roughly 2MB on Linux; a prompt typed into a live pane is submitted by its first
+  newline, which is why `swarm` flattens newlines out of what it sends. The seed is
+  therefore a single line naming a file on disk, not the transcript itself.
 - Open question: the portable transcript format is a candidate for a `@profullstack/*`
   package if anything else ever needs to read engine transcripts. Per the reuse-first rule,
   check before writing a second copy.

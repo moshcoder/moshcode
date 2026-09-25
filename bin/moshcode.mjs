@@ -370,6 +370,14 @@ async function main() {
     process.exitCode = (await fleetCommand(rest)) || 0;
     return;
   }
+  // A handoff (PRD 0018): one engine's conversation, continued in another.
+  // Lazy like swarm and fleet, and for the same reason: a plain launch never
+  // reads a transcript.
+  if (cmd === "handoff") {
+    const { handoffCommand } = await import("../src/handoff.mjs");
+    process.exitCode = (await handoffCommand(rest, { version: moshcodeVersion() || "" })) || 0;
+    return;
+  }
   // The Omarchy bar (PRD 0017). `status` is the snapshot a QML widget polls;
   // the rest is what makes the plugin shippable from a box that is not Omarchy.
   // Lazy like swarm and fleet: a plain launch never reads a manifest.

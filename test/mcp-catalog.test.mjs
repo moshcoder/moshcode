@@ -73,7 +73,10 @@ test("credentials are never written into the spec", () => {
 
 test("`mcp catalog` is its own verb, and unknown verbs mention it", () => {
   assert.deepEqual(parseMcp(["catalog"]), { showCatalog: true });
-  assert.match(parseMcp(["bogus"]).error, /install, add, catalog, or list/);
+  // The tail of the list, so adding a verb before it does not fail this. The
+  // claim is that an unknown verb names the real ones, not that the roster is
+  // frozen.
+  assert.match(parseMcp(["bogus"]).error, /install, add, bridge, catalog, or list/);
 });
 
 test("the catalog listing names every entry", () => {

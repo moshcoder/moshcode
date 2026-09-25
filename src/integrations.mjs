@@ -40,6 +40,12 @@ export function parseMcp(tokens) {
   const verb = tokens[0];
   if (!verb || verb === "list") return { list: true, json: tokens.slice(1).includes("--json") };
   if (verb === "catalog") return { showCatalog: true };
+  // The house rule from PRD 0018 R12: a CLI ships an MCP bridge. It takes no
+  // arguments because it is a transport, not a verb with options.
+  if (verb === "bridge") {
+    if (tokens.length > 1) return { error: "mcp bridge takes no arguments" };
+    return { bridge: true };
+  }
   if (verb === "connect") {
     if (tokens.length > 1) return { error: "mcp connect takes no arguments" };
     return { remote: { action: "connect" } };
@@ -256,6 +262,11 @@ export async function mcpCommand(tokens, {
   const parsed = parseMcp(tokens);
   if (parsed.list) { printMcpTargets(parsed.json); return 0; }
   if (parsed.showCatalog) { printMcpCatalog(); return 0; }
+  if (parsed.bridge) {
+    const { serveBridge } = await import("./mcp.mjs");
+    const { moshcodeVersion } = await import("./ui.mjs");
+    return serveBridge({ version: moshcodeVersion() || "" });
+  }
   if (parsed.error) { console.log(err(parsed.error)); return 1; }
   if (parsed.remote) {
     const options = { fetchImpl, credentials, login };
