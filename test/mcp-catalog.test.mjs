@@ -73,10 +73,16 @@ test("credentials are never written into the spec", () => {
 
 test("`mcp catalog` is its own verb, and unknown verbs mention it", () => {
   assert.deepEqual(parseMcp(["catalog"]), { showCatalog: true });
-  // The tail of the list, so adding a verb before it does not fail this. The
-  // claim is that an unknown verb names the real ones, not that the roster is
-  // frozen.
-  assert.match(parseMcp(["bogus"]).error, /install, add, bridge, catalog, or list/);
+  // Named one at a time rather than as a substring of the whole list. Pinning
+  // the tail was already the second attempt at surviving a growing roster and
+  // it only moved the problem: `catalog` and `list` are no longer last, so the
+  // pattern broke again the moment ten verbs landed after them. What this test
+  // actually claims is that an unknown verb names the real ones.
+  const { error } = parseMcp(["bogus"]);
+  assert.match(error, /unknown mcp verb/);
+  for (const verb of ["install", "add", "bridge", "catalog", "list"]) {
+    assert.ok(error.includes(verb), `expected the error to offer ${verb}`);
+  }
 });
 
 test("the catalog listing names every entry", () => {

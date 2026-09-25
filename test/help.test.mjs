@@ -135,9 +135,14 @@ test("a bad sub-verb prints that command's usage, not the whole wall", async () 
   assert.equal(code, 1);
   assert.equal(stdout, "");
   assert.match(stderr, /has no verb "nonsense"/);
-  // A ceiling, not a target: the whole wall is 127 lines. It moves when a verb
-  // is added, which is why it is loose rather than exact.
-  assert.ok(stderr.split("\n").length <= 30, "usage block should be the command's own, and short");
+  // A ceiling, not a target: the whole wall is 127 lines. It moved from 24 to
+  // 30 when `bridge` landed and again here, because `mcp` now has twenty-odd
+  // verbs and listing them IS the usage block doing its job. The number keeps
+  // drifting up because it was carrying the whole claim on its own, so the real
+  // guard is the line below: the wall's closing line, which no command's own
+  // usage ever prints.
+  assert.ok(stderr.split("\n").length <= 45, "usage block should be the command's own, and short");
+  assert.doesNotMatch(stderr, /^engines are installed and driven by moshcode/m, "that is the wall");
 });
 
 test("an unknown help topic suggests rather than dumping", async () => {

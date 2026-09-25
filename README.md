@@ -1679,6 +1679,68 @@ moshcode skill list --json
 Each row reports `installed` and `supported` separately, so an installed engine
 without that integration primitive remains visible rather than looking absent.
 
+### Managing a registered server
+
+Registering a server is a fan-out; so is everything you do to it afterwards.
+
+```sh
+moshcode mcp add                              # interactive wizard
+moshcode mcp add sentry --url https://mcp.sentry.dev/mcp --token env:SENTRY_TOKEN
+moshcode mcp add tools --engines claude,codex -- npx -y my-mcp-server
+moshcode mcp remove sentry
+moshcode mcp reauth sentry                    # each engine's own OAuth login
+moshcode mcp unauth sentry
+moshcode mcp reconnect --all
+moshcode mcp list --servers                   # what moshcode registered
+```
+
+**Scope here is two axes, not one.** `--engine-scope user|project` picks the
+config file each engine writes. `--engines claude,codex` picks which of the six
+engines get the server at all. Both default to the widest useful answer: user
+scope, every installed MCP-capable engine. `--scope` is deliberately neither of
+them, because on `/mcp answer` it already means the OAuth permissions of a
+shared session.
+
+**`--token env:VAR` is the form worth using.** A literal token is in your shell
+history before moshcode sees it and in every engine's config afterwards. The
+`env:` form is read from the environment at registration time, and it is what
+`~/.moshcode/mcp.json` records. That file keeps header *names* and the variable
+a value came from, never a value.
+
+**`disable` and `enable` are a round trip, not a live toggle.** No engine
+moshcode drives has an enable or disable command, and moshcode does not edit
+their config files. So `disable` takes the server out of every engine and keeps
+its spec; `enable` registers exactly that spec again.
+
+What a given engine cannot do is reported rather than faked. OpenCode has no
+`mcp remove`. Codex has no project scope. Only the Gemini family has
+`mcp reconnect`. Gemini and Qwen authorize from inside their own session. Kimi
+and omp run MCP servers perfectly well and have no scriptable `mcp` subcommand
+for moshcode to drive. Each of those prints the reason and what to type instead.
+
+### Testing a server before you trust it
+
+`test`, `resources`, `prompts` and `notifications` talk *to* a server rather
+than about it, and they run through [mcpjam](#mcp-server-testing), which
+moshcode already installs. They take a registered name, a catalog name, or a
+bare URL. The last one matters, because "does this thing work" is a question
+you ask before deciding to register it.
+
+```sh
+moshcode install mcpjam
+moshcode mcp test https://mcp.sentry.dev/mcp
+moshcode mcp resources sentry --json
+moshcode mcp prompts sentry
+moshcode mcp notifications sentry             # what it declares
+moshcode mcp notifications sentry --listen --for 30000
+moshcode mcp catalog search postgres          # the public MCP directories
+```
+
+`catalog search` is the generalized form of a registry search: it sweeps the
+scraped MCP directories through mcpjam rather than adding a vendor-specific
+verb, and the registry API key stays mcpjam's to hold rather than being copied
+into a second place.
+
 ### Connect ChatGPT, Claude, or Chovy to this session
 
 Start the interactive pit, then mint a short-lived remote MCP URL for its live

@@ -401,9 +401,15 @@ export const CORE_CLI_COMMANDS = [
     synopsis: [["moshcode mcp <verb> [args…]", ""]],
     verbs: "MCP_VERBS",
     examples: [
-      ["moshcode mcp list --json", "support and install status"],
-      ["moshcode mcp install https://mcp.example.com", "a remote server"],
+      ["moshcode mcp list --json", "registered servers + engine support"],
+      ["moshcode mcp install https://mcp.example.com", "a remote server, everywhere"],
+      ["moshcode mcp add tools --engines claude,codex -- npx -y srv", "two engines only"],
+      ["moshcode mcp test sentry", "does it actually answer?"],
+      ["moshcode mcp catalog search postgres", "the public MCP directories"],
     ],
+    note: "moshcode drives each engine's own `mcp` commands and never writes their config files, so a "
+      + "verb an engine lacks is skipped with the reason rather than faked. The verbs that talk TO a "
+      + "server run through mcpjam.",
     seeAlso: ["skill", "engines"],
   },
   {
@@ -1122,30 +1128,161 @@ export const MCP_VERBS = [
     ],
     flags: [
       ["--name <n>", "override the derived server name", ""],
+      ["--url <url>", "the remote server, spelled explicitly", ""],
       ["-t, --transport <t>", "http | sse | stdio", "inferred from the target"],
+      ["--token <t|env:VAR>", "Authorization: Bearer …; env:VAR keeps it out of history", ""],
+      ["--engine-scope <s>", "user | project: the config file each engine writes", "user"],
+      ["--engines <a,b>", "only these engines", "every MCP-capable engine"],
       ["-e, --env K=V", "repeatable", ""],
       ["-H, --header 'K: V'", "repeatable", ""],
       ["--", "everything after this is the server's argv", ""],
     ],
+    note: "scope here is two axes, not one. --engine-scope picks the config file inside each engine; "
+      + "--engines picks which of the six engines get the server at all. `--scope` is deliberately NOT "
+      + "either of them: on `mcp answer` it already means the OAuth permissions of a shared session.",
   },
   {
     name: "add",
-    description: "register a named MCP server",
+    description: "register a named MCP server, or run the wizard",
     acceptsServerSpec: true,
-    synopsis: [["moshcode mcp add --name <n> <target>", ""]],
+    synopsis: [
+      ["moshcode mcp add", "interactive wizard"],
+      ["moshcode mcp add <name> --url <url> [-t http|sse]", "remote server"],
+      ["moshcode mcp add <name> -- <cmd…>", "local stdio server"],
+    ],
+    flags: [
+      ["--url <url>", "the remote server, spelled explicitly", ""],
+      ["-t, --transport <t>", "http | sse | stdio", "inferred from the target"],
+      ["--token <t|env:VAR>", "Authorization: Bearer …; env:VAR keeps it out of history", ""],
+      ["--engine-scope <s>", "user | project", "user"],
+      ["--engines <a,b>", "only these engines", "every MCP-capable engine"],
+    ],
   },
   {
     name: "bridge",
     description: "serve moshcode's verbs over MCP, on stdio",
     synopsis: [["moshcode mcp bridge", "speaks MCP on stdin/stdout; register it with any engine"]],
   },
-  { name: "catalog", description: "show known MCP servers", synopsis: [["moshcode mcp catalog", ""]] },
   {
-    name: "list",
-    description: "show MCP support and install status",
-    synopsis: [["moshcode mcp list [--json]", ""]],
+    name: "remove",
+    takesServerName: true,
+    description: "deregister a server from every engine",
+    synopsis: [["moshcode mcp remove <name> [--engine-scope user|project] [--engines a,b]", ""]],
+    note: "OpenCode and privacycode have no `mcp remove`; they are skipped with the file to edit. "
+      + "Codex has no project scope.",
+  },
+  {
+    name: "enable",
+    takesServerName: true,
+    description: "re-register a server moshcode disabled",
+    synopsis: [["moshcode mcp enable <name>", ""]],
+    note: "no engine moshcode drives has an enable/disable verb, and moshcode will not edit their "
+      + "config files to fake one. So disable deregisters the server everywhere and keeps its spec in "
+      + "~/.moshcode/mcp.json, and enable registers exactly that spec again. A credential is never "
+      + "kept, so a token-authenticated server needs --token again on the way back.",
+  },
+  {
+    name: "disable",
+    takesServerName: true,
+    description: "deregister a server, keeping its spec for enable",
+    synopsis: [["moshcode mcp disable <name>", ""]],
+    seeAlso: ["mcp"],
+  },
+  {
+    name: "test",
+    takesServerName: true,
+    description: "connect to a server and report what it serves",
+    synopsis: [["moshcode mcp test <name|url> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]],
+    note: "runs through mcpjam, which moshcode already installs (`/install mcpjam`). "
+      + "Takes a registered name, a catalog name, or a bare URL you have not registered yet.",
+  },
+  {
+    name: "reauth",
+    takesServerName: true,
+    description: "run each engine's own OAuth login for a server",
+    synopsis: [["moshcode mcp reauth <name>", ""]],
+    note: "drives `claude mcp login`, `codex mcp login` and `opencode mcp auth` in turn. Each runs the "
+      + "MCP spec's OAuth 2.1 flow (authorization code + PKCE) and keeps its own rotating refresh "
+      + "token; moshcode mints nothing and stores nothing. Gemini and Qwen authorize from inside "
+      + "the session, so they are skipped with the words to type there.",
+  },
+  {
+    name: "unauth",
+    takesServerName: true,
+    description: "clear a server's stored OAuth credentials",
+    synopsis: [["moshcode mcp unauth <name>", ""]],
+  },
+  {
+    name: "reconnect",
+    takesServerName: true,
+    description: "redial a server in the engines that can",
+    synopsis: [
+      ["moshcode mcp reconnect <name>", ""],
+      ["moshcode mcp reconnect --all", "every configured server"],
+    ],
+    flags: [["-a, --all", "reconnect every server", ""]],
+    note: "only the Gemini family has `mcp reconnect`. Claude Code, Codex and OpenCode dial their "
+      + "servers when a session starts, so they are skipped with what to do instead.",
+  },
+  {
+    name: "resources",
+    takesServerName: true,
+    description: "list the resources a server exposes",
+    synopsis: [["moshcode mcp resources <name|url> [--json]", ""]],
     flags: [["--json", "machine-readable", ""]],
   },
+  {
+    name: "prompts",
+    takesServerName: true,
+    description: "list the prompts a server exposes",
+    synopsis: [["moshcode mcp prompts <name|url> [--json]", ""]],
+    flags: [["--json", "machine-readable", ""]],
+  },
+  {
+    name: "notifications",
+    takesServerName: true,
+    description: "what a server can notify about, and watch it",
+    synopsis: [
+      ["moshcode mcp notifications <name|url>", "the capabilities it declares"],
+      ["moshcode mcp notifications <name|url> --listen --for 30000", "stream them"],
+    ],
+    flags: [
+      ["--listen", "stream notifications instead of reading capabilities", ""],
+      ["--for <ms>", "stop listening after this long", "until Ctrl-C"],
+      ["--json", "machine-readable", ""],
+    ],
+  },
+  {
+    name: "catalog",
+    description: "show known MCP servers, or search the public directories",
+    synopsis: [
+      ["moshcode mcp catalog", "moshcode's own curated list"],
+      ["moshcode mcp catalog search <keyword> [--limit 1-100]", "the public MCP directories"],
+    ],
+    flags: [
+      ["--limit <1-100>", "results per page", ""],
+      ["--source <id>", "one directory instead of all of them", "all"],
+      ["--json", "machine-readable", ""],
+    ],
+    note: "search runs through mcpjam's registry, which sweeps the scraped MCP directories "
+      + "(Smithery among them). There is no Smithery-specific verb and no second API key here on "
+      + "purpose: the key is mcpjam's, mcpjam already stores it, and a copy in moshcode would be a "
+      + "second place to leak it from.",
+  },
+  {
+    name: "list",
+    description: "show registered servers, plus MCP support per engine",
+    synopsis: [
+      ["moshcode mcp list [--json]", "engine support (--json is the engine array)"],
+      ["moshcode mcp list --servers [--json]", "just the servers moshcode registered"],
+    ],
+    flags: [
+      ["--servers", "only the servers, not the engine matrix", ""],
+      ["--json", "machine-readable", ""],
+    ],
+  },
+  { name: "help", description: "show this help", synopsis: [["moshcode mcp help", ""]] },
 ];
 
 export const SKILL_VERBS = [

@@ -20,9 +20,22 @@ test("an engine-native scope flag is rejected, not turned into the server name",
 });
 
 test("a long unsupported flag is rejected too", () => {
-  const { error, spec } = parseMcp(["add", "--scope", "user", "https://mcp.example.com/mcp"]);
+  const { error, spec } = parseMcp(["add", "--namespace", "user", "https://mcp.example.com/mcp"]);
   assert.equal(spec, undefined);
-  assert.match(error, /unknown mcp flag "--scope"/);
+  assert.match(error, /unknown mcp flag "--namespace"/);
+});
+
+// `--scope` used to be one of these, and now it is worse than unknown: it is a
+// flag that exists on a SIBLING verb meaning something else entirely. `/mcp
+// answer --scope sessions:write` grants a shared session write access, so
+// someone reaching for a config scope here is one flag away from a permission
+// they did not intend. It gets its own message rather than the generic one.
+test("--scope is refused by name, and points at the two flags that exist", () => {
+  const { error, spec } = parseMcp(["add", "--scope", "project", "https://mcp.example.com/mcp"]);
+  assert.equal(spec, undefined);
+  assert.match(error, /--engine-scope/);
+  assert.match(error, /--engines/);
+  assert.match(error, /OAuth permissions/);
 });
 
 test("a misspelled supported flag is rejected rather than silently accepted", () => {
@@ -37,8 +50,8 @@ test("a stray flag in the command position is rejected", () => {
 });
 
 test("install reports the stray flag, not a misleading missing-name error", () => {
-  const { error } = parseMcp(["install", "--scope", "user", "https://mcp.example.com/mcp"]);
-  assert.match(error, /unknown mcp flag "--scope"/);
+  const { error } = parseMcp(["install", "--namespace", "user", "https://mcp.example.com/mcp"]);
+  assert.match(error, /unknown mcp flag "--namespace"/);
   assert.doesNotMatch(error, /explicit --name/);
 });
 
@@ -58,8 +71,8 @@ test("no stray flag ever reaches an engine's native argv", () => {
 });
 
 test("a stray flag cannot smuggle a bogus name past the catalog lookup", () => {
-  const { error } = parseMcp(["add", "--scope", "porkbun"]);
-  assert.match(error, /unknown mcp flag "--scope"/);
+  const { error } = parseMcp(["add", "--namespace", "porkbun"]);
+  assert.match(error, /unknown mcp flag "--namespace"/);
 });
 
 // ---------- controls: the opposite direction ----------
