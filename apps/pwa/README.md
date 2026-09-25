@@ -38,11 +38,12 @@ identical file names, `src/migrations/` (SQLite) and `src/migrations-pg/`
 (Postgres, converted with `npx libsql-pg convert-schema` and reviewed); a new
 migration is written to both. The ledger `_migrations` is keyed by file name.
 
-To run the test suite against a real Postgres as well as the SQLite files:
+To run the test suite against a real Postgres as well as the SQLite files, point
+`PG_TEST_ADMIN_URL` at a server where the runner may `CREATE DATABASE` (a local
+`postgres:17-alpine` container will do; one throwaway database per test process):
 
 ```sh
-PG_TEST_ADMIN_URL=postgres://postgres:pw@127.0.0.1:5432/postgres \
-  node --import ./scripts/pg-test-preload.mjs --test
+PG_TEST_ADMIN_URL="$LOCAL_POSTGRES_URL" node --import ./scripts/pg-test-preload.mjs --test
 ```
 
 ## Deploy (dev2)

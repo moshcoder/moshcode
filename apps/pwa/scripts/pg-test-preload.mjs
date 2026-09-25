@@ -1,7 +1,9 @@
 // Run the test suite against a real Postgres instead of the per-test SQLite files.
 //
-//   PG_TEST_ADMIN_URL=postgres://postgres:pw@127.0.0.1:5432/postgres \
-//     node --import ./scripts/pg-test-preload.mjs --test
+//   PG_TEST_ADMIN_URL="$LOCAL_POSTGRES_URL" node --import ./scripts/pg-test-preload.mjs --test
+//
+// PG_TEST_ADMIN_URL is a postgres:// URL of a server where the runner may
+// CREATE DATABASE (a local postgres:17-alpine container will do).
 //
 // Every test file runs in its own process and points DATABASE_URL at a scratch
 // `file:` database before importing src/config.mjs. This preload runs first in
