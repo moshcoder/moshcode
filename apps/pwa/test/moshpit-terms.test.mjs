@@ -187,7 +187,7 @@ test("deleting a user takes their rows with them", { skip: installed ? false : "
   const { run, all } = await import("../src/db.mjs");
   const { randomBytes: rb } = await import("node:crypto");
 
-  await t.test("foreign keys are actually on", async () => {
+  await t.test("foreign keys are actually on", { skip: process.env.MOSHCODE_TEST_DIALECT === "postgres" && "Postgres always enforces them" }, async () => {
     // SQLite ignores every REFERENCES clause without this, per connection. The
     // cascades in the schema were decorative for as long as it was unset.
     assert.equal((await all("PRAGMA foreign_keys"))[0].foreign_keys, 1);

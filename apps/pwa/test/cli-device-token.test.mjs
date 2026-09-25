@@ -57,6 +57,10 @@ async function boot() {
 
   const seedDeviceCode = async (deviceCode, { status = "approved", ageMs = 0, userCode = "ABCD-2345" } = {}) => {
     await run(`INSERT OR REPLACE INTO users (id, email, display_name, created_at) VALUES ('u1','a@b.c','demo',1)`);
+    // user_code is UNIQUE and the tests reuse one. On SQLite the REPLACE above
+    // deleted u1 and cascaded away the previous code; on Postgres REPLACE is an
+    // upsert and cascades nothing, so clear the stale code explicitly.
+    await run(`DELETE FROM device_codes WHERE user_code = ?`, [userCode]);
     const now = Date.now();
     await run(
       `INSERT INTO device_codes (device_code,user_code,user_id,status,name,interval_s,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)`,
