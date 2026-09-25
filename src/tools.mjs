@@ -330,6 +330,44 @@ export const TOOLS = {
     // yt-dlp have.
     binDirs: [path.join(homedir(), ".local", "bin")],
   },
+  swamp: {
+    desc: "Swamp — deterministic automation: typed models, workflow DAGs, versioned runs, and a runtime credential vault",
+    bin: "swamp",
+    // The step up from noodle: noodle runs one HTTP request, swamp runs a DAG of
+    // model methods with dependency ordering, records every run immutably, and
+    // injects credentials from a vault at execution time so they never reach a
+    // prompt. System Initiative builds it (github.com/systeminit/swamp,
+    // TypeScript on Deno, AGPL-3.0 with an extension/definition exception).
+    //
+    // A tool, not an engine, and the distinction is load-bearing: swamp is
+    // driven BY a coding agent rather than being one. It ships skills into
+    // .claude/skills, .cursor/skills and .agents/skills so Claude Code, Cursor,
+    // OpenCode and Codex can all call it. There is no interactive session to
+    // land a herd pane on, so `moshcode agents` is the wrong list for it.
+    //
+    // SWAMP_NONINTERACTIVE is not optional here. The vendor script prompts for
+    // SWAMP CLUB signup partway through, and a piped install under moshcode has
+    // no one to answer it; the script honours CI too, but saying the intent
+    // outright beats pretending to be a build.
+    install: {
+      cmd: "sh",
+      args: ["-c", "curl -fsSL https://swamp-club.com/install.sh | SWAMP_NONINTERACTIVE=1 sh"],
+    },
+    // No `upgrade` key: no vendor updater is documented, and the installer
+    // always pulls the `stable` release, so re-running it IS the upgrade and
+    // toolUpgradeSpec falls back to install on its own — same as noodle above.
+    //
+    // Install target depends on who runs it: root gets /usr/local/bin, a normal
+    // user gets ~/.local/bin or ~/bin when either is already on PATH, and
+    // ~/.swamp/bin when neither is. Only that last one is a directory nothing
+    // else here adds, and the script appends to no shell rc, so all three
+    // non-root landing spots are searched.
+    binDirs: [
+      path.join(homedir(), ".local", "bin"),
+      path.join(homedir(), "bin"),
+      path.join(homedir(), ".swamp", "bin"),
+    ],
+  },
   spinifex: {
     desc: "Spinifex — AWS-compatible cloud on your own hardware (EC2, EBS, S3, VPC, IAM)",
     // The product is Spinifex; the binary it installs is `spx`. Same split as

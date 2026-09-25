@@ -34,4 +34,5 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0016](0016-openfleet-the-record-a-swarm-leaves-behind.md) | OpenFleet: the record a swarm leaves behind, and the fleet verb that reads it | Draft |
 | [0017](0017-moshcode-on-the-omarchy-bar.md) | Put the herd on the Omarchy bar — a plugin, and the one snapshot it reads | Accepted |
 | [0018](0018-take-what-omp-got-right.md) | Take what omp got right: cross-engine handoff, stream rules, and a usage ledger | Draft |
+| [0019](0019-take-what-swamp-got-right.md) | Take what swamp got right: heartbeat liveness, immutable run history, and workflow DAGs | Draft |
 <!-- PRD-INDEX:END -->
