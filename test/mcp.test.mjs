@@ -13,6 +13,14 @@ import { parseMcp } from "../src/integrations.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 
+// The fan-out test below puts stub engines on PATH and hands process.env to the
+// CLI. A MOSHCODE_ENGINE_BIN_<KEY> exported in the shell running the suite
+// would send that engine's `mcp add` to the real build instead of the stub —
+// writing into the operator's own engine config.
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("MOSHCODE_ENGINE_BIN_")) delete process.env[name];
+}
+
 test("deriveName pulls a sane name from a remote host", () => {
   assert.equal(deriveName("https://mcp.sentry.dev/mcp"), "sentry");
   assert.equal(deriveName("https://api.githubcopilot.com/mcp/"), "githubcopilot");
