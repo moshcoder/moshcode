@@ -14,7 +14,14 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { ENGINES, agentLaunchArgs, aiExecArgs, engineBinOverride, exitReason, isInstalled, openPassthrough, pickAiEngine, ranOk, resolveEngine, runCmd } from "../src/engines.mjs";
+// engines.mjs applies MOSHCODE_ENGINE_BIN_<KEY> to ENGINES.*.bin at import, and
+// run() hands process.env to every child. An override exported in the shell
+// running the suite (a local codex build, say) would otherwise swap the stubs
+// below for that build. Scrub them first; the override tests set their own.
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("MOSHCODE_ENGINE_BIN_")) delete process.env[name];
+}
+const { ENGINES, agentLaunchArgs, aiExecArgs, engineBinOverride, exitReason, isInstalled, openPassthrough, pickAiEngine, ranOk, resolveEngine, runCmd } = await import("../src/engines.mjs");
 
 const BIN = fileURLToPath(new URL("../bin/moshcode.mjs", import.meta.url));
 // The autonomous-session bypass flags each engine declares (engine.agentArgs).

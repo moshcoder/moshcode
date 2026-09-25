@@ -29,6 +29,13 @@ const replied = (out) => strip(out).split("to leave")[1] || "";
 // the child nothing else.
 const NO_ENGINES = mkdtempSync(join(tmpdir(), "moshcode-no-engines-"));
 
+// An empty PATH is not the whole of "no engines": MOSHCODE_ENGINE_BIN_<KEY>
+// names an engine by absolute path, so one exported in the shell running the
+// suite made codex "installed" here and /prd launched that real build.
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("MOSHCODE_ENGINE_BIN_")) delete process.env[name];
+}
+
 function runTui(input, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN], {
