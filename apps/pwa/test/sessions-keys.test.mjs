@@ -71,7 +71,7 @@ async function boot() {
   }).then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }));
 
   const queued = (id) => all(
-    `SELECT body FROM session_commands WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`, [id]);
+    `SELECT body FROM session_commands WHERE session_id = ? ORDER BY created_at ASC`, [id]);
 
   const { createApiKey } = await import("../src/lib/apikey.mjs");
   const { plaintext: apiKey } = await createApiKey("u1", "keys-test");

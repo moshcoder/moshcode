@@ -62,7 +62,7 @@ async function boot() {
   }).then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }));
 
   const queued = () => all(
-    `SELECT body FROM session_commands WHERE session_id = 'cli-1' ORDER BY created_at ASC, rowid ASC`);
+    `SELECT body FROM session_commands WHERE session_id = 'cli-1' ORDER BY created_at ASC`);
 
   return { run, all, db, server, send, queued };
 }

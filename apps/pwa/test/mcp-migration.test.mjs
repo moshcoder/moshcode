@@ -13,7 +13,9 @@ const { sha256 } = await import("../src/lib/crypto.mjs");
 const migrations = new URL("../src/migrations/", import.meta.url);
 test.after(() => { db.close?.(); fs.rmSync(dir, { recursive: true, force: true }); });
 
-test("upgrade preserves existing consent, pairs access/refresh grants and leaves ordinary queued input alone", async () => {
+// Applies the SQLite files in src/migrations/ by hand, so it is SQLite-only.
+const sqliteOnly = process.env.MOSHCODE_TEST_DIALECT === "postgres" && "applies the SQLite migration files directly";
+test("upgrade preserves existing consent, pairs access/refresh grants and leaves ordinary queued input alone", { skip: sqliteOnly }, async () => {
   const files = fs.readdirSync(migrations).filter((name) => name.endsWith(".sql") && name < "022").sort();
   for (const name of files) {
     const sql = fs.readFileSync(new URL(name, migrations), "utf8");

@@ -8,8 +8,8 @@ a link to `/approve/:id`, you read the context and reply, and the script resumes
 from your answer. Paid channels are metered against prepaid credits topped up via
 CoinPay.
 
-Zero-framework: **Express + libSQL (SQLite/Turso)**, server-rendered, punk/metal
-brand. Auth via **email/password**, **passkey (WebAuthn)**, or **CoinPay**.
+Zero-framework: **Express + Postgres** (via [`@profullstack/libsql-pg`](https://github.com/profullstack/libsql-pg);
+a local SQLite file for development), server-rendered, punk/metal brand. Auth via **email/password**, **passkey (WebAuthn)**, or **CoinPay**.
 
 ## Run locally
 
@@ -24,12 +24,35 @@ DATABASE_URL=file:./data/local.db npm run dev
 Secrets live in **Doppler** (`moshcode` project) for real envs. With the Doppler
 CLI: `doppler run -- npm start`.
 
-## Deploy (Railway + Turso)
+## Database
 
-- Service **root directory** = `apps/pwa`; Nixpacks builds it, `npm start` runs
-  migrations then boots (`railway.json`).
-- Set env from Doppler: `DATABASE_URL` + `DATABASE_AUTH_TOKEN` (Turso libSQL URL
-  + token), `SESSION_SECRET`, `MOSHCODE_WEBHOOK_SECRET`, `RESEND_API_KEY`,
+`DATABASE_URL` is either a `postgres://` URL (production: the shared cluster on
+dev2, `?sslmode=require`) or a `file:` path (development, tests). The client is
+`@profullstack/libsql-pg`, which keeps the `@libsql/client` surface this code
+was written against and rewrites the remaining SQLite idioms per statement.
+A `libsql://` (Turso) URL is refused at boot: the data moved off Turso on
+2026-09-25, and `DATABASE_AUTH_TOKEN` is no longer read.
+
+Migrations run at boot (`src/migrate.mjs`). They live in two directories with
+identical file names, `src/migrations/` (SQLite) and `src/migrations-pg/`
+(Postgres, converted with `npx libsql-pg convert-schema` and reviewed); a new
+migration is written to both. The ledger `_migrations` is keyed by file name.
+
+To run the test suite against a real Postgres as well as the SQLite files, point
+`PG_TEST_ADMIN_URL` at a server where the runner may `CREATE DATABASE` (a local
+`postgres:17-alpine` container will do; one throwaway database per test process):
+
+```sh
+PG_TEST_ADMIN_URL="$LOCAL_POSTGRES_URL" node --import ./scripts/pg-test-preload.mjs --test
+```
+
+## Deploy (dev2)
+
+- `.github/workflows/deploy-dev2.yml` ships every merge to dev2; the root
+  `Dockerfile` installs `apps/pwa`'s dependencies and runs `src/server.mjs`,
+  which applies migrations then boots.
+- Env (rendered into `app.env` on dev2 from the vault): `DATABASE_URL`
+  (postgres://), `SESSION_SECRET`, `MOSHCODE_WEBHOOK_SECRET`, `RESEND_API_KEY`,
   `PUBLIC_ORIGIN=https://app.moshcode.sh`, `MCP_PUBLIC_ORIGIN=https://moshcode.sh`,
   and the `COINPAY_*` values.
 - `ADMIN_EMAILS`: comma-separated account emails allowed to call `/api/admin/*`

@@ -74,3 +74,20 @@ test("no HAVING without a GROUP BY — Turso refuses to parse it", () => {
   assert.deepEqual(offenders, [],
     `HAVING with no GROUP BY parses on SQLite and fails on Turso:\n  ${offenders.join("\n  ")}`);
 });
+
+test("every SQLite migration has a Postgres twin of the same name, and vice versa", () => {
+  const names = (dir) => fs.readdirSync(path.join(SRC, dir)).filter((f) => f.endsWith(".sql")).sort();
+  assert.deepEqual(names("migrations-pg"), names("migrations"),
+    "src/migrations and src/migrations-pg must hold the same file names: the _migrations ledger is keyed by name");
+});
+
+test("no `IS NOT ?` against a bound value — Postgres only has IS NOT NULL/TRUE/FALSE", () => {
+  const offenders = [];
+  for (const file of sources(SRC)) {
+    const text = withoutComments(fs.readFileSync(file, "utf8"));
+    for (const match of text.matchAll(/\bIS NOT \?/g)) {
+      offenders.push(`${path.relative(SRC, file)}:${text.slice(0, match.index).split("\n").length}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `use IS DISTINCT FROM ?:\n  ${offenders.join("\n  ")}`);
+});
