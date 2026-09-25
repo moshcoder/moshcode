@@ -1766,7 +1766,7 @@ const VERBS = {
   // `ui` is the sidebar workspace; the old modal list lives on as the fallback
   // inside it for machines with no tmux to swap panes on.
   ui: async (argv, options) => (await import("./herd-workspace.mjs")).herdUi(argv, options),
-  sidebar: async (argv, options) => (await import("./herd-workspace.mjs")).herdSidebar(options),
+  sidebar: async (argv, options) => (await import("./herd-sidebar.mjs")).herdSidebar(options),
   bar: async (argv, options) => (await import("./herd-bar.mjs")).herdBar(options),
   tile: async (argv, options) => (await import("./herd-tile.mjs")).herdTile(argv, options),
   untile: async (argv, options) => (await import("./herd-tile.mjs")).herdUntile(argv, options),

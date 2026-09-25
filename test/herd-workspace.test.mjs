@@ -1,5 +1,5 @@
-// The sidebar workspace: the row/line agreement a click depends on, and the
-// pane swap that has to leave the sidebar alone.
+// The sidebar workspace: the tmux pane swap that has to leave the sidebar
+// alone, and the actions the sidebar draws from.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -8,53 +8,28 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ACTIONS, renderSidebar, sidebarRows, WINDOW, WORKSPACE } from "../src/herd-workspace.mjs";
+import { ACTIONS, WINDOW, WORKSPACE } from "../src/herd-workspace.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const hasTmux = (() => {
   try { return spawnSync("tmux", ["-V"], { encoding: "utf8" }).status === 0; }
   catch { return false; }
 })();
-const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
-const member = (name, extra = {}) => ({
-  name, engine: "claude", herd: "main", state: "idle", cwd: "/x", alive: true, ...extra,
-});
 
-/* ------------------------------------------------ the click map is the screen */
+/* ----------------------------------------------------------------- actions */
 
-test("every clickable row renders on exactly the line it claims", () => {
-  // Same guarantee the list needed, for the same reason: these line numbers ARE
-  // the click map, so a one-line drift sends every click to its neighbour.
-  const rows = sidebarRows([member("api"), member("work", { engine: "shell" }), member("logs", { herd: "scratch" })]);
-  const lines = strip(renderSidebar(rows, { selected: "api", showing: "api" })).split("\r\n");
-
-  for (const row of rows.filter((r) => r.kind === "session" || r.kind === "action")) {
-    const rendered = lines[row.line - 1];
-    const label = row.kind === "session" ? row.session.name : row.action.label;
-    assert.ok(rendered !== undefined, `line ${row.line} for ${label} is off the end`);
-    assert.ok(
-      rendered.includes(row.kind === "session" ? row.session.name : row.action.label.split(" ").pop()),
-      `${label} claims line ${row.line}, which renders as ${JSON.stringify(rendered)}`,
-    );
-  }
-});
+// What the sidebar LOOKS like moved to src/herd-sidebar.mjs when it was ported
+// to hqtui, and the tests that pinned a row to the line it rendered on went
+// with it: the tree widget reports the row it drew each node on, so the click
+// map is the screen by construction rather than by agreement between two
+// pieces of code here. See test/herd-sidebar-click.test.mjs, which presses
+// screen cells. What is left in this file is the tmux half.
 
 test("actions are always present, even with an empty herd", () => {
   // The sidebar has to be able to CREATE the first member; a herd with nothing
   // in it and no actions would be a dead end.
-  const rows = sidebarRows([]);
-  const actions = rows.filter((r) => r.kind === "action");
-  assert.equal(actions.length, ACTIONS.length);
-  assert.match(strip(renderSidebar(rows, {})), /\+ shell/);
-});
-
-test("the member being shown is marked differently from the one selected", () => {
-  // Selecting and showing are separate: you can move the highlight around
-  // without the right-hand pane changing under you.
-  const rows = sidebarRows([member("api"), member("web")]);
-  const text = strip(renderSidebar(rows, { selected: "web", showing: "api" }));
-  const apiLine = text.split("\r\n").find((l) => l.includes("api"));
-  assert.match(apiLine, /▸/, "the shown member carries the marker");
+  assert.ok(ACTIONS.some((a) => a.run === "shell"));
+  assert.ok(ACTIONS.some((a) => a.run === "agent"));
 });
 
 test("every action has a single-key shortcut and none collide", () => {
