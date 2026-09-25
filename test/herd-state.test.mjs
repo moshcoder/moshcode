@@ -12,14 +12,22 @@ import {
   reportState, rulesFor, sessionState, STATES, stripAnsi, withState,
 } from "../src/herd-state.mjs";
 
+// The herd dir AND the fleet home, both temporary. The fleet home matters
+// since PRD 0019 R2: the classifier now reads heartbeats out of
+// $OPENFLEET_HOME, and a test that left it pointing at the developer's own
+// ~/.openfleet would pass or fail on what happened to be running on the box.
 function withHerdDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-state-test-"));
-  const previous = process.env.MOSHCODE_HERD_DIR;
+  const fleetHome = path.join(dir, "openfleet");
+  const previous = { herd: process.env.MOSHCODE_HERD_DIR, fleet: process.env.OPENFLEET_HOME };
   process.env.MOSHCODE_HERD_DIR = dir;
-  try { return fn(dir); }
+  process.env.OPENFLEET_HOME = fleetHome;
+  try { return fn(dir, fleetHome); }
   finally {
-    if (previous === undefined) delete process.env.MOSHCODE_HERD_DIR;
-    else process.env.MOSHCODE_HERD_DIR = previous;
+    for (const [key, value] of [["MOSHCODE_HERD_DIR", previous.herd], ["OPENFLEET_HOME", previous.fleet]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -179,7 +187,7 @@ test("a finished process is done, whatever is on its screen", () => {
   withHerdDir(() => {
     // The one thing the runtime knows for certain, so no rule gets a vote.
     const state = sessionState(live({ exited: true }), { read: () => "Do you want to proceed?" });
-    assert.deepEqual(state, { state: "done", authority: "runtime" });
+    assert.deepEqual(state, { state: "done", authority: "runtime", confidence: "known" });
   });
 });
 
@@ -187,7 +195,7 @@ test("a session the runtime no longer has is gone, not unknown", () => {
   withHerdDir(() => {
     // `gone` is what `restore` reads; collapsing it into `unknown` would lose
     // the difference between "I can't tell" and "the box rebooted".
-    assert.deepEqual(sessionState({ name: "s", alive: false }), { state: "gone", authority: "runtime" });
+    assert.deepEqual(sessionState({ name: "s", alive: false }), { state: "gone", authority: "runtime", confidence: "known" });
   });
 });
 

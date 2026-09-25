@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { REFUSED, fleetCommand } from "../src/fleet-cli.mjs";
 import * as fleet from "../src/openfleet.mjs";
+import * as runs from "../src/run-record.mjs";
 import { strip } from "../src/ui.mjs";
 
 const NOW = Date.UTC(2026, 8, 13, 5, 42, 0);
@@ -542,5 +543,110 @@ test("log reads the ledger in order and filters by member, swarm and since; --js
     assert.equal(await h.run(["log", "--since", "10s"]), 0);
     assert.match(h.text(), /nothing in the ledger matches/);
     assert.equal(await h.run(["log", "--since", "yesterday-ish"]), 1);
+  } finally { h.cleanup(); }
+});
+
+/* ------------------------------------------- beat and gc (PRD 0019 R2, R3) */
+
+test("beat writes a heartbeat for a run and takes the fleet from the variable moshcode set", async () => {
+  const h = harness({ env: { MOSHCODE_RUN_FLEET: FLEET, MOSHCODE_HERD_NAME: "claude1" } });
+  try {
+    assert.equal(await h.run(["beat", "r1", "--state", "working"]), 0);
+    assert.match(h.text(), /r1 beat · working · fleet anthony@dev/);
+    const written = JSON.parse(fs.readFileSync(runs.beatPath(FLEET, "r1", h.opts.env), "utf8"));
+    assert.equal(written.state, "working");
+    assert.equal(written.session, "claude1", "the herd name rides along so the roster can match it");
+    assert.equal(written.at, NOW);
+  } finally { h.cleanup(); }
+});
+
+test("beat takes the run from the environment, so a hook needs no argument at all", async () => {
+  const h = harness({ env: { MOSHCODE_RUN: "r2", MOSHCODE_RUN_FLEET: FLEET } });
+  try {
+    assert.equal(await h.run(["beat", "--json"]), 0);
+    assert.equal(JSON.parse(h.text()).run, "r2");
+  } finally { h.cleanup(); }
+});
+
+test("beat refuses a state outside the herd's vocabulary rather than writing a word nothing reads", async () => {
+  const h = harness({ env: { MOSHCODE_RUN_FLEET: FLEET } });
+  try {
+    assert.equal(await h.run(["beat", "r1", "--state", "thinking"]), 1);
+    assert.match(h.text(), /--state is one of working, blocked, done, idle, unknown/);
+    assert.equal(fs.existsSync(runs.beatPath(FLEET, "r1", h.opts.env)), false);
+    h.lines.length = 0;
+    assert.equal(await h.run(["beat"]), 1, "with no run and no MOSHCODE_RUN there is nothing to beat for");
+  } finally { h.cleanup(); }
+});
+
+test("beat writes no ledger line: a heartbeat is the present tense, not history", async () => {
+  const h = harness({ env: { MOSHCODE_RUN_FLEET: FLEET } });
+  try {
+    seed(h);
+    const before = h.ledger().length;
+    for (let i = 0; i < 50; i++) assert.equal(await h.run(["beat", "r1", "--state", "working"]), 0);
+    assert.equal(h.ledger().length, before, "fifty beats and the ledger has not grown by a line");
+  } finally { h.cleanup(); }
+});
+
+test("gc prunes ended runs per directory, previews with --dry-run, and leaves the spec's lines alone", async () => {
+  const h = harness();
+  try {
+    seed(h);
+    const { env } = h.opts;
+    for (let i = 0; i < 4; i++) {
+      const run = `r${i}`;
+      // Recent enough that only the per-directory count can evict them: the
+      // age rule is tested on its own in test/run-record.test.mjs.
+      runs.openRun({ run, fleet: FLEET, engine: "moshcode/claude", cwd: "/src/api", session: `s${i}` }, { env, now: NOW - 20000 + i * 1000 });
+      runs.closeRun(FLEET, run, { state: "done" }, { env, now: NOW - 19000 + i * 1000 });
+    }
+    const spec = h.ledger().filter((l) => !String(l.event).startsWith("run.")).length;
+
+    assert.equal(await h.run(["gc", "--keep", "1", "--dry-run"]), 0);
+    assert.match(h.text(), /would remove 3 runs and 6 ledger lines/);
+    assert.equal(runs.listRuns(FLEET, env).length, 4, "a dry run removes nothing");
+
+    h.lines.length = 0;
+    assert.equal(await h.run(["gc", "--keep", "1"]), 0);
+    assert.match(h.text(), /removed 3 runs and 6 ledger lines/);
+    assert.equal(runs.listRuns(FLEET, env).length, 1);
+    assert.equal(h.ledger().filter((l) => !String(l.event).startsWith("run.")).length, spec,
+      "member.start, swarm.spawn and the rest are the record of what agents were allowed to do");
+  } finally { h.cleanup(); }
+});
+
+test("gc refuses a nonsense retention rather than guessing at one", async () => {
+  const h = harness();
+  try {
+    assert.equal(await h.run(["gc", "--keep", "-1"]), 1);
+    assert.match(h.text(), /--keep is a whole number/);
+    h.lines.length = 0;
+    assert.equal(await h.run(["gc", "--older-than", "forever"]), 1);
+    assert.match(h.text(), /--older-than is a duration like 30d/);
+  } finally { h.cleanup(); }
+});
+
+test("gc with nothing to do says so and exits zero", async () => {
+  const h = harness();
+  try {
+    assert.equal(await h.run(["gc"]), 0);
+    assert.match(h.text(), /nothing to remove/);
+  } finally { h.cleanup(); }
+});
+
+test("fleet log renders a run's start, steps and end without a second tool", async () => {
+  const h = harness();
+  try {
+    const { env } = h.opts;
+    runs.openRun({ run: "r1", fleet: FLEET, engine: "moshcode/claude", model: "claude-opus-5",
+      session: "claude1", task: "fix the thing", cwd: "/src/api" }, { env, now: Date.parse(at("05:00:00")) });
+    runs.recordStep(FLEET, "r1", { kind: "tool", name: "edit", summary: "src/api.mjs" }, { env, now: Date.parse(at("05:00:01")) });
+    runs.closeRun(FLEET, "r1", { state: "done", summary: "fixed" }, { env, now: Date.parse(at("05:00:02")) });
+
+    assert.equal(await h.run(["log"]), 0);
+    assert.match(h.lines[0], /run\.start\s+by sysop  r1 · moshcode\/claude claude-opus-5 \(claude1\) · "fix the thing"/);
+    assert.match(h.lines[1], /run\.step\s+by sysop  r1 · tool edit · src\/api\.mjs/);
+    assert.match(h.lines[2], /run\.end\s+by sysop  r1 · done · fixed/);
   } finally { h.cleanup(); }
 });

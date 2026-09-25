@@ -13,14 +13,21 @@ import {
 import { EXIT, waitForMany } from "../src/herd-cli.mjs";
 import { TOOLS } from "../src/tools.mjs";
 
+// The herd dir AND the fleet home. The fleet home matters since PRD 0019 R2:
+// the classifier reads heartbeats out of $OPENFLEET_HOME, and a test that left
+// it pointing at the developer's own ~/.openfleet would pass or fail on what
+// happened to be running on the box.
 function withHerdDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-0011-test-"));
-  const previous = process.env.MOSHCODE_HERD_DIR;
+  const previous = { herd: process.env.MOSHCODE_HERD_DIR, fleet: process.env.OPENFLEET_HOME };
   process.env.MOSHCODE_HERD_DIR = dir;
+  process.env.OPENFLEET_HOME = path.join(dir, "openfleet");
   try { return fn(dir); }
   finally {
-    if (previous === undefined) delete process.env.MOSHCODE_HERD_DIR;
-    else process.env.MOSHCODE_HERD_DIR = previous;
+    for (const [key, value] of [["MOSHCODE_HERD_DIR", previous.herd], ["OPENFLEET_HOME", previous.fleet]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -71,7 +78,9 @@ test("a reported sub-kind survives the round trip", () => {
     assert.equal(reportState("api", "blocked:permission").ok, true);
     assert.equal(hookReport("api").kind, "permission");
     const state = sessionState({ name: "api", engine: "claude", alive: true, exited: false });
-    assert.deepEqual(state, { state: "blocked", authority: "hook", blockedOn: "permission" });
+    // `confidence: known` since PRD 0019 R2: the engine reported this, so it is
+    // a fact rather than something a screen rule worked out.
+    assert.deepEqual(state, { state: "blocked", authority: "hook", confidence: "known", blockedOn: "permission" });
   });
 });
 
@@ -91,8 +100,11 @@ test("the sub-kind is absent rather than undefined when there is not one", () =>
   // benefit of none is a new key on every row.
   withHerdDir(() => {
     const state = sessionState({ name: "api", engine: "claude", alive: true, exited: false }, { read: () => "esc to interrupt" });
-    assert.deepEqual(state, { state: "working", authority: "screen" });
+    assert.deepEqual(state, { state: "working", authority: "screen", confidence: "inferred" });
     assert.equal("blockedOn" in state, false);
+    // And no `run` key either, for the same reason: a session moshcode did not
+    // start has no run, and every row would otherwise carry an empty one.
+    assert.equal("run" in state, false);
   });
 });
 

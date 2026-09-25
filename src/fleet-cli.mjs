@@ -15,8 +15,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { EXIT, herdKill, roster as herdRoster } from "./herd-cli.mjs";
+import { STATES } from "./herd-state.mjs";
 import { herdDir, slugifyName } from "./herd.mjs";
 import * as fleet from "./openfleet.mjs";
+import * as runs from "./run-record.mjs";
 import { acid, amber, ash, bone, dim, err, info, ok, warn } from "./ui.mjs";
 
 /** The exit a refused open, cap or stop returns. logicsrc fleet uses the same number. */
@@ -28,6 +30,8 @@ const USAGE = {
   tree: "usage: moshcode fleet tree [fleet] [--json]",
   stop: "usage: moshcode fleet stop <member|swarm> | --fleet <fleet> [--json]",
   log: "usage: moshcode fleet log [fleet] [--since 1h] [--member <id>] [--swarm <id>] [--json]",
+  beat: "usage: moshcode fleet beat <run> [--state working|blocked|done|idle] [--fleet <id>] [--session <name>] [--ttl 10m] [--json]",
+  gc: "usage: moshcode fleet gc [fleet] [--keep 20] [--older-than 30d] [--dry-run] [--json]",
 };
 
 /* ----------------------------------------------------------------- parsing */
@@ -526,6 +530,11 @@ function describeLine(l) {
     case "member.end": return `${l.member} · ${l.state}${l.total ? ` · ${l.total}` : ""}${l.summary ? ` · ${clip(String(l.summary).replace(/\s+/g, " "), 80)}` : ""}`;
     case "swarm.end": return `${l.swarm} · ${l.state}${l.verdict ? ` · ${l.verdict.length} verdict${l.verdict.length === 1 ? "" : "s"}` : ""}${l.summary ? ` · ${clip(String(l.summary).replace(/\s+/g, " "), 80)}` : ""}`;
     case "ceiling.refuse": return `${l.member ? `${l.member} · ` : ""}${l.action} refused on ${l.key}: wanted ${JSON.stringify(l.wanted)}, allowed ${JSON.stringify(l.allowed)}`;
+    // The run record rides the same ledger (PRD 0019 R3), so `fleet log`
+    // reads it without a second tool and without being taught a second format.
+    case "run.start": return `${l.run} · ${l.engine || "?"}${l.model ? ` ${l.model}` : ""}${l.session ? ` (${l.session})` : ""}${l.task ? ` · "${clip(l.task, 50)}"` : ""}`;
+    case "run.step": return `${l.run} · ${l.kind}${l.name ? ` ${l.name}` : ""}${l.summary ? ` · ${clip(String(l.summary).replace(/\s+/g, " "), 80)}` : ""}`;
+    case "run.end": return `${l.run} · ${l.state}${l.summary ? ` · ${clip(String(l.summary).replace(/\s+/g, " "), 80)}` : ""}`;
     default: return "";
   }
 }
@@ -533,7 +542,7 @@ function describeLine(l) {
 const paintEvent = (event) => {
   if (event === "ceiling.refuse") return amber(event);
   if (event.endsWith(".end")) return ash(event);
-  if (event === "swarm.spawn" || event === "member.start") return acid(event);
+  if (event === "swarm.spawn" || event === "member.start" || event === "run.start") return acid(event);
   return bone(event);
 };
 
@@ -577,9 +586,118 @@ async function fleetLog(argv, o) {
   return EXIT.matched;
 }
 
+/* ------------------------------------------------------- beat and retention */
+
+/**
+ * `moshcode fleet beat <run>`: this run is alive, and here is what it is doing.
+ *
+ * The verb an engine's lifecycle hook calls (PRD 0019 R2). It is deliberately
+ * the cheapest thing in this file: one file written, no ledger read, no tree
+ * folded, because it runs on every turn of every session in the herd and a
+ * beat that costs a tenth of a second is a beat somebody turns off.
+ *
+ * Unlike `open` and `cap` this is not the sysop's alone. A member beating for
+ * its own run is the normal case and the reason the verb exists.
+ */
+export function fleetBeat(argv, { write = console.log, env = process.env, now = () => Date.now() } = {}) {
+  const { flags, positional, errors } = parseArgs(argv, {
+    valued: ["state", "kind", "fleet", "session", "member", "ttl"], flags: ["json"],
+  });
+  for (const e of errors) write(err(e));
+  if (errors.length) { write(err(USAGE.beat)); return EXIT.usage; }
+
+  const run = positional[0] || env.MOSHCODE_RUN || null;
+  if (!run) { write(err(USAGE.beat)); return EXIT.usage; }
+
+  // The fleet the run belongs to, in the order a caller can actually supply
+  // it: the flag, the variable moshcode set beside MOSHCODE_RUN when it
+  // started the session, then the fleet this process sits in.
+  const name = flags.fleet || env.MOSHCODE_RUN_FLEET || env.OPENFLEET_FLEET
+    || fleet.currentFleet(env) || fleet.implicitFleet(env);
+
+  if (flags.state && !STATES.includes(flags.state)) {
+    write(err(`--state is one of ${STATES.join(", ")}`));
+    return EXIT.usage;
+  }
+  let ttl;
+  if (flags.ttl !== undefined) {
+    ttl = parseDurationMs(flags.ttl);
+    if (ttl === null) { write(err("--ttl is a duration like 10m")); return EXIT.usage; }
+  }
+
+  const written = runs.beat(name, run, {
+    state: flags.state, kind: flags.kind, ttl,
+    session: flags.session || env.MOSHCODE_HERD_NAME, member: flags.member || env.OPENFLEET_MEMBER,
+  }, { env, now: now() });
+
+  if (!written.ok) {
+    write(err(String(written.error?.message || written.error)));
+    return EXIT.infra;
+  }
+  if (flags.json) { write(JSON.stringify(written.beat, null, 2)); return EXIT.matched; }
+  write(ok(`${bone(run)} beat${flags.state ? ` · ${flags.state}` : ""} · fleet ${name}`));
+  return EXIT.matched;
+}
+
+/**
+ * `moshcode fleet gc`: the retention the run record needs to be allowed to be
+ * immutable (PRD 0019, Risks).
+ *
+ * An immutable record grows without bound, which is a reason not to ship one
+ * unless the pruning ships with it. omp's shape: keep the newest N runs per
+ * working directory rather than N overall, so one busy checkout cannot evict
+ * every other one, plus an age cap for the directories nobody has touched in a
+ * month. An unfinished run is never a candidate at any age.
+ *
+ * `--dry-run` first is the polite default to recommend, not to impose: this
+ * deletes history somebody may want, and a verb that is hard to preview is a
+ * verb people run blind.
+ */
+export function fleetGc(argv, { write = console.log, env = process.env, now = () => Date.now() } = {}) {
+  const { flags, positional, errors } = parseArgs(argv, {
+    valued: ["keep", "older-than", "fleet"], flags: ["json", "dry-run"],
+  });
+  for (const e of errors) write(err(e));
+  if (errors.length) { write(err(USAGE.gc)); return EXIT.usage; }
+
+  let keep = runs.GC_KEEP_PER_DIR;
+  if (flags.keep !== undefined) {
+    keep = Number(flags.keep);
+    if (!Number.isInteger(keep) || keep < 0) { write(err("--keep is a whole number")); return EXIT.usage; }
+  }
+  let maxAgeMs = runs.GC_MAX_AGE_MS;
+  if (flags["older-than"] !== undefined) {
+    maxAgeMs = parseDurationMs(flags["older-than"]);
+    if (maxAgeMs === null) { write(err("--older-than is a duration like 30d")); return EXIT.usage; }
+  }
+
+  const only = flags.fleet || positional[0] || null;
+  const report = runs.gcRuns({ env, now: now(), keep, maxAgeMs, fleet: only, dryRun: Boolean(flags["dry-run"]) });
+
+  if (flags.json) { write(JSON.stringify(report, null, 2)); return EXIT.matched; }
+  const verb = report.dryRun ? "would remove" : "removed";
+  if (!report.removed.length) {
+    write(info(`nothing to remove. ${report.kept} run${report.kept === 1 ? "" : "s"} kept, ${keep} per directory.`));
+    return EXIT.matched;
+  }
+  for (const r of report.removed) {
+    write(`${dim(r.ended)}  ${bone(r.run)}  ${ash(tildeHome(r.cwd))}  ${dim(r.why === "age" ? "older than the age cap" : "beyond the per-directory count")}`);
+  }
+  write(ok(`${verb} ${report.removed.length} run${report.removed.length === 1 ? "" : "s"} and ${report.lines} ledger line${report.lines === 1 ? "" : "s"}. ${report.kept} kept.`));
+  return EXIT.matched;
+}
+
+const tildeHome = (p) => {
+  const h = process.env.HOME || "";
+  return h && String(p).startsWith(h) ? `~${String(p).slice(h.length)}` : String(p ?? "");
+};
+
 /* --------------------------------------------------------------- dispatch */
 
-const VERBS = { open: fleetOpen, cap: fleetCap, tree: fleetTree, stop: fleetStop, log: fleetLog };
+const VERBS = {
+  open: fleetOpen, cap: fleetCap, tree: fleetTree, stop: fleetStop, log: fleetLog,
+  beat: fleetBeat, gc: fleetGc,
+};
 
 export async function fleetCommand(argv = [], { write = console.log, ...deps } = {}) {
   const o = {
