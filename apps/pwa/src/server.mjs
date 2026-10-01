@@ -149,6 +149,8 @@ async function main() {
   // Unref'd so it never holds the process open on its own.
   setInterval(sweep, SWEEP_MS).unref();
   app.listen(config.port, () => console.log(`🤘 app.moshcode.sh on :${config.port} (${config.env}) — ${config.origin}`));
+  // PID 1 in its container: without a handler `docker stop` waits 10 s for SIGKILL.
+  for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => process.exit(0));
 }
 main().catch((e) => { console.error("boot failed:", e); process.exit(1); });
 
