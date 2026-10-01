@@ -54,7 +54,12 @@ test("the origin is asked for the Moshpit name, not the target", async () => {
   } finally { server.close(); }
 });
 
-test("fetch() would have sent the wrong Host — the bug this replaces", async () => {
+// Pins undici's behaviour: Node's fetch() drops a caller-supplied Host header.
+// Bun's fetch() honours it, so there is no defect to pin when the suite runs on
+// Bun (production does); the gateway's own http.request path is covered above.
+test("fetch() would have sent the wrong Host — the bug this replaces", {
+  skip: process.versions.bun ? "Bun's fetch() keeps a caller-supplied Host" : false,
+}, async () => {
   const { server, seen, port } = await virtualHost();
   try {
     const res = await fetch(`http://127.0.0.1:${port}/`, {

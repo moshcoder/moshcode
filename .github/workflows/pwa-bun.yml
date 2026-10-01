@@ -1,0 +1,46 @@
+# app.moshcode.sh runs on Bun in production (see Dockerfile). Its dependencies are
+# still installed with npm from apps/pwa/package-lock.json, as the image does.
+name: pwa on bun
+
+on:
+  pull_request:
+    paths: ["apps/pwa/**", "Dockerfile", ".github/workflows/pwa-bun.yml"]
+  push:
+    branches: [main]
+    paths: ["apps/pwa/**", "Dockerfile", ".github/workflows/pwa-bun.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PWA tests + boot under Bun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+        working-directory: apps/pwa
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      # One process per file, as `node --test` does: each file points DATABASE_URL
+      # at its own scratch database before importing config. --timeout: bun test
+      # stops a test after 5 s by default; node --test has no limit, and the pit
+      # tests seed 5000 names first.
+      - name: Tests (one Bun process per file)
+        working-directory: apps/pwa
+        run: |
+          failed=0
+          for f in test/*.test.mjs; do bun test --timeout 120000 "./$f" > /tmp/t.log 2>&1 || { echo "FAIL $f"; cat /tmp/t.log; failed=1; }; done
+          exit $failed
+      - name: Server boots under Bun
+        run: |
+          DATABASE_URL="file:/tmp/pwa-ci.db" SESSION_SECRET=ci PORT=3000 bun apps/pwa/src/server.mjs > /tmp/server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/healthz && exit 0
+            sleep 1
+          done
+          cat /tmp/server.log; exit 1
