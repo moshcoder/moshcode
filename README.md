@@ -907,6 +907,22 @@ same name that vendors this package. Installing both is fine: the wrapper hands
 over to a `crawlproof` on PATH that is not its own, and refuses to follow one
 that is.
 
+### Keywords
+
+`keywords` loads a page in headless Chrome and ranks the 1-, 2- and 3-word
+phrases its visible text repeats. It skips nav, header, footer, forms and
+hidden text:
+
+```sh
+moshcode install keywords         # the cli-tools set; `cli-tools update` if you have an older one
+moshcode keywords https://example.org
+moshcode keywords example.org --limit 50 --json
+```
+
+It ships in the `cli-tools` set (v0.52.0+), so installing it installs the set,
+and upgrading runs `cli-tools update`. It uses the box's own Chrome or Chromium
+(`CHROME_PATH` names one).
+
 ### Cloud + infra CLIs
 
 ```sh
