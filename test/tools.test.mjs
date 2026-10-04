@@ -418,6 +418,15 @@ test("keywords is one cli-tools command with its own entry, installed and upgrad
   assert.match(toolList(), /keywords/);
 });
 
+test("statements is one cli-tools command with its own entry, installed and upgraded with the set", () => {
+  assert.deepEqual(resolveTool("statements"), ["statements", TOOLS.statements]);
+  assert.equal(TOOLS.statements.bin, "statements");
+  assert.deepEqual(TOOLS.statements.install, TOOLS["cli-tools"].install);
+  assert.ok(TOOLS.statements.binDirs.some((dir) => dir.endsWith(path.join(".local", "bin"))));
+  assert.deepEqual(toolUpgradeSpec(TOOLS.statements), { cmd: "cli-tools", args: ["update"] });
+  assert.match(toolList(), /statements/);
+});
+
 test("Spinifex installs the spx host platform and re-runs the script to upgrade", () => {
   assert.deepEqual(resolveTool("SPINIFEX"), ["spinifex", TOOLS.spinifex]);
   // The product is Spinifex; the binary is spx. Getting this backwards makes

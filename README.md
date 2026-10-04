@@ -923,6 +923,26 @@ It ships in the `cli-tools` set (v0.52.0+), so installing it installs the set,
 and upgrading runs `cli-tools update`. It uses the box's own Chrome or Chromium
 (`CHROME_PATH` names one).
 
+### Statements
+
+SimpleFIN gives an app balances and transactions, never the PDF statements the
+banks issue. `statements` fills that gap. It takes the account list from
+SimpleFIN (or from `coinpay finances accounts`), signs in to each bank once in
+its own Chrome profile, and from then on downloads every new statement, filed
+as `<bank>/<account>/<YYYY-MM>.pdf`:
+
+```sh
+moshcode install statements                 # the cli-tools set (v0.53.0+)
+moshcode statements accounts                # institutions, accounts, who is signed in
+moshcode statements login chase             # once per bank, in a window; no password is stored
+moshcode statements fetch --import coinpay  # every new statement, kept in CoinPay's statement library too
+moshcode statements assist dcu              # a window; every PDF you download is filed
+```
+
+`fetch` exits `3` when a bank needs signing in again, so a weekly cron run
+(`cronjob set statements --schedule '30 7 * * 1' --command 'statements fetch --import coinpay'`)
+can tell you. The cli-tools README has the details.
+
 ### Cloud + infra CLIs
 
 ```sh
