@@ -407,6 +407,17 @@ test("cli-tools probes its dispatcher and updates through it", () => {
   assert.match(toolList(), /cli-tools/);
 });
 
+test("keywords is one cli-tools command with its own entry, installed and upgraded with the set", () => {
+  assert.deepEqual(resolveTool("keywords"), ["keywords", TOOLS.keywords]);
+  assert.equal(TOOLS.keywords.bin, "keywords");
+  // No package of its own: the cli-tools installer is the install.
+  assert.deepEqual(TOOLS.keywords.install, TOOLS["cli-tools"].install);
+  assert.ok(TOOLS.keywords.binDirs.some((dir) => dir.endsWith(path.join(".local", "bin"))));
+  // An older checkout lacks the command; the set's updater is what adds it.
+  assert.deepEqual(toolUpgradeSpec(TOOLS.keywords), { cmd: "cli-tools", args: ["update"] });
+  assert.match(toolList(), /keywords/);
+});
+
 test("Spinifex installs the spx host platform and re-runs the script to upgrade", () => {
   assert.deepEqual(resolveTool("SPINIFEX"), ["spinifex", TOOLS.spinifex]);
   // The product is Spinifex; the binary is spx. Getting this backwards makes

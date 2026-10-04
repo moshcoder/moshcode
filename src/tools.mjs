@@ -105,6 +105,27 @@ export const TOOLS = {
     // no `upgrade` key, the same as bo and railway.
     install: { cmd: "npm", args: ["install", "-g", "@profullstack/crawlproof"] },
   },
+  keywords: {
+    desc: "Keywords — the 1-, 2- and 3-word phrases a page's visible text repeats, ranked by count (headless Chrome)",
+    bin: "keywords",
+    // One command out of the cli-tools set (v0.52.0+), with its own entry so
+    // `/tools keywords` and `/install keywords` find it by the word you type.
+    // Unlike crawlproof there is no separate package: the set IS the install,
+    // so this runs the same installer and the same updater as `cli-tools`.
+    // It reads the page in a real browser (the box's own Chrome, found the
+    // way `wcag` finds it), because only visible text is counted.
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh",
+      ],
+    },
+    binDirs: [path.join(homedir(), ".local", "bin")],
+    // An older cli-tools checkout has the dispatcher but not this command;
+    // `cli-tools update` pulls and relinks, which is what adds it.
+    upgrade: { cmd: "cli-tools", args: ["update"] },
+  },
   timer: {
     desc: "Profullstack timer - track time against projects, for people and for agents",
     bin: "timer",
