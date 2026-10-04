@@ -126,6 +126,23 @@ export const TOOLS = {
     // `cli-tools update` pulls and relinks, which is what adds it.
     upgrade: { cmd: "cli-tools", args: ["update"] },
   },
+  statements: {
+    desc: "Statements — the PDF statements behind every SimpleFIN account, fetched from each bank and filed by account and month",
+    bin: "statements",
+    // SimpleFIN carries balances and transactions only; the original PDFs stay
+    // at the banks. This cli-tools command (v0.53.0+) signs in to each bank once
+    // in its own Chrome profile and downloads the statements from then on, so
+    // like keywords it installs and upgrades with the set.
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh",
+      ],
+    },
+    binDirs: [path.join(homedir(), ".local", "bin")],
+    upgrade: { cmd: "cli-tools", args: ["update"] },
+  },
   timer: {
     desc: "Profullstack timer - track time against projects, for people and for agents",
     bin: "timer",
