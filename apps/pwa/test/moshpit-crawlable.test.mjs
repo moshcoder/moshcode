@@ -108,6 +108,21 @@ test("a name's page canonicalises to itself and describes itself", skip, async (
   assert.ok(body.includes(`<meta property="og:url" content="${ORIGIN}/n/scrambled.eggs">`));
 });
 
+test("every Moshpit page reports to the one crawlproof project", skip, async () => {
+  const { get } = await app();
+  const { config } = await import("../src/config.mjs");
+  const tag = `<script data-site="${config.crawlproofSite}" src="https://crawlproof.com/stats.js" async></script>`;
+  assert.ok(config.crawlproofSite, "the network project id is set by default");
+
+  // A held name, an unclaimed one, an ending and the pit itself: the landing
+  // pages anyone arrives on from a resolver, a parked domain or a link.
+  for (const url of ["/n/scrambled.eggs", "/n/hawaiian.chicken", "/n/eggs", "/pit"]) {
+    const { body } = await get(url);
+    const head = body.slice(0, body.indexOf("</head>"));
+    assert.ok(head.includes(tag), `${url} has no tracker in its head`);
+  }
+});
+
 test("the app host is never what a pit page canonicalises to", skip, async () => {
   const { get } = await app();
   const { body } = await get("/n/scrambled.eggs");
