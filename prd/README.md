@@ -35,4 +35,5 @@ Start one with `moshcode prd "<idea>"` (TUI: `/prd`).
 | [0017](0017-moshcode-on-the-omarchy-bar.md) | Put the herd on the Omarchy bar — a plugin, and the one snapshot it reads | Accepted |
 | [0018](0018-take-what-omp-got-right.md) | Take what omp got right: cross-engine handoff, stream rules, and a usage ledger | Draft |
 | [0019](0019-take-what-swamp-got-right.md) | Take what swamp got right: heartbeat liveness, immutable run history, and workflow DAGs | Draft |
+| [0020](0020-the-herd-in-your-pocket.md) | The herd in your pocket: first-class mobile for moshcode, with no SSH, no Tailscale and no app-store wait | Draft |
 <!-- PRD-INDEX:END -->
