@@ -61,6 +61,12 @@ export const config = {
   origin,
   /** Canonical public home of the namespace — /pit and /n/<name>. */
   pitOrigin,
+  /**
+   * The crawlproof.com project every Moshpit page reports to: one project for
+   * the whole network, so /n/<name>, /pit and the offers add up in one place.
+   * Set MOSHPIT_CRAWLPROOF_SITE to an empty string to turn the tag off.
+   */
+  crawlproofSite: (process.env.MOSHPIT_CRAWLPROOF_SITE ?? "2cbffe9d-1b6e-43f0-85f3-3cadee132048").trim(),
   mcp: {
     origin: mcpOrigin,
     accessTtlMs: 60 * 60 * 1000,

@@ -36,7 +36,7 @@
 //   GET    /pit/dns                           how to reach these names from a machine
 import { createHash } from "node:crypto";
 import { Router } from "express";
-import { page, footer, appBar, esc } from "../lib/html.mjs";
+import { page as shellPage, footer, appBar, esc } from "../lib/html.mjs";
 import { requireAuth, csrfInput } from "../lib/session.mjs";
 import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
@@ -174,6 +174,12 @@ import {
   verifyTwin,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
+
+/**
+ * Every page this router draws carries the Moshpit crawlproof tag. A proxied
+ * origin's own HTML is passed through untouched — that page is its owner's.
+ */
+const page = (opts) => shellPage({ ...opts, tracker: config.crawlproofSite });
 import { shortLinkUrl } from "../lib/moshpit-links.mjs";
 import { caEnabled, caMaterial } from "../lib/moshpit-ca.mjs";
 import { getNameCertificate, issueNameCertificate, listNameCertificates } from "../lib/moshpit-certs.mjs";
@@ -804,11 +810,11 @@ moshpitRouter.delete("/api/moshpit/links/:code", async (req, res) => {
 moshpitRouter.get("/f/:code", async (req, res) => {
   const link = await getLink(req.params.code);
   if (!link) {
-    return res.status(404).type("html").send(page("no such link", `
+    return res.status(404).type("html").send(page({ title: "no such link", body: `
       <h1>No such short link</h1>
       <p class="faint">Nothing is published at <code>/f/${esc(String(req.params.code || ""))}</code>.
       It may have been taken down.</p>
-      <p><a href="${config.pitOrigin}/pit">the pit &rarr;</a></p>`));
+      <p><a href="${config.pitOrigin}/pit">the pit &rarr;</a></p>` }));
   }
 
   bumpLink(link.code).catch(() => {});

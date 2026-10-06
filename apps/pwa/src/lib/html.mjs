@@ -80,8 +80,13 @@ footer{border-top:1px solid var(--line);padding:26px 0;margin-top:40px}
 @media (max-width:940px){.grid{grid-template-columns:1fr}}
 `;
 
-/** Full HTML document with the brand shell. */
-export function page({ title = "moshcode ▸ app", body = "", head = "" }) {
+/**
+ * Full HTML document with the brand shell.
+ *
+ * `tracker` is a crawlproof.com project id. Only the Moshpit routes pass one,
+ * so the public network pages are counted and the signed-in app is not.
+ */
+export function page({ title = "moshcode ▸ app", body = "", head = "", tracker = "" }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -92,7 +97,8 @@ export function page({ title = "moshcode ▸ app", body = "", head = "" }) {
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <style>${BRAND_CSS}</style>
-${head}
+${head}${tracker ? `
+<script data-site="${esc(tracker)}" src="https://crawlproof.com/stats.js" async></script>` : ""}
 </head>
 <body>${body}
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{})}</script>
