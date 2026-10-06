@@ -17,7 +17,8 @@
 // Under --dry-run it narrates the argv instead of spawning.
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ENGINES, aiExecArgs, pickAiEngine, resolveEngine } from "./engines.mjs";
+import { API_ENGINES, ENGINES, aiExecArgs, pickAiEngine, resolveAnyEngine, runApiEngine } from "./engines.mjs";
+import { apiEngineConfig, buildChatRequest } from "./api-engines.mjs";
 
 // Resolve THIS package's own moshcode entrypoint, so scripting stays
 // self-referential and doesn't depend on `moshcode` being on PATH.
@@ -84,7 +85,12 @@ export function runAi(ctx, prompt, opts = {}) {
     // narrate without requiring an installed engine — so the fallback has to
     // resolve an alias itself: with nothing installed pickAiEngine() returns
     // null, and handing the raw alias to aiExecArgs threw instead of narrating.
-    const engine = pickAiEngine(opts.engine) || resolveEngine(opts.engine)?.[0] || opts.engine || "claude";
+    const engine = pickAiEngine(opts.engine) || resolveAnyEngine(opts.engine)?.key || opts.engine || "claude";
+    if (Object.hasOwn(API_ENGINES, engine)) {
+      const { url } = buildChatRequest(apiEngineConfig(engine), prompt);
+      ctx.out(`  🧠 ai(${JSON.stringify(String(prompt).slice(0, 48))}) → would POST: ${url} (${apiEngineConfig(engine).model})`);
+      return "";
+    }
     const args = aiExecArgs(engine, prompt); // throws only on an unknown engine name
     ctx.out(`  🧠 ai(${JSON.stringify(String(prompt).slice(0, 48))}) → would run: ${engine} ${args.join(" ")}`);
     return "";
@@ -92,7 +98,16 @@ export function runAi(ctx, prompt, opts = {}) {
 
   const engine = pickAiEngine(opts.engine);
   if (!engine) {
-    throw new Error(`moshscript: ai() needs an installed engine — try install("claude")`);
+    throw new Error(`moshscript: ai() needs an installed engine — try install("claude"), or set ZAI_API_KEY / PERPLEXITY_API_KEY / FUGU_API_KEY`);
+  }
+  if (Object.hasOwn(API_ENGINES, engine)) {
+    // An API engine is a fetch, so this branch is a promise; ai() is
+    // documented as needing await, which is what makes that safe.
+    ctx.out(`  🧠 ai() → ${engine}: ${String(prompt).slice(0, 60)}${String(prompt).length > 60 ? "…" : ""}`);
+    return runApiEngine(engine, prompt).then((r) => {
+      if (!r.ok) throw new Error(`moshscript: ai() → ${engine}: ${r.error}`);
+      return r.output;
+    });
   }
   const e = ENGINES[engine];
   const args = aiExecArgs(engine, prompt);

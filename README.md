@@ -28,6 +28,8 @@ or miss one that does. A test fails the build when it drifts.
 |---|---|---|
 | `moshcode agents` | engines | list engines, open their agent view, or launch autonomously |
 | `moshcode start` | engines | launch an engine with its native defaults |
+| `moshcode oneshot` | engines | run one prompt on one engine (CLI or API: zai, perplexity, fugu) and print the answer |
+| `moshcode hooks` | engines | fan-out prompt runner: a signed webhook in, one signed result per engine back out |
 | `moshcode herd` | runtime | run agent sessions that outlive this terminal |
 | `moshcode swarm` | runtime | one task, a herd of agents, one answer — plan, fan out, verify, synthesise (PRD 0015) |
 | `moshcode omarchy` | runtime | the herd on the Omarchy bar: the snapshot a QML widget polls, and the plugin around it (PRD 0017) |
@@ -102,6 +104,59 @@ moshcode install openagents # curl -fsSL https://openagents.org/install.sh | bas
 `openagents` is the odd one out: a launcher that supervises the engines above
 rather than a coding agent itself. Its installer ends by offering to pair the
 machine with a workspace — press Enter to skip that.
+
+### API-only engines: zai, perplexity, fugu
+
+Three engines are an OpenAI-compatible HTTP API and nothing else, so there is
+nothing to install and no interactive session to open (`moshcode zai` says so
+and points here). They answer one prompt at a time, through `moshcode oneshot`,
+moshscript's `ai(prompt, { engine: "zai" })` and `moshcode hooks serve`. Each is
+usable when its key is set:
+
+| engine | aliases | key | default model (override) | base URL (override) |
+| --- | --- | --- | --- | --- |
+| `zai` | `glm`, `zhipu` | `ZAI_API_KEY` | `glm-5.2` (`ZAI_MODEL`) | `https://api.z.ai/api/coding/paas/v4` (`ZAI_BASE_URL`) |
+| `perplexity` | `pplx`, `sonar` | `PERPLEXITY_API_KEY` | `sonar-reasoning-pro` (`PERPLEXITY_MODEL`) | `https://api.perplexity.ai` (`PERPLEXITY_BASE_URL`) |
+| `fugu` | `sakana` | `FUGU_API_KEY` | `fugu` (`FUGU_MODEL`) | `https://api.sakana.ai/v1` (`FUGU_BASE_URL`) |
+
+```sh
+moshcode oneshot zai "explain this regex: ^a+$"
+git diff | moshcode oneshot pplx -
+moshcode oneshot claude "one-line summary of RFC 9110"   # CLI engines too, in print mode
+moshcode oneshot --list                                  # who can answer here
+```
+
+`<think>…</think>` blocks from reasoning models are stripped from the answer.
+`<KEY>_MAX_TOKENS` (for example `ZAI_MAX_TOKENS`) raises the 8192-token default.
+
+### Fan-out prompt runner: `moshcode hooks serve`
+
+One signed webhook in, the prompt run once on every available engine in
+parallel, one signed webhook back per engine. Signing and delivery are
+[`@profullstack/webhooks`](https://www.npmjs.com/package/@profullstack/webhooks)
+(Standard Webhooks headers, CloudEvents bodies) with the shared secret in
+`MOSHCODE_HOOKS_SECRET`; `serve` refuses to start without it.
+
+```sh
+export MOSHCODE_HOOKS_SECRET=$(moshcode hooks secret)
+moshcode hooks serve --port 7690 --host 127.0.0.1 --concurrency 4 --timeout 180
+```
+
+`POST /hooks` takes a `moshcode.prompt.requested.v1` event whose data is
+`{ run_id, prompt, engines?, timeout_s?, callback_url }` and answers `202
+{ run_id, engines, skipped }` at once (401 for a bad signature, 400/413/422 for a
+bad request). `prompt` is at most 20,000 characters; `callback_url` must be
+https, or http to localhost, 127.0.0.1 or host.docker.internal. Each engine then
+posts back `moshcode.prompt.result.v1` with `{ run_id, engine, kind, ok, output,
+error, exit_code, ms, model, truncated }`, and the run ends with
+`moshcode.prompt.completed.v1` `{ run_id, total, ok, failed, ms }`. `GET
+/engines` (`{ engines: [{ name, kind, available, reason? }] }`) and `GET
+/healthz` are unsigned.
+
+A prompt from the network gets the narrowest run moshcode has: plain print
+mode with no yolo or skip-permissions flag, a fresh empty temp directory that is
+deleted afterwards, a hard deadline that kills the engine's whole process tree,
+and output capped at 64 KB.
 
 ### Autonomous agents versus raw starts
 
