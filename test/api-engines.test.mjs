@@ -305,6 +305,14 @@ test("a broken mise shim is unavailable, with mise's reason, and is never spawne
     const r = await runOneShot("gemini", "x", { env, spawnImpl: () => assert.fail("spawned a broken shim") });
     assert.equal(r.ok, false);
     assert.match(r.error, /broken mise shim/);
+
+    // mise runs the next `gemini` on PATH when its own is not active, so a
+    // real binary later on PATH keeps the engine available.
+    fs.mkdirSync(path.join(dir, "bin"));
+    fs.writeFileSync(path.join(dir, "bin", "gemini"), "#!/bin/sh\necho real\n");
+    fs.chmodSync(path.join(dir, "bin", "gemini"), 0o755);
+    const withFallback = { PATH: `${path.join(dir, "shims")}:${path.join(dir, "bin")}:/usr/bin:/bin` };
+    assert.equal(oneShotEngines(withFallback).find((e) => e.name === "gemini").available, true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -197,8 +197,19 @@ export function checkShim(binPath, name, env = process.env, { spawnSyncImpl = sp
     try { target = realpathSync(out); } catch { /* keep mise's answer */ }
     result = { ok: true, target };
   } else {
-    const why = String(r.stderr || r.error?.message || "").split("\n").map((l) => l.trim()).find(Boolean) || "mise which failed";
-    result = { ok: false, target: null, reason: `${name} is a broken mise shim: ${why.replace(/^mise (ERROR|WARN)\s*/, "").slice(0, 160)}` };
+    // A shim for a tool that is not active falls through to the next `name`
+    // on PATH when run, so a real binary later on PATH still answers.
+    const shimDir = path.dirname(binPath);
+    const rest = (env.PATH || "").split(path.delimiter).filter((d) => d && path.resolve(d) !== path.resolve(shimDir));
+    const fallback = resolveExecutable(name, [], { ...env, PATH: rest.join(path.delimiter) });
+    let fallbackReal = null;
+    try { fallbackReal = fallback ? realpathSync(fallback) : null; } catch { /* dangling */ }
+    if (fallbackReal && path.basename(fallbackReal) !== "mise") {
+      result = { ok: true, target: fallbackReal };
+    } else {
+      const why = String(r.stderr || r.error?.message || "").split("\n").map((l) => l.trim()).find(Boolean) || "mise which failed";
+      result = { ok: false, target: null, reason: `${name} is a broken mise shim: ${why.replace(/^mise (ERROR|WARN)\s*/, "").slice(0, 160)}` };
+    }
   }
   shimCache.set(cacheKey, { at: now, result });
   return result;
