@@ -1,0 +1,11 @@
+⏺ Update(src/server.mjs)
+
+ Edit file
+ src/server.mjs
+   12  import { sessionsRouter } from "./routes/sessions.mjs";
+   13 +import { herdRouter } from "./routes/herd.mjs";
+
+ Do you want to make this edit to server.mjs?
+ ❯ 1. Yes
+   2. Yes, allow all edits during this session (shift+tab)
+   3. No, and tell Claude what to do differently (esc)

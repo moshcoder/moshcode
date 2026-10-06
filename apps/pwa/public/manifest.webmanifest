@@ -1,8 +1,8 @@
 {
   "name": "moshcode",
   "short_name": "moshcode",
-  "description": "Human-in-the-loop approvals for your moshscript loops.",
-  "start_url": "/",
+  "description": "Your herd of coding agents on your phone: every session, one-tap approvals, a terminal with a key bar.",
+  "start_url": "/m",
   "scope": "/",
   "display": "standalone",
   "background_color": "#070806",

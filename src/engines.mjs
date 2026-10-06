@@ -179,6 +179,23 @@ export const ENGINES = {
       // works cannot outrank "esc to interrupt".
       idle: [/\?\s+for shortc/i, /shift\+tab to cycle/i, /^\s*❯\s+Try\s+"/m],
     },
+    // One-tap answers to the permission dialog from a phone (PRD 0020 §2).
+    // `prompt` must match the bottom of the screen before any key is sent:
+    // it is what tells a live permission dialog from whatever came after it,
+    // so a late tap is refused as stale instead of typing `1` into the next
+    // prompt. Claude's dialog is a numbered menu, and a digit picks its option
+    // outright; option 2 is "Yes, and don't ask again …" for commands and
+    // "Yes, allow all edits during this session" for edits. Esc is the deny
+    // the dialog itself advertises. Fixture screens: test/fixtures/approve/.
+    approve: {
+      prompt: [/\bdo you want to (?:proceed|make this edit|create|allow)\b/i],
+      // Older releases draw the dialog inside a box, so a line may open with │.
+      options: [/^[\s│|]*[❯›>]?\s*1\.\s*Yes\b/m],
+      allow: ["1"],
+      allowAll: ["2"],
+      allowAllWhen: /^[\s│|]*[❯›>]?\s*2\.\s*Yes,/m,
+      deny: ["Escape"],
+    },
   },
   codex: {
     desc: "Codex — OpenAI's coding CLI",
@@ -198,6 +215,19 @@ export const ENGINES = {
     state: {
       blocked: [/\ballow (?:this )?command\b/i, /\bapprove this (?:command|edit|change)\b/i],
       working: [/\besc to interrupt\b/i, /^\s*working\b/im],
+    },
+    // Codex labels each approval option with its own shortcut letter —
+    // "Yes, proceed (y)", "… don't ask again for this command (a)" — and those
+    // letters are what it binds, so they are what we send. "Always" is only
+    // offered when the dialog offers it. See claude's `approve` for the rules.
+    approve: {
+      prompt: [/\bwould you like to (?:run|make|apply)\b/i, /\ballow (?:this )?command\?/i],
+      options: [/\bYes,? proceed\b|\(y\)/i],
+      allow: ["y"],
+      allowAll: ["a"],
+      allowAllWhen: /\(a\)/,
+      footer: [/\bpress enter to confirm\b|\besc to cancel\b/i],
+      deny: ["Escape"],
     },
   },
   gemini: {

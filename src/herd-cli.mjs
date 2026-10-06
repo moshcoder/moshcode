@@ -1124,6 +1124,97 @@ export async function herdWatch(argv, { write = console.log, once = false } = {}
 }
 
 /**
+ * The phone relay in the foreground (PRD 0020). `herd phone on` installs this
+ * as a service; running it by hand is for a box with no service manager, or
+ * for watching what it does.
+ */
+export async function herdRelay(argv, { write = console.log } = {}) {
+  const { runRelay } = await import("./herd-relay.mjs");
+  const { moshcodeVersion } = await import("./ui.mjs");
+  const controller = new AbortController();
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => controller.abort());
+  try {
+    await runRelay({ roster, signal: controller.signal, version: moshcodeVersion() || "", write: (line) => write(info(line)) });
+    return EXIT.matched;
+  } catch (e) {
+    write(err(e.message || String(e)));
+    return EXIT.infra;
+  }
+}
+
+/** `moshcode herd phone on|off|status` — install, remove or inspect the relay service. */
+export async function herdPhone(argv, { write = console.log, exec = null } = {}) {
+  const relay = await import("./herd-relay.mjs");
+  const { loadCreds } = await import("./auth.mjs");
+  const [verb = "status"] = argv;
+  const run = exec || (async (cmd, args) => {
+    const { spawnSync } = await import("node:child_process");
+    const r = spawnSync(cmd, args, { encoding: "utf8" });
+    return { ok: r.status === 0, error: (r.stderr || r.error?.message || "").trim(), stdout: r.stdout || "" };
+  });
+  const file = relay.relayServicePath();
+  const api = (process.env.MOSHCODE_API || loadCreds()?.api || "https://app.moshcode.sh").replace(/\/+$/, "");
+
+  if (verb === "on") {
+    if (!process.env.MOSHCODE_API_KEY && !loadCreds()?.token) {
+      // No manual steps: log in now rather than tell someone to.
+      write(info("not logged in to app.moshcode.sh yet — logging in first."));
+      const { loginAuto } = await import("./auth.mjs");
+      const result = await loginAuto({}).catch((e) => ({ ok: false, error: e }));
+      if (!loadCreds()?.token) {
+        write(err(`login did not finish${result?.error ? `: ${result.error.message || result.error}` : ""} — run \`moshcode login\` and then this again.`));
+        return EXIT.usage;
+      }
+    }
+    const machine = relay.machineIdentity();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, relay.relayServiceFile({ env: relay.relayEnv() }));
+    write(ok(`wrote ${file}`));
+    for (const [cmd, args, opts] of relay.relayServiceCommands({ file, action: "on" })) {
+      const r = await run(cmd, args);
+      if (!r.ok && !opts?.optional) {
+        write(err(`${cmd} ${args.join(" ")} failed: ${r.error}`));
+        write(info(`run ${acid("moshcode herd relay")} in the herd instead; it is the same process in the foreground.`));
+        return EXIT.infra;
+      }
+      if (r.ok) write(ok(`${cmd} ${args.join(" ")}`));
+    }
+    write("");
+    write(ok(`${bone(machine.name)} is on your phone. open ${acid(`${api}/m`)} and add it to your home screen.`));
+    write(info("sign in with the same account, allow notifications, and a blocked agent buzzes you with Allow / Deny."));
+    return EXIT.matched;
+  }
+
+  if (verb === "off") {
+    for (const [cmd, args] of relay.relayServiceCommands({ file, action: "off" })) await run(cmd, args);
+    try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
+    write(ok("phone relay off — this box is no longer on app.moshcode.sh/m."));
+    return EXIT.matched;
+  }
+
+  if (verb === "status") {
+    const installed = fs.existsSync(file);
+    const [[cmd, args]] = relay.relayServiceCommands({ file, action: "status" });
+    const running = installed ? (await run(cmd, args)).ok : false;
+    const machine = relay.machineIdentity();
+    const loggedIn = Boolean(process.env.MOSHCODE_API_KEY || loadCreds()?.token);
+    if (argv.includes("--json")) {
+      write(JSON.stringify({ installed, running, loggedIn, machine, file, url: `${api}/m` }));
+      return EXIT.matched;
+    }
+    write(`${bone("machine")}  ${machine.name} ${dim(machine.id)}`);
+    write(`${bone("service")}  ${installed ? (running ? acid("running") : amber("installed, not running")) : ash("not installed")} ${dim(file)}`);
+    write(`${bone("login")}    ${loggedIn ? acid("yes") : amber("no — run `moshcode login`")}`);
+    write(`${bone("phone")}    ${acid(`${api}/m`)}`);
+    if (!installed) write(info(`turn it on with ${acid("moshcode herd phone on")}`));
+    return EXIT.matched;
+  }
+
+  write(err("usage: moshcode herd phone <on|off|status>"));
+  return EXIT.usage;
+}
+
+/**
  * What a reply to each kind of blocked has to look like.
  *
  * Sent with the notification rather than checked on the way back, because the
@@ -1780,6 +1871,8 @@ const VERBS = {
   read: herdRead, prompt: herdPrompt, "send-keys": herdSendKeys,
   wait: herdWait, restore: herdRestore, report: herdReport,
   notify: herdNotify, watch: herdWatch, stop: herdStop,
+  // PRD 0020: the herd on a phone, through a relay the box dials out on.
+  phone: herdPhone, relay: herdRelay,
   // PRD 0011. Same shape as everything above: one verb, `--json` on all of
   // them, and no second API anywhere — `serve` is this surface answering a
   // socket rather than a parallel one.

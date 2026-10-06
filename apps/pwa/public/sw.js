@@ -1,5 +1,5 @@
 /* moshcode PWA service worker — offline app shell (network-first for docs). */
-const CACHE = "moshcode-v3";
+const CACHE = "moshcode-v4";
 const SHELL = ["/", "/icon.svg", "/manifest.webmanifest", "/passkey.js"];
 
 self.addEventListener("install", (e) => {
@@ -12,26 +12,57 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-// approval push notifications
+// Push: approvals, and the herd (PRD 0020). A herd push for a permission
+// prompt carries Allow / Deny actions and a one-time token; tapping one answers
+// the agent from the notification without opening the app. Platforms that show
+// no action buttons (Safari) open the pane, where the same buttons are.
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) {}
-  e.waitUntil(self.registration.showNotification(d.title || "moshcode 🤘", {
+  const options = {
     body: d.body || "You have an approval waiting.",
     icon: "/icon.svg",
     badge: "/icon.svg",
-    data: { url: d.url || "/" },
-    tag: "moshcode-approval",
-  }));
+    data: { url: d.url || "/", act: d.act || null },
+    tag: d.tag || "moshcode-approval",
+    renotify: Boolean(d.tag),
+    requireInteraction: Boolean(d.requireInteraction),
+  };
+  if (Array.isArray(d.actions) && d.actions.length) options.actions = d.actions.slice(0, 2);
+  e.waitUntil(self.registration.showNotification(d.title || "moshcode 🤘", options));
 });
+
+async function act(data, intent) {
+  try {
+    const res = await fetch("/api/herd/act", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: data.act.token, intent }),
+    });
+    const body = await res.json().catch(() => ({}));
+    const said = res.ok ? (intent === "allow" ? "allowed" : "denied")
+      : body.stale ? "already answered" : (body.error || "could not answer");
+    await self.registration.showNotification(`moshcode: ${said}`, { body: "", icon: "/icon.svg", tag: "moshcode-herd-ack", data: { url: data.url } });
+  } catch (_) {
+    return openUrl(data.url);
+  }
+}
+
+function openUrl(url) {
+  return clients.matchAll({ type: "window" }).then((cs) => {
+    for (const c of cs) if ("focus" in c) { c.navigate(url); return c.focus(); }
+    return clients.openWindow(url);
+  });
+}
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || "/";
-  e.waitUntil(clients.matchAll({ type: "window" }).then((cs) => {
-    for (const c of cs) if ("focus" in c) { c.navigate(url); return c.focus(); }
-    return clients.openWindow(url);
-  }));
+  const data = e.notification.data || {};
+  if ((e.action === "allow" || e.action === "deny") && data.act && data.act.token) {
+    e.waitUntil(act(data, e.action));
+    return;
+  }
+  e.waitUntil(openUrl(data.url || "/"));
 });
 
 self.addEventListener("fetch", (e) => {
