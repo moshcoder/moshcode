@@ -427,6 +427,20 @@ test("statements is one cli-tools command with its own entry, installed and upgr
   assert.match(toolList(), /statements/);
 });
 
+test("porkbun is one cli-tools command with its own entry, installed and upgraded with the set", () => {
+  assert.deepEqual(resolveTool("porkbun"), ["porkbun", TOOLS.porkbun]);
+  assert.equal(TOOLS.porkbun.bin, "porkbun");
+  assert.deepEqual(TOOLS.porkbun.install, TOOLS["cli-tools"].install);
+  assert.ok(TOOLS.porkbun.binDirs.some((dir) => dir.endsWith(path.join(".local", "bin"))));
+  assert.deepEqual(toolUpgradeSpec(TOOLS.porkbun), { cmd: "cli-tools", args: ["update"] });
+  assert.match(toolList(), /porkbun/);
+});
+
+test("digitalocean and do resolve to doctl, the official binary", () => {
+  assert.deepEqual(resolveTool("digitalocean"), ["doctl", TOOLS.doctl]);
+  assert.deepEqual(resolveTool("do"), ["doctl", TOOLS.doctl]);
+});
+
 test("Spinifex installs the spx host platform and re-runs the script to upgrade", () => {
   assert.deepEqual(resolveTool("SPINIFEX"), ["spinifex", TOOLS.spinifex]);
   // The product is Spinifex; the binary is spx. Getting this backwards makes
