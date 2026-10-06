@@ -156,7 +156,21 @@ error, exit_code, ms, model, truncated }`, and the run ends with
 A prompt from the network gets the narrowest run moshcode has: plain print
 mode with no yolo or skip-permissions flag, a fresh empty temp directory that is
 deleted afterwards, a hard deadline that kills the engine's whole process tree,
-and output capped at 64 KB.
+and output capped at 64 KB. An engine that exits 0 with no output is reported
+as `ok: false` (`"empty answer"`), and an engine whose binary is a mise shim
+with no version set is `available: false` with mise's reason.
+
+One-shot runs (`oneshot` and `hooks serve`) wire some CLI engines from API keys
+in the environment, for that engine's child process only:
+
+| engine | uses | becomes |
+| --- | --- | --- |
+| `qwen` | `QWEN_API_KEY` or `DASHSCOPE_API_KEY` | `--auth-type openai --openai-base-url <QWEN_API_URL or DashScope intl> -m <QWEN_MODEL or qwen-plus>`, key in qwen's `OPENAI_API_KEY`; always `--safe-mode` (no MCP servers) |
+| `kimi` | `MOONSHOT_API_KEY` (or `KIMI_API_KEY`) | `KIMI_MODEL_NAME=<KIMI_MODEL or kimi-k2.6>` + `KIMI_MODEL_API_KEY`, instead of the `kimi login` provider |
+| `deepseek` | `DEEPSEEK_API_KEY`, `DEEPSEEK_API_URL`; `MOSHCODE_DEEPSEEK_VIA=dashscope` routes it through `DASHSCOPE_API_KEY` (`MOSHCODE_DEEPSEEK_MODEL`, default `deepseek-v3.2`) | always `--approval-mode plan` (its headless default approves every tool) |
+| `aider` | `AIDER_MODEL`, else `DASHSCOPE_API_KEY` (`openai/qwen-plus`), else `GEMINI_API_KEY`, else `DEEPSEEK_API_KEY` | `--no-git --no-analytics …`, banner stripped from the answer |
+| `claude` | | `--strict-mcp-config` (no MCP servers) |
+| `gemini` | | `GEMINI_CLI_TRUST_WORKSPACE=true` in the runner's empty temp dir only |
 
 ### Autonomous agents versus raw starts
 

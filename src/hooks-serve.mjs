@@ -140,7 +140,7 @@ export async function executeRun(run, {
     let r;
     try {
       dir = await mkdtemp(path.join(tmpRoot, "moshcode-hook-"));
-      r = await runOne(engine, run.prompt, { cwd: dir, timeoutMs: run.timeoutMs, maxBytes, env });
+      r = await runOne(engine, run.prompt, { cwd: dir, timeoutMs: run.timeoutMs, maxBytes, env, scratch: true });
     } catch (e) {
       r = { engine, kind: resolveAnyEngine(engine)?.kind || null, ok: false, output: "", error: e.message, exit_code: null, ms: 0, model: null, truncated: false };
     } finally {
