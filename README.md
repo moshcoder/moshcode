@@ -943,6 +943,25 @@ moshcode statements assist dcu              # a window; every PDF you download i
 (`cronjob set statements --schedule '30 7 * * 1' --command 'statements fetch --import coinpay'`)
 can tell you. The cli-tools README has the details.
 
+### Porkbun
+
+`porkbun` manages the domains on a Porkbun account from the shell: DNS records,
+URL forwards, availability checks and registration:
+
+```sh
+moshcode install porkbun                       # the cli-tools set; `cli-tools update` if you have an older one
+cli-tools config pull                          # PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY from the vault
+moshcode porkbun ping                          # check the keys, show the IP Porkbun sees
+moshcode porkbun domains
+moshcode porkbun ls example.com --type TXT
+moshcode porkbun set example.com www CNAME app.example.net
+moshcode porkbun check example.dev
+```
+
+It ships in the `cli-tools` set, so installing it installs the set, and
+upgrading runs `cli-tools update`. Porkbun's own MCP server is separate:
+`moshcode mcp add porkbun`.
+
 ### Cloud + infra CLIs
 
 ```sh
@@ -950,7 +969,7 @@ moshcode install railway          # npm i -g @railway/cli
 moshcode install gh               # GitHub release binary → ~/.local/bin
 moshcode install supabase         # GitHub release binary (no global npm package exists)
 moshcode install doppler          # official script, installed user-local (needs gpgv)
-moshcode install doctl            # GitHub release binary → ~/.local/bin
+moshcode install doctl            # GitHub release binary → ~/.local/bin (also: digitalocean, do)
 moshcode install turso            # official script → ~/.turso (new shell to pick up PATH)
 moshcode install tailscale        # official script; system daemon, so it needs root
 moshcode install coral            # official script → ~/.local/bin (checksum-verified)

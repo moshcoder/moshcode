@@ -143,6 +143,24 @@ export const TOOLS = {
     binDirs: [path.join(homedir(), ".local", "bin")],
     upgrade: { cmd: "cli-tools", args: ["update"] },
   },
+  porkbun: {
+    desc: "Porkbun — DNS records, URL forwards, availability checks and registration for the domains on a Porkbun account",
+    bin: "porkbun",
+    // The cli-tools command, not Porkbun's MCP server (that one is
+    // `moshcode mcp add porkbun`). Like keywords and statements it has no
+    // package of its own, so it installs and upgrades with the set. It reads
+    // PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY from the env or from
+    // `cli-tools config` (`cli-tools config pull` fetches both from the vault).
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh",
+      ],
+    },
+    binDirs: [path.join(homedir(), ".local", "bin")],
+    upgrade: { cmd: "cli-tools", args: ["update"] },
+  },
   timer: {
     desc: "Profullstack timer - track time against projects, for people and for agents",
     bin: "timer",
