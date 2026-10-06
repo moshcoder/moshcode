@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ENGINES, agentLaunchArgs, resolveEngine, engineStatus, openSession } from "./engines.mjs";
+import { API_ENGINES, ENGINES, agentLaunchArgs, apiEngineAvailable, interactiveError, resolveApiEngine, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { TOOLS, resolveTool, resolveInstallable, suggestTargets, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
 import { postSocial, socialRoster } from "./socials.mjs";
@@ -183,6 +183,11 @@ function printEngines(json = false) {
     const dot = e.installed ? acid("●") : ash("○");
     console.log(`   ${dot} ${bone(e.key.padEnd(9))} ${ash(e.installed ? "installed" : "not installed — /install " + e.key)}`);
   }
+  // API-only engines: one-shot through `moshcode oneshot`, no session to open.
+  for (const [key, e] of Object.entries(API_ENGINES)) {
+    const ok = apiEngineAvailable(key).available;
+    console.log(`   ${ok ? acid("●") : ash("○")} ${bone(key.padEnd(9))} ${ash(ok ? "api · moshcode oneshot " + key : "api · set " + e.keyEnv)}`);
+  }
 }
 
 /**
@@ -254,7 +259,7 @@ function printSocials() {
  */
 function isReservedName(name) {
   const key = String(name).toLowerCase();
-  return Boolean(findPitCommand(key) || resolveEngine(key) || resolveTool(key) || RENAMED_COMMANDS[key]);
+  return Boolean(findPitCommand(key) || resolveEngine(key) || resolveApiEngine(key) || resolveTool(key) || RENAMED_COMMANDS[key]);
 }
 
 function printAliases({ json = false } = {}) {
@@ -1207,7 +1212,11 @@ export async function tui() {
         continue;
       }
       const resolved = resolveEngine(rest[0]);
-      if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
+      if (!resolved) {
+        const api = resolveApiEngine(rest[0]);
+        console.log(err(api ? interactiveError(api[0]) : `unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`));
+        continue;
+      }
       const [key, engine] = resolved;
       const detached = detachedLaunch(key, rest.slice(1), { agentMode: true });
       if (detached.taken) continue;
@@ -1224,7 +1233,11 @@ export async function tui() {
     if (cmd === "start") {
       if (!rest[0]) { console.log(err("usage: /start <engine> [args…] [-d]")); continue; }
       const resolved = resolveEngine(rest[0]);
-      if (!resolved) { console.log(err(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`)); continue; }
+      if (!resolved) {
+        const api = resolveApiEngine(rest[0]);
+        console.log(err(api ? interactiveError(api[0]) : `unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`));
+        continue;
+      }
       const [key, engine] = resolved;
       const detached = detachedLaunch(key, rest.slice(1));
       if (detached.taken) continue;
@@ -1436,6 +1449,9 @@ export async function tui() {
       rl = mkrl();
       continue;
     }
+    // An API-only engine has no session to open; say what does work.
+    const apiEngine = resolveApiEngine(cmd);
+    if (apiEngine && !resolveTool(cmd)) { console.log(err(interactiveError(apiEngine[0]))); continue; }
     // Bare workflow-tool name (including `/ugig` and `/coinpay`) → run it.
     const resolvedTool = resolveTool(cmd);
     if (resolvedTool) {

@@ -36,7 +36,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { API_ENGINES, apiEngineAvailable, resolveApiEngine } from "./api-engines.mjs";
 import { setActiveChildInput } from "./mirror.mjs";
+
+// API-only engines (zai, perplexity, fugu) live in their own table; see
+// src/api-engines.mjs for why they are not entries in ENGINES.
+export {
+  API_ENGINES, API_ENGINE_ALIASES, apiEngineAvailable, interactiveError, resolveApiEngine, runApiEngine, stripThink,
+} from "./api-engines.mjs";
 import { throttleSpec } from "./nice.mjs";
 import { captureSpec } from "./pty.mjs";
 
@@ -502,15 +509,15 @@ export function primaryBin(bin) {
   return Array.isArray(bin) ? bin[0] : bin;
 }
 
-function executableCandidates(bin, extraDirs = []) {
-  const exts = process.platform === "win32" ? ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";")] : [""];
+function executableCandidates(bin, extraDirs = [], env = process.env) {
+  const exts = process.platform === "win32" ? ["", ...(env.PATHEXT || ".EXE;.CMD;.BAT").split(";")] : [""];
   const names = (Array.isArray(bin) ? bin : [bin]).filter(Boolean);
   const seen = new Set();
   const candidates = [];
   for (const name of names) {
     const dirs = path.isAbsolute(name) || name.includes(path.sep)
       ? [""]
-      : [...(process.env.PATH || "").split(path.delimiter).filter(Boolean), ...extraDirs.filter(Boolean)];
+      : [...(env.PATH || "").split(path.delimiter).filter(Boolean), ...extraDirs.filter(Boolean)];
     for (const dir of dirs) {
       for (const ext of exts) {
         const candidate = dir ? path.join(dir, name + ext) : name + ext;
@@ -525,8 +532,11 @@ function executableCandidates(bin, extraDirs = []) {
   return candidates;
 }
 
-export function resolveExecutable(bin, extraDirs = []) {
-  for (const candidate of executableCandidates(bin, extraDirs)) {
+// `env` is passed only where a caller needs to ask "what would PATH=<x> find"
+// without touching process.env: the hooks runner's availability probe, and its
+// tests.
+export function resolveExecutable(bin, extraDirs = [], env = process.env) {
+  for (const candidate of executableCandidates(bin, extraDirs, env)) {
     try {
       if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
     } catch { /* keep looking */ }
@@ -600,6 +610,26 @@ export function aiExecArgs(engine, prompt) {
   return fn(String(prompt));
 }
 
+/** Does this CLI engine have a one-shot form? (openagents does not.) */
+export function hasHeadlessMode(engine) {
+  return Object.hasOwn(AI_EXEC, engine);
+}
+
+/**
+ * Any engine by name or alias, CLI or API: `{ key, kind, engine }`, or null.
+ *
+ * resolveEngine() stays CLI-only on purpose — every launch surface uses it and
+ * hands the result to a spawn. The one-shot surfaces (ask, ai(), hooks) and
+ * the "that's an API engine" errors use this one.
+ */
+export function resolveAnyEngine(token) {
+  const cli = resolveEngine(token);
+  if (cli) return { key: cli[0], kind: "cli", engine: cli[1] };
+  const api = resolveApiEngine(token);
+  if (api) return { key: api[0], kind: "api", engine: api[1] };
+  return null;
+}
+
 /**
  * First installed engine that supports headless ai(), honoring a preference.
  *
@@ -610,11 +640,14 @@ export function aiExecArgs(engine, prompt) {
  * "needs an installed engine" even when Claude was installed. An unknown name
  * still yields null.
  */
-export function pickAiEngine(preferred) {
-  const wanted = preferred ? resolveEngine(preferred)?.[0] : null;
-  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "mimocode", "omp", "aider"];
+export function pickAiEngine(preferred, env = process.env) {
+  const wanted = preferred ? resolveAnyEngine(preferred)?.key : null;
+  // API engines come last: with nothing named, an installed CLI wins, and an
+  // API key in the environment is the fallback rather than a surprise.
+  const order = preferred ? (wanted ? [wanted] : []) : ["claude", "codex", "opencode", "privacycode", "gemini", "kimi", "qwen", "deepseek", "mimocode", "omp", "aider", ...Object.keys(API_ENGINES)];
   for (const key of order) {
     if (Object.hasOwn(ENGINES, key) && Object.hasOwn(AI_EXEC, key) && isInstalled(ENGINES[key].bin, ENGINES[key].binDirs)) return key;
+    if (Object.hasOwn(API_ENGINES, key) && apiEngineAvailable(key, env).available) return key;
   }
   return null;
 }

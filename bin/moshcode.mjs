@@ -8,12 +8,16 @@ import {
   agentLaunchArgs,
   engineList,
   ENGINES,
+  API_ENGINES,
+  apiEngineAvailable,
   engineStatus,
   openSession,
   primaryBin,
+  resolveApiEngine,
   resolveEngine,
   resolveExecutable,
   runCmd,
+  interactiveError,
 } from "../src/engines.mjs";
 import { TOOLS, toolList, toolStatus, resolveTool, resolveInstallable, openTool, adoptAliasLines } from "../src/tools.mjs";
 import { tradeArgs, tradeUsage } from "../src/trade.mjs";
@@ -124,6 +128,27 @@ function printStatus(entries, json = false) {
 
 function printEngineStatus(json = false) {
   printStatus(engineStatus(), json);
+  // API-only engines (zai, perplexity, fugu) have no binary to be "installed";
+  // they are usable when their key is set. Listed after the CLIs, and only in
+  // the human roster: the JSON above is a documented array of binaries.
+  if (!json) {
+    for (const [key, e] of Object.entries(API_ENGINES)) {
+      const ok = apiEngineAvailable(key).available;
+      console.log(`${ok ? "●" : "○"} ${key.padEnd(11)} ${e.desc}${ok ? "" : ` — set ${e.keyEnv}`}`);
+    }
+  }
+}
+
+/**
+ * An interactive launch of an API-only engine: one sentence, exit 1, and the
+ * command that does work. True when `name` was one (and the error is printed).
+ */
+function refuseApiLaunch(name) {
+  const api = resolveApiEngine(name);
+  if (!api) return false;
+  console.error(`✗ ${interactiveError(api[0])}`);
+  process.exitCode = 1;
+  return true;
 }
 
 async function launchEngine(key, engine, args, { agentMode = false } = {}) {
@@ -326,6 +351,7 @@ async function main() {
     }
     const resolved = resolveEngine(rest[0]);
     if (!resolved) {
+      if (refuseApiLaunch(rest[0])) return;
       console.error(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`);
       process.exitCode = 1;
       return;
@@ -341,6 +367,7 @@ async function main() {
     }
     const resolved = resolveEngine(rest[0]);
     if (!resolved) {
+      if (refuseApiLaunch(rest[0])) return;
       console.error(`unknown engine "${rest[0]}". try: ${Object.keys(ENGINES).join(", ")}`);
       process.exitCode = 1;
       return;
@@ -405,6 +432,19 @@ async function main() {
       console.log("\nthe primary development toolchain runs through `moshcode` as a");
       console.log("dev.profullstack.com user — https://dev.profullstack.com/");
     }
+    return;
+  }
+  // One prompt, one answer, on any engine — CLI or API (src/oneshot-cli.mjs).
+  if (cmd === "oneshot") {
+    const { oneshotCommand } = await import("../src/oneshot-cli.mjs");
+    process.exitCode = (await oneshotCommand(rest)) || 0;
+    return;
+  }
+  // The fan-out prompt runner (src/hooks-serve.mjs): a signed webhook in, one
+  // signed result per engine back out. Lazy: it pulls in the webhooks package.
+  if (cmd === "hooks") {
+    const { hooksCommand } = await import("../src/hooks-serve.mjs");
+    process.exitCode = (await hooksCommand(rest, { version: moshcodeVersion() || "" })) || 0;
     return;
   }
   if (cmd === "trade") {
@@ -860,6 +900,9 @@ async function main() {
     const [key, engine] = resolved;
     return launchEngine(key, engine, rest);
   }
+
+  // `moshcode zai` — an API engine has no session to open; say what does work.
+  if (refuseApiLaunch(cmd)) return;
 
   // `moshcode <tool> [args…]` is deliberately silent: the native CLI owns
   // stdout/stderr so JSON and other pipelines remain byte-for-byte usable.

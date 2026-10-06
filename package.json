@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@profullstack/hqtui": "^0.7.0",
-    "@profullstack/synconfig": "^0.1.3"
+    "@profullstack/synconfig": "^0.1.3",
+    "@profullstack/webhooks": "^0.1.0"
   }
 }

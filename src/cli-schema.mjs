@@ -72,6 +72,56 @@ export const CORE_CLI_COMMANDS = [
     seeAlso: ["agents", "engines", "herd", "ps"],
   },
   {
+    name: "oneshot",
+    group: "engines",
+    description: "run one prompt on one engine (CLI or API: zai, perplexity, fugu) and print the answer",
+    synopsis: [
+      ["moshcode oneshot <engine> \"<prompt>\"", "a CLI engine in its print mode here, or one API call"],
+      ["moshcode oneshot <engine> -", "read the prompt from stdin"],
+      ["moshcode oneshot --list", "which engines can answer on this machine"],
+    ],
+    flags: [
+      ["--timeout <s>", "give up (and kill the engine) after this many seconds", "180"],
+      ["--json", "the whole result: engine, kind, ok, output, error, exit_code, ms, model", ""],
+      ["--list", "every engine and whether it can answer here", ""],
+    ],
+    examples: [
+      ["moshcode oneshot zai \"explain this regex: ^a+$\"", "Z.AI GLM (ZAI_API_KEY)"],
+      ["git diff | moshcode oneshot pplx -", "Perplexity Sonar reviews a diff (PERPLEXITY_API_KEY)"],
+      ["moshcode oneshot claude \"one-line summary of RFC 9110\"", "claude -p, no permission bypass"],
+    ],
+    seeAlso: ["hooks", "engines", "start"],
+    note: "API engines have no interactive session: zai (ZAI_API_KEY, ZAI_MODEL, ZAI_BASE_URL), "
+      + "perplexity (PERPLEXITY_API_KEY, PERPLEXITY_MODEL), fugu (FUGU_API_KEY, FUGU_MODEL, FUGU_BASE_URL). "
+      + "<think> blocks from reasoning models are stripped.",
+  },
+  {
+    name: "hooks",
+    group: "engines",
+    description: "fan-out prompt runner: a signed webhook in, one signed result per engine back out",
+    synopsis: [
+      ["moshcode hooks serve [--port 7690] [--host 127.0.0.1] [--concurrency 4] [--timeout 180]", "accept moshcode.prompt.requested.v1 on POST /hooks"],
+      ["moshcode hooks secret", "print a new shared secret (whsec_…)"],
+      ["moshcode hooks engines [--json]", "which engines a run would use here"],
+    ],
+    flags: [
+      ["--port <n>", "port to listen on", "7690"],
+      ["--host <addr>", "address to bind", "127.0.0.1"],
+      ["--concurrency <n>", "engines running at once, across all runs", "4"],
+      ["--timeout <s>", "hard per-engine deadline; a request's timeout_s can only shorten it", "180"],
+      ["--json", "machine-readable engine roster", ""],
+    ],
+    examples: [
+      ["MOSHCODE_HOOKS_SECRET=$(moshcode hooks secret) moshcode hooks serve", "listen on 127.0.0.1:7690"],
+      ["curl -s localhost:7690/engines", "the roster, unsigned"],
+    ],
+    seeAlso: ["oneshot", "engines"],
+    note: "requests and callbacks are Standard Webhooks-signed CloudEvents (@profullstack/webhooks) with MOSHCODE_HOOKS_SECRET; "
+      + "serve refuses to start without it. data: { run_id, prompt (≤20k chars), engines?, timeout_s?, callback_url (https, or http to localhost) }. "
+      + "each engine runs once in print mode (no yolo/skip-permissions) in a fresh empty temp dir, output capped at 64 KB; "
+      + "results come back as moshcode.prompt.result.v1, then moshcode.prompt.completed.v1.",
+  },
+  {
     name: "herd",
     group: "runtime",
     description: "run agent sessions that outlive this terminal",
