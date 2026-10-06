@@ -14,7 +14,10 @@ import {
   resolveApiEngine, runApiEngine, stripThink,
 } from "../src/api-engines.mjs";
 import { ENGINES, pickAiEngine, resolveAnyEngine, resolveEngine } from "../src/engines.mjs";
-import { AUTONOMOUS_FLAGS, oneShotArgs, oneShotEngines, runCapped, runOneShot } from "../src/oneshot.mjs";
+import {
+  AUTONOMOUS_FLAGS, DASHSCOPE_INTL, checkShim, oneShotArgs, oneShotEngines, oneShotProfile, parseKimiStream, runCapped,
+  runOneShot, stripAiderChrome,
+} from "../src/oneshot.mjs";
 import { oneshotCommand } from "../src/oneshot-cli.mjs";
 
 const run = promisify(execFile);
@@ -175,7 +178,8 @@ test("runOneShot runs a CLI engine's headless form in the given directory", asyn
     assert.equal(r.engine, "claude");
     assert.equal(r.kind, "cli");
     assert.equal(r.exit_code, 0);
-    assert.match(r.output, /argv: -p hello there/);
+    // --strict-mcp-config: no MCP servers for a one-shot answer.
+    assert.match(r.output, /argv: --strict-mcp-config -p hello there/);
     assert.match(r.output, new RegExp(`cwd: ${fs.realpathSync(cwd)}`));
     assert.doesNotMatch(r.output, /dangerously/);
   } finally {
@@ -255,4 +259,129 @@ test("launching an API engine interactively is a clear error, not a crash", asyn
     assert.match(result.stderr, /moshcode oneshot (zai|perplexity|fugu)/);
   }
   assert.match(interactiveError("zai"), /moshcode oneshot zai/);
+});
+
+/* ------------------------------------- empty answers, shims, per-engine wiring */
+
+function scriptBinDir(name, body) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-fakebin-"));
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, `#!/bin/sh\n${body}\n`);
+  fs.chmodSync(file, 0o755);
+  return dir;
+}
+
+test("an exit-0 run with no output is a failure: empty answer", async () => {
+  for (const body of ["exit 0", "printf '  \\n\\n'"]) {
+    const dir = scriptBinDir("claude", body);
+    try {
+      const r = await runOneShot("claude", "x", { env: { PATH: `${dir}:/usr/bin:/bin` } });
+      assert.equal(r.ok, false, body);
+      assert.equal(r.exit_code, 0);
+      assert.match(r.error, /^empty answer/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("an API engine that answers nothing is a failure: empty answer", async () => {
+  const r = await runOneShot("zai", "x", { env: { ZAI_API_KEY: "k" }, fetch: fakeFetch({ choices: [{ message: { content: "<think>only thinking</think>" } }] }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "empty answer");
+});
+
+test("a broken mise shim is unavailable, with mise's reason, and is never spawned", { skip: process.platform === "win32" }, async () => {
+  // A shim is a symlink to the mise binary; this fake mise fails `which` the way real mise does.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-shim-"));
+  const mise = path.join(dir, "mise");
+  fs.writeFileSync(mise, "#!/bin/sh\necho 'mise ERROR No version is set for shim: gemini' >&2\nexit 1\n");
+  fs.chmodSync(mise, 0o755);
+  fs.mkdirSync(path.join(dir, "shims"));
+  fs.symlinkSync(mise, path.join(dir, "shims", "gemini"));
+  try {
+    const env = { PATH: `${path.join(dir, "shims")}:/usr/bin:/bin` };
+    const by = Object.fromEntries(oneShotEngines(env).map((e) => [e.name, e]));
+    assert.equal(by.gemini.available, false);
+    assert.match(by.gemini.reason, /gemini is a broken mise shim: No version is set for shim: gemini/);
+    const r = await runOneShot("gemini", "x", { env, spawnImpl: () => assert.fail("spawned a broken shim") });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /broken mise shim/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("checkShim: a working shim resolves through mise; a plain binary is left alone", { skip: process.platform === "win32" }, () => {
+  const calls = [];
+  const spawnSyncImpl = (cmd, args) => { calls.push(args); return { status: 0, stdout: "/opt/node/bin/qwen\n", stderr: "" }; };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-shim-"));
+  const mise = path.join(dir, "mise");
+  fs.writeFileSync(mise, "");
+  fs.symlinkSync(mise, path.join(dir, "qwen"));
+  try {
+    const r = checkShim(path.join(dir, "qwen"), "qwen", { PATH: `${dir}-unique` }, { spawnSyncImpl, now: 1 });
+    assert.deepEqual(r, { ok: true, target: "/opt/node/bin/qwen" });
+    assert.deepEqual(calls, [["which", "qwen"]]);
+    const plain = path.join(dir, "plain");
+    fs.writeFileSync(plain, "");
+    assert.deepEqual(checkShim(plain, "plain", {}, { spawnSyncImpl: () => assert.fail("asked mise about a non-shim") }), { ok: true, target: fs.realpathSync(plain) });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("per-engine one-shot wiring: scoped env, read-only flags, nothing autonomous", () => {
+  const env = { DASHSCOPE_API_KEY: "ds", MOONSHOT_API_KEY: "ms", GEMINI_API_KEY: "g", DEEPSEEK_API_KEY: "dk" };
+  const qwen = oneShotProfile("qwen", env);
+  assert.deepEqual(qwen.args, ["--safe-mode", "--auth-type", "openai", "--openai-base-url", DASHSCOPE_INTL, "-m", "qwen-plus"]);
+  assert.deepEqual(qwen.env, { OPENAI_API_KEY: "ds" });
+  assert.ok(!qwen.args.includes("ds"), "a key never goes in argv");
+  assert.deepEqual(oneShotProfile("qwen", {}).args, ["--safe-mode"]);
+
+  const ds = oneShotProfile("deepseek", env);
+  assert.deepEqual(ds.args, ["--approval-mode", "plan"]);
+  assert.equal(ds.realBin, true);
+  assert.deepEqual(ds.env, {});
+  assert.deepEqual(oneShotProfile("deepseek", { ...env, MOSHCODE_DEEPSEEK_VIA: "dashscope" }).env,
+    { DEEPSEEK_API_KEY: "ds", DEEPSEEK_BASE_URL: DASHSCOPE_INTL, DEEPSEEK_MODEL: "deepseek-v3.2" });
+  assert.deepEqual(oneShotProfile("deepseek", { DEEPSEEK_API_URL: "https://api.deepseek.com/v1" }).env, { DEEPSEEK_BASE_URL: "https://api.deepseek.com/v1" });
+
+  const kimi = oneShotProfile("kimi", env);
+  assert.deepEqual(kimi.args, ["--output-format", "stream-json"]);
+  assert.deepEqual(kimi.env, { KIMI_MODEL_NAME: "kimi-k2.6", KIMI_MODEL_API_KEY: "ms" });
+  assert.deepEqual(oneShotProfile("kimi", { ...env, KIMI_MODEL_NAME: "mine" }).env, {}, "an explicit kimi model wins");
+  assert.deepEqual(oneShotProfile("kimi", {}).env, {}, "no key: kimi's own login");
+
+  const aider = oneShotProfile("aider", env);
+  assert.ok(aider.args.includes("--no-git"));
+  assert.deepEqual(aider.args.slice(-2), ["--model", "openai/qwen-plus"]);
+  assert.deepEqual(aider.env, { OPENAI_API_KEY: "ds", OPENAI_API_BASE: DASHSCOPE_INTL });
+  assert.deepEqual(oneShotProfile("aider", { GEMINI_API_KEY: "g" }).args.slice(-2), ["--model", "gemini/gemini-flash-latest"]);
+  assert.ok(!oneShotProfile("aider", { ...env, AIDER_MODEL: "x" }).args.includes("--model"));
+
+  assert.deepEqual(oneShotProfile("gemini", {}, { scratch: true }).env, { GEMINI_CLI_TRUST_WORKSPACE: "true" });
+  assert.deepEqual(oneShotProfile("gemini", {}).env, {}, "only a fresh empty dir is trusted");
+  assert.deepEqual(oneShotProfile("claude", {}).args, ["--strict-mcp-config"]);
+
+  for (const key of Object.keys(ENGINES)) {
+    for (const a of oneShotProfile(key, env, { scratch: true }).args) assert.ok(!AUTONOMOUS_FLAGS.has(a), `${key} profile carries ${a}`);
+  }
+});
+
+test("the scoped env reaches only that engine's child", async () => {
+  const dir = scriptBinDir("qwen", 'echo "key=$OPENAI_API_KEY argv=$*"');
+  try {
+    const env = { PATH: `${dir}:/usr/bin:/bin`, DASHSCOPE_API_KEY: "ds" };
+    const r = await runOneShot("qwen", "hi", { env });
+    assert.equal(r.ok, true, r.error);
+    assert.match(r.output, /key=ds argv=--safe-mode --auth-type openai .* -m qwen-plus -p hi/);
+    assert.equal(env.OPENAI_API_KEY, undefined, "the caller's env is untouched");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("output parsers: kimi stream-json and aider chrome", () => {
+  const kimi = [
+    '{"role":"meta","type":"system.version","version":"2.1.1"}',
+    '{"role":"assistant","content":"pong"}',
+    '{"role":"meta","type":"session.resume_hint","content":"To resume this session: kimi -r s"}',
+  ].join("\n");
+  assert.equal(parseKimiStream(kimi), "pong");
+  assert.equal(parseKimiStream("not json"), "");
+  const aider = "Analytics have been permanently disabled.\n\nAider v0.86.2\nModel: openai/qwen-plus with whole edit format\nGit repo: none\nRepo-map: disabled\n\npong\n\nTokens: 604 sent, 1 received.\n";
+  assert.equal(stripAiderChrome(aider), "pong");
 });

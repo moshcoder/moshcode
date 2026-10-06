@@ -234,7 +234,7 @@ test("the server: 401 unsigned or mis-signed, 202 signed, then signed callbacks 
   const by = Object.fromEntries(results.map((e) => [e.data.engine, e.data]));
   assert.equal(by.claude.ok, true);
   assert.equal(by.claude.kind, "cli");
-  assert.match(by.claude.output, /^argv: -p say hi$/m);
+  assert.match(by.claude.output, /^argv: --strict-mcp-config -p say hi$/m);
   assert.doesNotMatch(by.claude.output, /dangerously|yolo/);
   const cwd = by.claude.output.match(/cwd: (.*)/)[1];
   assert.match(path.basename(cwd), /^moshcode-hook-/);
