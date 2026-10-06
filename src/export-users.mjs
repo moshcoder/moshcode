@@ -1,6 +1,12 @@
 // `moshcode export users [--clean]` and `/export users`: the operator's list of
 // signed-up accounts, from app.moshcode.sh's /api/admin/users/export.
 //
+// `--all` is every Profullstack property instead: it runs cli-tools'
+// `user-export` over the sources in ~/.config/cli-tools/user-export.json, and
+// `--all --clean` is `user-export --clean` (myna unsubscribes, Resend bounces,
+// test accounts, never-logged-in and email-cleaner dropped; email,first_name,
+// last_name out). Same file rules as below, and only counts on the screen.
+//
 // The app decides who may have it (ADMIN_EMAILS there); this side only asks
 // with the logged-in account's key, so a non-operator gets the app's 403 and
 // nothing else. `--clean` hands the CSV to cli-tools' `email-cleaner` and keeps
@@ -25,17 +31,25 @@ export const CLEANER_FLAGS = [
   "--allow-no-website", "--no-dns", "--fix-typos",
 ];
 
-const USAGE = "usage: export users [--clean [cleaner flags]] [--format csv|json] [-o file]";
+/** user-export's own --clean switches that `--all --clean` passes through. */
+export const ALL_CLEAN_FLAGS = ["--keep-never-logged-in", "--no-resend", "--no-dns"];
+
+const USAGE = "usage: export users [--all] [--clean [cleaner flags]] [--format csv|json] [-o file]";
 const DEFAULT_API = "https://app.moshcode.sh";
 
 /* ------------------------------------------------------------------ parsing */
 
 export function parseExportArgs(argv = []) {
-  const opts = { subject: null, clean: false, format: "csv", output: null, cleanerFlags: [], error: null };
+  const opts = { subject: null, all: false, clean: false, format: "csv", output: null, cleanerFlags: [], error: null };
   const fail = (msg) => ({ ...opts, error: msg });
   for (let i = 0; i < argv.length; i++) {
     const a = String(argv[i]);
     if (a === "--clean") opts.clean = true;
+    else if (a === "--all") opts.all = true;
+    else if (a === "--keep-never-logged-in" || a === "--no-resend") {
+      if (!opts.clean) return fail(`${a} goes after --clean (with --all). ${USAGE}`);
+      if (!opts.cleanerFlags.includes(a)) opts.cleanerFlags.push(a);
+    }
     else if (a === "--format" || a.startsWith("--format=")) {
       const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i];
       if (!["csv", "json"].includes(String(v || "").toLowerCase())) return fail(`--format takes csv or json. ${USAGE}`);
@@ -53,6 +67,14 @@ export function parseExportArgs(argv = []) {
   }
   if (!opts.subject) return fail(USAGE);
   if (opts.subject !== "users") return fail(`nothing called "${opts.subject}" to export; only users. ${USAGE}`);
+  if (opts.all) {
+    if (opts.format !== "csv") return fail(`--all writes CSV only. ${USAGE}`);
+    const foreign = opts.cleanerFlags.filter((f) => !ALL_CLEAN_FLAGS.includes(f));
+    if (foreign.length) return fail(`${foreign[0]} is not an --all --clean option (it takes ${ALL_CLEAN_FLAGS.join(", ")}). ${USAGE}`);
+  } else {
+    const allOnly = opts.cleanerFlags.find((f) => f === "--keep-never-logged-in" || f === "--no-resend");
+    if (allOnly) return fail(`${allOnly} only applies to --all --clean. ${USAGE}`);
+  }
   return opts;
 }
 
@@ -230,6 +252,7 @@ export async function exportCommand(argv = [], {
 } = {}) {
   const opts = parseExportArgs(argv);
   if (opts.error) { write(opts.error); return 1; }
+  if (opts.all) return exportAll(opts, { env, write, stdout, spawnImpl, home, cwd, now, pit });
 
   let cleaner = null;
   if (opts.clean) {
@@ -305,4 +328,51 @@ export async function exportCommand(argv = [], {
   if (rejectedFile) write(`rejected rows, with reasons: ${rejectedFile}`);
   for (const note of notes) write(note);
   return 0;
+}
+
+/**
+ * `export users --all [--clean]`: every property, through cli-tools'
+ * user-export. Its stderr is per-source counts and the clean tally, never an
+ * address, so it is passed through line by line.
+ */
+export function exportAll(opts, {
+  env = process.env,
+  write = (line) => console.error(line),
+  stdout = (text) => process.stdout.write(text),
+  spawnImpl = spawnSync,
+  home = os.homedir(),
+  cwd = process.cwd(),
+  now = new Date(),
+  pit = false,
+} = {}) {
+  const bin = findOnPath("user-export", env.PATH || "");
+  if (!bin) {
+    write("--all needs user-export, which is not on PATH: install cli-tools (`moshcode install cli-tools`) and run this again");
+    return 1;
+  }
+  const file = opts.output ? path.resolve(cwd, opts.output) : (pit ? defaultFile(home, "csv", now) : null);
+  const notes = [];
+  const args = [];
+  if (opts.clean) args.push("--clean", ...opts.cleanerFlags);
+  if (file) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const backup = backupBeside(file);
+    if (backup) notes.push(`backed up the previous ${path.basename(file)} to ${backup}`);
+    args.push("-o", file);
+    if (opts.clean) {
+      const rejected = rejectedPath(file);
+      const rb = backupBeside(rejected);
+      if (rb) notes.push(`backed up the previous ${path.basename(rejected)} to ${rb}`);
+      args.push("--dropped", rejected);
+    }
+  }
+  const run = spawnImpl(bin, args, { env, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  if (run.error) { write(`could not run user-export: ${run.error.message}`); return 1; }
+  for (const line of String(run.stderr || "").split("\n")) if (line.trim()) write(line);
+  if (!file && run.stdout) stdout(run.stdout);
+  if (run.status !== 0 && run.status !== 3) return run.status || 1;
+  if (file && opts.clean) write(`dropped rows, with reasons: ${rejectedPath(file)}`);
+  for (const note of notes) write(note);
+  // 3 = some source failed; the rest is still written, but say so in the code.
+  return run.status === 3 ? 3 : 0;
 }
