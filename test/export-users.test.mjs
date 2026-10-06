@@ -267,3 +267,59 @@ test("end to end through the real binary: login creds, the app, a stub cleaner",
     server.close();
   }
 });
+
+/* -------------------------------------------------------------------- --all */
+
+function stubUserExport() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moshcode-all-"));
+  fs.writeFileSync(path.join(dir, "user-export"), "#!/bin/sh\n", { mode: 0o755 });
+  return dir;
+}
+
+test("--all parses, and rejects what user-export cannot do", () => {
+  const opts = parseExportArgs(["users", "--all", "--clean", "--no-resend"]);
+  assert.equal(opts.all, true);
+  assert.deepEqual(opts.cleanerFlags, ["--no-resend"]);
+  assert.match(parseExportArgs(["users", "--all", "--format", "json"]).error, /CSV only/);
+  assert.match(parseExportArgs(["users", "--all", "--clean", "--allow-role"]).error, /not an --all --clean option/);
+  assert.match(parseExportArgs(["users", "--clean", "--no-resend"]).error, /only applies to --all --clean/);
+});
+
+test("--all --clean runs user-export with the file and its .rejected.csv, no login needed", async () => {
+  const dir = stubUserExport();
+  const calls = [];
+  const lines = [];
+  const code = await exportCommand(["users", "--all", "--clean", "--keep-never-logged-in", "-o", "list.csv"], {
+    env: { PATH: dir },
+    cwd: dir,
+    creds: null,
+    write: (l) => lines.push(l),
+    spawnImpl: (bin, args) => {
+      calls.push([bin, args]);
+      return { status: 0, stdout: "", stderr: "total 3 users from 1 sources\nclean: 3 unique addresses, 2 kept, 1 dropped\n" };
+    },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(calls, [[path.join(dir, "user-export"),
+    ["--clean", "--keep-never-logged-in", "-o", path.join(dir, "list.csv"), "--dropped", path.join(dir, "list.rejected.csv")]]]);
+  assert.ok(lines.some((l) => l.startsWith("clean: 3 unique")));
+  assert.ok(lines.some((l) => l.includes("list.rejected.csv")));
+});
+
+test("--all without user-export on PATH says how to get it", async () => {
+  const lines = [];
+  const code = await exportCommand(["users", "--all"], { env: { PATH: "" }, creds: null, write: (l) => lines.push(l) });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /moshcode install cli-tools/);
+});
+
+test("--all passes a partial export through as exit 3, CSV on stdout", async () => {
+  const dir = stubUserExport();
+  const out = [];
+  const code = await exportCommand(["users", "--all"], {
+    env: { PATH: dir }, creds: null, write: () => {}, stdout: (t) => out.push(t),
+    spawnImpl: () => ({ status: 3, stdout: "site,name,email,last_login\n", stderr: "x  ERROR down\n" }),
+  });
+  assert.equal(code, 3);
+  assert.deepEqual(out, ["site,name,email,last_login\n"]);
+});

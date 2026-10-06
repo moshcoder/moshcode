@@ -51,7 +51,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode logout` | account | clear the logged-in account |
 | `moshcode save` | account | save this machine's pit settings to your account |
 | `moshcode load` | account | bring your saved pit settings onto this machine |
-| `moshcode export` | account | operator only: export the app's users as CSV, optionally cleaned |
+| `moshcode export` | account | operator only: export users as CSV (this app, or --all properties), optionally cleaned |
 | `moshcode console` | account | serve or connect to the browser terminal |
 | `moshcode dns` | hosting | resolve Moshpit names on this machine |
 | `moshcode name` | hosting | prove you hold a Moshpit name, so an app can use it as your identity |
@@ -1660,6 +1660,7 @@ without touching the database:
 moshcode export users -o users.csv                  # email, display_name, created_at, id, signup_method
 moshcode export users --format json -o users.json   # the same rows, plus counts
 moshcode export users --clean -o users.csv          # only the addresses worth mailing
+moshcode export users --all --clean -o list.csv     # every property: email,first_name,last_name
 ```
 
 Who counts as an operator is decided by the app, not the CLI: the account you

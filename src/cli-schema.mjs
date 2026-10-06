@@ -546,12 +546,16 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "export",
     group: "account",
-    description: "operator only: export the app's users as CSV, optionally cleaned",
+    description: "operator only: export users as CSV (this app, or --all properties), optionally cleaned",
     synopsis: [
       ["moshcode export users [--format csv|json] [-o file]", ""],
       ["moshcode export users --clean [cleaner flags] [-o file]", ""],
+      ["moshcode export users --all [--clean] [-o file]", "every Profullstack property"],
     ],
     flags: [
+      ["--all", "every property in ~/.config/cli-tools/user-export.json, through cli-tools' user-export", ""],
+      ["--keep-never-logged-in", "with --all --clean: keep addresses that never logged in", ""],
+      ["--no-resend", "with --all --clean: skip the Resend bounce lookup", ""],
       ["--clean", "run the list through cli-tools' email-cleaner and keep the valid rows", ""],
       ["--format <csv|json>", "output format", "csv"],
       ["-o, --output <file>", "write here (mode 0600) instead of stdout; an existing file is backed up first", ""],
@@ -567,13 +571,17 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode export users -o users.csv", "the whole list"],
       ["moshcode export users --clean -o users.csv", "plus users.rejected.csv"],
       ["moshcode export users --clean --no-dns", "offline, CSV on stdout"],
+      ["moshcode export users --all --clean -o list.csv", "every property, mailable only, plus list.rejected.csv"],
     ],
     seeAlso: ["login", "whoami"],
     note: "needs `moshcode login` as an account listed in ADMIN_EMAILS on app.moshcode.sh; everyone else gets a 403. "
       + "columns: email, display_name, created_at (ISO), id, signup_method (password, passkey or coinpay). "
       + "accounts without an email are counted, never listed. --clean fails rather than skipping when email-cleaner "
       + "is not on PATH (`moshcode install cli-tools`). counts go to stderr, so stdout stays pure CSV. "
-      + "in the pit, /export users always writes a file (~/.moshcode/exports/ unless -o) and prints only its path and the counts.",
+      + "in the pit, /export users always writes a file (~/.moshcode/exports/ unless -o) and prints only its path and the counts. "
+      + "--all needs no login: it reads the databases in ~/.config/cli-tools/user-export.json directly. --all --clean drops "
+      + "myna unsubscribes, Resend bounces/suppressions/complaints (RESEND_API_KEY), test accounts, never-logged-in and "
+      + "whatever email-cleaner rejects, and writes email,first_name,last_name.",
   },
   {
     name: "console",
@@ -2061,8 +2069,8 @@ export const PIT_COMMANDS = [
   { name: "whoami", cli: "whoami", description: "who this machine is logged in as" },
   // Dispatched since forever and missing from /help until now.
   { name: "logout", cli: "logout", description: "clear the logged-in account" },
-  { name: "export", args: "users [--clean] [--format csv|json] [-o file]", cli: "export",
-    description: "operator only: export users to a file, optionally cleaned" },
+  { name: "export", args: "users [--all] [--clean] [--format csv|json] [-o file]", cli: "export",
+    description: "operator only: export users to a file (--all = every property), optionally cleaned" },
   { name: "save", args: "[--dry-run] [--force]", cli: "save",
     description: "save this pit's settings to your moshcode.sh account" },
   { name: "load", args: "[--dry-run] [--force]", cli: "load",
