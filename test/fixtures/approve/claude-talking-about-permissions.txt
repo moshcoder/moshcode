@@ -1,0 +1,9 @@
+⏺ The approvals page now asks "Do you want to proceed?" before deploying, and
+  lists the options as 1. Yes and 2. No. I updated the copy and the tests.
+
+  Shall I also update the README?
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ >                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ? for shortcuts

@@ -712,9 +712,12 @@ export function startSession({
 }
 
 /** The last `lines` rows of a session's screen — what the classifier reads. */
-export function capture(name, { lines = 60, substrate = detectSubstrate(), runner = spawnSync } = {}) {
+export function capture(name, { lines = 60, escapes = false, substrate = detectSubstrate(), runner = spawnSync } = {}) {
   if (substrate === "tmux") {
-    const r = tmux(["capture-pane", "-p", "-t", target(name, { runner }), "-S", `-${Math.max(0, lines)}`], { runner });
+    // `escapes` keeps colour and attributes (-e), for a screen that is going to
+    // be painted by a terminal rather than read by a classifier.
+    const flags = escapes ? ["-p", "-e"] : ["-p"];
+    const r = tmux(["capture-pane", ...flags, "-t", target(name, { runner }), "-S", `-${Math.max(0, lines)}`], { runner });
     return r.ok ? r.stdout.replace(/\n+$/, "") : "";
   }
   if (substrate === "pty") return ptyCapture(name, lines);

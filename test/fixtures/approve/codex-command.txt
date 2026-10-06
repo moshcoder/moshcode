@@ -1,0 +1,11 @@
+• I need to run the tests to confirm the fix.
+
+  Would you like to run the following command?
+
+  $ npm test
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for this command (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

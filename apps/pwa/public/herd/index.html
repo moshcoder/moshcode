@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#070806">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="moshcode">
+  <title>moshcode herd</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/herd/herd.css">
+</head>
+<body>
+  <header class="top">
+    <a class="back" id="back" href="#/" hidden aria-label="Back to the herd">‹</a>
+    <h1 id="title">herd</h1>
+    <span class="spacer"></span>
+    <button class="icon" id="push-btn" type="button" aria-label="Notifications" title="Notifications">🔔</button>
+    <a class="icon" href="#/machines" aria-label="Machines" title="Machines">⌘</a>
+  </header>
+  <p class="why" id="push-why" hidden></p>
+  <main id="view" aria-live="polite"></main>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script type="module" src="/herd/herd.js"></script>
+</body>
+</html>

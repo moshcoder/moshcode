@@ -1650,6 +1650,17 @@ export const HERD_VERBS = [
   { name: "watch", description: "deliver those notifications (run it inside the herd)",
     synopsis: [["moshcode herd watch [--interval 5s]", ""]],
     flags: [["--interval <dur>", "how often to look", "5s"], ["--force", "watch even with notifications off", ""]] },
+  // PRD 0020 — the herd in your pocket.
+  { name: "phone", description: "put this herd on your phone (app.moshcode.sh/m): roster, one-tap approvals, a terminal with a key bar",
+    synopsis: [["moshcode herd phone <on|off|status>", ""]],
+    flags: [["--json", "machine-readable (status)", ""]],
+    examples: [
+      ["moshcode herd phone on", "install the relay as a user service, then open app.moshcode.sh/m on your phone"],
+      ["moshcode herd phone status", "is the relay running, and as which machine"],
+    ],
+    note: "the box dials out to app.moshcode.sh; nothing listens, so there is no port, no Tailscale and no SSH key on the phone." },
+  { name: "relay", description: "run the phone relay in the foreground (what `herd phone on` installs)",
+    synopsis: [["moshcode herd relay", ""]] },
   { name: "stop", description: "stop the whole runtime and everything in it",
     synopsis: [["moshcode herd stop --yes", ""]],
     flags: [["--yes, -y", "required when sessions are running", ""]] },
