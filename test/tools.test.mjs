@@ -224,6 +224,41 @@ fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)))
   ]);
 });
 
+test("QryptChat is a workflow tool that runs qc, installed from its official npm package", () => {
+  for (const name of ["qryptchat", "QC", "qrypt.chat", "qrypt-chat", "qrypt"]) {
+    assert.deepEqual(resolveTool(name), ["qryptchat", TOOLS.qryptchat], name);
+  }
+  assert.equal(TOOLS.qryptchat.bin, "qc");
+  assert.deepEqual(TOOLS.qryptchat.install, {
+    cmd: "npm",
+    args: ["install", "-g", "@profullstack/qryptchat"],
+  });
+  assert.equal(TOOLS.qryptchat.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.qryptchat), TOOLS.qryptchat.install);
+  assert.match(toolList(), /QryptChat/);
+});
+
+test("install qrypt.chat delegates to the official npm package", async () => {
+  const root = tempDir("moshcode-install-qc-");
+  const nativeBin = path.join(root, "bin");
+  const capture = path.join(root, "npm-args.json");
+  mkdirSync(nativeBin);
+  writeExecutable(nativeBin, "npm", `
+import fs from "node:fs";
+fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`);
+
+  const result = await run(["install", "qrypt.chat"], {
+    binDir: nativeBin,
+    env: { NPM_CAPTURE: capture },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), [
+    "install", "-g", "@profullstack/qryptchat",
+  ]);
+});
+
 test("install mcpjam delegates to the official npm package", async () => {
   const root = tempDir("moshcode-install-mcpjam-");
   const nativeBin = path.join(root, "bin");
