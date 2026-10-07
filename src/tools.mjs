@@ -192,6 +192,17 @@ export const TOOLS = {
     // — no `upgrade` key, the same as mcpjam and railway.
     install: { cmd: "npm", args: ["install", "-g", "@profullstack/bufferoverride"] },
   },
+  qryptchat: {
+    desc: "QryptChat — end-to-end-encrypted (ML-KEM) chat from the terminal: TUI, CLI and MCP for qrypt.chat",
+    // The package ships two names for one script, `qc` and `qryptchat`; `qc`
+    // is the one its own docs use, so it is the binary we probe and pass
+    // through to, and an alias so `/qc` works in the pit. Keyed by the product
+    // name rather than the binary (bo goes the other way) because `qc` alone
+    // says nothing in a `/tools` listing. Needs Node 22+. An ordinary global
+    // npm package, so the install is also the upgrade.
+    bin: "qc",
+    install: { cmd: "npm", args: ["install", "-g", "@profullstack/qryptchat"] },
+  },
   secrets: {
     desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
     // The passthrough target is the `logicsrc` binary; the moshcode command is
@@ -570,6 +581,8 @@ export const TOOL_ALIASES = {
   "crawl-proof": "crawlproof", eleven: "elevenlabs", "eleven-labs": "elevenlabs",
   im: "imagemagick", "image-magick": "imagemagick", convert: "imagemagick",
   "digitalocean": "doctl", do: "doctl",
+  // The binary, the domain, and the repo name (profullstack/qrypt-chat).
+  qc: "qryptchat", "qrypt.chat": "qryptchat", "qrypt-chat": "qryptchat", qrypt: "qryptchat",
 };
 
 /** Resolve a name or alias to `[key, tool]`, or null. */

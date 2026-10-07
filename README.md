@@ -938,6 +938,26 @@ login`. Publishing needs one, and `bo login` is a device-code exchange, so a
 terminal never handles a browser session. `bo mcp config` prints the MCP
 registration for a coding agent, which is the same graph over a different door.
 
+### QryptChat — end-to-end-encrypted chat in the pit
+
+[qrypt.chat](https://qrypt.chat) from a terminal: `qc` with no arguments opens
+the full-screen client, and the same command is a scriptable CLI and an MCP
+server. Messages are encrypted and decrypted on this machine (ML-KEM-1024); the
+server only ever sees ciphertext.
+
+```sh
+moshcode install qryptchat        # npm i -g @profullstack/qryptchat (Node 22+)
+
+moshcode qryptchat                # the TUI; the first run signs in through your browser
+moshcode qryptchat send alice "on my way"
+moshcode qryptchat listen --json  # new messages as NDJSON
+moshcode qryptchat mcp            # stdio MCP: list_chats, read_chat, send_message
+```
+
+The binary is `qc`, and `qc`, `qrypt.chat` and `qrypt-chat` all resolve to this
+entry, so `moshcode qc send …` and `/tools install qrypt.chat` work as well.
+In the pit, `/qc` and `/qryptchat` are the same command.
+
 ### CrawlProof — what the fleet costs and what it returns
 
 [CrawlProof](https://crawlproof.com) knows who arrived on your sites and what
