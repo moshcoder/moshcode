@@ -42,6 +42,7 @@ import { bearer, userForApiKey } from "../lib/apikey.mjs";
 import { balance } from "../lib/credits.mjs";
 import { resolverConfig } from "../lib/moshpit-resolvers.mjs";
 import { landingFor } from "../lib/moshpit-landing.mjs";
+import { buildPromo, boughtName, BUILD_PROMO_CSS, BUILD_URL, BUILD_PRICE_USD, HOSTING_PRICE_USD } from "../lib/moshpit-build-promo.mjs";
 import { FEED_KINDS, loadFeed } from "../lib/feed.mjs";
 import {
   sendOfferAnswer,
@@ -2707,7 +2708,8 @@ const landingCard = (req, landing) => {
     return `<div class="pit-land">
       <p class="label">you asked for ${esc(landing.name)}</p>
       <h2>${name} is already yours.</h2>
-      <p class="pit-copy">It is in your list below — change where it points, or release it.</p>
+      <p class="pit-copy">It is in your list below — change where it points, or release it.
+        Nothing at it yet? <a class="acid" href="${BUILD_URL}">We build and host it</a> — $${BUILD_PRICE_USD}, then $${HOSTING_PRICE_USD} a month.</p>
     </div>`;
   }
 
@@ -3123,6 +3125,8 @@ function hostingHelp() {
     <code>moshcode template install bun-caddy-sqlite</code> writes the Caddyfile, the systemd
     units and a Bun + SQLite service already wired up this way.
     <code>moshcode template list</code> shows what there is.</p>
+  <p class="pit-copy" style="font-size:.84rem">No server, or no time? <a class="acid" href="${BUILD_URL}">We build the
+    app and host it for you</a> — $${BUILD_PRICE_USD} to build, then $${HOSTING_PRICE_USD} a month.</p>
   <p class="pit-copy" style="font-size:.84rem">Check it with <code>moshcode dns resolve seo.rank</code>,
     then <code>curl -6 http://seo.rank/</code>. A port other than 80 only works in the
     <code>/n/</code> view — DNS carries an address and has nowhere to put a port, so the browser
@@ -3390,7 +3394,7 @@ moshpitRouter.get("/pit", async (req, res) => {
 
   res.type("html").send(page({
     title: "moshcode ▸ the pit",
-    head: `<style>${PIT_CSS}</style>`,
+    head: `<style>${PIT_CSS}${BUILD_PROMO_CSS}</style>`,
     body: `${appBar(req.user, bal, req.csrfToken)}
 <main class="wrap" style="padding:38px 24px 64px">
   <p class="label">the moshpit namespace</p>
@@ -3410,6 +3414,7 @@ moshpitRouter.get("/pit", async (req, res) => {
   </p>
   ${landingCard(req, landing)}
   ${msg}
+  ${buildPromo({ name: boughtName(req.query.ok) })}
   ${req.user ? claimForm(req) + bulkClaimForm(req) : ""}
   ${pitTabs(tab, { yours: mineTotal, theirs: theirsTotal, forSale: filter ? 0 : forSaleCount }, filter?.query ?? "")}
   ${filterBox(tab, filter?.query ?? "", req.user ? (tab === "theirs" ? "theirs" : "mine") : "all")}
