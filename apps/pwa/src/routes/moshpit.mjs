@@ -4158,6 +4158,9 @@ moshpitRouter.get("/pit/dns", async (req, res) => {
   const bal = req.user ? await balance(req.user.id) : 0;
   const { resolvers, doh, published } = resolverConfig();
   const first = resolvers[0]?.address ?? "<resolver address>";
+  // The opt-in root, when this registry signs: what makes https:// on a pit
+  // name stop warning. Absent, the page says so instead of linking a 503.
+  const ca = await caMaterial().catch(() => null);
 
   const addresses = published
     ? `<ul class="pit-addrs">${resolvers.map((r) => `
@@ -4194,7 +4197,35 @@ moshpitRouter.get("/pit/dns", async (req, res) => {
   </p>
   ${pitTabs("dns")}
 
-  <h2 style="font-size:1.2rem">The addresses</h2>
+  <h2 id="connect" style="font-size:1.2rem">Ways to connect</h2>
+  <p class="pit-copy">Pick by how much of the machine you want to change. Most people want the first one.</p>
+  <ol class="pit-steps dim">
+    <li><b class="acid">Just your browser — two minutes, no admin rights.</b> Turn on DNS over HTTPS with
+      this registry as the provider. Chrome / Edge / Brave: Settings → Privacy and security → Security →
+      Use secure DNS → <em>With: Custom</em>. Firefox: Settings → Privacy &amp; Security → DNS over HTTPS →
+      <em>Max Protection</em> → <em>Custom</em>.
+      ${doh ? `Paste <code>${esc(doh)}</code>.` : "The endpoint appears here once a resolver is up."}
+      Moshpit names now open in that browser; every other site resolves as before.</li>
+    <li><b class="acid">https:// without the warning</b> — ${ca
+      ? `trust the <a class="acid" href="/api/moshpit/ca.crt">Moshpit Root CA</a> (SHA-256
+      <code style="word-break:break-all">${esc(ca.rootFingerprint)}</code>). Easiest:
+      <code>moshcode dns ca --user-only</code> (browser store, no prompt) or <code>moshcode dns ca</code>
+      (every store). By hand: Firefox → Settings → Privacy &amp; Security → Certificates → View
+      Certificates → Authorities → Import, tick <em>trust this CA to identify websites</em>; Chrome and
+      Edge use the system store — macOS Keychain Access → System → import, then <em>Always Trust</em>;
+      Windows: open the file → Install Certificate → Local Machine → Trusted Root Certification
+      Authorities. Its promise to sign only Moshpit names is a policy, not a technical limit, so trust it
+      only if you trust this registry.`
+      : "this registry does not sign certificates yet, so <code>https://</code> on a Moshpit name will warn; plain <code>http://</code> works."}</li>
+    <li><b class="acid">Change nothing at all</b> — <a class="acid" href="#tron">TronBrowser</a> resolves
+      the namespace itself over ordinary HTTPS, with no setting to touch.</li>
+    <li><b class="acid">The whole machine, or the whole network</b> — <code>moshcode dns enable</code> sets
+      up a local resolver, routing and the root in one step (it asks for sudo; it never runs on its own).
+      Or point the machine's or router's DNS at a resolver below, so <code>curl</code>, <code>git</code>
+      and every app see the names too.</li>
+  </ol>
+
+  <h2 style="margin-top:34px;font-size:1.2rem">The addresses</h2>
   ${addresses}
 
   <h2 style="margin-top:34px;font-size:1.2rem">Set it</h2>
@@ -4208,11 +4239,8 @@ moshpitRouter.get("/pit/dns", async (req, res) => {
       <code>nameserver</code> line in <code>/etc/resolv.conf</code>.</li>
     <li><b class="acid">Router</b> — hand it out over DHCP and every device on the network gets the
       namespace. This is the setup it is really for.</li>
-    <li><b class="acid">A locked-down machine</b> where DNS is not yours to change — use DNS over HTTPS
-      in the browser. Firefox: Privacy &amp; Security → DNS over HTTPS → custom provider. Chrome:
-      Security → Use secure DNS → custom.
-      ${doh ? `The endpoint is <code>${esc(doh)}</code>.` : "An endpoint appears here once a resolver is up."}
-      Or run <a class="acid" href="#tron">TronBrowser</a>, which changes no network settings at all.</li>
+    <li><b class="acid">A locked-down machine</b> where DNS is not yours to change — the browser route in
+      <a class="acid" href="#connect">Ways to connect</a>, or <a class="acid" href="#tron">TronBrowser</a>.</li>
   </ol>
 
   <h2 id="tron" style="margin-top:34px;font-size:1.2rem">Or change nothing: <span class="acid">TronBrowser</span></h2>
@@ -4262,11 +4290,12 @@ nslookup anything.moshpit       <span class="faint"># the Windows spelling</span
 
   <h2 style="margin-top:34px;font-size:1.2rem">What still breaks</h2>
   <p class="pit-copy">
-    <code>https://</code> on a Moshpit name will warn <em>on the resolver route</em>. No public
-    certificate authority will issue for <span class="mono">scrambled.eggs</span>, because none of them
-    recognise a namespace that does not descend from the ICANN root. Plain <code>http://</code> works,
-    and so does this site. A certificate authority you opt into is the real answer, and it is not built
-    yet.
+    <code>https://</code> on a Moshpit name will warn <em>on the resolver route</em> until you opt in.
+    No public certificate authority will issue for <span class="mono">scrambled.eggs</span>, because none
+    of them recognise a namespace that does not descend from the ICANN root. Plain <code>http://</code>
+    works, and so does this site. ${ca
+      ? `The answer is a root you opt into — <a class="acid" href="#connect">Ways to connect</a>, step two.`
+      : "A certificate authority you opt into is the real answer; this registry does not run one yet."}
   </p>
   <p class="pit-copy" style="font-size:.9rem">
     TronBrowser sidesteps it rather than solving it: it rewrites the navigation to this registry's own
