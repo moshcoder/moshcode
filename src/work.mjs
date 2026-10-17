@@ -426,9 +426,16 @@ async function dropTree(repo, dir, deps) {
 
 /** Everything the attempt changed against the base, as one binary-safe patch. */
 async function collectPatch(dir, base, linked, deps) {
-  const excludes = linked.map((p) => `:(exclude)${p}`);
-  const add = await deps.git(dir, ["add", "-A", "--", ".", ...excludes]);
+  // Add everything, then take the links back out. Naming a link in the add
+  // itself (an exclude pathspec) makes git refuse the whole add when the
+  // repository's .gitignore already ignores it, which `node_modules` without
+  // a trailing slash does.
+  const add = await deps.git(dir, ["add", "-A"]);
   if (add.code !== 0) return { ok: false, error: `git add failed: ${tail(add.stderr, 400)}` };
+  if (linked.length) {
+    const unstage = await deps.git(dir, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...linked]);
+    if (unstage.code !== 0) return { ok: false, error: `git rm --cached failed: ${tail(unstage.stderr, 400)}` };
+  }
   const diff = await deps.git(dir, ["diff", "--cached", "--binary", base]);
   if (diff.code !== 0) return { ok: false, error: `git diff failed: ${tail(diff.stderr, 400)}` };
   const names = await deps.git(dir, ["diff", "--cached", "--name-only", base]);
@@ -604,6 +611,11 @@ export async function runWork(options, {
         tally.done++;
         const files = result.files?.length ? ` (${result.files.length} file${result.files.length === 1 ? "" : "s"})` : "";
         write(`  ✓ ${task.id} passed on attempt ${n}${files}: ${task.title}`);
+      } else if (passed) {
+        // Verify passed and the change could not be collected: another attempt
+        // would pass again and fail the same way. The kept tree has the work.
+        keepTree = Boolean(tree);
+        toInbox(task, `verify passed, but the change could not be collected: ${row.error}`, { attempts, tree: tree?.dir });
       } else if (n < task.maxAttempts) {
         finish(task, "pending", { attempts });
         tally.retried++;

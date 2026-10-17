@@ -335,3 +335,43 @@ test("every package's node_modules is linked into the tree, and none of them rea
     assert.doesNotMatch(fs.readFileSync(task.result.patch, "utf8"), /node_modules/);
   } finally { s.cleanup(); }
 });
+
+test("a repo that ignores node_modules (no slash) still has its passing change collected", async () => {
+  const s = sandbox();
+  try {
+    // `node_modules` without a trailing slash also matches the symlink, and
+    // naming an ignored path in `git add` made git refuse the whole add.
+    fs.writeFileSync(path.join(s.repo, ".gitignore"), "node_modules\n");
+    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], { cwd: s.repo });
+    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "ignore"], { cwd: s.repo });
+    fs.mkdirSync(path.join(s.repo, "node_modules/.bin"), { recursive: true });
+    const { id } = work.addTask("q", { prompt: "make add add", verify: VERIFY, cwd: s.repo }, { env: s.env });
+    const calls = [];
+    const r = await work.runWork({ queue: "q" }, { env: s.env, deps: depsWith(s.env, fixAdd, calls), engineOf: claude });
+    assert.equal(r.done, 1, JSON.stringify(work.findTask("q", id, s.env).task));
+    assert.equal(calls.length, 1, "one attempt: a pass is not retried");
+    const { task } = work.findTask("q", id, s.env);
+    assert.deepEqual(task.result.files, ["src/add.mjs"]);
+  } finally { s.cleanup(); }
+});
+
+test("verify passed but the change cannot be collected: the inbox at once, not a retry", async () => {
+  const s = sandbox();
+  try {
+    const { id } = work.addTask("q", { prompt: "make add add", verify: VERIFY, cwd: s.repo }, { env: s.env });
+    const live = depsWith(s.env, fixAdd);
+    const calls = [];
+    const deps = {
+      ...live,
+      engine: (...a) => { calls.push(a); return live.engine(...a); },
+      git: (cwd, args) => (args[0] === "add" ? Promise.resolve({ code: 1, stdout: "", stderr: "boom", error: null }) : live.git(cwd, args)),
+    };
+    const r = await work.runWork({ queue: "q" }, { env: s.env, deps, engineOf: claude });
+    assert.equal(r.inbox, 1);
+    assert.equal(calls.length, 1);
+    const { state, task } = work.findTask("q", id, s.env);
+    assert.equal(state, "inbox");
+    assert.match(task.inbox.reason, /verify passed, but the change could not be collected: git add failed: boom/);
+    assert.ok(fs.existsSync(task.inbox.tree), "the tree with the work in it is kept");
+  } finally { s.cleanup(); }
+});
