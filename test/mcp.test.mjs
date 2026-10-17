@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -136,6 +136,10 @@ test("runMcpAdd summarizes added / skipped / not-installed", async () => {
 function tempDir(prefix = "moshcode-mcp-") { return mkdtempSync(path.join(tmpdir(), prefix)); }
 
 function run(args, { binDir, env = {} }) {
+  // The stubs are `#!/usr/bin/env node` scripts, so node has to be on the
+  // otherwise stub-only PATH.
+  symlinkSync(process.execPath, path.join(binDir, "node"));
+  const home = tempDir("moshcode-mcp-home-");
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args], {
       stdio: ["ignore", "ignore", "ignore"],
@@ -148,7 +152,13 @@ function run(args, { binDir, env = {} }) {
         // this file exists.
         MOSHCODE_MCP_FILE: path.join(tempDir("moshcode-mcp-registry-"), "mcp.json"),
         ...env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+        // Only the stub engines, never the host's. Inheriting the real PATH
+        // (or HOME, which the engines' binDirs hang off) lets any engine
+        // actually installed on the box join the fan-out — it runs a real
+        // `mcp add` against the operator's config, and its exit status
+        // decides this test.
+        PATH: binDir,
+        HOME: home,
       },
     });
     child.on("error", reject);

@@ -19,6 +19,9 @@ const require = createRequire(import.meta.url);
 let deps = null;
 try {
   deps = { express: require("express") };
+  // express alone can resolve from the repo root's node_modules; the app's
+  // config also needs this one, which only apps/pwa installs.
+  await import("@profullstack/notifications/server");
 } catch {
   deps = null;
 }

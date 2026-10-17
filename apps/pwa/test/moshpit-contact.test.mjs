@@ -30,6 +30,10 @@ const require = createRequire(import.meta.url);
 let deps = null;
 try {
   deps = { express: require("express") };
+  // express alone is not proof: it can resolve from a node_modules above the
+  // repo while apps/pwa's own are absent. config.mjs, which every module boot()
+  // imports, needs this one, and only apps/pwa installs it.
+  require.resolve("@profullstack/notifications/package.json");
 } catch {
   deps = null;
 }

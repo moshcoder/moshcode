@@ -15,8 +15,16 @@ import { createRequire } from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
+// express alone is not a good enough probe: it can resolve from a node_modules
+// above the repo while the PWA's own dependencies are absent. Probe the ones the
+// router below actually loads, too. notifications is ESM-only, so it is
+// resolved the way the app imports it rather than through require.
 let deps = null;
-try { deps = { express: require("express") }; } catch { deps = null; }
+try {
+  deps = { express: require("express") };
+  require.resolve("@libsql/client");
+  import.meta.resolve("@profullstack/notifications/server");
+} catch { deps = null; }
 
 const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-records-page-test-"));
 process.env.DATABASE_URL = `file:${path.join(workdir, "test.db")}`;

@@ -65,8 +65,12 @@ const require = createRequire(import.meta.url);
 let deps = null;
 try {
   deps = { express: require("express") };
+  // express can resolve from a node_modules above the repo, so it alone does
+  // not prove apps/pwa's own dependencies are installed. config.mjs (loaded by
+  // the router) imports this one, and it is ESM-only, so import it.
+  await import("@profullstack/notifications/server");
 } catch {
-  deps = null;
+  deps = null; // pwa dependencies not installed — tests below skip
 }
 
 const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-pit-search-test-"));

@@ -6,9 +6,14 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import test from "node:test";
 
+// Probe more than express: express can resolve from a node_modules above the
+// repo even when apps/pwa's own dependencies were never installed, and then the
+// boot path dies on ERR_MODULE_NOT_FOUND instead of skipping. @libsql/client is
+// a PWA-only dependency that src/db.mjs loads, so it tells us the real story.
 const require = createRequire(import.meta.url);
 let deps = null;
 try {
+  require("@libsql/client");
   deps = { express: require("express") };
 } catch {
   deps = null;

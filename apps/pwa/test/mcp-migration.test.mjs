@@ -1,21 +1,40 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
+
+// The PWA modules pull in express and the rest at load time, and apps/pwa is not
+// a pnpm workspace, so the root suite can run without them: probe and skip.
+// express alone is not enough — a stray one higher up the tree can satisfy it —
+// so probe the packages db.mjs and config.mjs load as well (notifications is
+// ESM-only, hence import.meta.resolve rather than require).
+const require = createRequire(import.meta.url);
+let hasDeps = true;
+try {
+  require("express");
+  require.resolve("@libsql/client");
+  import.meta.resolve("@profullstack/notifications/server");
+} catch {
+  hasDeps = false;
+}
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-upgrade-"));
 process.env.DATABASE_URL = `file:${path.join(dir, "test.db")}`;
 process.env.PUBLIC_ORIGIN = "https://app.example.test";
 process.env.MCP_PUBLIC_ORIGIN = "https://gateway.example.test";
-const { run, get, db } = await import("../src/db.mjs");
-const { sha256 } = await import("../src/lib/crypto.mjs");
 const migrations = new URL("../src/migrations/", import.meta.url);
-test.after(() => { db.close?.(); fs.rmSync(dir, { recursive: true, force: true }); });
+let db;
+test.after(() => { db?.close?.(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 // Applies the SQLite files in src/migrations/ by hand, so it is SQLite-only.
 const sqliteOnly = process.env.MOSHCODE_TEST_DIALECT === "postgres" && "applies the SQLite migration files directly";
-test("upgrade preserves existing consent, pairs access/refresh grants and leaves ordinary queued input alone", { skip: sqliteOnly }, async () => {
+const skip = (!hasDeps && "PWA dependencies are not installed") || sqliteOnly;
+test("upgrade preserves existing consent, pairs access/refresh grants and leaves ordinary queued input alone", { skip }, async () => {
+  const dbModule = await import("../src/db.mjs");
+  const { run, get } = dbModule; db = dbModule.db;
+  const { sha256 } = await import("../src/lib/crypto.mjs");
   const files = fs.readdirSync(migrations).filter((name) => name.endsWith(".sql") && name < "022").sort();
   for (const name of files) {
     const sql = fs.readFileSync(new URL(name, migrations), "utf8");

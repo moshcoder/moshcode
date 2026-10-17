@@ -16,9 +16,22 @@ import { createRequire } from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
+// `express` alone is not proof: it also resolves from the repo root's
+// node_modules, while the packages src/config.mjs and src/db.mjs load do not.
+// Those are ESM-only, so require.resolve answers ERR_PACKAGE_PATH_NOT_EXPORTED
+// when they ARE installed — only MODULE_NOT_FOUND means missing.
+const installed = (name) => {
+  try {
+    require.resolve(name);
+    return true;
+  } catch (err) {
+    return err?.code !== "MODULE_NOT_FOUND";
+  }
+};
 let deps = null;
 try {
   deps = { express: require("express") };
+  if (!["@libsql/client", "@profullstack/notifications"].every(installed)) deps = null;
 } catch {
   deps = null;
 }

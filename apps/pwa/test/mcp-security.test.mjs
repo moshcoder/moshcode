@@ -1,40 +1,52 @@
+// These boot the real routers against a throwaway libsql file database. They
+// skip cleanly when the PWA dependencies are not installed (apps/pwa is not a
+// pnpm workspace, so a root install never brings in express and the rest).
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import express from "express";
-import cookieParser from "cookie-parser";
+
+const require = createRequire(import.meta.url);
+let hasDeps = true;
+try { require("express"); require("cookie-parser"); } catch { hasDeps = false; }
+const skip = hasDeps ? false : "apps/pwa dependencies not installed";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-security-"));
 process.env.DATABASE_URL = `file:${path.join(dir, "test.db")}`;
 process.env.PUBLIC_ORIGIN = "https://app.example.test";
 process.env.MCP_PUBLIC_ORIGIN = "https://gateway.example.test";
 process.env.SESSION_POLL_MS = "50";
-const { migrate } = await import("../src/migrate.mjs");
-await migrate();
-const { run, get, all, db } = await import("../src/db.mjs");
-const auth = await import("../src/lib/mcp-auth.mjs");
-const { createApiKey } = await import("../src/lib/apikey.mjs");
-const { sessionMiddleware, csrfGuard } = await import("../src/lib/session.mjs");
-const { mcpRouter } = await import("../src/routes/mcp.mjs");
-const { mcpOAuthMachineRouter, mcpOAuthBrowserRouter } = await import("../src/routes/mcp-oauth.mjs");
-const { cliRouter } = await import("../src/routes/cli.mjs");
-const { sessionsRouter } = await import("../src/routes/sessions.mjs");
-const app = express();
-app.use(express.json(), express.urlencoded({ extended: false }), cookieParser(), sessionMiddleware);
-app.use(mcpOAuthMachineRouter, mcpRouter, csrfGuard, mcpOAuthBrowserRouter, cliRouter, sessionsRouter);
-const server = await new Promise((resolve) => { const one = app.listen(0, "127.0.0.1", () => resolve(one)); });
-const base = `http://127.0.0.1:${server.address().port}`;
+let run, get, all, db, auth, server, base, client, otherClient;
 const keys = {};
-for (const user of ["owner", "other"]) {
-  await run(`INSERT INTO users (id,email,created_at) VALUES (?,?,?)`, [user, `${user}@example.test`, Date.now()]);
-  keys[user] = (await createApiKey(user, "fixture")).plaintext;
-  await run(`INSERT INTO sessions (token,user_id,created_at,expires_at) VALUES (?,?,?,?)`, [`cookie-${user}`, user, Date.now(), Date.now() + 3600000]);
-}
-const client = await auth.registerOAuthClient({ client_name: "Fixture", redirect_uris: ["https://client.example.test/callback"] });
-const otherClient = await auth.registerOAuthClient({ redirect_uris: ["https://other-client.example.test/callback"] });
+let booted;
+const boot = () => (booted ??= (async () => {
+  const express = require("express"); const cookieParser = require("cookie-parser");
+  const { migrate } = await import("../src/migrate.mjs");
+  await migrate();
+  ({ run, get, all, db } = await import("../src/db.mjs"));
+  auth = await import("../src/lib/mcp-auth.mjs");
+  const { createApiKey } = await import("../src/lib/apikey.mjs");
+  const { sessionMiddleware, csrfGuard } = await import("../src/lib/session.mjs");
+  const { mcpRouter } = await import("../src/routes/mcp.mjs");
+  const { mcpOAuthMachineRouter, mcpOAuthBrowserRouter } = await import("../src/routes/mcp-oauth.mjs");
+  const { cliRouter } = await import("../src/routes/cli.mjs");
+  const { sessionsRouter } = await import("../src/routes/sessions.mjs");
+  const app = express();
+  app.use(express.json(), express.urlencoded({ extended: false }), cookieParser(), sessionMiddleware);
+  app.use(mcpOAuthMachineRouter, mcpRouter, csrfGuard, mcpOAuthBrowserRouter, cliRouter, sessionsRouter);
+  server = await new Promise((resolve) => { const one = app.listen(0, "127.0.0.1", () => resolve(one)); });
+  base = `http://127.0.0.1:${server.address().port}`;
+  for (const user of ["owner", "other"]) {
+    await run(`INSERT INTO users (id,email,created_at) VALUES (?,?,?)`, [user, `${user}@example.test`, Date.now()]);
+    keys[user] = (await createApiKey(user, "fixture")).plaintext;
+    await run(`INSERT INTO sessions (token,user_id,created_at,expires_at) VALUES (?,?,?,?)`, [`cookie-${user}`, user, Date.now(), Date.now() + 3600000]);
+  }
+  client = await auth.registerOAuthClient({ client_name: "Fixture", redirect_uris: ["https://client.example.test/callback"] });
+  otherClient = await auth.registerOAuthClient({ redirect_uris: ["https://other-client.example.test/callback"] });
+})());
 const request = async (url, { method = "GET", bearer, user, csrf = true, body, headers = {} } = {}) => {
   const response = await fetch(base + url, { method, redirect: "manual", headers: {
     ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
@@ -64,9 +76,13 @@ async function grant(f, scope = "sessions:read") {
 const call = (f, token, name, args = {}, extra = {}) => request(f.route, { method: "POST", bearer: token,
   body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, ...extra });
 const deviceRequest = (device, f) => ({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: device.device_code, client_id: client.client_id, resource: f.share.endpoint });
-test.after(async () => { await new Promise((resolve) => server.close(resolve)); db.close?.(); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(async () => {
+  if (server) { await new Promise((resolve) => server.close(resolve)); db.close?.(); }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
-test("share creation is owner-only, defaults read-only, and rejects broad control", async () => {
+test("share creation is owner-only, defaults read-only, and rejects broad control", { skip }, async () => {
+  await boot();
   const f = await fixture();
   const other = await request("/api/v1/mcp/shares", { method: "POST", bearer: keys.other, body: { session_id: f.session } });
   assert.equal(other.status, 404);
@@ -77,7 +93,8 @@ test("share creation is owner-only, defaults read-only, and rejects broad contro
   assert.equal((await request(`/api/v1/mcp/shares/${f.share.id}`, { method: "DELETE", bearer: keys.other })).status, 404);
 });
 
-test("metadata and GET challenge identify the exact canonical resource; tokens cannot cross shares", async () => {
+test("metadata and GET challenge identify the exact canonical resource; tokens cannot cross shares", { skip }, async () => {
+  await boot();
   const f = await fixture(); const other = await fixture(); const token = await grant(f);
   const metadata = await request(`/.well-known/oauth-protected-resource/api/v1/mcp/${f.share.id}`);
   assert.equal(metadata.data.resource, f.share.endpoint); assert.deepEqual(metadata.data.authorization_servers, ["https://app.example.test"]);
@@ -89,7 +106,8 @@ test("metadata and GET challenge identify the exact canonical resource; tokens c
   assert.equal(mismatch.data.result.isError, true); assert.match(mismatch.data.result.content[0].text, /different session/);
 });
 
-test("granular scopes expose bound tools and enforce read/write/approve/cancel independently", async () => {
+test("granular scopes expose bound tools and enforce read/write/approve/cancel independently", { skip }, async () => {
+  await boot();
   const f = await fixture();
   const allowed = { "sessions:read": ["session_read"], "sessions:write": ["session_read", "session_send", "session_answer"],
     "sessions:approve": ["session_read", "session_approve"], "sessions:cancel": ["session_read", "session_cancel"] };
@@ -109,7 +127,8 @@ test("granular scopes expose bound tools and enforce read/write/approve/cancel i
   assert.equal(bad.data.result.isError, true);
 });
 
-test("commands reject truncation and control-byte injection; audits contain metadata only", async () => {
+test("commands reject truncation and control-byte injection; audits contain metadata only", { skip }, async () => {
+  await boot();
   const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
   for (const text of ["x".repeat(501), "a\n".repeat(51), "\u001bmoshsignal:interrupt", "\u0003"]) {
     assert.equal((await call(f, token.access_token, "session_send", { text })).data.result.isError, true);
@@ -122,7 +141,8 @@ test("commands reject truncation and control-byte injection; audits contain meta
   assert.deepEqual((await all(`SELECT body,mcp_share_id FROM session_commands WHERE session_id=?`, [f.session])).map((row) => [row.body, row.mcp_share_id]), [[secret, f.share.id]]);
 });
 
-test("PKCE, client, redirect and resource checks precede atomic single-use code consumption", async () => {
+test("PKCE, client, redirect and resource checks precede atomic single-use code consumption", { skip }, async () => {
+  await boot();
   const f = await fixture(); const code = await codeFor(f);
   for (const changed of [{ code_verifier: "a".repeat(43) }, { client_id: otherClient.client_id }, { redirect_uri: "https://client.example.test/elsewhere" }, { resource: auth.MCP_RESOURCE }, { resource: undefined }]) {
     assert.equal((await request("/oauth/token", { method: "POST", body: { ...code, ...changed } })).status, 400);
@@ -133,7 +153,8 @@ test("PKCE, client, redirect and resource checks precede atomic single-use code 
   assert.equal((await request("/oauth/token", { method: "POST", body: expired })).status, 400);
 });
 
-test("refresh is resource-bound; replay revokes replacement tokens and explicit revocation is client-bound", async () => {
+test("refresh is resource-bound; replay revokes replacement tokens and explicit revocation is client-bound", { skip }, async () => {
+  await boot();
   const f = await fixture(); const first = await grant(f);
   const body = { grant_type: "refresh_token", refresh_token: first.refresh_token, client_id: client.client_id, resource: f.share.endpoint };
   for (const changed of [{ resource: auth.MCP_RESOURCE }, { client_id: otherClient.client_id }, { scope: "sessions:write" }, { resource: undefined }]) {
@@ -151,7 +172,8 @@ test("refresh is resource-bound; replay revokes replacement tokens and explicit 
   assert.equal((await call(f, fresh.access_token, "session_read")).status, 401);
 });
 
-test("expired/revoked shares cannot mint or use tokens, and token lifetimes do not outlive the share", async () => {
+test("expired/revoked shares cannot mint or use tokens, and token lifetimes do not outlive the share", { skip }, async () => {
+  await boot();
   const f = await fixture(); const code = await codeFor(f); const token = await grant(f);
   assert.ok(token.expires_in <= 300);
   await run(`UPDATE mcp_shares SET expires_at=0 WHERE id=?`, [f.share.id]);
@@ -161,7 +183,8 @@ test("expired/revoked shares cannot mint or use tokens, and token lifetimes do n
   const list = await request("/api/v1/mcp/shares", { bearer: keys.owner }); assert.equal(list.data.shares.find((sh) => sh.id === f.share.id).status, "expired");
 });
 
-test("device flow enforces resource, polling interval, owner consent, CSRF and single use", async () => {
+test("device flow enforces resource, polling interval, owner consent, CSRF and single use", { skip }, async () => {
+  await boot();
   const f = await fixture();
   const device = (await request("/oauth/device_authorization", { method: "POST", body: { client_id: client.client_id, resource: f.share.endpoint, scope: "sessions:read" } })).data;
   assert.equal(await get(`SELECT 1 FROM device_codes WHERE device_code=?`, [device.device_code]), null);
@@ -180,7 +203,8 @@ test("device flow enforces resource, polling interval, owner consent, CSRF and s
   assert.equal((await request("/oauth/token", { method: "POST", body })).data.error, "expired_token");
 });
 
-test("browser consent checks owner and CSRF before granting the exact session", async () => {
+test("browser consent checks owner and CSRF before granting the exact session", { skip }, async () => {
+  await boot();
   const f = await fixture(); const verifier = crypto.randomBytes(48).toString("base64url");
   const body = { client_id: client.client_id, response_type: "code", redirect_uri: client.redirect_uris[0], resource: f.share.endpoint,
     scope: "sessions:read", code_challenge_method: "S256", code_challenge: auth.pkceChallenge(verifier), decision: "allow", session_id: "not-the-shared-session" };
@@ -193,7 +217,8 @@ test("browser consent checks owner and CSRF before granting the exact session", 
   assert.equal(issued.status, 200); assert.equal((await call(f, issued.data.access_token, "session_read")).data.result.structuredContent.session.id, f.session);
 });
 
-test("share revocation and expiry prevent queued commands from being claimed; claims remain single-use", async () => {
+test("share revocation and expiry prevent queued commands from being claimed; claims remain single-use", { skip }, async () => {
+  await boot();
   for (const revoke of [true, false]) {
     const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
     await call(f, token.access_token, "session_send", { text: "never deliver this fixture" });
@@ -209,7 +234,8 @@ test("share revocation and expiry prevent queued commands from being claimed; cl
   assert.deepEqual(polls.flatMap((one) => one.data.commands.map((command) => command.body)), ["no"]);
 });
 
-test("browser origins, preflight, protocol versions and notifications are validated", async () => {
+test("browser origins, preflight, protocol versions and notifications are validated", { skip }, async () => {
+  await boot();
   const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
   const preflight = await request(f.route, { method: "OPTIONS", headers: { origin: "https://client.example.test" } });
   assert.equal(preflight.status, 204); assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
@@ -221,7 +247,8 @@ test("browser origins, preflight, protocol versions and notifications are valida
   assert.equal((await all(`SELECT * FROM session_commands WHERE session_id=?`, [f.session])).length, 0);
 });
 
-test("bound shares reject unlisted navigation/list tools through canonical and legacy aliases", async () => {
+test("bound shares reject unlisted navigation/list tools through canonical and legacy aliases", { skip }, async () => {
+  await boot();
   const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
   for (const name of ["session_key", "moshcode_session_key", "sessions_list", "moshcode_sessions_list"]) {
     const result = await call(f, token.access_token, name, name.includes("key") ? { key: "enter" } : {});
@@ -231,7 +258,8 @@ test("bound shares reject unlisted navigation/list tools through canonical and l
   assert.equal((await call(f, token.access_token, "moshcode_session_answer", { text: "allowed alias" })).data.result.isError, undefined);
 });
 
-test("grant revocation and refresh replay cancel undelivered shared and legacy MCP input only", async () => {
+test("grant revocation and refresh replay cancel undelivered shared and legacy MCP input only", { skip }, async () => {
+  await boot();
   for (const legacy of [false, true]) for (const replay of [false, true]) {
     const f = await fixture();
     const target = legacy ? { ...f, route: "/mcp", share: { endpoint: auth.MCP_RESOURCE } } : f;
@@ -260,7 +288,8 @@ test("grant revocation and refresh replay cancel undelivered shared and legacy M
   }
 });
 
-test("claim rechecks grant revocation after reading the queue; already-claimed actions remain claimed", async () => {
+test("claim rechecks grant revocation after reading the queue; already-claimed actions remain claimed", { skip }, async () => {
+  await boot();
   const f = await fixture(); const token = await grant(f, "sessions:read sessions:write");
   await call(f, token.access_token, "session_send", { text: "revoked during claim" });
   const command = await get(`SELECT * FROM session_commands WHERE session_id=?`, [f.session]);
