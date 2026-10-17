@@ -397,6 +397,13 @@ async function main() {
     process.exitCode = (await fleetCommand(rest)) || 0;
     return;
   }
+  // Work (PRD 0021): a queue of tasks that carry their own verify command,
+  // drained by headless workers. Lazy like swarm and fleet.
+  if (cmd === "work") {
+    const { workCommand } = await import("../src/work-cli.mjs");
+    process.exitCode = (await workCommand(rest)) || 0;
+    return;
+  }
   // A handoff (PRD 0018): one engine's conversation, continued in another.
   // Lazy like swarm and fleet, and for the same reason: a plain launch never
   // reads a transcript.

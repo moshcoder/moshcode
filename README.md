@@ -34,6 +34,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode swarm` | runtime | one task, a herd of agents, one answer — plan, fan out, verify, synthesise (PRD 0015) |
 | `moshcode omarchy` | runtime | the herd on the Omarchy bar: the snapshot a QML widget polls, and the plugin around it (PRD 0017) |
 | `moshcode fleet` | runtime | the OpenFleet sysop tool: open a fleet, cap it, see the tree, stop a swarm, read the ledger (PRD 0016) |
+| `moshcode work` | runtime | a queue of tasks that carry their own verify command, drained by headless workers; you see only the inbox (PRD 0021) |
 | `moshcode handoff` | runtime | move a conversation from one engine to another, with its history (PRD 0018) |
 | `moshcode ps` | runtime | list herd sessions and what each one is doing |
 | `moshcode cost` <br>`usage` | runtime | what each session is spending, read from the engines' own logs |
@@ -634,6 +635,33 @@ enforced: a member past its `until` or a swarm that has spent its budget is
 stopped through its engine and ends `timeout` or `budget` in the ledger. `moshcode ps` groups its rows by fleet and swarm
 and marks every session whose approvals are bypassed. The records live under
 `$OPENFLEET_HOME`, default `~/.openfleet`.
+
+### Work — a queue, a verifier, and an inbox
+
+A swarm is a handful of panes a person watches. That stops scaling at the
+number of panes a person can read. `moshcode work` is the other shape: every
+task carries a `verify` command, workers are headless processes rather than
+panes, and the person only sees what the verifier could not settle.
+
+```sh
+moshcode work from-tests fix-tests                 # one task per failing test file; verify = that file passing
+moshcode work run fix-tests -n 50 --engine claude  # fifty workers, a git worktree per attempt
+moshcode work status fix-tests                     # the numbers, not the transcripts
+moshcode work inbox fix-tests                      # only what failed every attempt
+moshcode work apply fix-tests                      # land the passing patches, each checked first
+moshcode work add docs "document every flag in src/cli.mjs" --verify "npm test"
+```
+
+Exit 0 from `verify` is the only definition of done; the engine's own account
+is recorded and never consulted. A failed attempt goes back to the queue with
+the verify output in the next prompt; after `--max-attempts` (3) it goes to
+the inbox with its worktree kept. A task is a file, claimed by an atomic
+rename, so several `work run`s on one queue (on one box, or several sharing
+the directory) split it between them. The task id is a hash of what it asks,
+so a task queued twice is one task and a done one is never paid for again.
+Every run is an OpenFleet swarm, so `moshcode fleet tree` shows it and the
+fleet's `fan_out` ceiling bounds `-n`. Queues live under
+`$MOSHCODE_WORK_DIR`, default `~/.moshcode/work`.
 
 ### Let the engine say what it is doing
 

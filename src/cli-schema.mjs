@@ -273,6 +273,34 @@ export const CORE_CLI_COMMANDS = [
       + "a `claude -p` through its pid.",
   },
   {
+    name: "work",
+    group: "runtime",
+    description: "a queue of tasks that carry their own verify command, drained by headless workers; you see only the inbox (PRD 0021)",
+    synopsis: [
+      ["moshcode work <verb> [args…]", ""],
+    ],
+    verbs: "WORK_VERBS",
+    flags: [["--json", "machine-readable, on every verb that prints", ""]],
+    examples: [
+      ["moshcode work from-tests fix-tests", "one task per failing test file; verify is that file passing"],
+      ["moshcode work run fix-tests -n 50 --engine claude", "fifty headless workers, a git worktree each, until the queue is empty"],
+      ["moshcode work add docs \"document every flag in src/cli.mjs\" --verify \"npm test\"", "any task, as long as a command can say it is done"],
+      ["moshcode work status fix-tests", "the numbers: pending, working, done, inbox, pass rate"],
+      ["moshcode work inbox fix-tests", "only what the verifier could not settle"],
+      ["moshcode work apply fix-tests", "land every passing patch, each checked first"],
+    ],
+    seeAlso: ["swarm", "fleet", "herd"],
+    note: "the swarm is one task split into panes a person watches; work is the shape that scales past what a person can watch. "
+      + "every task has a verify shell command and exit 0 is the only definition of done: the engine's opinion is recorded, never consulted. "
+      + "a task is a file under $MOSHCODE_WORK_DIR (default ~/.moshcode/work/<queue>), claimed by an atomic rename, so any number of "
+      + "workers in any number of processes on one filesystem never hold the same task. each attempt runs in its own git worktree at "
+      + "the run's base commit with node_modules linked in, the engine headless with its autonomous flags; a pass keeps the diff as a "
+      + "patch under results/, a fail goes back to the queue with the verify output in the next prompt, and after --max-attempts "
+      + "(default 3) it goes to the inbox with its worktree kept. the task id is a hash of prompt, verify and cwd, so the same ask "
+      + "queued twice is one task and a done one is never paid for again. every run is an OpenFleet swarm (PRD 0016): one record and "
+      + "member.start / member.end with the verdict per attempt, so `moshcode fleet tree` and `moshcode fleet log` show it.",
+  },
+  {
     name: "handoff",
     group: "runtime",
     description: "move a conversation from one engine to another, with its history (PRD 0018)",
@@ -1998,6 +2026,73 @@ export const PAYMENT_VERBS = [
   { name: "disconnect", description: "forget a rail (the CLI stays logged in)", synopsis: [["moshcode payments disconnect <gateway>", ""]] },
 ];
 
+export const WORK_VERBS = [
+  { name: "ls", description: "every queue on this box, with its counts",
+    synopsis: [["moshcode work ls [--json]", ""]] },
+  { name: "add", description: "queue one task, or a file of them; a task without a verify command is refused",
+    synopsis: [
+      ["moshcode work add <queue> \"<prompt>\" --verify \"<cmd>\" [--cwd .] [--title …] [--max-attempts 3]", "prints the task id"],
+      ["moshcode work add <queue> --file tasks.jsonl [--verify \"<cmd>\"]", "one JSON object per line: prompt, verify, cwd, title"],
+    ],
+    flags: [
+      ["--verify <cmd>", "the shell command whose exit 0 means done, run from --cwd", "required"],
+      ["--cwd <dir>", "where the task works and verify runs", "."],
+      ["--title <text>", "the one line the inbox and status show", "the prompt's first line"],
+      ["--max-attempts <n>", "attempts before the task goes to the inbox", "3"],
+      ["--file <path|->", "a JSON array or JSON lines of tasks; --verify and --cwd fill what a line leaves out", ""],
+      ["--json", "machine-readable", ""],
+    ],
+    note: "the id is a hash of prompt, verify and cwd: the same ask added twice is one task, in whatever state it is in." },
+  { name: "from-tests", description: "run each test file on its own and queue one task per failing file",
+    synopsis: [["moshcode work from-tests <queue> [files…] [--runner \"node --test\"] [--cwd .] [--jobs 8]", ""]],
+    flags: [
+      ["--runner <cmd>", "how to run one test file; the file is appended", "node --test"],
+      ["--cwd <dir>", "the project root", "."],
+      ["--jobs <n>", "files run at a time while scanning", "8"],
+      ["--timeout <dur>", "how long one file may take while scanning", "120s"],
+      ["--max-attempts <n>", "attempts per task", "3"],
+      ["--json", "machine-readable", ""],
+    ],
+    note: "files default to *.test.{js,mjs,cjs,ts,mts} under test/ and tests/. each task's verify is `<runner> <file>` and its prompt "
+      + "carries the failure output, so a worker starts from the error instead of rediscovering it." },
+  { name: "run", description: "drain a queue with headless workers until nothing is pending",
+    synopsis: [["moshcode work run <queue> [-n 4] [--engine claude] [--timeout 30m] [--setup \"<cmd>\"] [--no-isolate]", ""]],
+    flags: [
+      ["-n, --workers <n>", "workers at once; checked against the fleet's fan_out ceiling", "4"],
+      ["--engine <engine>", "which engine works", "the first installed"],
+      ["--timeout <dur>", "how long one engine attempt may take", "30m"],
+      ["--verify-timeout <dur>", "how long verify (and --setup) may take", "10m"],
+      ["--limit <n>", "stop after this many tasks have been taken", "no limit"],
+      ["--setup <cmd>", "run in each fresh worktree before anything else; failing sends the task to the inbox", ""],
+      ["--no-isolate", "work in the task's own directory instead of a worktree (one worker per checkout, or chaos)", ""],
+      ["--no-precheck", "skip running verify before the first attempt", ""],
+      ["--json", "the run as data", ""],
+    ],
+    note: "before the first attempt verify runs once: a task that already passes is done for the price of one verify. each attempt is "
+      + "an OpenFleet member with the run's swarm id; the engine gets OPENFLEET_* plus MOSHCODE_WORK_QUEUE and MOSHCODE_WORK_TASK. "
+      + "engine output lands in runs/<id>-<n>.log. several `work run`s on one queue, on one box or several sharing the directory, "
+      + "split the tasks between them." },
+  { name: "status", description: "the queue as numbers: pending, working, done, inbox, attempts, pass rate, done per hour",
+    synopsis: [["moshcode work status <queue> [--json]", ""]] },
+  { name: "inbox", description: "only what needs a person: tasks that failed every attempt, could not set up, or no longer apply",
+    synopsis: [["moshcode work inbox <queue> [--json]", "the reason, the last lines of verify, and the kept worktree"]] },
+  { name: "show", description: "one task, with every attempt's exits and summary",
+    synopsis: [["moshcode work show <queue> <id> [--json]", ""]] },
+  { name: "retry", description: "send inbox tasks back to the queue with a fresh attempt budget",
+    synopsis: [["moshcode work retry <queue> <id…> | --all", "the old attempts are kept as history"]],
+    flags: [["--all", "every task in the inbox", ""]] },
+  { name: "drop", description: "remove tasks and their patches (not one a worker holds)",
+    synopsis: [["moshcode work drop <queue> <id…>", ""]] },
+  { name: "apply", description: "apply every passing, unapplied patch to its checkout, oldest first",
+    synopsis: [["moshcode work apply <queue> [--dry-run] [--json]", ""]],
+    flags: [["--dry-run", "check each patch and apply none", ""], ["--json", "machine-readable", ""]],
+    note: "each patch is `git apply --check`ed first, so the checkout never gets half of one. one that no longer applies goes to the "
+      + "inbox; retry runs it again against the new HEAD." },
+  { name: "recover", description: "put back claims whose worker died, or that are older than --stale",
+    synopsis: [["moshcode work recover <queue> [--stale 2h]", "run does this for dead workers on this host by itself"]],
+    flags: [["--stale <dur>", "also put back claims older than this, from any host", ""]] },
+];
+
 export const OMARCHY_VERBS = [
   { name: "status", description: "the snapshot the bar polls: agents, counts, burn, alerts",
     synopsis: [["moshcode omarchy status [--json] [--ttl <secs>] [--no-cache]", ""]],
@@ -2016,6 +2111,7 @@ export const OMARCHY_VERBS = [
 export const VERB_TABLES = {
   HERD_VERBS,
   FLEET_VERBS,
+  WORK_VERBS,
   OMARCHY_VERBS,
   SSH_VERBS,
   TIMER_VERBS,
