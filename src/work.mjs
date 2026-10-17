@@ -52,8 +52,9 @@ export const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
 const TAIL_CHARS = 4000;
 const CAPTURE_BYTES = 256 * 1024;
 const QUEUE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
-// Paths a worktree gets as symlinks to the checkout's own, so a tree can run
-// its tests without an install per attempt. Never part of a patch.
+// Directory names a worktree gets as symlinks to the checkout's own, wherever
+// they sit in it (findLinkable), so a tree can run its tests without an
+// install per attempt. Never part of a patch.
 export const LINKED = ["node_modules"];
 
 /* ---------------------------------------------------------------- the files */
@@ -381,14 +382,40 @@ async function makeTree(repo, dir, deps) {
   }
   if (res.code !== 0) return { ok: false, error: `git worktree add failed: ${tail(res.stderr || res.error, 400)}` };
   const linked = [];
-  for (const name of LINKED) {
-    const src = path.join(repo.root, name);
-    const dst = path.join(dir, name);
-    if (fs.existsSync(src) && !fs.existsSync(dst)) {
-      try { fs.symlinkSync(src, dst, "dir"); linked.push(name); } catch { /* the tree works without it, slower */ }
+  for (const rel of findLinkable(repo.root)) {
+    const src = path.join(repo.root, rel);
+    const dst = path.join(dir, rel);
+    // Only where the tree has the package too: a package the base commit lacks gets nothing.
+    if (fs.existsSync(path.dirname(dst)) && !fs.existsSync(dst)) {
+      try { fs.symlinkSync(src, dst, "dir"); linked.push(rel); } catch { /* the tree works without it, slower */ }
     }
   }
   return { ok: true, dir, linked };
+}
+
+const NO_DESCEND = new Set(["node_modules", ".git", "dist", "build", "out", "coverage", ".next", ".turbo", ".svelte-kit", "target"]);
+
+/**
+ * Every LINKED directory in the checkout, root first, at most `maxDepth`
+ * levels down: a monorepo's packages each have their own node_modules
+ * (pnpm puts one per package), and a tree with only the root's cannot run
+ * a package's tests.
+ */
+export function findLinkable(root, { names = LINKED, maxDepth = 4 } = {}) {
+  const out = [];
+  const walk = (rel, depth) => {
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const child = rel ? path.join(rel, e.name) : e.name;
+      if (names.includes(e.name)) { out.push(child); continue; }
+      if (NO_DESCEND.has(e.name) || e.name.startsWith(".") || depth >= maxDepth) continue;
+      walk(child, depth + 1);
+    }
+  };
+  walk("", 0);
+  return out.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length || a.localeCompare(b));
 }
 
 async function dropTree(repo, dir, deps) {

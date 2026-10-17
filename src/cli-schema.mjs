@@ -294,7 +294,7 @@ export const CORE_CLI_COMMANDS = [
       + "every task has a verify shell command and exit 0 is the only definition of done: the engine's opinion is recorded, never consulted. "
       + "a task is a file under $MOSHCODE_WORK_DIR (default ~/.moshcode/work/<queue>), claimed by an atomic rename, so any number of "
       + "workers in any number of processes on one filesystem never hold the same task. each attempt runs in its own git worktree at "
-      + "the run's base commit with node_modules linked in, the engine headless with its autonomous flags; a pass keeps the diff as a "
+      + "the run's base commit with every node_modules in the checkout (root and each package, 4 levels deep) linked in, the engine headless with its autonomous flags; a pass keeps the diff as a "
       + "patch under results/, a fail goes back to the queue with the verify output in the next prompt, and after --max-attempts "
       + "(default 3) it goes to the inbox with its worktree kept. the task id is a hash of prompt, verify and cwd, so the same ask "
       + "queued twice is one task and a done one is never paid for again. every run is an OpenFleet swarm (PRD 0016): one record and "
