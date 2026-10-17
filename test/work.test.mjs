@@ -307,3 +307,31 @@ test("the CLI: add refuses a task with no verify, status prints the counts", asy
     assert.equal(await workCommand(["frobnicate"], { write, env: s.env }), 2);
   } finally { s.cleanup(); }
 });
+
+test("every package's node_modules is linked into the tree, and none of them reaches the patch", async () => {
+  const s = sandbox();
+  try {
+    // A monorepo package whose test needs its own installed dependency.
+    const pkg = path.join(s.repo, "packages/web");
+    fs.mkdirSync(path.join(pkg, "test"), { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), '{ "type": "module" }\n');
+    fs.writeFileSync(path.join(pkg, "test/dep.test.mjs"), 'import { test } from "node:test";\nimport { ok } from "dep";\ntest("dep", () => { if (!ok) throw new Error("no"); });\n');
+    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], { cwd: s.repo });
+    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "web"], { cwd: s.repo });
+    // Installed, untracked: what pnpm leaves in each package.
+    fs.mkdirSync(path.join(pkg, "node_modules/dep"), { recursive: true });
+    fs.writeFileSync(path.join(pkg, "node_modules/dep/package.json"), '{ "name": "dep", "type": "module", "main": "index.js" }\n');
+    fs.writeFileSync(path.join(pkg, "node_modules/dep/index.js"), "export const ok = true;\n");
+    fs.mkdirSync(path.join(s.repo, "node_modules/.bin"), { recursive: true });
+
+    assert.deepEqual(work.findLinkable(s.repo), ["node_modules", path.join("packages", "web", "node_modules")]);
+
+    const { id } = work.addTask("q", { prompt: "touch a file", verify: "node --test test/dep.test.mjs", cwd: pkg }, { env: s.env });
+    const touch = (cwd) => fs.writeFileSync(path.join(cwd, "NOTES.md"), "x\n");
+    const r = await work.runWork({ queue: "q", precheck: false }, { env: s.env, deps: depsWith(s.env, touch), engineOf: claude });
+    assert.equal(r.done, 1, JSON.stringify(work.findTask("q", id, s.env).task.attempts));
+    const { task } = work.findTask("q", id, s.env);
+    assert.deepEqual(task.result.files, ["packages/web/NOTES.md"]);
+    assert.doesNotMatch(fs.readFileSync(task.result.patch, "utf8"), /node_modules/);
+  } finally { s.cleanup(); }
+});
