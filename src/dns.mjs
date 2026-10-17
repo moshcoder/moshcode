@@ -450,6 +450,63 @@ const TLD_PAGE = 1000;
  * Paged to exhaustion against `total`, with the page count bounded so a
  * registry that misreports it cannot spin here forever.
  */
+/**
+ * Keep the bridge's ending list loaded and current.
+ *
+ * Read once at start, the list was all-or-nothing for the life of the
+ * process: a bridge started while this machine's own resolver was itself (the
+ * usual case on a restart, since the resolver is routed here and the bridge
+ * is not listening yet) failed to reach the registry, answered every Moshpit
+ * name NXDOMAIN, and kept doing so until somebody restarted it again. Now an
+ * empty list is retried in the background (5 s, 10 s, 30 s, then every five
+ * minutes), and a loaded one is refreshed hourly so a newly claimed ending
+ * resolves without a restart. A failed refresh never empties a good list.
+ *
+ * `tldSet` is filled in place: the server reads that same set per query.
+ */
+export function keepEndingsFresh({
+  tldSet,
+  load,
+  out = () => {},
+  schedule = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+  cancel = clearTimeout,
+  retryDelays = [5_000, 10_000, 30_000],
+  retryEvery = 300_000,
+  refreshEvery = 3_600_000,
+} = {}) {
+  let attempt = 0;
+  let timer = null;
+  let stopped = false;
+  const next = () => {
+    if (stopped) return;
+    const ms = tldSet.size ? refreshEvery : (retryDelays[attempt] ?? retryEvery);
+    timer = schedule(run, ms);
+  };
+  const run = async () => {
+    if (stopped) return;
+    const hadNone = tldSet.size === 0;
+    try {
+      const found = await load();
+      if (Array.isArray(found) && found.length) {
+        tldSet.clear();
+        for (const one of found) tldSet.add(one);
+        if (hadNone) out(`answering for ${tldSet.size} endings (the ending list loaded on retry ${attempt + 1})`);
+        attempt = 0;
+      } else if (hadNone) {
+        attempt += 1;
+      }
+    } catch (err) {
+      if (hadNone) {
+        attempt += 1;
+        out(`! still cannot read the ending list — ${err?.message || err}; trying again`);
+      }
+    }
+    next();
+  };
+  next();
+  return () => { stopped = true; if (timer) cancel(timer); };
+}
+
 export async function fetchTlds({ registryBase = DEFAULT_REGISTRY_BASE, fetchImpl = fetch } = {}) {
   const base = `${registryBase.replace(/\/+$/, "")}/api/moshpit/tlds`;
   const seen = [];
@@ -2881,6 +2938,8 @@ export async function dnsCommand(args = [], out = console.log, deps = {}) {
         },
         onError: (err) => out(`! resolver socket error — ${err?.message || err}`),
       });
+      // Retried until it loads, then refreshed: see keepEndingsFresh.
+      keepEndingsFresh({ tldSet, load: () => fetchTldsImpl({ registryBase }), out });
     } catch (err) {
       const why = err?.code === "EACCES"
         ? `needs privileges to bind port ${port}`
