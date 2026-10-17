@@ -55,7 +55,7 @@ test("`on` writes the default categories and names the ones never fetched", asyn
   const dir = await tempDir(t);
   const { code, text } = await run(["on"], dir);
   assert.equal(code, 0);
-  assert.match(text, /filtering on — ads, malware, phishing, mining/);
+  assert.match(text, /filtering on — ads, malware, c2, phishing, mining/);
   // The state that would otherwise read as protection.
   assert.match(text, /never been fetched/);
   assert.match(text, /moshcode dns filter update/);
@@ -93,7 +93,7 @@ test("`off` keeps the lists and the rules", async (t) => {
   const config = await readConfig(dir);
   assert.equal(config.enabled, false);
   assert.deepEqual(config.block, ["tracker.example"]);
-  assert.deepEqual(config.categories, ["ads", "malware", "phishing", "mining"]);
+  assert.deepEqual(config.categories, ["ads", "malware", "c2", "phishing", "mining"]);
 });
 
 test("an unknown mode or list is refused rather than half-applied", async (t) => {

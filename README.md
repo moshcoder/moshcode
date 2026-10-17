@@ -2147,7 +2147,7 @@ names that exist only to advertise, track, mine or phish, before a connection is
 ever opened. Nothing is filtered until you ask for it.
 
 ```sh
-moshcode dns filter on             # ads, malware, phishing, mining
+moshcode dns filter on             # ads, malware, c2, phishing, mining
 moshcode dns filter update         # fetch the lists — nothing downloads on its own
 moshcode dns filter                # what is on, and what it has blocked
 moshcode dns filter test ads.example.com   # would this be blocked, and by which rule
@@ -2158,6 +2158,7 @@ moshcode dns filter allow news.example     # never block it, whatever any list s
 |---|---|
 | `ads` | ads and trackers — StevenBlack unified, on by default |
 | `malware` | hosts serving malware — URLhaus, on by default |
+| `c2` | botnet command-and-control and payload domains — ThreatFox, on by default |
 | `phishing` | Phishing Army, on by default |
 | `mining` | in-browser cryptominers, on by default |
 | `adult` `gambling` `social` `fakenews` | opt in by name with `filter add <list>` |
