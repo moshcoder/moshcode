@@ -56,6 +56,13 @@ export const FILTER_CATALOG = [
     note: "URLhaus, abuse.ch — hosts serving malware payloads right now",
   },
   {
+    id: "c2",
+    title: "Botnet C2 and malware hosts",
+    format: "hosts",
+    url: "https://threatfox.abuse.ch/downloads/hostfile/",
+    note: "ThreatFox, abuse.ch — command-and-control and payload domains reported in the last days",
+  },
+  {
     id: "phishing",
     title: "Phishing",
     format: "domains",
@@ -102,11 +109,11 @@ export const FILTER_CATALOG = [
 export const CATALOG_BY_ID = new Map(FILTER_CATALOG.map((entry) => [entry.id, entry]));
 
 /**
- * What `filter on` turns on when told nothing else: the four categories that
+ * What `filter on` turns on when told nothing else: the five categories that
  * block things nobody asks for. Everything that blocks content a person might
  * actually want — adult, gambling, social, fakenews — is opt-in by name.
  */
-export const DEFAULT_CATEGORIES = ["ads", "malware", "phishing", "mining"];
+export const DEFAULT_CATEGORIES = ["ads", "malware", "c2", "phishing", "mining"];
 
 /**
  * How a blocked name is answered.
