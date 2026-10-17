@@ -20,6 +20,11 @@ const require = createRequire(import.meta.url);
 let deps = null;
 try {
   deps = { express: require("express") };
+  // express alone is not proof: it can resolve from a node_modules above the
+  // repo. Probe what the router's import chain loads too (config.mjs needs
+  // the ESM-only notifications package, db.mjs the libsql client).
+  require("@libsql/client");
+  await import("@profullstack/notifications/server");
 } catch {
   deps = null;
 }

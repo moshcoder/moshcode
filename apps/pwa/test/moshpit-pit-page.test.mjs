@@ -23,6 +23,12 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 let deps = null;
 try {
+  // express alone is not proof: another workspace hoists it into the root
+  // node_modules, so it resolves when the rest of apps/pwa's deps do not. Probe
+  // the packages the router chain (src/config.mjs, src/db.mjs) loads as well.
+  // notifications is ESM-only, so it has to go through the ESM resolver.
+  require.resolve("@libsql/client");
+  import.meta.resolve("@profullstack/notifications/server");
   deps = { express: require("express") };
 } catch {
   deps = null;

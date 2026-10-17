@@ -18,6 +18,11 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 let deps = null;
 try {
+  // express can resolve from a node_modules above the repo, so probe what the
+  // router's import graph needs too. The notifications package is import-only
+  // (no "require" export condition), hence resolve rather than require.
+  require("@libsql/client");
+  import.meta.resolve("@profullstack/notifications/server");
   deps = { express: require("express") };
 } catch {
   deps = null;

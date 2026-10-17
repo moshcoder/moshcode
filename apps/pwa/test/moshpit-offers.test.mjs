@@ -31,6 +31,10 @@ import {
 const require = createRequire(import.meta.url);
 let deps = null;
 try {
+  // express alone is not proof: a stray node_modules higher up the tree can
+  // satisfy it while the packages config.mjs and db.mjs load are missing.
+  require.resolve("@profullstack/notifications/package.json");
+  require.resolve("@libsql/client");
   deps = { express: require("express") };
 } catch {
   deps = null;

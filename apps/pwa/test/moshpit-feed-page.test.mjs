@@ -14,8 +14,15 @@ import { createRequire } from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
+// express alone is not proof: the root install can hoist it while the rest of
+// apps/pwa's dependencies — which db.mjs and config.mjs load — are missing.
 let deps = null;
-try { deps = { express: require("express") }; } catch { deps = null; }
+try {
+  require.resolve("@libsql/client");
+  // import-only exports, so require.resolve cannot see it.
+  import.meta.resolve("@profullstack/notifications/server");
+  deps = { express: require("express") };
+} catch { deps = null; }
 
 const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-feed-page-test-"));
 process.env.DATABASE_URL = `file:${path.join(workdir, "test.db")}`;

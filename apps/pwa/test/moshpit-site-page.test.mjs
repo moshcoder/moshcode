@@ -14,8 +14,16 @@ import { createRequire } from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
+// express alone is not a reliable probe: it can resolve from a node_modules
+// further up the tree while the rest of apps/pwa's dependencies are missing.
+// So probe what the router's module graph loads. @profullstack/notifications
+// is ESM-only (no "require" export), so it is resolved rather than required.
 let deps = null;
-try { deps = { express: require("express") }; } catch { deps = null; }
+try {
+  deps = { express: require("express") };
+  require("@libsql/client");
+  import.meta.resolve("@profullstack/notifications/server");
+} catch { deps = null; }
 
 const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-site-page-test-"));
 process.env.DATABASE_URL = `file:${path.join(workdir, "test.db")}`;
