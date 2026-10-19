@@ -44,7 +44,7 @@ test("plan: a plain folder is the site and lands in public/", () => {
   const [prepare, upload, run] = p.steps;
   assert.deepEqual(prepare.argv.slice(0, 2), ["ssh", "dev3.profullstack.com"]);
   assert.match(prepare.argv[2], /mkdir -p 'apps\/shop\.blue\/public\/'/);
-  assert.deepEqual(upload.argv.slice(0, 3), ["rsync", "-az", "--delete"]);
+  assert.deepEqual(upload.argv.slice(0, 4), ["rsync", "-az", "--delete", "--chmod=D755,Fgo+r,Fu+rw"]);
   for (const x of [".git", "node_modules", ".env", ".env.*", ".DS_Store"]) assert.ok(upload.argv.includes(x), x);
   assert.deepEqual(upload.argv.slice(-2), ["site/", "dev3.profullstack.com:apps/shop.blue/public/"]);
   assert.match(run.argv[2], /^cd 'apps\/shop\.blue' && if \[ -x deploy\.sh \]/);
