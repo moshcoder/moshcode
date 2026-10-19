@@ -779,6 +779,24 @@ export const CORE_CLI_COMMANDS = [
   { name: "short", aliasOf: "shorten", description: "alias for shorten" },
   { name: "link", aliasOf: "shorten", description: "alias for shorten" },
   {
+    name: "deploy",
+    group: "hosting",
+    description: "upload a folder to your Moshpit server — it opens at <name> and <name>.pit.world",
+    synopsis: [["moshcode deploy <name> [dir]", "rsync dir (default .) to apps/<name>, then run its deploy.sh there"]],
+    flags: [
+      ["--host <host>", "the Moshpit server", "$MOSHCODE_DEPLOY_HOST or dev3.profullstack.com"],
+      ["--user <user>", "ssh user on it", "$MOSHCODE_DEPLOY_USER, else ssh's own"],
+      ["--dry-run", "print the ssh and rsync commands instead of running them", ""],
+      ["--json", "print the result as machine-readable JSON", ""],
+    ],
+    examples: [
+      ["moshcode deploy shop.blue ./site", "a static folder lands in apps/shop.blue/public"],
+      ["moshcode deploy blue.eggs --dry-run", "see exactly what would run"],
+    ],
+    seeAlso: ["site", "name", "ssh"],
+    note: "a folder with its own public/ goes up whole (deploy.sh runs inside the box's deploy-gate when it has one); without one, the folder is the site. The first deploy of a name needs it set up on the server — $5 a month, unlimited sites: https://pit.world/start",
+  },
+  {
     name: "games",
     group: "arcade",
     description: "the moshcode arcade — twenty-two games, no menus",
