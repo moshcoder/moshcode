@@ -123,7 +123,9 @@ export function plan({ name, dir, host, user = "" }, { hasPublic }) {
       { label: "prepare", argv: ["ssh", dest, prepare] },
       {
         label: "upload",
-        argv: ["rsync", "-az", "--delete", ...EXCLUDES.flatMap((x) => ["--exclude", x]), "-e", "ssh", source, `${dest}:${target}`],
+        // nginx reads the files as another user, so a 0700 folder or 0600 file from the laptop would 403:
+        // directories go up 755 and files gain go+r, keeping deploy.sh's execute bit.
+        argv: ["rsync", "-az", "--delete", "--chmod=D755,Fgo+r,Fu+rw", ...EXCLUDES.flatMap((x) => ["--exclude", x]), "-e", "ssh", source, `${dest}:${target}`],
       },
       { label: "deploy.sh", argv: ["ssh", dest, run] },
     ],
