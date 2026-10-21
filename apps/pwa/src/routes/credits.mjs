@@ -5,6 +5,7 @@ import { config } from "../config.mjs";
 import { id } from "../lib/crypto.mjs";
 import { grant } from "../lib/credits.mjs";
 import { verifySignature } from "../lib/signature.mjs";
+import { checkoutConfigured, checkoutEmail, createCheckoutSession, readWebhook } from "../lib/coinpay-checkout.mjs";
 import { requireAuth } from "../lib/session.mjs";
 import { settleNamePurchase, settleOfferPurchase, settleTldPurchase } from "../moshpit.mjs";
 
@@ -23,71 +24,59 @@ creditsRouter.post("/credits/buy", requireAuth, async (req, res) => {
   // Object.prototype — truthy, so the starter fallback is skipped and the
   // payment goes out with no amount/credits.
   const pack = (req.body.pack && Object.hasOwn(PACKS, req.body.pack)) ? PACKS[req.body.pack] : PACKS.starter;
-  if (!config.coinpay.businessId) {
-    // not wired yet — tell the user instead of failing silently
+  if (!checkoutConfigured()) {
+    // not wired yet: tell the user instead of failing silently
     return res.redirect("/settings?err=coinpay-not-configured");
   }
+  const email = checkoutEmail(req);
+  if (!email) return res.redirect("/settings?err=email-required-for-checkout");
   try {
-    const r = await fetch(`${config.coinpay.apiBase}/api/payments/create`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        business_id: config.coinpay.businessId,
-        amount: pack.usd,
-        currency: "USD",
-        payment_method: "both",
-        metadata: { app: "moshcode", user_id: req.user.id, credits: pack.credits },
-        redirect_url: `${config.origin}/settings?bought=1`,
-      }),
+    const ses = await createCheckoutSession({
+      amountUsd: pack.usd,
+      description: `moshcode credits: ${pack.credits.toLocaleString("en-US")}`,
+      email,
+      accountId: req.user.id,
+      metadata: { kind: "credits", user_id: req.user.id, credits: pack.credits },
+      successUrl: `${config.origin}/settings?bought=1`,
+      cancelUrl: `${config.origin}/settings`,
     });
-    const pay = await r.json();
-    const payId = pay.id || pay.payment_id;
+    // Keyed by the session id: the webhook carries it as checkout_session_id.
     await run(`INSERT INTO credit_purchases (id,user_id,credits,amount_usd,status,created_at) VALUES (?,?,?,?,?,?)`,
-      [payId, req.user.id, pack.credits, pack.usd, "pending", Date.now()]);
-    res.redirect(pay.hosted_url || pay.url || `${config.coinpay.apiBase}/pay/${payId}`);
+      [ses.id, req.user.id, pack.credits, pack.usd, "pending", Date.now()]);
+    res.redirect(ses.url);
   } catch (e) {
-    console.error("coinpay create failed:", e.message);
+    console.error("coinpay checkout failed:", e.message);
     res.redirect("/settings?err=coinpay-failed");
   }
 });
 
-// The status is the last segment of a dotted event name ("payment.confirmed"),
-// so match it as a whole word. A bare substring test answers "does this name
-// contain a success word anywhere" rather than "did the payment land": a
-// negated status ends in one of them ("payment.unpaid" ends in "paid",
-// "payment.unconfirmed" ends in "confirmed") and would grant the full credit
-// pack for money that never arrived.
-const CONFIRMED_EVENT = /(?:^|[.\-_/:])(?:confirmed|completed|paid)$/i;
-
-// CoinPay confirms payment → credit the balance (idempotent on purchase id).
+// CoinPay confirms payment: settle whichever purchase row owns the session (or
+// payment) id. The signature is required: an unsigned or mis-signed body is
+// refused, and with no secret configured nothing is accepted at all.
 creditsRouter.post("/webhooks/coinpay", async (req, res) => {
-  if (config.coinpay.webhookSecret && !verifySignature(req.get("x-coinpay-signature") || req.get("webhook-signature"), req.rawBody || "", config.coinpay.webhookSecret)) {
+  const secret = config.coinpay.webhookSecret;
+  if (!secret) return res.status(503).json({ error: "webhook not configured" });
+  if (!verifySignature(req.get("x-coinpay-signature") || req.get("webhook-signature"), req.rawBody || "", secret)) {
     return res.status(401).json({ error: "bad signature" });
   }
-  const event = req.body?.type || req.body?.event;
-  const payId = req.body?.data?.id || req.body?.payment_id || req.body?.id;
-  if (event && CONFIRMED_EVENT.test(event) && payId) {
+  const evt = readWebhook(req.body);
+  if (!evt.paid || !evt.refs.length) return res.json({ ok: true, settled: false });
+
+  for (const payId of evt.refs) {
     // CoinPay is configured with a single webhook URL, so this endpoint is the
-    // entry point for every kind of payment the app takes. A name purchase and
-    // a credit top-up are different rows in different tables; whichever one
-    // this id belongs to is the one that settles.
+    // entry point for every kind of payment the app takes. A name purchase, an
+    // ending, an accepted offer and a credit top-up are rows in different
+    // tables; whichever one this id belongs to is the one that settles.
     await settleNamePurchase(payId).catch((e) => console.error("[moshpit] settle failed:", e.message));
-    // An ending is a different table from a name, and this is the one webhook
-    // URL CoinPay is configured with — whichever row the id belongs to settles.
     await settleTldPurchase(payId).catch((e) => console.error("[moshpit] tld settle failed:", e.message));
-    // And an accepted offer, which is a third table again — a negotiated sale
-    // or a lease rather than a listed price. Same reasoning: one webhook URL,
-    // and whichever row owns this id is the one that settles.
     await settleOfferPurchase(payId).catch((e) => console.error("[moshpit] offer settle failed:", e.message));
 
     const p = await get(`SELECT * FROM credit_purchases WHERE id = ? AND status = 'pending'`, [payId]);
     if (p) {
       // Claim the purchase atomically, the same way /cli/token claims auth
-      // codes. The status check above is not enough on its own: CoinPay retries
-      // a webhook it never got an ack for, so two deliveries of the same
-      // confirmation can be in flight at once. Against a remote (network)
-      // database both read "pending" before either UPDATE lands, and the pack
-      // gets granted twice. Only the first claim credits the ledger.
+      // codes. CoinPay retries a webhook it never got an ack for, so two
+      // deliveries of the same confirmation can be in flight at once; only the
+      // first claim credits the ledger.
       const claimed = await run(
         `UPDATE credit_purchases SET status = 'cleared' WHERE id = ? AND status = 'pending'`, [payId]);
       if (claimed.rowsAffected) {
@@ -95,5 +84,5 @@ creditsRouter.post("/webhooks/coinpay", async (req, res) => {
       }
     }
   }
-  res.json({ ok: true });
+  res.json({ ok: true, settled: true });
 });

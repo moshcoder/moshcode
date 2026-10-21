@@ -37,9 +37,10 @@ async function boot() {
       let data = "";
       req.on("data", (chunk) => { data += chunk; });
       req.on("end", () => {
-        received.push(JSON.parse(data));
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "pay_1", hosted_url: "http://coinpay.test/pay/pay_1" }));
+        received.push({ ...JSON.parse(data), _path: req.url, _auth: req.headers.authorization });
+        res.writeHead(201, { "content-type": "application/json" });
+        const n = received.length;
+        res.end(JSON.stringify({ success: true, id: `cs_test${n}`, url: `http://coinpay.test/checkout/cs_test${n}`, methods: [] }));
       });
     });
     s.listen(0, "127.0.0.1", () => resolve(s));
@@ -49,7 +50,7 @@ async function boot() {
   const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-pwa-test-"));
   process.env.DATABASE_URL = `file:${path.join(workdir, "test.db")}`;
   process.env.SESSION_SECRET = "test-secret";
-  process.env.COINPAY_BUSINESS_ID = "biz_test";
+  process.env.COINPAY_API_KEY = "cp_live_test";
   process.env.COINPAY_API_BASE = `http://127.0.0.1:${stubPort}`;
 
   const { migrate } = await import("../src/migrate.mjs");
@@ -101,6 +102,27 @@ test("credits/buy: a named pack buys that pack", { skip: !deps && "apps/pwa deps
   const sent = received.at(-1);
   assert.equal(sent.amount, 20);
   assert.equal(sent.metadata.credits, 5000);
+});
+
+test("credits/buy: opens a hosted checkout session for the signed-in user", { skip: !deps && "apps/pwa deps not installed" }, async () => {
+  const { buy, run } = await app();
+  const res = await buy("starter");
+  assert.equal(res.status, 302);
+  const sent = received.at(-1);
+  assert.equal(sent._path, "/api/checkout/sessions");
+  assert.equal(sent._auth, "Bearer cp_live_test");
+  assert.equal(sent.customer_email, "a@b.c");
+  assert.equal(sent.account_id, "u1");
+  assert.equal(sent.property, "app.moshcode.sh");
+  assert.equal(sent.currency, "USD");
+  assert.equal(sent.expires_in_minutes, 60);
+  assert.equal(sent.blockchain, undefined);
+  assert.match(sent.success_url, /\/settings\?bought=1$/);
+  const id = `cs_test${received.length}`;
+  assert.equal(res.headers.get("location"), `http://coinpay.test/checkout/${id}`);
+  const { all } = await import("../src/db.mjs");
+  const [row] = await all(`SELECT user_id, status FROM credit_purchases WHERE id = ?`, [id]);
+  assert.deepEqual({ ...row }, { user_id: "u1", status: "pending" });
 });
 
 test("credits/buy: an unknown pack falls back to starter", { skip: !deps && "apps/pwa deps not installed" }, async () => {

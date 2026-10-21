@@ -12,6 +12,7 @@
 // throwaway libsql file database, skipping cleanly when the PWA dependencies
 // are not installed. Run `npm install` in apps/pwa to enable them.
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -33,6 +34,14 @@ try {
 const workdir = mkdtempSync(path.join(tmpdir(), "moshcode-pwa-event-match-test-"));
 process.env.DATABASE_URL = `file:${path.join(workdir, "test.db")}`;
 process.env.SESSION_SECRET = "test-secret";
+
+// CoinPay signs t=<unix>,v1=<hmac-sha256 hex of "t.rawBody">.
+const WEBHOOK_SECRET = "whsec_test_secret";
+process.env.COINPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
+function signature(raw, secret = WEBHOOK_SECRET) {
+  const t = Math.floor(Date.now() / 1000);
+  return `t=${t},v1=${crypto.createHmac("sha256", secret).update(`${t}.${raw}`).digest("hex")}`;
+}
 
 async function boot() {
   const { migrate } = await import("../src/migrate.mjs");
@@ -69,16 +78,17 @@ async function boot() {
   };
 
   const deliver = (payId, type) => new Promise((resolve, reject) => {
+    const body = JSON.stringify({ type, data: { id: payId } });
     const req = http.request({
       host: "127.0.0.1", port, path: "/webhooks/coinpay", method: "POST", agent: false,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-coinpay-signature": signature(body) },
     }, (res) => {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(data) }));
     });
     req.on("error", reject);
-    req.end(JSON.stringify({ type, data: { id: payId } }));
+    req.end(body);
   });
 
   return { all, server, seedPurchase, granted, deliver };
