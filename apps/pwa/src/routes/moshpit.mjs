@@ -34,6 +34,7 @@
 //   GET    /f/:code                           follow one
 //   GET    /pit/records                       the DNS records on the names you hold
 //   GET    /pit/dns                           how to reach these names from a machine
+import { checkoutConfigured, checkoutEmail, createCheckoutSession } from "../lib/coinpay-checkout.mjs";
 import { createHash } from "node:crypto";
 import { Router } from "express";
 import { page as shellPage, footer, appBar, esc } from "../lib/html.mjs";
@@ -2315,35 +2316,32 @@ moshpitRouter.post("/offers/:id/pay", requireAuth, async (req, res) => {
 
   if (!offer || offerActor(offer, { userId: req.user.id, token }) !== "offerer") return fail("that offer is not yours");
   if (effectiveStatus(offer) !== "accepted") return fail("that offer is not agreed yet");
-  if (!config.coinpay.businessId) return fail("payments are not configured yet");
+  if (!checkoutConfigured()) return fail("payments are not configured yet");
+  const email = checkoutEmail(req);
+  if (!email) return fail("add an email to your account to check out");
 
   const terms = agreedTerms(offer);
   const name = offer.label ? `${offer.label}.${offer.tld}` : `.${offer.tld}`;
+  const back = `${config.origin}/offers/${offer.id}${token ? `?t=${encodeURIComponent(token)}` : ""}`;
   try {
-    const r = await fetch(`${config.coinpay.apiBase}/api/payments/create`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        business_id: config.coinpay.businessId,
-        amount: terms.amountUsd,
-        currency: "USD",
-        payment_method: "both",
-        metadata: {
-          app: "moshcode", kind: `moshpit_offer_${offer.kind}`, user_id: req.user.id,
-          offer_id: offer.id, tld: offer.tld, label: offer.label,
-        },
-        redirect_url: `${config.origin}/offers/${offer.id}${token ? `?t=${encodeURIComponent(token)}` : ""}`,
-      }),
+    const ses = await createCheckoutSession({
+      amountUsd: terms.amountUsd,
+      description: `Moshpit ${offer.kind === "lease" ? "lease" : "purchase"}: ${name}`,
+      email,
+      accountId: req.user.id,
+      metadata: {
+        kind: `moshpit_offer_${offer.kind}`, user_id: req.user.id,
+        offer_id: offer.id, tld: offer.tld, label: offer.label,
+      },
+      successUrl: back,
+      cancelUrl: back,
     });
-    const pay = await r.json();
-    const payId = pay.id || pay.payment_id;
-    if (!payId) throw new Error("no payment id in response");
 
     // Recorded before the buyer leaves, because the webhook can arrive before
-    // they are redirected back and with no payment id on the row it has nothing
-    // to settle.
-    await openOfferPurchase({ offerId: offer.id, paymentId: payId, userId: req.user.id });
-    return res.redirect(pay.hosted_url || pay.url || `${config.coinpay.apiBase}/pay/${payId}`);
+    // they are redirected back and with no session id on the row it has
+    // nothing to settle. The webhook echoes it as checkout_session_id.
+    await openOfferPurchase({ offerId: offer.id, paymentId: ses.id, userId: req.user.id });
+    return res.redirect(ses.url);
   } catch (e) {
     console.error(`[moshpit] offer checkout failed for ${name}:`, e.message);
     return fail("could not start checkout");
@@ -2503,35 +2501,36 @@ async function startCheckout(req, res, { json }) {
   if (!q.ok) {
     return json ? bad(res, q.error, q.taken ? 409 : 400) : back(res, { err: q.error }, "theirs");
   }
-  if (!config.coinpay.businessId) {
+  if (!checkoutConfigured()) {
     const msg = "payments are not configured yet";
     return json ? bad(res, msg, 503) : back(res, { err: msg }, "theirs");
   }
+  const email = checkoutEmail(req);
+  if (!email) {
+    const msg = "add an email to your account to check out";
+    return json ? bad(res, msg, 400) : back(res, { err: msg }, "theirs");
+  }
 
   try {
-    const r = await fetch(`${config.coinpay.apiBase}/api/payments/create`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        business_id: config.coinpay.businessId,
-        amount: q.priceUsd,
-        currency: "USD",
-        payment_method: "both",
-        metadata: { app: "moshcode", kind: "moshpit_name", user_id: req.user.id, tld: q.tld, label: q.label },
-        redirect_url: `${config.origin}/pit?bought=${encodeURIComponent(`${q.label}.${q.tld}`)}`,
-      }),
+    const name = `${q.label}.${q.tld}`;
+    const ses = await createCheckoutSession({
+      amountUsd: q.priceUsd,
+      description: `Moshpit name: ${name}`,
+      email,
+      accountId: req.user.id,
+      metadata: { kind: "moshpit_name", user_id: req.user.id, tld: q.tld, label: q.label },
+      successUrl: `${config.origin}/pit?bought=${encodeURIComponent(name)}`,
+      cancelUrl: `${config.origin}/pit`,
     });
-    const pay = await r.json();
-    const payId = pay.id || pay.payment_id;
-    if (!payId) throw new Error("no payment id in response");
 
     // Recorded before the buyer leaves for the payment page: the webhook can
     // arrive before they are redirected back, and with no row it has nothing
-    // to settle.
-    await openNamePurchase({ paymentId: payId, tld: q.tld, label: q.label, userId: req.user.id, amountUsd: q.priceUsd });
+    // to settle. Keyed by the session id (the webhook's checkout_session_id).
+    await openNamePurchase({ paymentId: ses.id, tld: q.tld, label: q.label, userId: req.user.id, amountUsd: q.priceUsd });
 
-    const url = pay.hosted_url || pay.url || `${config.coinpay.apiBase}/pay/${payId}`;
-    return json ? res.status(201).json({ payment_id: payId, checkout_url: url, price_usd: q.priceUsd }) : res.redirect(url);
+    return json
+      ? res.status(201).json({ payment_id: ses.id, checkout_session_id: ses.id, checkout_url: ses.url, price_usd: q.priceUsd })
+      : res.redirect(ses.url);
   } catch (e) {
     console.error("[moshpit] checkout failed:", e.message);
     const msg = "could not start checkout";

@@ -140,7 +140,11 @@ export const config = {
   coinpay: {
     apiBase: (process.env.COINPAY_API_BASE || "https://coinpayportal.com").replace(/\/+$/, ""),
     businessId: process.env.COINPAY_BUSINESS_ID || "",
+    // Business cp_live_ key: Bearer auth for hosted checkout sessions.
+    apiKey: process.env.COINPAY_API_KEY || "",
     webhookSecret: process.env.COINPAY_WEBHOOK_SECRET || "",
+    // Site hostname recorded on every checkout session and echoed on webhooks.
+    property: process.env.COINPAY_PROPERTY || "app.moshcode.sh",
     oauth: {
       authorizeUrl: process.env.COINPAY_OAUTH_AUTHORIZE_URL || "",
       tokenUrl: process.env.COINPAY_OAUTH_TOKEN_URL || "",
