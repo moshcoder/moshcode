@@ -7,6 +7,8 @@ import { createUserWithPassword, userByEmail } from "../lib/users.mjs";
 import { dashboardHandler } from "./pages.mjs";
 import { config } from "../config.mjs";
 import { ringFooter } from "../lib/ring-footer.mjs";
+import { acceptInvite } from "../lib/credit-codes.mjs";
+import { inviteFromRequest, clearInvite, sendInviteConfirmation, attributeSignup } from "./invites.mjs";
 
 export const authRouter = Router();
 
@@ -17,6 +19,8 @@ function authPage(req, { error = "", mode = "in" } = {}) {
   // Reading only req.query blanked the field on each of those, and the visitor
   // had to retype their email to correct a password.
   const email = req.body?.email || req.query.email || "";
+  // An invite picked up on /i/<code> rides along with a sign-up made from here.
+  const invite = mode === "up" ? inviteFromRequest(req) : null;
   const body = `
   <main class="wrap" style="max-width:440px;padding-top:8vh">
     <a class="brand" href="/" style="justify-content:center;font-size:1.5rem;margin-bottom:6px"><span class="mark">M</span>MOSHCODE<span class="app">app</span></a>
@@ -25,6 +29,7 @@ function authPage(req, { error = "", mode = "in" } = {}) {
       ${error ? `<div class="notice err">${esc(error)}</div>` : ""}
       <form method="post" action="/auth/${mode === "up" ? "register" : "login"}">
         ${csrfInput(req)}
+        ${invite ? `<input type="hidden" name="invite" value="${esc(invite)}"><div class="notice ok">Signing up with invite ${esc(invite)}.</div>` : ""}
         <label class="field"><span>Email</span>
           <input type="email" name="email" autocomplete="username" required placeholder="you@example.com" value="${esc(email)}"></label>
         <label class="field"><span>Password</span>
@@ -88,6 +93,20 @@ authRouter.post("/auth/register", async (req, res) => {
   if (await userByEmail(email)) return res.type("html").send(authPage(req, { mode: "up", error: "That email already has an account — sign in." }));
   const user = await createUserWithPassword(email, hashPassword(password));
   await createSession(res, user.id);
+  await attributeSignup(req, user.id);
+  const invite = inviteFromRequest(req);
+  if (invite) {
+    clearInvite(res);
+    // The account exists either way; an invite that cannot be used is reported on
+    // /invites rather than costing the visitor their sign-up.
+    const r = await acceptInvite(invite, user).catch((e) => {
+      console.error("[invites] accept failed:", e.message);
+      return { ok: false, reason: "invalid" };
+    });
+    if (!r.ok) return res.redirect(`/invites?invite_err=${encodeURIComponent(r.reason)}`);
+    if (r.status === "pending") await sendInviteConfirmation(req, user);
+    return res.redirect("/invites");
+  }
   res.redirect(takeNext(req, res) || "/");
 });
 

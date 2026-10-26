@@ -12,6 +12,7 @@ import { config } from "../config.mjs";
 import { id } from "../lib/crypto.mjs";
 import { createSession, setCeremony, getCeremony, clearCeremony, takeNext } from "../lib/session.mjs";
 import { createUserPasskey, userById } from "../lib/users.mjs";
+import { attributeSignup } from "./invites.mjs";
 
 export const passkeyRouter = Router();
 const enc = (s) => new TextEncoder().encode(s);
@@ -80,6 +81,7 @@ passkeyRouter.post("/auth/passkey/register/verify", async (req, res) => {
   }
   clearCeremony(res, "reg");
   await createSession(res, user.id);
+  if (!ceremony.existing) await attributeSignup(req, user.id);
   res.json({ ok: true, redirect: takeNext(req, res) || "/" });
 });
 
