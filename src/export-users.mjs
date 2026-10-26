@@ -5,7 +5,10 @@
 // `user-export` over the sources in ~/.config/cli-tools/user-export.json, and
 // `--all --clean` is `user-export --clean` (myna unsubscribes, Resend bounces,
 // test accounts, never-logged-in and email-cleaner dropped; email,first_name,
-// last_name out). Same file rules as below, and only counts on the screen.
+// last_name out). `--all --full` is `user-export --full`: email, first_name,
+// last_name, company_domain, job_title, linkedin_url, enriched from the
+// config's "enrich" sources and a LinkedIn search for whoever is still blank.
+// Same file rules as below, and only counts on the screen.
 //
 // The app decides who may have it (ADMIN_EMAILS there); this side only asks
 // with the logged-in account's key, so a non-operator gets the app's 403 and
@@ -34,18 +37,30 @@ export const CLEANER_FLAGS = [
 /** user-export's own --clean switches that `--all --clean` passes through. */
 export const ALL_CLEAN_FLAGS = ["--keep-never-logged-in", "--no-resend", "--no-dns"];
 
-const USAGE = "usage: export users [--all] [--clean [cleaner flags]] [--format csv|json] [-o file]";
+/** user-export's own --full switches that `--all --full` passes through. */
+export const FULL_FLAGS = ["--no-enrich", "--no-linkedin"];
+
+const USAGE = "usage: export users [--all [--full]] [--clean [cleaner flags]] [--format csv|json] [-o file]";
 const DEFAULT_API = "https://app.moshcode.sh";
 
 /* ------------------------------------------------------------------ parsing */
 
 export function parseExportArgs(argv = []) {
-  const opts = { subject: null, all: false, clean: false, format: "csv", output: null, cleanerFlags: [], error: null };
+  const opts = { subject: null, all: false, clean: false, format: "csv", output: null, cleanerFlags: [], full: false, fullFlags: [], error: null };
   const fail = (msg) => ({ ...opts, error: msg });
   for (let i = 0; i < argv.length; i++) {
     const a = String(argv[i]);
     if (a === "--clean") opts.clean = true;
     else if (a === "--all") opts.all = true;
+    else if (a === "--full") opts.full = true;
+    else if (FULL_FLAGS.includes(a)) {
+      if (!opts.fullFlags.includes(a)) opts.fullFlags.push(a);
+    }
+    else if (a === "--linkedin-max" || a.startsWith("--linkedin-max=")) {
+      const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i];
+      if (!/^\d+$/.test(String(v ?? ""))) return fail(`--linkedin-max takes a number of searches. ${USAGE}`);
+      opts.fullFlags.push("--linkedin-max", String(v));
+    }
     else if (a === "--keep-never-logged-in" || a === "--no-resend") {
       if (!opts.clean) return fail(`${a} goes after --clean (with --all). ${USAGE}`);
       if (!opts.cleanerFlags.includes(a)) opts.cleanerFlags.push(a);
@@ -67,6 +82,8 @@ export function parseExportArgs(argv = []) {
   }
   if (!opts.subject) return fail(USAGE);
   if (opts.subject !== "users") return fail(`nothing called "${opts.subject}" to export; only users. ${USAGE}`);
+  if ((opts.full || opts.fullFlags.length) && !opts.all) return fail(`--full and its options need --all. ${USAGE}`);
+  if (opts.fullFlags.length && !opts.full) return fail(`${opts.fullFlags[0]} goes with --full. ${USAGE}`);
   if (opts.all) {
     if (opts.format !== "csv") return fail(`--all writes CSV only. ${USAGE}`);
     const foreign = opts.cleanerFlags.filter((f) => !ALL_CLEAN_FLAGS.includes(f));
@@ -353,6 +370,7 @@ export function exportAll(opts, {
   const file = opts.output ? path.resolve(cwd, opts.output) : (pit ? defaultFile(home, "csv", now) : null);
   const notes = [];
   const args = [];
+  if (opts.full) args.push("--full", ...opts.fullFlags);
   if (opts.clean) args.push("--clean", ...opts.cleanerFlags);
   if (file) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -366,6 +384,8 @@ export function exportAll(opts, {
       args.push("--dropped", rejected);
     }
   }
+  // --full enriches and searches LinkedIn before it prints anything: minutes, not seconds.
+  if (opts.full) write("enriching every address (company, title, LinkedIn); this takes a few minutes and prints nothing until it is done");
   const run = spawnImpl(bin, args, { env, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   if (run.error) { write(`could not run user-export: ${run.error.message}`); return 1; }
   for (const line of String(run.stderr || "").split("\n")) if (line.trim()) write(line);
