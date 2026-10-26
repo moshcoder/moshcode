@@ -10,6 +10,8 @@ import { PACKS } from "./credits.mjs";
 import { latestSnapshotMeta } from "./settings-sync.mjs";
 import { config } from "../config.mjs";
 import { parseSubscription, vapidPublicKeyResponse } from "@profullstack/notifications/server";
+import { redeemCard } from "./invites.mjs";
+import { REDEEM_MESSAGES } from "../lib/credit-codes.mjs";
 
 export const pagesRouter = Router();
 
@@ -81,7 +83,7 @@ export async function dashboardHandler(req, res) {
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               ${Object.entries(PACKS).map(([k, p]) => `<button class="btn ${k === "pro" ? "acid" : ""}" name="pack" value="${k}">${p.credits.toLocaleString()}·$${p.usd}</button>`).join("")}
             </div>
-            <div class="faint mono" style="font-size:.7rem;margin-top:8px">pay with CoinPay — crypto or card</div>
+            <div class="faint mono" style="font-size:.7rem;margin-top:8px">pay with CoinPay — crypto or card · <a class="acid" href="/redeem">have a code?</a> · <a class="acid" href="/invites">invites</a></div>
           </form>
           <div style="margin-top:16px;border-top:1px solid var(--line)">${ledgerHtml}</div>
         </div>
@@ -117,6 +119,8 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
   const byKind = Object.fromEntries(chans.map((c) => [c.kind, c]));
   const newKey = getCeremony(req, "newkey") || "";
   const err = req.query.err ? String(req.query.err) : "";
+  const codeErr = req.query.code_err ? (REDEEM_MESSAGES[String(req.query.code_err)] || "That code could not be redeemed.") : "";
+  const redeemed = /^\d{1,9}$/.test(String(req.query.redeemed || "")) ? Number(req.query.redeemed) : null;
 
   const chanRows = CHANNEL_KINDS.map((kind) => {
     const c = byKind[kind] || { enabled: 0, target: "" };
@@ -138,6 +142,8 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
   <main class="wrap" style="max-width:720px;padding-top:30px">
     <h1 style="font-size:1.5rem;margin-bottom:20px">Settings</h1>
     ${err ? `<div class="notice err">${esc(err.replace(/-/g, " "))}</div>` : ""}
+    ${codeErr ? `<div class="notice err">${esc(codeErr)}</div>` : ""}
+    ${redeemed !== null ? `<div class="notice ok">Code redeemed: +${redeemed.toLocaleString()} credits. Balance ${bal.toLocaleString()}.</div>` : ""}
     ${newKey ? `<div class="notice ok">
       Your new API key. Copy it now — once this box goes, the key cannot be shown again.
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:9px">
@@ -189,6 +195,8 @@ pagesRouter.get("/settings", requireAuth, async (req, res) => {
         })();
       </script>
     </div>` : ""}
+
+    ${redeemCard(req)}
 
     <div class="card" style="margin-bottom:22px"><div class="card-head"><span class="h">Channels · where pings land</span></div>
       <div class="card-body"><form method="post" action="/settings/channels">${csrfInput(req)}

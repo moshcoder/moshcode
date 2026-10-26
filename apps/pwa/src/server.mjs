@@ -21,6 +21,7 @@ import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
 import { socialsRouter } from "./routes/socials.mjs";
 import { adminRouter } from "./routes/admin.mjs";
+import { invitesRouter, refMiddleware } from "./routes/invites.mjs";
 import { MAX_BATCH, MAX_PUBLISH_BYTES } from "./lib/moshpit-content.mjs";
 import { endExpiredLeases, expireOffers } from "./moshpit.mjs";
 import { startRingFooterRefresh, RING_FOOTER_OPTIONS } from "./lib/ring-footer.mjs";
@@ -74,6 +75,7 @@ app.get("/.well-known/openwebring.json", (_req, res) =>
   res.json(descriptor({ site: RING_FOOTER_OPTIONS.site, name: "moshcode app" })));
 
 app.use(sessionMiddleware);
+app.use(refMiddleware); // ?ref= -> referral_code cookie (first touch), recorded at sign-up
 
 // OAuth token/registration and MCP calls are machine endpoints. Mount them
 // before browser CSRF; each MCP call is bearer-authenticated and token issuance
@@ -89,6 +91,7 @@ app.use(passkeyRouter);
 app.use(coinpayRouter);
 app.use(approvalsRouter);
 app.use(creditsRouter);
+app.use(invitesRouter);   // /redeem, /credits/redeem, /invites, /i/<code>, /api/credits/redeem
 app.use(cliRouter);       // /cli/authorize, /cli/token, /api/me
 app.use(adminRouter);     // /api/admin/*, ADMIN_EMAILS operators only
 app.use(sessionsRouter);  // /sessions (live CLI mirror) + /api/sessions
