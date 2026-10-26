@@ -323,3 +323,24 @@ test("--all passes a partial export through as exit 3, CSV on stdout", async () 
   assert.equal(code, 3);
   assert.deepEqual(out, ["site,name,email,last_login\n"]);
 });
+
+test("--all --full passes --full and its switches to user-export, and says it will be slow", async () => {
+  const opts = parseExportArgs(["users", "--all", "--full", "--no-enrich", "--linkedin-max", "0"]);
+  assert.equal(opts.full, true);
+  assert.deepEqual(opts.fullFlags, ["--no-enrich", "--linkedin-max", "0"]);
+  assert.match(parseExportArgs(["users", "--full"]).error, /need --all/);
+  assert.match(parseExportArgs(["users", "--all", "--no-linkedin"]).error, /goes with --full/);
+  assert.match(parseExportArgs(["users", "--all", "--full", "--linkedin-max", "x"]).error, /takes a number/);
+
+  const dir = stubUserExport();
+  const calls = [];
+  const lines = [];
+  const code = await exportCommand(["users", "--all", "--full", "--no-linkedin", "--clean", "--no-resend", "-o", "leads.csv"], {
+    env: { PATH: dir }, cwd: dir, creds: null, write: (l) => lines.push(l),
+    spawnImpl: (bin, args) => { calls.push(args); return { status: 0, stdout: "", stderr: "" }; },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(calls, [["--full", "--no-linkedin", "--clean", "--no-resend",
+    "-o", path.join(dir, "leads.csv"), "--dropped", path.join(dir, "leads.rejected.csv")]]);
+  assert.match(lines[0], /takes a few minutes/);
+});

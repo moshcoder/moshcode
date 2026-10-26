@@ -629,9 +629,14 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode export users [--format csv|json] [-o file]", ""],
       ["moshcode export users --clean [cleaner flags] [-o file]", ""],
       ["moshcode export users --all [--clean] [-o file]", "every Profullstack property"],
+      ["moshcode export users --all --full [--clean] [-o file]", "plus company_domain, job_title, linkedin_url"],
     ],
     flags: [
       ["--all", "every property in ~/.config/cli-tools/user-export.json, through cli-tools' user-export", ""],
+      ["--full", "with --all: email,first_name,last_name,company_domain,job_title,linkedin_url, enriched", ""],
+      ["--no-enrich", "with --all --full: skip the config's enrich sources", ""],
+      ["--no-linkedin", "with --all --full: skip the LinkedIn search", ""],
+      ["--linkedin-max <n>", "with --all --full: cap new LinkedIn searches this run (0 = cache only)", ""],
       ["--keep-never-logged-in", "with --all --clean: keep addresses that never logged in", ""],
       ["--no-resend", "with --all --clean: skip the Resend bounce lookup", ""],
       ["--clean", "run the list through cli-tools' email-cleaner and keep the valid rows", ""],
@@ -650,6 +655,7 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode export users --clean -o users.csv", "plus users.rejected.csv"],
       ["moshcode export users --clean --no-dns", "offline, CSV on stdout"],
       ["moshcode export users --all --clean -o list.csv", "every property, mailable only, plus list.rejected.csv"],
+      ["moshcode export users --all --full --clean -o leads.csv", "mailable only, with company, title and LinkedIn filled where found"],
     ],
     seeAlso: ["login", "whoami"],
     note: "needs `moshcode login` as an account listed in ADMIN_EMAILS on app.moshcode.sh; everyone else gets a 403. "
@@ -659,7 +665,9 @@ export const CORE_CLI_COMMANDS = [
       + "in the pit, /export users always writes a file (~/.moshcode/exports/ unless -o) and prints only its path and the counts. "
       + "--all needs no login: it reads the databases in ~/.config/cli-tools/user-export.json directly. --all --clean drops "
       + "myna unsubscribes, Resend bounces/suppressions/complaints (RESEND_API_KEY), test accounts, never-logged-in and "
-      + "whatever email-cleaner rejects, and writes email,first_name,last_name.",
+      + "whatever email-cleaner rejects, and writes email,first_name,last_name. --all --full writes "
+      + "email,first_name,last_name,company_domain,job_title,linkedin_url, filling blanks from the config's enrich sources "
+      + "and a cached LinkedIn search; company_domain falls back to the address's domain unless it is webmail.",
   },
   {
     name: "console",
@@ -2244,7 +2252,7 @@ export const PIT_COMMANDS = [
   { name: "whoami", cli: "whoami", description: "who this machine is logged in as" },
   // Dispatched since forever and missing from /help until now.
   { name: "logout", cli: "logout", description: "clear the logged-in account" },
-  { name: "export", args: "users [--all] [--clean] [--format csv|json] [-o file]", cli: "export",
+  { name: "export", args: "users [--all [--full]] [--clean] [--format csv|json] [-o file]", cli: "export",
     description: "operator only: export users to a file (--all = every property), optionally cleaned" },
   { name: "save", args: "[--dry-run] [--force]", cli: "save",
     description: "save this pit's settings to your moshcode.sh account" },

@@ -1779,6 +1779,7 @@ moshcode export users -o users.csv                  # email, display_name, creat
 moshcode export users --format json -o users.json   # the same rows, plus counts
 moshcode export users --clean -o users.csv          # only the addresses worth mailing
 moshcode export users --all --clean -o list.csv     # every property: email,first_name,last_name
+moshcode export users --all --full --clean -o leads.csv  # plus company_domain,job_title,linkedin_url
 ```
 
 Who counts as an operator is decided by the app, not the CLI: the account you
@@ -1800,6 +1801,14 @@ is copied to `<name>.bak-NNN.csv` first. Counts and paths go to stderr, so
 stdout stays pure CSV for a pipe. In the pit, `/export users` always writes a
 file (`~/.moshcode/exports/` unless you give `-o`) and prints only where it
 went and the counts, never the addresses.
+
+`--all --full` is cli-tools' `user-export --full`: one row per address with
+`email,first_name,last_name,company_domain,job_title,linkedin_url`. Blanks are
+filled from the config's `enrich` sources, then a LinkedIn search (cached, so a
+rerun only searches new people; `--linkedin-max 0` uses the cache alone,
+`--no-linkedin` skips it). `company_domain` falls back to the address's own
+domain unless that is webmail. Expect it to take minutes and print nothing until
+it is done.
 
 ## Browser terminal (`moshcode console`)
 
