@@ -14,6 +14,9 @@ importers:
       '@peculiar/x509':
         specifier: ^1.14.3
         version: 1.14.3
+      '@profullstack/footer':
+        specifier: 0.2.6
+        version: 0.2.6
       '@profullstack/libsql-pg':
         specifier: ^0.1.2
         version: 0.1.2
@@ -214,6 +217,16 @@ packages:
   '@peculiar/x509@1.14.3':
     resolution: {integrity: sha512-C2Xj8FZ0uHWeCXXqX5B4/gVFQmtSkiuOolzAgutjTfseNOHT3pUjljDZsTSxXFGgio54bCzVFqmEOUrIVk8RDA==}
     engines: {node: '>=20.0.0'}
+
+  '@profullstack/footer@0.2.6':
+    resolution: {integrity: sha512-BKwbDszAc7e0mYIBiPjgr/5WS8WyDt8IW718s/zW/8pCWOIB1BGwSNs6fmImRSo5kqIjQKUVbXp22jZQ5GEipA==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      react: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@profullstack/libsql-pg@0.1.2':
     resolution: {integrity: sha512-6YrQujssWhkyWInB0G4CWOhH6Pj6kydeK4RKrXOosxQ12flpO4VjUEGTabtSh9zZ7FzCRch0hwFNKApJl/7b4w==}
@@ -873,6 +886,8 @@ snapshots:
       reflect-metadata: 0.2.2
       tslib: 2.8.1
       tsyringe: 4.10.0
+
+  '@profullstack/footer@0.2.6': {}
 
   '@profullstack/libsql-pg@0.1.2':
     dependencies:

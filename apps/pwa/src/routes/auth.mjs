@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword } from "../lib/crypto.mjs";
 import { createUserWithPassword, userByEmail } from "../lib/users.mjs";
 import { dashboardHandler } from "./pages.mjs";
 import { config } from "../config.mjs";
+import { ringFooter } from "../lib/ring-footer.mjs";
 
 export const authRouter = Router();
 
@@ -45,6 +46,7 @@ function authPage(req, { error = "", mode = "in" } = {}) {
       <p id="passkey-msg" class="mono faint" style="font-size:.72rem;text-align:center;margin:12px 0 0"></p>
     </div></div>
   </main>${footer}
+  <div class="wrap">${ringFooter()}</div>
   <script src="/vendor/simplewebauthn-browser.umd.js"></script>
   <script src="/passkey.js"></script>`;
   return page({ title: "moshcode ▸ sign in", body });
