@@ -471,6 +471,14 @@ test("porkbun is one cli-tools command with its own entry, installed and upgrade
   assert.match(toolList(), /porkbun/);
 });
 
+test("terms is the cli-tools AI terms-of-service reader, installed and upgraded with the set", () => {
+  assert.deepEqual(resolveTool("terms"), ["terms", TOOLS.terms]);
+  assert.equal(TOOLS.terms.bin, "terms");
+  assert.deepEqual(TOOLS.terms.install, TOOLS["cli-tools"].install);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.terms), { cmd: "cli-tools", args: ["update"] });
+  assert.match(toolList(), /terms/);
+});
+
 test("digitalocean and do resolve to doctl, the official binary", () => {
   assert.deepEqual(resolveTool("digitalocean"), ["doctl", TOOLS.doctl]);
   assert.deepEqual(resolveTool("do"), ["doctl", TOOLS.doctl]);

@@ -161,6 +161,25 @@ export const TOOLS = {
     binDirs: [path.join(homedir(), ".local", "bin")],
     upgrade: { cmd: "cli-tools", args: ["update"] },
   },
+  terms: {
+    desc: "Terms - an AI lawyer for a site's terms of service and privacy policy: what you agree to, liabilities, where your data goes, red flags quoted, what to push back on",
+    bin: "terms",
+    // The cli-tools command (v0.73.0+) over @profullstack/fineprint, the same
+    // reader behind fineprint.agent, so `/terms stripe.com` in the pit and the
+    // website give the same review. It runs on the user's own key: whichever of
+    // ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY is set, from the
+    // env or `cli-tools config`; with none it asks fineprint.agent. Like
+    // porkbun it has no package of its own and comes with the set.
+    install: {
+      cmd: "sh",
+      args: [
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh",
+      ],
+    },
+    binDirs: [path.join(homedir(), ".local", "bin")],
+    upgrade: { cmd: "cli-tools", args: ["update"] },
+  },
   timer: {
     desc: "Profullstack timer - track time against projects, for people and for agents",
     bin: "timer",
