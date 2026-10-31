@@ -18,8 +18,8 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0
       '@profullstack/footer':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: latest
+        version: 0.6.13
       '@profullstack/libsql-pg':
         specifier: ^0.1.2
         version: 0.1.2
@@ -232,8 +232,8 @@ packages:
     engines: {node: '>=22.13'}
     hasBin: true
 
-  '@profullstack/footer@0.2.6':
-    resolution: {integrity: sha512-BKwbDszAc7e0mYIBiPjgr/5WS8WyDt8IW718s/zW/8pCWOIB1BGwSNs6fmImRSo5kqIjQKUVbXp22jZQ5GEipA==}
+  '@profullstack/footer@0.6.13':
+    resolution: {integrity: sha512-eLBpC7wKyDsXa5afx7F+QdKtC5mhHDx+qVM7wrztwAZEP1cGFJcXhpr90O20Sn+o2s1z0+BppXJ4IB+v1f07PQ==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -921,7 +921,7 @@ snapshots:
     transitivePeerDependencies:
       - react
 
-  '@profullstack/footer@0.2.6': {}
+  '@profullstack/footer@0.6.13': {}
 
   '@profullstack/libsql-pg@0.1.2':
     dependencies:
