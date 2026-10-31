@@ -11,6 +11,8 @@ import { footerHtml, footerHtmlSync } from "@profullstack/footer";
 
 export const RING_FOOTER_OPTIONS = {
   site: "https://app.moshcode.sh/",
+  builtIndieHref: "https://built.indie.pit.world/for?site=https://app.moshcode.sh/",
+  pwamartHref: "https://pwamart.com/for?site=https://app.moshcode.sh/",
   links: [
     { label: "moshcode.sh", href: "https://moshcode.sh/" },
     { label: "The pit", href: "/pit" },

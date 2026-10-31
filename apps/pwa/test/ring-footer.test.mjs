@@ -11,7 +11,10 @@ test("ring footer links the Profullstack ring from app.moshcode.sh", () => {
   const html = ringFooter();
   assert.match(html, /rssamplifier\.com\/ring\/profullstack/);
   assert.match(html, /from=https%3A%2F%2Fapp\.moshcode\.sh%2F/);
-  assert.match(html, /built\.indie\.pit\.world\/for/);
+  assert.match(html, /href="https:\/\/built\.indie\.pit\.world\/for\?site=https:\/\/app\.moshcode\.sh\/"/);
+  assert.match(html, /src="https:\/\/logicsrc\.com\/openicon\/set\/hq\/svg\/built-indie\.svg"/);
+  assert.match(html, /href="https:\/\/pwamart\.com\/for\?site=https:\/\/app\.moshcode\.sh\/"/);
+  assert.match(html, /src="https:\/\/logicsrc\.com\/openicon\/set\/hq\/svg\/pwamart\.svg"/);
   assert.doesNotMatch(html, /pit\.world network/);
   assert.equal(RING_FOOTER_OPTIONS.site, "https://app.moshcode.sh/");
 });
