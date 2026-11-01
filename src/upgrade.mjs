@@ -7,6 +7,7 @@ import fs from "node:fs";
 import { ENGINES, engineStatus, exitReason, ranOk, resolveEngine, upgradeSpec, runCmd } from "./engines.mjs";
 import { TOOLS, resolveTool, toolStatus, toolUpgradeSpec } from "./tools.mjs";
 import { needsRootHere, primeEscalation } from "./escalate.mjs";
+import { updatePlan } from "./selfupdate.mjs";
 
 // Self-upgrade re-runs the moshcode installer's `update` path. Defaults to the
 // GitHub-hosted install.sh (always live); override with MOSHCODE_INSTALL_URL.
@@ -203,10 +204,15 @@ export async function runUpgrade(targets = [], io = {}) {
       log(`\n· moshcode runs from a git checkout (${MOSHCODE_HOME}) — \`git pull\` there to update it (skipping self-reinstall).`);
     } else {
       const before = selfVersion();
-      const ok = await run("moshcode", selfSpec(), "(self)");
-      const after = selfVersion();
-      if (ok && before && after) {
-        log(before === after ? `· moshcode already at ${after}` : `· moshcode ${before} → ${after} — restart moshcode to load it.`);
+      const decision = await updatePlan({ installed: before });
+      if (!decision.act) {
+        log(`\n· moshcode ${before || "version unknown"}: ${decision.why}; skipping self-reinstall.`);
+      } else {
+        const ok = await run("moshcode", selfSpec(), "(self)");
+        const after = selfVersion();
+        if (ok && before && after) {
+          log(before === after ? `· moshcode already at ${after}` : `· moshcode ${before} → ${after} — restart moshcode to load it.`);
+        }
       }
     }
   }

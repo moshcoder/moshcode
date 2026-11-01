@@ -680,7 +680,8 @@ async function main() {
       const { execFile } = await import("node:child_process");
       process.exitCode = (await selfUpdateCommand(rest, console.log, {
         upgrade: async () => {
-          const results = await runUpgrade(rest.filter((a) => !a.startsWith("--")));
+          const targets = rest.filter((a) => !a.startsWith("--"));
+          const results = await runUpgrade(targets.length ? targets : ["self"]);
           return results.filter((r) => !r.ok).length ? 1 : 0;
         },
         write: (path, body) => fsp.writeFile(path, body),
