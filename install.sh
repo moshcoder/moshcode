@@ -23,6 +23,7 @@
 #   MOSHCODE_BIN=/path/dir   wrapper bin dir  (default: $HOME/.local/bin)
 #   MOSHCODE_REF=vX.Y.Z      pin a tag/branch (default: latest release, else main)
 #   MOSHCODE_ALLOW_ROOT=1    install as root anyway (see below)
+#   MOSHCODE_NO_AUTOUPDATE=1 skip the per-user hourly update check
 #   MOSHCODE_NO_PROXY=1      skip the pinned-TLS proxy (https:// on a Moshpit
 #                            name will not verify without it)
 #
@@ -278,6 +279,30 @@ install_proxy() {
     unset _proxy_sh
 }
 
+schedule_auto_update() {
+    if [ "${MOSHCODE_NO_AUTOUPDATE:-}" = "1" ]; then
+        info "MOSHCODE_NO_AUTOUPDATE=1 — skipping automatic updates"
+        return 0
+    fi
+    if ! (cd "$MOSHCODE_HOME" && MOSHCODE_BIN="$MOSHCODE_BIN" node --input-type=module -e '
+        import("@profullstack/cli/auto-update").then(async ({installAutoUpdate}) => {
+          const result = await installAutoUpdate({name:"moshcode",command:process.env.MOSHCODE_BIN+"/moshcode",args:["update","--if-newer"]});
+          if (!result.scheduled) { console.error(`moshcode: automatic updates not scheduled: ${result.reason}`); process.exitCode=1; }
+          else console.log(`moshcode: automatic updates scheduled with ${result.scheduler}`);
+        }).catch(error => { console.error(`moshcode: could not schedule automatic updates: ${error.message}`); process.exitCode=1; });
+    '); then
+        warn "automatic update check could not be scheduled"
+    fi
+}
+
+unschedule_auto_update() {
+    [ -d "$MOSHCODE_HOME/node_modules/@profullstack/cli" ] || return 0
+    (cd "$MOSHCODE_HOME" && node --input-type=module -e '
+        import("@profullstack/cli/auto-update").then(({removeAutoUpdate}) => removeAutoUpdate("moshcode"))
+          .catch(error => { console.error(`moshcode: could not remove automatic update check: ${error.message}`); process.exitCode=1; });
+    ') || true
+}
+
 # ---- commands -------------------------------------------------------------
 run_install() {
     printf '\n%smoshcode installer%s %s— code hard, mosh harder 🤘%s\n\n' "$BOLD" "$RESET" "$ASH" "$RESET"
@@ -288,6 +313,7 @@ run_install() {
     fetch_and_unpack "$_ref"
     write_wrapper
     ensure_path
+    schedule_auto_update
     install_proxy
     printf '\n%sdone.%s run:\n' "$ACID" "$RESET"
     printf '  moshcode                 # open the TUI shell\n'
@@ -300,6 +326,7 @@ run_install() {
 
 run_remove() {
     info "removing moshcode"
+    unschedule_auto_update
     rm -f "$WRAPPER" 2>/dev/null || true
     rm -f "$SCRIPT_WRAPPER" 2>/dev/null || true
     rm -rf "$MOSHCODE_HOME" 2>/dev/null || true
