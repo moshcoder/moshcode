@@ -20,6 +20,7 @@
     "@profullstack/footer": "latest",
     "@profullstack/libsql-pg": "^0.1.2",
     "@profullstack/notifications": "^0.1.0",
+    "@profullstack/player": "^0.17.0",
     "@profullstack/redeem-credits": "^0.2.0",
     "@profullstack/synconfig": "^0.1.1",
     "@simplewebauthn/browser": "^13.3.0",

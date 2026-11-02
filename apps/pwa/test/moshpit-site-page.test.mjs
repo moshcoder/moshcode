@@ -199,7 +199,9 @@ test("site: every post type renders as itself", skip, async () => {
   assert.match(html, /class="site-out" href="https:\/\/example\.com\/thing"[^>]*>→ example\.com/);
   assert.match(html, /<img class="site-shot" src="https:\/\/cdn\.example\/p\.jpg"/);
   assert.match(html, /class="site-gallery"/);
-  assert.match(html, /<video class="site-video" controls preload="none" src="https:\/\/cdn\.example\/clip\.mp4">/);
+  // A direct file goes to @profullstack/player, with the bare <video> as the fallback.
+  assert.match(html, /<div class="site-video site-player" data-pf-player data-src="https:\/\/cdn\.example\/clip\.mp4"><video controls playsinline preload="none" src="https:\/\/cdn\.example\/clip\.mp4"><\/video><\/div>/);
+  assert.match(html, /<script type="module" src="\/pf-player-init\.js"><\/script>/);
   assert.match(html, /youtube-nocookie\.com\/embed\/dQw4w9WgXcQ/);
   // An embed is a card, not a frame — an arbitrary URL does not get an iframe
   // on the origin where accounts live.

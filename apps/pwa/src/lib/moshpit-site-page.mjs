@@ -21,7 +21,7 @@ import { esc } from "./html.mjs";
 import { feedDate } from "./moshpit-feed-page.mjs";
 import { navFor, postsFor } from "./moshpit-content.mjs";
 
-/** A direct media file — something <video> can play without anyone's player. */
+/** A direct media file — something @profullstack/player (or a bare <video>) plays itself. */
 const VIDEO_FILE = /\.(mp4|webm|ogv|ogg|mov|m4v)(\?|#|$)/i;
 
 /**
@@ -115,6 +115,8 @@ export const SITE_CSS = `
   background:var(--surface)}
 .site-video{width:100%;aspect-ratio:16/9;border-radius:10px;border:1px solid var(--line);
   background:#000;margin-top:12px;display:block}
+.site-player{overflow:hidden}
+.site-player video{display:block;width:100%;height:100%;background:#000}
 .site-card{display:flex;gap:12px;align-items:center;margin-top:12px;padding:12px 14px;
   border:1px solid var(--line-2);border-radius:10px;background:var(--bg-tint)}
 .site-card .mono{font-size:.76rem;color:var(--dim);word-break:break-all}
@@ -159,7 +161,10 @@ function media(item) {
 
   if (item.kind === "video" && item.url) {
     if (VIDEO_FILE.test(item.url)) {
-      return `<video class="site-video" controls preload="none" src="${esc(item.url)}"></video>`;
+      // @profullstack/player takes over the <video> once /pf-player-init.js has
+      // loaded it; until then, or without JS, the native controls play it.
+      return `<div class="site-video site-player" data-pf-player data-src="${esc(item.url)}"><video controls playsinline preload="none" src="${esc(item.url)}"></video></div>
+<script type="module" src="/pf-player-init.js"></script>`;
     }
     const embed = videoEmbed(item.url);
     if (embed) {
