@@ -19,7 +19,7 @@ importers:
         version: 0.3.0
       '@profullstack/footer':
         specifier: latest
-        version: 0.6.19
+        version: 0.6.14
       '@profullstack/libsql-pg':
         specifier: ^0.1.2
         version: 0.1.2
@@ -235,8 +235,8 @@ packages:
     engines: {node: '>=22.13'}
     hasBin: true
 
-  '@profullstack/footer@0.6.19':
-    resolution: {integrity: sha512-DAS2jHDJFnH1w6lDtYbEnvuV2n4NY2vrRwnUKeQPC+Nwfg1f2Me9ClZ6KlXs6Dv0pgJSg2ATLSX0hV+Mq7co3w==}
+  '@profullstack/footer@0.6.14':
+    resolution: {integrity: sha512-/rQG6srmCkQop7PK8Vp9go4Xq9Ha7NN7xHuSkqM9VXaADqERq6jgorFc5Ym6+ej+XmzJ85Z7gUDiNbqJVssmFQ==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -947,7 +947,7 @@ snapshots:
     transitivePeerDependencies:
       - react
 
-  '@profullstack/footer@0.6.19': {}
+  '@profullstack/footer@0.6.14': {}
 
   '@profullstack/libsql-pg@0.1.2':
     dependencies:
