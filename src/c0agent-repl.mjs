@@ -59,7 +59,8 @@ export function parseArgs(argv) {
     else if (a === "--permission-mode") opts.mode = argv[++i];
     else if (a === "-C" || a === "--cwd") opts.cwd = argv[++i];
     else if (a === "-y" || a === "--yes" || a === "--dangerously-skip-permissions") opts.mode = "yolo";
-    else if (i === 0 && (a === "agents" || a === "agent")) { opts.manage = argv.slice(1); break; }
+    // `agents …` as the first word (after any flags) manages definitions; later it's prompt text.
+    else if (!opts.words.length && opts.print == null && (a === "agents" || a === "agent")) { opts.manage = argv.slice(i + 1); break; }
     else opts.words.push(a);
   }
   if (opts.print === "" && opts.words.length) opts.print = opts.words.join(" ");

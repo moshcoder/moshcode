@@ -308,6 +308,8 @@ function handledHelp(cmd, rest) {
   // `moshcode <command> [verb] --help`, at any depth.
   const command = findCommand(cmd);
   if (!command) return false;
+  // `agents c0mpute --help` is the c0mpute agent's own usage, not this table's.
+  if ((command.name === "agents" || command.name === "start") && isC0mputeAgent(rest[0])) return false;
   // `run` claims --help only before the script filename.
   if (!wantsHelp(rest, { stopAt: command.name === "run" })) return false;
 
