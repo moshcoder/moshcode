@@ -295,5 +295,7 @@ test("routing: the names that mean the c0mpute agent, and CLI flags", () => {
   assert.equal(parseArgs(["-p", "-m", "qwen3:4b"]).model, "qwen3:4b");
   assert.equal(parseArgs(["--dangerously-skip-permissions"]).mode, "yolo");
   assert.deepEqual(parseArgs(["agents", "show", "plan"]).manage, ["show", "plan"]);
+  assert.deepEqual(parseArgs(["-C", "/x", "agents", "list"]).manage, ["list"]);
+  assert.equal(parseArgs(["fix", "the", "agents"]).manage, null);
   assert.equal(describeCall({ name: "task", input: { agent: "explore", prompt: "find x" } }), "Task(explore: find x)");
 });
