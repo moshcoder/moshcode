@@ -196,6 +196,60 @@ moshcode agents aider       # aider --yes-always                                
 moshcode agents openagents  # openagents                                        (dashboard)
 ```
 
+### `agents c0mpute`: a coding agent on the c0mpute network
+
+c0mpute has no coding CLI of its own, so moshcode is the harness. The agent runs
+the loop locally and sends the model calls to the peer node that takes each job.
+It reads, edits, runs commands and delegates to subagents, with the same UX as
+Claude Code:
+
+```sh
+moshcode agents c0mpute                    # interactive session (also /agents c0mpute in the pit)
+moshcode agents c0mpute -p "fix the failing test"   # print mode: answer on stdout
+moshcode agents c0mpute -y -C ~/src/app     # never ask, work in ~/src/app (use a container)
+moshcode agents c0mpute agents list         # manage agent definitions without a session
+```
+
+Inside a session:
+
+| | |
+|---|---|
+| `/agents` | list agents; `new` (drafted by c0mpute or by hand), `show`, `edit`, `rm`, `run <name> <task>` |
+| `@<agent> <task>` | run one subagent directly |
+| shift-tab | cycle permission mode: ask, accept edits, plan (read-only) |
+| esc / ^C | interrupt the running turn |
+| `/model`, `/models` | switch the model (saved), list what nodes serve |
+| `/todos`, `/compact`, `/clear`, `/cost`, `/key`, `/cwd` | checklist, shrink context, fresh chat, usage, key, directory |
+
+The lead agent can call `task` to hand a self-contained job to a subagent. Several
+`task` calls in one reply run in parallel. Subagents start with a fresh
+conversation, their own system prompt and their own tool list, and cannot spawn
+subagents. Built-ins: `general-purpose`, `explore` (read-only search) and `plan`
+(read-only architect). Your own agents are markdown files with frontmatter:
+
+```markdown
+---
+name: test-runner
+description: Runs the test suite and reports failures with file:line. Use after any change.
+tools: bash, read, grep
+model: qwen2.5:7b        # optional; omit to use the session model
+---
+You run the project's tests and report each failure with its file and line...
+```
+
+They load from `./.moshcode/agents` (project), then `~/.moshcode/agents` (user),
+then Claude Code's `.claude/agents` (read-only, tool and model names mapped), then
+the built-ins. The first one found for a name wins, and `/agents` shows what it
+overrides. Edits and non-read-only commands ask first unless you pick another mode.
+`ls`, `cat`, `git status`/`diff`/`log` and `rg` never ask.
+
+Key: `C0MPUTE_API_KEY` or `/key ik_live_...` (saved 0600 in `~/.moshcode/c0mpute.json`).
+With no key you get the free tier, 10 prompts a day. Model: `C0MPUTE_MODEL` or
+`/model`. The default is the best house model, and smaller ones are tried when no
+node serves it. **Privacy:** prompts and tool output (file contents, command
+output) go to whichever peer node takes the job, so keep secrets out of a c0mpute
+session.
+
 Codex's native agents overview requires a CLI with `codex agents` support
 (verified with 0.151.0) and, for the local daemon, the managed standalone
 installation. `moshcode install codex` / `moshcode upgrade codex` use Codex's

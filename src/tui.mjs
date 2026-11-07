@@ -10,6 +10,7 @@ import path from "node:path";
 import { API_ENGINES, ENGINES, agentLaunchArgs, apiEngineAvailable, interactiveError, resolveApiEngine, resolveEngine, engineStatus, openSession } from "./engines.mjs";
 import { TOOLS, resolveTool, resolveInstallable, suggestTargets, toolStatus, openTool, readToolAliases, toolsWithAliases } from "./tools.mjs";
 import { tradeArgs, tradeUsage } from "./trade.mjs";
+import { isC0mputeAgent } from "./c0agent-defs.mjs";
 import { postSocial, socialRoster } from "./socials.mjs";
 import { shortenCommand } from "./shorten.mjs";
 import { runUpgrade } from "./upgrade.mjs";
@@ -1211,6 +1212,16 @@ export async function tui() {
         await enginesDefaults(rest.slice(1), { write: (l) => console.log(`  ${l}`) });
         continue;
       }
+      // c0mpute has no coding CLI of its own: moshcode is the harness, and it
+      // needs the terminal the way an engine session does.
+      if (isC0mputeAgent(rest[0])) {
+        const { c0agentMain } = await import("./c0agent-repl.mjs");
+        rl.close();
+        try { await c0agentMain(rest.slice(1)); }
+        catch (e) { console.log(err(`c0mpute agent: ${e.message || e}`)); }
+        rl = mkrl();
+        continue;
+      }
       const resolved = resolveEngine(rest[0]);
       if (!resolved) {
         const api = resolveApiEngine(rest[0]);
@@ -1232,6 +1243,7 @@ export async function tui() {
     }
     if (cmd === "start") {
       if (!rest[0]) { console.log(err("usage: /start <engine> [args…] [-d]")); continue; }
+      if (isC0mputeAgent(rest[0])) { pending = `/agents ${line.replace(/^\/?start\s+/i, "")}`; continue; }
       const resolved = resolveEngine(rest[0]);
       if (!resolved) {
         const api = resolveApiEngine(rest[0]);

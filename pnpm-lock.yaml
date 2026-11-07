@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@profullstack/ai-providers':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@profullstack/cli':
         specifier: ^0.2.0
         version: 0.2.0
@@ -32,6 +35,11 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
+  '@profullstack/ai-providers@0.2.0':
+    resolution: {integrity: sha512-xY7a4gHThur7uTUnmzft47TnqVK+NVA57K60LThSAeHhITbSNLhkt9Sp7uNKCSg0wC55b5wLFEFGsGzblCiT6Q==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   '@profullstack/cli@0.2.0':
     resolution: {integrity: sha512-98Ei8yt1hBhoBFGfqDUM6QBKmzP7mad90uybp9BUw2zvilHOIRv5bTn8byR7+MjiiNN0FQ/DvOlGT9o3KcNCyg==}
     engines: {node: '>=18'}
@@ -52,6 +60,8 @@ packages:
 snapshots:
 
   '@moshcoder/moshpit-dns@0.5.0': {}
+
+  '@profullstack/ai-providers@0.2.0': {}
 
   '@profullstack/cli@0.2.0': {}
 

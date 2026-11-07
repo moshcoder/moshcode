@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isC0mputeAgent } from "../src/c0agent-defs.mjs";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -350,6 +351,12 @@ async function main() {
       printEngineStatus(rest[0] === "--json");
       return;
     }
+    // c0mpute has no coding CLI of its own: moshcode is the harness.
+    if (isC0mputeAgent(rest[0])) {
+      const { c0agentMain } = await import("../src/c0agent-repl.mjs");
+      process.exitCode = await c0agentMain(rest.slice(1));
+      return;
+    }
     const resolved = resolveEngine(rest[0]);
     if (!resolved) {
       if (refuseApiLaunch(rest[0])) return;
@@ -364,6 +371,11 @@ async function main() {
     if (!rest.length) {
       console.error(`usage: moshcode start <engine> [args…]\nengines:\n${engineList()}`);
       process.exitCode = 1;
+      return;
+    }
+    if (isC0mputeAgent(rest[0])) {
+      const { c0agentMain } = await import("../src/c0agent-repl.mjs");
+      process.exitCode = await c0agentMain(rest.slice(1));
       return;
     }
     const resolved = resolveEngine(rest[0]);
