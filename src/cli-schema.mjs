@@ -49,6 +49,8 @@ export const CORE_CLI_COMMANDS = [
       ["moshcode agents --json", "pipe engine status into a script"],
       ["moshcode agents claude", "claude's agent list"],
       ["moshcode agents codex", "Codex's shared-daemon agents overview (CLI 0.151.0+)"],
+      ["moshcode agents c0mpute", "a Claude-Code-style agent with subagents, on the c0mpute network"],
+      ["moshcode agents c0mpute -p \"fix the failing test\"", "run it once and print the answer"],
     ],
     seeAlso: ["start", "engines", "install"],
     note: "autonomous modes bypass approval prompts — use them in a container or a workspace you trust.",
