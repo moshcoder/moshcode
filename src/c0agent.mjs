@@ -117,10 +117,50 @@ function parseAttrs(s) {
 export function looseJson(text) {
   const t = String(text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
   if (!t.startsWith("{")) return null;
-  for (const candidate of [t, t.replace(/,\s*([}\]])/g, "$1")]) {
+  // The first balanced object: a stray "}}" or trailing prose after it is not ours.
+  const first = balancedObject(t);
+  for (const candidate of [t, first, first?.replace(/,\s*([}\]])/g, "$1")]) {
+    if (!candidate) continue;
     try { const v = JSON.parse(candidate); return v && typeof v === "object" && !Array.isArray(v) ? v : null; } catch { /* next */ }
   }
   return null;
+}
+
+/** The text of the first brace-balanced object in `t` (strings respected), or null. */
+function balancedObject(t) {
+  let depth = 0;
+  let inStr = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return t.slice(0, i + 1);
+  }
+  return null;
+}
+
+/**
+ * Tool blocks as `{ attrs, body }`. A block ends at its </tool>, or, when the
+ * model forgot to close it, at the next <tool or the end of the reply.
+ */
+function toolBlocks(src) {
+  const blocks = [];
+  const opens = [...src.matchAll(/<tool\b([^>]*?)(\/?)>/gi)];
+  for (let k = 0; k < opens.length; k++) {
+    const m = opens[k];
+    if (m[2]) { blocks.push({ attrs: m[1], body: "" }); continue; }
+    const start = m.index + m[0].length;
+    const nextOpen = k + 1 < opens.length ? opens[k + 1].index : src.length;
+    const rest = src.slice(start, nextOpen);
+    const close = rest.search(/<\/tool\s*>/i);
+    blocks.push({ attrs: m[1], body: close >= 0 ? rest.slice(0, close) : rest });
+  }
+  return blocks;
 }
 
 /**
@@ -133,13 +173,12 @@ export function parseToolCalls(text) {
   const fake = src.search(/<tool_result\b/i);
   if (fake >= 0) src = src.slice(0, fake);
   const calls = [];
-  const re = /<tool\b([^>]*?)(\/>|>([\s\S]*?)<\/tool\s*>)/gi;
-  for (const m of src.matchAll(re)) {
-    const attrs = parseAttrs(m[1]);
+  for (const block of toolBlocks(src)) {
+    const attrs = parseAttrs(block.attrs);
     const name = normalizeTool(attrs.name);
     if (!name) { calls.push({ name: attrs.name || "?", input: {}, error: `unknown tool "${attrs.name}"` }); continue; }
     delete attrs.name;
-    const body = (m[3] ?? "").trim();
+    const body = block.body.trim();
     let input = looseJson(body);
     if (!input) {
       input = { ...attrs };
@@ -186,7 +225,7 @@ export function visibleText(text) {
   let src = stripThink(text);
   const fake = src.search(/<tool_result\b/i);
   if (fake >= 0) src = src.slice(0, fake);
-  return src.replace(/<tool\b[^>]*?(\/>|>[\s\S]*?<\/tool\s*>)/gi, "").replace(/\n{3,}/g, "\n\n").trim();
+  return src.replace(/<tool\b[^>]*?(\/>|>[\s\S]*?(<\/tool\s*>|(?=<tool\b)|$))/gi, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
@@ -388,7 +427,18 @@ export async function runTool(session, call, ctx = {}) {
         if (!oldS) return { ok: false, output: "old (the exact text to replace) is required; read the file first" };
         const text = fs.readFileSync(file, "utf8");
         const count = text.split(oldS).length - 1;
-        if (!count) return { ok: false, output: `old text not found in ${input.path}: read the file and copy it exactly, including indentation` };
+        if (!count) {
+          // Small models re-indent what they copy. Accept the one place that
+          // matches line for line once leading whitespace is ignored, and keep
+          // the file's own indentation on the lines that replace it.
+          const fuzzy = indentTolerantMatch(text, oldS);
+          if (fuzzy) {
+            const replacement = reindent(newS, oldS, fuzzy.text);
+            fs.writeFileSync(file, text.slice(0, fuzzy.index) + replacement + text.slice(fuzzy.index + fuzzy.text.length));
+            return { ok: true, output: `edited ${rel(session, file)} (matched ignoring indentation)`, summary: "1 replacement" };
+          }
+          return { ok: false, output: `old text not found in ${input.path}: read the file and copy it exactly, including indentation` };
+        }
         if (count > 1 && !input.all) return { ok: false, output: `old text occurs ${count} times in ${input.path}: include more surrounding lines, or pass "all": true` };
         fs.writeFileSync(file, input.all ? text.split(oldS).join(newS) : text.replace(oldS, () => newS));
         const delta = newS.split("\n").length - oldS.split("\n").length;
@@ -460,20 +510,54 @@ export async function runTool(session, call, ctx = {}) {
         return { ok: false, output: `unknown tool ${name}` };
     }
   } catch (e) {
-    return { ok: false, output: String(e?.message || e) };
+    const msg = String(e?.message || e);
+    return { ok: false, output: e?.code === "ENOENT" ? `${msg}\nthat path does not exist: use ls or glob to find the real file name` : msg };
   }
+}
+
+/** The single span of `text` equal to `old` line for line, ignoring leading whitespace. */
+export function indentTolerantMatch(text, old) {
+  const want = old.replace(/\n+$/, "").split("\n").map((l) => l.trim());
+  if (!want.some(Boolean)) return null;
+  const lines = text.split("\n");
+  const starts = [];
+  let pos = 0;
+  for (const l of lines) { starts.push(pos); pos += l.length + 1; }
+  const hits = [];
+  for (let i = 0; i + want.length <= lines.length; i++) {
+    if (want.every((w, j) => lines[i + j].trim() === w)) hits.push(i);
+  }
+  if (hits.length !== 1) return null;
+  const i = hits[0];
+  const endLine = i + want.length - 1;
+  const index = starts[i];
+  return { index, text: text.slice(index, starts[endLine] + lines[endLine].length) };
+}
+
+/** Shift `next` by the indentation difference between what the model wrote and what the file has. */
+function reindent(next, wrote, actual) {
+  const leads = (s) => s.split("\n").filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)[0]);
+  const w = leads(wrote);
+  const a = leads(actual);
+  // Map each indentation the model used to the file's indentation at the same line.
+  const map = new Map();
+  w.forEach((x, i) => { if (a[i] != null && !map.has(x)) map.set(x, a[i]); });
+  return next.replace(/\n+$/, "").split("\n").map((l) => {
+    const lead = l.match(/^[ \t]*/)[0];
+    return map.has(lead) ? map.get(lead) + l.slice(lead.length) : l;
+  }).join("\n");
 }
 
 // ─── prompts ─────────────────────────────────────────────────────────────────
 
 const TOOL_DOCS = {
-  read: `read {"path": "src/app.js", "offset": 1, "limit": 300}  read a file with line numbers`,
-  write: `write {"path": "notes.md", "content": "..."}  create or overwrite a whole file`,
-  edit: `edit {"path": "src/app.js", "old": "exact old text", "new": "replacement"}  replace text; read the file first, copy "old" exactly`,
+  read: `read {"path": "<file>", "offset": 1, "limit": 300}  read a file with line numbers`,
+  write: `write {"path": "<file>", "content": "..."}  create or overwrite a whole file`,
+  edit: `edit {"path": "<file>", "old": "exact old text", "new": "replacement"}  replace text; read the file first, copy "old" exactly`,
   bash: `bash {"command": "npm test"}  run a shell command in the project`,
-  glob: `glob {"pattern": "src/**/*.ts"}  find files by name`,
-  grep: `grep {"pattern": "function main", "path": "src", "glob": "*.js"}  search file contents (regex)`,
-  ls: `ls {"path": "src"}  list a directory`,
+  glob: `glob {"pattern": "**/*.js"}  find files by name`,
+  grep: `grep {"pattern": "function main", "path": "<dir>", "glob": "*.js"}  search file contents (regex)`,
+  ls: `ls {"path": "."}  list a directory`,
   todo: `todo {"items": [{"text": "write the test", "status": "in_progress"}]}  keep a checklist for multi-step work`,
   task: `task {"agent": "explore", "prompt": "everything the subagent needs to know"}  hand a self-contained job to a subagent`,
 };
@@ -486,6 +570,16 @@ function projectNotes(cwd) {
     } catch { /* next */ }
   }
   return "";
+}
+
+/** The top of the working directory, so the model starts from real names, not guesses. */
+function topLevel(cwd) {
+  try {
+    const entries = fs.readdirSync(cwd, { withFileTypes: true })
+      .filter((e) => e.name !== ".git" && e.name !== "node_modules")
+      .map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).sort();
+    return entries.length ? `files here: ${entries.slice(0, 60).join("  ")}${entries.length > 60 ? `  … (${entries.length - 60} more)` : ""}` : "the directory is empty";
+  } catch { return ""; }
 }
 
 function gitLine(cwd) {
@@ -527,6 +621,7 @@ export function systemPrompt({ agent, tools, session, depth = 0, agents = [] }) 
     "# Environment",
     `working directory: ${session.cwd}`,
     `platform: ${process.platform} · date: ${new Date().toISOString().slice(0, 10)} · ${gitLine(session.cwd)}`,
+    topLevel(session.cwd),
     lead ? projectNotes(session.cwd) : "",
   ].join("\n");
 }

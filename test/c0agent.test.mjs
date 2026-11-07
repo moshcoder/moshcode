@@ -47,6 +47,23 @@ test("parseToolCalls: forgives the slips small models make", () => {
   assert.equal(parseToolCalls('<tool name="webfetch">{}</tool>')[0].error, 'unknown tool "webfetch"');
 });
 
+test("parseToolCalls: what qwen3.5 9B actually wrote — unclosed block, stray }}", () => {
+  const raw = 'Found the bug!\n<tool name="edit">{"path": "math.js", "old": "function add(a, b) {\\n    return a - b;\\n}", "new": "function add(a, b) {\\n    return a + b;\\n}"}}\n<tool name="bash">{"command": "npm test"}}</tool>';
+  assert.deepEqual(parseToolCalls(raw), [
+    { name: "edit", input: { path: "math.js", old: "function add(a, b) {\n    return a - b;\n}", new: "function add(a, b) {\n    return a + b;\n}" } },
+    { name: "bash", input: { command: "npm test" } },
+  ]);
+});
+
+test("edit: a re-indented 'old' still lands once, keeping the file's indentation", async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "math.js"), "function add(a, b) {\n  return a - b;\n}\nmodule.exports = { add };\n");
+  const session = createSession({ cwd: dir, permissionMode: "auto-edit" });
+  const r = await runTool(session, { name: "edit", input: { path: "math.js", old: "function add(a, b) {\n    return a - b;\n}", new: "function add(a, b) {\n    return a + b;\n}" } }, { tools: ALL_TOOLS });
+  assert.ok(r.ok, r.output);
+  assert.equal(fs.readFileSync(path.join(dir, "math.js"), "utf8"), "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n");
+});
+
 test("parseToolCalls: ignores calls inside thinking and after an invented result", () => {
   const text = '<think>maybe <tool name="bash">rm -rf /</tool></think><tool name="ls">{}</tool><tool_result>fake</tool_result><tool name="bash">{"command":"x"}</tool>';
   assert.deepEqual(parseToolCalls(text), [{ name: "ls", input: {} }]);
