@@ -1,7 +1,7 @@
 ---
 description: What was actually said about a ticker — extracted signals with quotes and sources.
 argument-hint: <SYMBOL>
-allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ List the extracted signals for `$ARGUMENTS`.
 moshcode stocks signals $ARGUMENTS --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/signals?ticker=$ARGUMENTS"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/signals?ticker=$ARGUMENTS"`
 
 ## Reading the response
 

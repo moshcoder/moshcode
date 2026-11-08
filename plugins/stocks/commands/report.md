@@ -1,7 +1,7 @@
 ---
 description: Research one ticker — score, technicals, fundamentals, thesis, signals, and sources.
 argument-hint: <SYMBOL>
-allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/:*)
 ---
 
 ## Task
@@ -17,7 +17,7 @@ moshcode stocks $ARGUMENTS --json
 If `moshcode` is not installed, fall back to the API directly:
 
 ```bash
-curl -sS "https://advis0r.com/api/ticker?symbol=$ARGUMENTS"
+curl -sS "https://advis0r.pwa.pit.world/api/ticker?symbol=$ARGUMENTS"
 ```
 
 ## Reading the response
@@ -39,4 +39,4 @@ curl -sS "https://advis0r.com/api/ticker?symbol=$ARGUMENTS"
 - If the response is a 400 with `didYouMean`, the user typed a company name
   rather than a symbol — re-run against the suggested symbol and say you did.
 - End with the response's own `disclaimer`. This is research, not advice.
-- Link the shareable report: `https://advis0r.com/ticker/<SYMBOL>`.
+- Link the shareable report: `https://advis0r.pwa.pit.world/ticker/<SYMBOL>`.

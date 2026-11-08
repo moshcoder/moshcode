@@ -1,7 +1,7 @@
 ---
 description: Full-text search across every indexed earnings transcript and article.
 argument-hint: <words to search for>
-allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ Search the transcript index for `$ARGUMENTS`.
 moshcode stocks search $ARGUMENTS --limit 20 --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/search?q=<url-encoded>&limit=20"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/search?q=<url-encoded>&limit=20"`
 
 ## Reading the response
 

@@ -1,6 +1,6 @@
 ---
 description: Every crypto pair advis0r can price, and which are trading.
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -11,7 +11,7 @@ List the supported pairs.
 moshcode crypto assets --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/crypto/assets"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/crypto/assets"`
 
 ## Reading the response
 

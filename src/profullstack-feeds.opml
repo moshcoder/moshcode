@@ -10,7 +10,7 @@
     <outline text="BitTorrented Blog" title="BitTorrented Blog" type="rss" xmlUrl="https://bittorrented.com/blog/rss.xml" htmlUrl="https://bittorrented.com/blog" />
     <outline text="bl0ggers Blog" title="bl0ggers Blog" type="rss" xmlUrl="https://bl0ggers.com/blog/rss.xml" htmlUrl="https://bl0ggers.com/blog" />
     <outline text="c0mpute Blog" title="c0mpute Blog" type="rss" xmlUrl="https://c0mpute.com/blog/rss.xml" htmlUrl="https://c0mpute.com/blog" />
-    <outline text="c0upons Blog" title="c0upons Blog" type="rss" xmlUrl="https://c0upons.com/blog/rss.xml" htmlUrl="https://c0upons.com/blog" />
+    <outline text="c0upons Blog" title="c0upons Blog" type="rss" xmlUrl="https://c0upons.pwa.pit.world/blog/rss.xml" htmlUrl="https://c0upons.pwa.pit.world/blog" />
     <outline text="CoinPay Blog" title="CoinPay Blog" type="rss" xmlUrl="https://coinpayportal.com/blog/rss.xml" htmlUrl="https://coinpayportal.com/blog" />
     <outline text="CrawlProof Blog" title="CrawlProof Blog" type="rss" xmlUrl="https://crawlproof.com/blog/rss.xml" htmlUrl="https://crawlproof.com/blog" />
     <outline text="d0rz Blog" title="d0rz Blog" type="rss" xmlUrl="https://d0rz.com/blog/rss.xml" htmlUrl="https://d0rz.com/blog" />

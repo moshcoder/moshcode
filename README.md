@@ -92,7 +92,7 @@ or miss one that does. A test fails the build when it drifts.
 moshcode engines            # list installable engines
 moshcode engines --json     # machine-readable install status for automation
 moshcode install opencode   # install opencode (curl … | bash)
-moshcode install privacycode # curl -fsSL https://getprivacycode.com/install | sh
+moshcode install privacycode # curl -fsSL https://getprivacycode.pwa.pit.world/install | sh
 moshcode install claude     # npm i -g @anthropic-ai/claude-code
 moshcode install codex      # npm i -g @openai/codex
 moshcode install kimi       # curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
@@ -1392,7 +1392,7 @@ opt-in or corresponding environment setting.
 ### Equity research (`moshcode stocks`)
 
 Where `trade` is Alpaca's order book, `stocks` is the research desk:
-[advis0r.com](https://advis0r.com/api)'s public read-only API, rendered in the
+[advis0r.com](https://advis0r.pwa.pit.world/api)'s public read-only API, rendered in the
 pit. No key, no login, no write routes, no binary to install:
 
 ```sh

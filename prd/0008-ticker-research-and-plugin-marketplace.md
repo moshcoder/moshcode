@@ -22,7 +22,7 @@ superseded-by:
 
 `moshcode trade` can look up a quote and place an order. It cannot answer the
 question that comes before either one — *is this worth buying?* Everything that
-would inform that lives in [advis0r.com](https://advis0r.com/api): indexed
+would inform that lives in [advis0r.com](https://advis0r.pwa.pit.world/api): indexed
 earnings transcripts and news, extracted signals with sources, SEC fundamentals,
 technicals, and a composite score. Today that means leaving the pit for a
 browser, and it means an agent working in a session has no path to it at all.

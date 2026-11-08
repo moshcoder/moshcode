@@ -1,6 +1,6 @@
 # stocks — equity research in your engine 🤘
 
-Slash commands backed by [advis0r.com](https://advis0r.com/api): scored research
+Slash commands backed by [advis0r.com](https://advis0r.pwa.pit.world/api): scored research
 reports, extracted signals with sources, transcript search, company-name lookup,
 and ranked watchlists.
 

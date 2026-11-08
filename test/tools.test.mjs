@@ -94,7 +94,7 @@ test("tool registry uses the official native CLI packages", () => {
   assert.deepEqual(resolveTool("c0upons"), ["c0upons", TOOLS.c0upons]);
   assert.deepEqual(TOOLS.c0upons.install, {
     cmd: "sh",
-    args: ["-c", "curl -fsSL https://c0upons.com/install.sh | sh"],
+    args: ["-c", "curl -fsSL https://c0upons.pwa.pit.world/install.sh | sh"],
   });
   // The c0upons CLI replaces its own binary, so upgrades skip the installer.
   assert.deepEqual(TOOLS.c0upons.upgrade, { cmd: "c0upons", args: ["upgrade"] });
@@ -590,7 +590,7 @@ for (const [name, shell, script] of [
   ["ugig", "bash", "curl -fsSL https://ugig.net/install.sh | bash"],
   ["coinpay", "sh", "curl -fsSL https://coinpayportal.com/install.sh | sh"],
   ["c0mpute", "sh", "curl -fsSL https://c0mpute.com/install.sh | sh"],
-  ["c0upons", "sh", "curl -fsSL https://c0upons.com/install.sh | sh"],
+  ["c0upons", "sh", "curl -fsSL https://c0upons.pwa.pit.world/install.sh | sh"],
   ["coral", "bash", "curl -fsSL https://withcoral.com/install.sh | bash"],
   ["noodle", "bash", "curl -fsSL https://noodlerest.dev/install.sh | bash"],
   ["spinifex", "bash", "curl -fsSL https://install.mulgadc.com | INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash"],

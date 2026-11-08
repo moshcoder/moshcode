@@ -1,7 +1,7 @@
 ---
 description: The fast read on one ticker — price, score, and how stale the snapshot is.
 argument-hint: <SYMBOL>
-allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ Give the short answer on `$ARGUMENTS` — price and score, not the full write-up
 moshcode stocks $ARGUMENTS --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/ticker?symbol=$ARGUMENTS"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/ticker?symbol=$ARGUMENTS"`
 
 This is the same document `/stocks:report` reads. The difference is what you do
 with it: four lines, not a report. If the user wants the thesis, signals and

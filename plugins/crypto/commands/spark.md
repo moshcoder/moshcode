@@ -1,7 +1,7 @@
 ---
 description: Compare recent moves across several crypto pairs at once.
 argument-hint: <PAIR> [PAIR…]
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -15,7 +15,7 @@ moshcode crypto spark $ARGUMENTS --period 24h --json
 `--period` is `24h` or `7d`. Up to 20 pairs per call. With no pairs given, ask
 which ones — or offer the majors (BTC, ETH, SOL).
 
-Fallback: `curl -sS "https://advis0r.com/api/crypto/sparklines?symbols=BTC-USD,ETH-USD&period=24h"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/crypto/sparklines?symbols=BTC-USD,ETH-USD&period=24h"`
 
 ## Reading the response
 
