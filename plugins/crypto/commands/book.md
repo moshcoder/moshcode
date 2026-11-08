@@ -1,7 +1,7 @@
 ---
 description: Top of the crypto order book, both sides, with the spread.
 argument-hint: <PAIR>
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ Show the order book for `$ARGUMENTS`.
 moshcode crypto book $ARGUMENTS --depth 10 --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/crypto/orderbook?symbol=$ARGUMENTS&depth=10"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/crypto/orderbook?symbol=$ARGUMENTS&depth=10"`
 
 ## Reading the response
 

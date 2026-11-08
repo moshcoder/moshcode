@@ -1,7 +1,7 @@
 ---
 description: Historical crypto OHLCV for one pair, at any supported timeframe.
 argument-hint: <PAIR> [timeframe]
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -15,7 +15,7 @@ moshcode crypto bars $ARGUMENTS --timeframe 1Day --limit 30 --json
 Timeframes: `1Min`, `5Min`, `15Min`, `1Hour`, `1Day`, `1Week`. Add
 `--start`/`--end` (ISO dates) to pin a window.
 
-Fallback: `curl -sS "https://advis0r.com/api/crypto/bars?symbol=<PAIR>&timeframe=1Day&limit=30"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/crypto/bars?symbol=<PAIR>&timeframe=1Day&limit=30"`
 
 ## Reading the response
 

@@ -67,7 +67,7 @@ export const ENGINES = {
     bin: "privacycode",
     // An opencode derivative, so it speaks the same flags/subcommands.
     agentArgs: ["--auto"],
-    install: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.com/install | sh"] },
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://getprivacycode.pwa.pit.world/install | sh"] },
     binDirs: [path.join(homedir(), ".privacycode", "bin")],
     // Same lineage, so the same screen wording and the same resume flag.
     resume: ["--continue"],

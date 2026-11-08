@@ -5,12 +5,12 @@
 // Nothing here holds credentials — every route this touches is public and
 // read-only, which is why there is no login verb and no write verb.
 //
-// The API is documented at https://advis0r.com/api and returns *stored*
+// The API is documented at https://advis0r.pwa.pit.world/api and returns *stored*
 // snapshots: a report carries `reportGeneratedAt`, and every renderer prints it.
 // A stale price is fine; a stale price dressed up as a live one is not.
 import { acid, ash, amber, bone, clip, danger, dim } from "./ui.mjs";
 
-export const DEFAULT_ADVISOR_URL = "https://advis0r.com";
+export const DEFAULT_ADVISOR_URL = "https://advis0r.pwa.pit.world";
 
 /** The advis0r base URL, overridable for a local instance or a test server. */
 export function advisorBase(env = process.env) {

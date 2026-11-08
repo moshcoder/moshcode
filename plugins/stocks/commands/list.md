@@ -1,7 +1,7 @@
 ---
 description: List every ticker with a stored report, best score first.
 argument-hint: "[--limit n] [--sort recent|score|ticker]"
-allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ List every ticker advis0r has a stored report for.
 moshcode stocks list $ARGUMENTS --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/reports?sort=score&limit=25"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/reports?sort=score&limit=25"`
 
 ## Reading the response
 

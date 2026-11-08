@@ -1,7 +1,7 @@
 ---
 description: Find a crypto pair by asset name (bitcoin → BTC/USD).
 argument-hint: <asset name>
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ Resolve `$ARGUMENTS` to a tradable pair.
 moshcode crypto lookup $ARGUMENTS --limit 10 --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/crypto/lookup?q=<url-encoded>&limit=10"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/crypto/lookup?q=<url-encoded>&limit=10"`
 
 ## Reading the response
 

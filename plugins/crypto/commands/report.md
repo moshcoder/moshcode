@@ -1,7 +1,7 @@
 ---
 description: Research one crypto pair — price, technicals, score, supply and order book.
 argument-hint: <PAIR>
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -17,7 +17,7 @@ moshcode crypto $ARGUMENTS --json
 If `moshcode` is not installed, fall back to the API directly:
 
 ```bash
-curl -sS "https://advis0r.com/api/crypto/report?symbol=$ARGUMENTS"
+curl -sS "https://advis0r.pwa.pit.world/api/crypto/report?symbol=$ARGUMENTS"
 ```
 
 Pairs are accepted as `BTC`, `BTC-USD`, `BTC/USD` or `BTCUSD`. A bare asset
@@ -47,4 +47,4 @@ resolves to that asset's USD pair.
   **not comparable** to an equity's score from `/stocks:report`. Do not rank the two
   against each other.
 - End with the response's own `disclaimer`. This is research, not advice.
-- Link the shareable page: `https://advis0r.com/crypto/<PAIR>`.
+- Link the shareable page: `https://advis0r.pwa.pit.world/crypto/<PAIR>`.

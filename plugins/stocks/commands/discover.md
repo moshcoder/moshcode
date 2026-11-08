@@ -1,7 +1,7 @@
 ---
 description: Build a ranked watchlist for a topic (slow — it analyzes each candidate).
 argument-hint: "[topic]"
-allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.com/api/:*)
+allowed-tools: Bash(moshcode stocks:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ Rank candidates for `$ARGUMENTS` (no topic → the default watchlist).
 moshcode stocks discover $ARGUMENTS --limit 10 --json
 ```
 
-Fallback: `curl -sS --max-time 180 "https://advis0r.com/api/discover?topic=<url-encoded>&provider=offline&horizon=2&limit=10"`
+Fallback: `curl -sS --max-time 180 "https://advis0r.pwa.pit.world/api/discover?topic=<url-encoded>&provider=offline&horizon=2&limit=10"`
 
 **This route runs an analysis per candidate and can take minutes.** Tell the
 user it is working before you start, and do not retry on a timeout — re-running

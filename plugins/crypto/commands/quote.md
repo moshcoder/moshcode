@@ -1,7 +1,7 @@
 ---
 description: The latest crypto trade and quote, with the bid/ask spread.
 argument-hint: <PAIR>
-allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.com/api/crypto/:*)
+allowed-tools: Bash(moshcode crypto:*), Bash(curl -sS https://advis0r.pwa.pit.world/api/crypto/:*)
 ---
 
 ## Task
@@ -12,7 +12,7 @@ Get the current quote for `$ARGUMENTS`.
 moshcode crypto quote $ARGUMENTS --json
 ```
 
-Fallback: `curl -sS "https://advis0r.com/api/crypto/quote?symbol=$ARGUMENTS"`
+Fallback: `curl -sS "https://advis0r.pwa.pit.world/api/crypto/quote?symbol=$ARGUMENTS"`
 
 ## Reading the response
 

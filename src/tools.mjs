@@ -48,7 +48,7 @@ export const TOOLS = {
     bin: "c0upons",
     // c0upons ships its own POSIX-sh installer, so `| sh` is enough here (the
     // script avoids bashisms deliberately) — no npm package to install from.
-    install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0upons.com/install.sh | sh"] },
+    install: { cmd: "sh", args: ["-c", "curl -fsSL https://c0upons.pwa.pit.world/install.sh | sh"] },
     // The CLI updates itself in place from the same origin the installer uses.
     upgrade: { cmd: "c0upons", args: ["upgrade"] },
   },

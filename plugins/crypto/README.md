@@ -1,6 +1,6 @@
 # crypto — market data in your engine 🤘
 
-Slash commands backed by [advis0r.com](https://advis0r.com/api/crypto): live
+Slash commands backed by [advis0r.com](https://advis0r.pwa.pit.world/api/crypto): live
 prices, technical scores, order books, OHLCV history and multi-pair sparklines
 across Alpaca's US crypto venue.
 
