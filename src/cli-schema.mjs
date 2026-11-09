@@ -706,8 +706,11 @@ export const CORE_CLI_COMMANDS = [
   {
     name: "name",
     group: "hosting",
-    description: "prove you hold a Moshpit name, so an app can use it as your identity",
-    synopsis: [["moshcode name link <name> [--app <url>]", ""]],
+    description: "prove you hold a Moshpit name, or serve it from a c0mpute site",
+    synopsis: [
+      ["moshcode name link <name> [--app <url>]", "prove you hold it, for an app"],
+      ["moshcode name c0mpute <name> <site_id|off>", "serve it from a c0mpute site, no server of yours"],
+    ],
     flags: [
       ["--app <url>", "the app to prove the name to", "https://qrypt.chat"],
       ["--dir <path>", "where the name's key and certificate live", "/etc/ssl/moshpit"],
@@ -716,6 +719,8 @@ export const CORE_CLI_COMMANDS = [
     examples: [
       ["sudo moshcode name link chovy.hacker", "the key is root-owned"],
       ["sudo moshcode name link blue.eggs --json", "hand the bundle to a script"],
+      ["moshcode name c0mpute blue.eggs 0123456789abcdef0123", "https://blue.eggs serves that c0mpute site"],
+      ["moshcode name c0mpute blue.eggs off", "stop serving it from c0mpute"],
     ],
     seeAlso: ["dns", "site", "whoami"],
   },

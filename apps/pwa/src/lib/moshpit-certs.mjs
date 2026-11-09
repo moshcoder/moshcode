@@ -11,6 +11,7 @@
 import { all, get, run } from "../db.mjs";
 import { addPin, controlledName, logAction, normalizeLabel, normalizeTld } from "../moshpit.mjs";
 import { issueLeaf } from "./moshpit-ca.mjs";
+import { c0mputeEdgeUsers } from "./moshpit-c0mpute.mjs";
 
 const CERT_COLS = `serial, tld, label, pin, cert, user_id, not_before, not_after, issued_at`;
 const DAY = 24 * 60 * 60 * 1000;
@@ -25,7 +26,18 @@ export const MAX_CERTS_PER_DAY = 24;
  * or { ok: false, error, status }.
  */
 export async function issueNameCertificate({ tld: tldInput, label: labelInput, userId, csr, now = Date.now() }) {
-  const owned = await controlledName(tldInput, labelInput, userId, now);
+  let owned = await controlledName(tldInput, labelInput, userId, now);
+  // The one exception to "the holder asks": a c0mpute edge, for a name whose
+  // holder pointed it at a c0mpute site. Setting the site is the holder's
+  // consent to being served by the edge, and the edge cannot serve
+  // https://<name> without a leaf. It lapses with the setting: once the site
+  // is cleared (or the name changes hands, which clears it) the edge is refused
+  // like anyone else, and the leaf it holds runs out within LEAF_DAYS.
+  let pinAs = userId;
+  if (!owned.ok && c0mputeEdgeUsers().has(userId)) {
+    const edge = await c0mputeEdgeName(tldInput, labelInput, now);
+    if (edge) { owned = edge; pinAs = edge.controller; }
+  }
   if (!owned.ok) return { ok: false, error: owned.error, status: 403 };
   const { tld, label } = owned;
 
@@ -48,7 +60,9 @@ export async function issueNameCertificate({ tld: tldInput, label: labelInput, u
   // pin-checking client (moshcode dns trust, the pit helper) in step. A pin that
   // is already there is fine; one already published as a different kind is not
   // ours to fix here, and the certificate is still valid without it.
-  const pinned = await addPin({ tld, label, pin: leaf.pin, kind: "tls", note: "moshpit-ca", userId });
+  // Published as the name's controller, because a pin is theirs: the edge
+  // asked for the leaf, but the key it carries is one the holder agreed to.
+  const pinned = await addPin({ tld, label, pin: leaf.pin, kind: "tls", note: pinAs === userId ? "moshpit-ca" : "moshpit-ca c0mpute-edge", userId: pinAs });
   await logAction(tld, userId, `cert:issue:${label}:${leaf.serial.slice(0, 8)}`);
 
   return {
@@ -62,6 +76,27 @@ export async function issueNameCertificate({ tld: tldInput, label: labelInput, u
     pin: leaf.pin,
     pinPublished: Boolean(pinned.ok),
   };
+}
+
+/**
+ * `{ ok, tld, label, controller }` when `label.tld` currently points at a
+ * c0mpute site, else null. `controller` is whoever controlledName() would
+ * accept: the tenant while a lease runs, otherwise the holder.
+ */
+async function c0mputeEdgeName(tldInput, labelInput, now) {
+  const tld = normalizeTld(tldInput);
+  const label = normalizeLabel(labelInput);
+  if (!tld || !label) return null;
+  const row = await get(
+    `SELECT user_id, c0mpute_site, leased_to, leased_until FROM moshpit_names WHERE tld = ? AND label = ?`,
+    [tld, label],
+  );
+  if (!row?.c0mpute_site) return null;
+  // A lease that ran out but has not been swept yet: the site is the former
+  // tenant's, and resolveMoshpitName already stopped serving it.
+  if (row.leased_to && row.leased_until && row.leased_until <= now) return null;
+  const tenanted = row.leased_to && row.leased_until > now;
+  return { ok: true, tld, label, controller: tenanted ? row.leased_to : row.user_id };
 }
 
 /** What has been issued under a name, newest first. Public: certificates are. */

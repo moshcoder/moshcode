@@ -75,6 +75,7 @@ import {
   normalizeRecordType,
   recordConflict,
 } from "./lib/moshpit-records.mjs";
+import { effectiveC0mputeTarget, normalizeC0mputeSite } from "./lib/moshpit-c0mpute.mjs";
 import {
   TWIN_UNLINK_LEAD_MS,
   clearnetTwins,
@@ -367,7 +368,7 @@ async function ownedTldAndLabel(tldInput, labelInput, userId) {
 
 /* ---- names under a TLD ---- */
 
-const NAME_COLS = `tld, label, user_id, target, feed_url, feed_kind, leased_to, leased_until, created_at`;
+const NAME_COLS = `tld, label, user_id, target, feed_url, feed_kind, c0mpute_site, leased_to, leased_until, created_at`;
 
 export async function getName(tld, label) {
   return get(`SELECT ${NAME_COLS} FROM moshpit_names WHERE tld = ? AND label = ?`, [tld, label]);
@@ -480,10 +481,42 @@ export async function setNameTarget({ tld: tldInput, label: labelInput, userId, 
   if (!owned.ok) return owned;
   const dest = normalizeTarget(target);
   if (!dest.ok) return { ok: false, error: dest.error };
-  await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`,
-    [dest.target, owned.tld, owned.label]);
+  // Pointing a name at a server is pointing it away from a c0mpute site: a
+  // site id left behind would keep winning at read time and the new target
+  // would never be served. Clearing the target leaves the site alone.
+  if (dest.target) {
+    await run(`UPDATE moshpit_names SET target = ?, c0mpute_site = NULL WHERE tld = ? AND label = ?`,
+      [dest.target, owned.tld, owned.label]);
+  } else {
+    await run(`UPDATE moshpit_names SET target = ? WHERE tld = ? AND label = ?`,
+      [dest.target, owned.tld, owned.label]);
+  }
   await logAction(owned.tld, userId, `retarget:${owned.label}`);
   return { ok: true };
+}
+
+/**
+ * Point a name at a static site on the c0mpute network, or take it off.
+ *
+ * `site` is the 20-hex id `c0mpute hosting publish` prints (or `site=<id>`,
+ * or a gateway URL ending in /s/<id>/). Empty clears it. The holder or the
+ * current tenant may set it, the same rule as a target, because it is one.
+ *
+ * Stored as given and turned into a target at read time
+ * (lib/moshpit-c0mpute.mjs), so the registry never has to rewrite rows when the
+ * edge moves.
+ */
+export async function setNameC0mpute({ tld: tldInput, label: labelInput, userId, site }) {
+  const owned = await controlledName(tldInput, labelInput, userId);
+  if (!owned.ok) return owned;
+  const id = normalizeC0mputeSite(site);
+  if (id === null) {
+    return { ok: false, error: "not a c0mpute site id — 20 hex characters, as printed by `c0mpute hosting publish`" };
+  }
+  await run(`UPDATE moshpit_names SET c0mpute_site = ? WHERE tld = ? AND label = ?`,
+    [id || null, owned.tld, owned.label]);
+  await logAction(owned.tld, userId, `${id ? "c0mpute" : "unc0mpute"}:${owned.label}`);
+  return { ok: true, site: id || null };
 }
 
 /**
@@ -826,7 +859,13 @@ export async function resolveMoshpitName(input) {
     registered: true,
     ...(Boolean(owner.alias_of) && !aliased ? { exempt: true } : {}),
     name_registered: Boolean(entry),
-    target: lapsed ? null : (entry?.target ?? null),
+    // A c0mpute site becomes the edge's hostname here, so every resolver that
+    // already follows a hostname target (the bridge, the DoH server,
+    // TronBrowser) reaches the edge without learning anything new.
+    target: lapsed ? null : effectiveC0mputeTarget({ target: entry?.target ?? null, site: entry?.c0mpute_site ?? null }),
+    // The site id itself, for the edge: it is how the edge learns which site to
+    // fetch for the Host it was handed. Null for every other name.
+    c0mpute: lapsed ? null : (entry?.c0mpute_site ?? null),
     // Carried alongside the target rather than folded into it. A resolver
     // answering AAAA has no use for a feed and ignores these; /n/ is the caller
     // that turns them into a page, and it needs both to decide which it serves.
@@ -2803,7 +2842,7 @@ async function handOverName(tld, label, buyerId) {
   // The target goes too. It names a server the seller runs, and leaving it
   // would point the buyer's new name at the seller's machine.
   await run(
-    `UPDATE moshpit_names SET user_id = ?, target = NULL, feed_url = NULL, feed_kind = NULL,
+    `UPDATE moshpit_names SET user_id = ?, target = NULL, feed_url = NULL, feed_kind = NULL, c0mpute_site = NULL,
        leased_to = NULL, leased_until = NULL WHERE tld = ? AND label = ?`,
     [buyerId, tld, label],
   );
@@ -2833,7 +2872,7 @@ export async function endExpiredLeases(now = Date.now(), limit = 200) {
     await run(`DELETE FROM moshpit_records WHERE tld = ? AND label = ?`, [lease.tld, lease.label]);
     await run(`DELETE FROM moshpit_name_pins WHERE tld = ? AND label = ?`, [lease.tld, lease.label]);
     await run(
-      `UPDATE moshpit_names SET target = NULL, feed_url = NULL, feed_kind = NULL, leased_to = NULL, leased_until = NULL
+      `UPDATE moshpit_names SET target = NULL, feed_url = NULL, feed_kind = NULL, c0mpute_site = NULL, leased_to = NULL, leased_until = NULL
        WHERE tld = ? AND label = ?`,
       [lease.tld, lease.label],
     );

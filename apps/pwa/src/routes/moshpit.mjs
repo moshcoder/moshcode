@@ -23,6 +23,7 @@
 //   DELETE /api/moshpit/tlds/:tld/records     withdraw one
 //   GET    /pit                               the human page
 //   PUT    /api/moshpit/tlds/:tld/names/feed  point a name you hold at an RSS/Atom feed
+//   PUT    /api/moshpit/tlds/:tld/names/c0mpute  point a name you hold at a c0mpute site
 //   GET    /api/moshpit/sites/:name/content   everything a name publishes
 //   POST   /api/moshpit/sites/:name/content   publish a page, section or post (upsert — the webhook)
 //   GET    /api/moshpit/sites/:name/content/:slug   one item
@@ -153,6 +154,7 @@ import {
   setAlias,
   setContact,
   setExempt,
+  setNameC0mpute,
   setNameFeed,
   setNameTarget,
   setTldPrice,
@@ -185,6 +187,7 @@ const page = (opts) => shellPage({ ...opts, tracker: config.crawlproofSite });
 import { shortLinkUrl } from "../lib/moshpit-links.mjs";
 import { caEnabled, caMaterial } from "../lib/moshpit-ca.mjs";
 import { getNameCertificate, issueNameCertificate, listNameCertificates } from "../lib/moshpit-certs.mjs";
+import { c0mputeEdgeHost } from "../lib/moshpit-c0mpute.mjs";
 
 export const moshpitRouter = Router();
 
@@ -501,6 +504,32 @@ moshpitRouter.put("/api/moshpit/tlds/:tld/names/feed", async (req, res) => {
     label: normalizeLabel(req.body?.label),
     feed: result.feed,
     feed_kind: result.kind,
+  });
+});
+
+/**
+ * Point a name at a c0mpute site, or clear it by sending an empty `site`.
+ *
+ * `{ label, site }`, where site is the 20-hex id `c0mpute hosting publish`
+ * prints. Its own endpoint for the reason the feed has one: a deploy script
+ * that only knows about targets must not wipe a site it never sent. The answer
+ * says whether an edge is configured, because without one the site is stored
+ * but nothing serves it yet, and an owner should hear that now rather than
+ * from a visitor.
+ */
+moshpitRouter.put("/api/moshpit/tlds/:tld/names/c0mpute", async (req, res) => {
+  if (!req.user) return unauthorized(res);
+  const result = await setNameC0mpute({
+    tld: req.params.tld, label: req.body?.label, userId: req.user.id, site: req.body?.site,
+  });
+  if (!result.ok) return bad(res, result.error || "could not set that c0mpute site");
+  const edge = c0mputeEdgeHost();
+  res.json({
+    tld: normalizeTld(req.params.tld),
+    label: normalizeLabel(req.body?.label),
+    c0mpute: result.site,
+    edge,
+    served: Boolean(result.site && edge),
   });
 });
 

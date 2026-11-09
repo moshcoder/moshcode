@@ -1,0 +1,13 @@
+-- A name may point at a static site on the c0mpute network.
+--
+-- `c0mpute_site` is the 20-hex site id a c0mpute publisher prints
+-- (`c0mpute hosting publish`). It is a third answer to "where does this name
+-- go", beside `target` (a server you run) and `feed_url` (somewhere you
+-- publish): a site that a peer-to-peer network keeps alive with no server of
+-- yours at all.
+--
+-- A column rather than a record type: a resolver never answers it directly. The
+-- registry turns it into a target at read time (the c0mpute edge that holds a
+-- Moshpit certificate for the name and fetches the site from c0mpute gateways),
+-- so every resolver already deployed keeps working unchanged.
+ALTER TABLE moshpit_names ADD COLUMN c0mpute_site TEXT;
