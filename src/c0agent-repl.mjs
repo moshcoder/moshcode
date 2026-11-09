@@ -136,18 +136,69 @@ function createSpinner(stream = process.stderr) {
   };
 }
 
+/** "anthony@profullstack-dev-vienna:e98c6ec2" -> "profullstack-dev-vienna". */
+export function shortNode(name) {
+  if (!name) return "a node";
+  return String(name).replace(/^[^@\s]+@/, "").replace(/:[0-9a-f]{6,}$/i, "");
+}
+
+const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/**
+ * The spinner label for one c0mpute job status. `job` carries what earlier
+ * statuses said (node, when writing began) so a later one can use it.
+ */
+export function statusLabel(status, job, { promptTokens = 0, agent = null, now = Date.now() } = {}) {
+  const who = agent ? `${agent} · ` : "";
+  const node = shortNode(job.node);
+  switch (status.stage) {
+    case "queued":
+      // The node only reports in with its first token, so this covers its
+      // queue AND it reading the prompt (minutes on a CPU node).
+      return `${who}${node} has the job · waiting for the first token (queue + reading ~${kTokens(promptTokens)} prompt tokens)`;
+    case "started":
+      return `${who}${node} is reading the prompt (~${kTokens(promptTokens)} tokens; a CPU node can take minutes)`;
+    case "writing": {
+      const secs = (now - (job.writingSince ?? now)) / 1000;
+      const rate = secs >= 2 ? ` · ${(status.tokens / secs).toFixed(1)} tok/s` : "";
+      return `${who}${node} writing · ${status.tokens} token${status.tokens === 1 ? "" : "s"}${rate}`;
+    }
+    case "retry":
+      return `${who}${status.model ?? "model"} unavailable (${status.reason}); trying the next model`;
+    default:
+      return null;
+  }
+}
+
 /** The event sink shared by the REPL and print mode. */
 function createRenderer({ out, log, spinner, quiet = false }) {
   let atLineStart = true;
   let wroteText = false;
   const line = (s) => { spinner.stop(); if (!atLineStart) { out("\n"); atLineStart = true; } log(s); };
+  const jobs = new Map(); // agent@depth -> {node, writingSince}
   return {
     reset() { wroteText = false; },
     get wroteText() { return wroteText; },
     finish() { spinner.stop(); if (!atLineStart) { out("\n"); atLineStart = true; } },
     event(e) {
       if (e.type === "waiting") {
-        spinner.start(e.depth ? `${e.agent} working…` : "Waiting for a c0mpute node…");
+        jobs.set(`${e.agent}@${e.depth}`, {});
+        const size = e.promptTokens ? ` (~${kTokens(e.promptTokens)} token prompt)` : "";
+        spinner.start(e.depth ? `${e.agent} · sending to c0mpute…` : `Sending to c0mpute${size}…`);
+        return;
+      }
+      if (e.type === "status") {
+        const key = `${e.agent}@${e.depth}`;
+        const job = jobs.get(key) ?? {};
+        jobs.set(key, job);
+        const s = e.status;
+        if (s.node) job.node = s.node;
+        if (s.stage === "writing" && job.writingSince == null) job.writingSince = Date.now();
+        const label = statusLabel(s, job, { promptTokens: e.promptTokens, agent: e.depth ? e.agent : null });
+        if (!label) return;
+        // Text is mid-line on stdout: a spinner redraw would wipe it.
+        if (!spinner.active && !atLineStart) return;
+        if (spinner.active) spinner.label(label); else spinner.start(label);
         return;
       }
       if (e.type === "thinking" && !e.depth) { spinner.label("Thinking…"); return; }
