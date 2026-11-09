@@ -496,10 +496,12 @@ export const BRIDGE_TOOLS = [
       type: "object",
       properties: {
         from: { type: "string", description: "the engine to read: claude, codex, opencode or privacycode" },
-        to: { type: "string", description: "the engine to hand it to: claude, codex, opencode, privacycode, qwen, gemini or omp" },
+        to: { type: "string", description: "the engine to hand it to: claude, codex, opencode, privacycode, qwen, gemini, omp or c0mpute" },
         session: { type: "string", description: "which source session, by id or a unique prefix; the newest by default" },
         cwd: { type: "string", description: "the directory whose session to read; the current one by default" },
         max: { type: "integer", description: "how many messages to carry, newest kept" },
+        budget: { type: "integer", description: "size in tokens of the brief the target reads first (default 4000)" },
+        verify: { type: "boolean", description: "run the project's own typecheck/lint/test and put the exit codes in the brief" },
       },
       required: ["from", "to"],
     },
@@ -511,6 +513,8 @@ export const BRIDGE_TOOLS = [
       if (args.session) tokens.push("--session", String(args.session));
       if (args.cwd) tokens.push("--cwd", String(args.cwd));
       if (args.max) tokens.push("--max", String(args.max));
+      if (args.budget) tokens.push("--budget", String(args.budget));
+      if (args.verify) tokens.push("--verify");
       const code = await handoffCommand(tokens, {
         write: (line) => out.push(line),
         fail: (line) => errors.push(line),

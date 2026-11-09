@@ -292,6 +292,9 @@ test("routing: the names that mean the c0mpute agent, and CLI flags", () => {
   for (const n of ["c0mpute", "C0mpute", "c0", "compute"]) assert.ok(isC0mputeAgent(n));
   assert.ok(!isC0mputeAgent("claude"));
   assert.deepEqual(parseArgs(["-p", "fix", "it"]).print, "fix");
+  // After `--` everything is prompt, flags included: a handoff brief can say anything.
+  assert.deepEqual(parseArgs(["-C", "/w", "--", "-y is not a flag here", "-p"]).words, ["-y is not a flag here", "-p"]);
+  assert.equal(parseArgs(["-C", "/w", "--", "-y"]).mode, null);
   assert.equal(parseArgs(["-p", "-m", "qwen3:4b"]).model, "qwen3:4b");
   assert.equal(parseArgs(["--dangerously-skip-permissions"]).mode, "yolo");
   assert.deepEqual(parseArgs(["agents", "show", "plan"]).manage, ["show", "plan"]);

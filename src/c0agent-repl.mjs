@@ -52,6 +52,8 @@ export function parseArgs(argv) {
   const opts = { print: null, model: null, agent: null, mode: null, cwd: null, words: [], manage: null, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // Everything after `--` is the prompt, even words that look like flags.
+    if (a === "--") { opts.words.push(...argv.slice(i + 1)); break; }
     if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "-p" || a === "--print") { opts.print = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : ""; }
     else if (a === "-m" || a === "--model") opts.model = argv[++i];
@@ -594,6 +596,17 @@ async function repl({ cfg, opts, write }) {
     const saved = findAgent(agent.name, { cwd: session.cwd });
     log(ok(`${agent.name} saved to ${file}`));
     if (saved) log(ash(`  the lead agent can now delegate to it; or run it yourself: @${saved.name} <task>`));
+  }
+
+  // A prompt given on the command line is the first turn, the way
+  // `claude "<prompt>"` starts: interactive, with that already submitted.
+  // `moshcode handoff <engine> c0mpute` opens the session this way.
+  const initial = opts.words.join(" ").trim();
+  if (initial) {
+    const firstLine = initial.split("\n")[0];
+    log(`${acid(">")} ${firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine}${initial.includes("\n") ? ash(` (+${initial.split("\n").length - 1} lines)`) : ""}`);
+    try { await runTurn(lead, initial); } catch (e) { spinner.stop(); log(err(String(e?.stack || e))); }
+    log("");
   }
 
   // The loop.

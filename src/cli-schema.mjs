@@ -312,21 +312,29 @@ export const CORE_CLI_COMMANDS = [
     flags: [
       ["--session <id>", "which source session, by id or a unique prefix", "the newest for this directory"],
       ["--cwd <dir>", "the directory whose session to read", "."],
-      ["--max <n>", "how many messages to carry, newest kept", "200"],
-      ["--dry-run", "do everything but launch: the transcript, the fleet record, the argv", ""],
-      ["--json", "machine-readable: the transcript path, the argv, the fleet edge", ""],
+      ["--max <n>", "how many messages to carry in the full transcript, newest kept", "200"],
+      ["--budget <tokens>", "size of the brief the next engine reads first", "4000"],
+      ["--verify [auto|none]", "run the project's own typecheck/lint/test (no shell) and put the exit codes in the brief", "none"],
+      ["--verify=<command>", "run this command instead, split on spaces, no shell; repeatable", ""],
+      ["--verify-timeout <s>", "limit per check", "600"],
+      ["--dry-run", "do everything but launch: the brief, the transcript, the fleet record, the argv", ""],
+      ["--json", "machine-readable: the brief and transcript paths, checks, the argv, the fleet edge", ""],
     ],
     examples: [
       ["moshcode handoff claude codex", "continue in Codex what Claude Code was doing here"],
+      ["moshcode handoff claude codex --verify", "the same, with the test results in the brief"],
+      ["moshcode handoff claude c0mpute", "out of Claude credits: keep going on the c0mpute agent"],
       ["moshcode handoff codex omp --session 01a01818", "a particular session, by the start of its id"],
       ["moshcode handoff opencode claude --dry-run", "see what would be carried, and where"],
     ],
     seeAlso: ["cost", "fleet", "agents", "start"],
     note: "reads from claude, codex, opencode and privacycode, the four engines whose session logs hold the conversation and not just "
-      + "token counts. launches claude, codex, opencode, privacycode, qwen, gemini or omp, the engines that take a first prompt and stay "
-      + "interactive. anything else is refused by name with the reason. the conversation and a list of the files that changed travel; "
-      + "the edits do not, because the working tree is already the real state. a transcript that parses to nothing is a refusal, never "
-      + "an empty conversation. the rendered file is ~/.moshcode/handoffs/<id>.json in the format documented at "
+      + "token counts. launches claude, codex, opencode, privacycode, qwen, gemini, omp, or c0mpute (moshcode's own agent on the c0mpute "
+      + "network, whose prompts are read by network peers). anything else is refused by name with the reason. the next engine reads a "
+      + "brief first, ~/.moshcode/handoffs/<id>.md: the goal and recent requests [user], the last report [agent-reported], git state and "
+      + "check exit codes [observed], and next steps [inferred], built without a model inside --budget. secrets are redacted from "
+      + "everything carried, always. the edits do not travel, because the working tree is already the real state. a transcript that "
+      + "parses to nothing is a refusal, never an empty conversation. the full transcript is ~/.moshcode/handoffs/<id>.json in the format documented at "
       + "docs/portable-transcript.md, and each handoff writes an OpenFleet record linking the new session to the old one so "
       + "`moshcode fleet tree` shows the edge.",
   },
