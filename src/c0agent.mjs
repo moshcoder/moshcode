@@ -697,7 +697,8 @@ export async function runAgent({ session, agent = LEAD_AGENT, messages, depth = 
   for (let step = 0; step < limit; step++) {
     if (signal?.aborted) return { text: last, toolUses, error: "interrupted" };
     trimContext(messages);
-    onEvent({ type: "waiting", agent: agent.name, depth });
+    const promptTokens = Math.ceil((system.length + messages.reduce((n, m) => n + String(m.content).length, 0)) / 4);
+    onEvent({ type: "waiting", agent: agent.name, depth, promptTokens });
     const filter = createStreamFilter(
       (t) => onEvent({ type: "text", text: t, agent: agent.name, depth }),
       { onThinking: () => onEvent({ type: "thinking", agent: agent.name, depth }) },
@@ -705,7 +706,17 @@ export async function runAgent({ session, agent = LEAD_AGENT, messages, depth = 
     let res;
     try {
       res = await session.provider.stream(
-        { system, messages: messages.map(({ role, content }) => ({ role, content })), maxTokens: 2048, temperature: 0.2, signal, models: { c0mpute: model } },
+        {
+          system,
+          messages: messages.map(({ role, content }) => ({ role, content })),
+          maxTokens: 2048,
+          temperature: 0.2,
+          signal,
+          models: { c0mpute: model },
+          // Where the job is (queued on a node, reading the prompt, writing):
+          // a CPU node can sit on a long prompt for minutes before token one.
+          onStatus: (status) => onEvent({ type: "status", status, promptTokens, agent: agent.name, depth }),
+        },
         (t) => filter.push(t),
       );
     } catch (e) {
