@@ -57,7 +57,7 @@ or miss one that does. A test fails the build when it drifts.
 | `moshcode export` | account | operator only: export users as CSV (this app, or --all properties), optionally cleaned |
 | `moshcode console` | account | serve or connect to the browser terminal |
 | `moshcode dns` | hosting | resolve Moshpit names on this machine |
-| `moshcode name` | hosting | prove you hold a Moshpit name, so an app can use it as your identity |
+| `moshcode name` | hosting | prove you hold a Moshpit name, or serve it from a c0mpute site |
 | `moshcode doh` | hosting | run the DNS-over-HTTPS resolver |
 | `moshcode site` <br>`serve` | hosting | install web-server config for a Moshpit name |
 | `moshcode template` <br>`templates` | hosting | scaffold a stack for a Moshpit-hosted service |

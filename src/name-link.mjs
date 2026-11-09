@@ -194,8 +194,13 @@ export async function nameCommand(argv, io = {}) {
   const err = io.err || ((s) => console.error(s));
   const { verb, name: raw, app, dir, json } = parseArgs(argv);
 
+  if (verb === "c0mpute") {
+    const { nameC0mputeCommand } = await import("./name-c0mpute.mjs");
+    return nameC0mputeCommand(argv.slice(argv.indexOf("c0mpute") + 1), io);
+  }
   if (verb !== "link") {
     err("usage: moshcode name link <name> [--app <url>] [--dir <path>] [--json]");
+    err("       moshcode name c0mpute <name> <site_id|off> [--json]");
     return 1;
   }
 

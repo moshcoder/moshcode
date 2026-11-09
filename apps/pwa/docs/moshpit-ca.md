@@ -36,6 +36,18 @@ top-level domain are refused unconditionally, whatever the registry's tables
 say, so a registry bug cannot mint `google.com`. Twenty-four issuances per name
 per day, so a broken renewal loop is stopped rather than served.
 
+One exception, opted into by the holder: a name pointed at a c0mpute site
+(`moshcode name c0mpute <name> <site_id>`, or `PUT
+/api/moshpit/tlds/:tld/names/c0mpute`) may also be issued to a c0mpute edge
+account listed in `MOSHPIT_C0MPUTE_EDGE_USERS`. The edge
+(`moshpit-proxy/bin/moshpit-c0mpute-edge.ts`) terminates TLS for the name and
+fetches the site from c0mpute gateways. The permission lasts exactly as long as
+the setting: clear the site, set a target, sell the name or let a lease lapse
+and the edge is refused like anyone else. With `MOSHPIT_C0MPUTE_EDGE` set to
+the edge's hostname, `/api/moshpit/resolve` answers that hostname as the
+name's target (and the site id as `c0mpute`), so existing resolvers need no
+change; with it unset nothing resolves differently.
+
 Every leaf's key is also published as a `tls` pin, so a client that still
 checks pins keeps working through the transition.
 
