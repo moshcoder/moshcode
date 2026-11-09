@@ -4,6 +4,8 @@
 //   >            type a task; the agent streams, tool calls print as ● Read(…)
 //   /agents      list, create (generated or by hand), show, edit, remove subagents
 //   @name task   run one subagent directly
+//   & task       run a task in the background; /tasks shows every task's state
+//                (Needs input · Working · Completed · Failed · Stopped)
 //   shift-tab    cycle permission mode: ask → accept edits → plan → ask
 //   esc / ^C     interrupt the running turn; ^C twice at an empty prompt exits
 //   -p "task"    print mode: run once, answer on stdout, progress on stderr
@@ -20,6 +22,7 @@ import {
 import {
   ALL_TOOLS, READ_ONLY_TOOLS, agentDirs, findAgent, loadAgents, normalizeTool, removeAgent, renderAgentFile, saveAgent, validName,
 } from "./c0agent-defs.mjs";
+import { createTaskBoard, liveSummary, readTasks, renderTasks, tasksFile } from "./c0agent-tasks.mjs";
 import { acid, amber, ash, bone, danger, dim, err, info, ok, warn } from "./ui.mjs";
 
 const MODES = ["ask", "auto-edit", "plan"];
@@ -42,6 +45,8 @@ options:
   --permission-mode <mode>    ask | auto-edit | plan
   -y, --dangerously-skip-permissions   never ask (use in a container)
   agents [list|show|rm] <n>   manage agent definitions without opening a session
+  tasks [clear]               every task and its state: Needs input, Working,
+                              Completed, Failed, Stopped (across sessions)
 
 agents live in ./.moshcode/agents and ~/.moshcode/agents (markdown + frontmatter);
 Claude Code's .claude/agents are picked up too. key: C0MPUTE_API_KEY or /key.`;
@@ -63,6 +68,7 @@ export function parseArgs(argv) {
     else if (a === "-y" || a === "--yes" || a === "--dangerously-skip-permissions") opts.mode = "yolo";
     // `agents …` as the first word (after any flags) manages definitions; later it's prompt text.
     else if (!opts.words.length && opts.print == null && (a === "agents" || a === "agent")) { opts.manage = argv.slice(i + 1); break; }
+    else if (!opts.words.length && opts.print == null && (a === "tasks" || a === "task")) { opts.manage = ["tasks", ...argv.slice(i + 1)]; break; }
     else opts.words.push(a);
   }
   if (opts.print === "" && opts.words.length) opts.print = opts.words.join(" ");
@@ -240,8 +246,20 @@ function createRenderer({ out, log, spinner, quiet = false }) {
 
 // ─── management (no session needed) ──────────────────────────────────────────
 
-export function manageAgents(args, { write = (l) => console.log(l), cwd = process.cwd() } = {}) {
+export function manageAgents(args, { write = (l) => console.log(l), cwd = process.cwd(), file = tasksFile() } = {}) {
   const [verb = "list", name] = args;
+  if (verb === "tasks") {
+    if (name === "clear") {
+      const all = readTasks({ file });
+      const live = all.filter((t) => t.state === "working" || t.state === "needs_input");
+      try { fs.writeFileSync(file, `${JSON.stringify(live, null, 2)}\n`, { mode: 0o600 }); } catch { /* nothing saved yet */ }
+      const n = all.length - live.length;
+      write(ok(`cleared ${n} finished task${n === 1 ? "" : "s"}`));
+      return 0;
+    }
+    renderTasks(readTasks({ file }), write, { showPid: true });
+    return 0;
+  }
   if (verb === "list" || verb === "ls") { renderAgentList(loadAgents({ cwd }), write); return 0; }
   if (verb === "show" || verb === "cat") {
     const a = findAgent(name, { cwd });
@@ -258,7 +276,7 @@ export function manageAgents(args, { write = (l) => console.log(l), cwd = proces
     for (const d of agentDirs({ cwd })) write(`${pad8(d.source)} ${d.dir}${d.writable ? "" : ash("  (read-only)")}`);
     return 0;
   }
-  write(err(`unknown: agents ${verb}. try list, show <name>, rm <name>, dirs — or /agents new inside a session`));
+  write(err(`unknown: agents ${verb}. try list, show <name>, rm <name>, dirs, tasks — or /agents new inside a session`));
   return 1;
 }
 
@@ -308,6 +326,8 @@ function appendHistory(line) {
 const HELP = [
   ["/agents", "list agents · new · show <n> · edit <n> · rm <n> · run <n> <task>"],
   ["@<agent> <task>", "run one subagent directly"],
+  ["& [@agent] <task>", "run a task in the background (also /bg)"],
+  ["/tasks", "every task by state · /tasks <id> · stop <id> · clear"],
   ["/model [name]", "show or switch the model (saved)"],
   ["/models", "models c0mpute serves right now"],
   ["/permissions [mode]", "ask · auto-edit · plan (shift-tab cycles)"],
@@ -373,7 +393,7 @@ async function repl({ cfg, opts, write }) {
     terminal: true,
     completer: (line) => {
       if (shiftTab) { shiftTab = false; return [[], line]; }
-      const words = ["/agents", "/model", "/models", "/permissions", "/todos", "/compact", "/clear", "/cost", "/key", "/cwd", "/exit", "/help",
+      const words = ["/agents", "/tasks", "/bg", "/model", "/models", "/permissions", "/todos", "/compact", "/clear", "/cost", "/key", "/cwd", "/exit", "/help",
         ...loadAgents({ cwd: session.cwd }).map((a) => `@${a.name}`)];
       const last = line.split(/\s+/).pop();
       const hits = words.filter((w) => w.startsWith(last));
@@ -383,24 +403,145 @@ async function repl({ cfg, opts, write }) {
 
   // One question at a time: parallel subagents can each want permission.
   let asking = Promise.resolve();
-  const question = (q) => new Promise((resolve) => rl.question(q, resolve));
+  let questioning = 0;
+  const question = (q) => {
+    questioning += 1;
+    return new Promise((resolve) => rl.question(q, (a) => { questioning -= 1; resolve(a); }));
+  };
+  const promptPermission = async (req) => {
+    spinner.stop();
+    log("");
+    log(`${amber("●")} ${bone(req.agent && req.agent !== "c0mpute" ? `[${req.agent}] ${req.title}` : req.title)}`);
+    for (const l of String(req.preview).split("\n").slice(0, 24)) {
+      log(`  ${l.startsWith("+ ") ? acid(l) : l.startsWith("- ") ? danger(l) : dim(l)}`);
+    }
+    const a = (await question(`  ${bone("Allow?")} ${ash("[y]es · [a]lways for this session · [n]o, or type what to do instead")} `)).trim();
+    if (/^(y|yes)$/i.test(a) || a === "") return "yes";
+    if (/^(a|always)$/i.test(a)) return "always";
+    if (/^(n|no)$/i.test(a)) return "no";
+    return a;
+  };
   const askPermission = (req) => {
-    const p = asking.then(async () => {
-      spinner.stop();
-      log("");
-      log(`${amber("●")} ${bone(req.agent && req.agent !== "c0mpute" ? `[${req.agent}] ${req.title}` : req.title)}`);
-      for (const l of String(req.preview).split("\n").slice(0, 24)) {
-        log(`  ${l.startsWith("+ ") ? acid(l) : l.startsWith("- ") ? danger(l) : dim(l)}`);
-      }
-      const a = (await question(`  ${bone("Allow?")} ${ash("[y]es · [a]lways for this session · [n]o, or type what to do instead")} `)).trim();
-      if (/^(y|yes)$/i.test(a) || a === "") return "yes";
-      if (/^(a|always)$/i.test(a)) return "always";
-      if (/^(n|no)$/i.test(a)) return "no";
-      return a;
+    const p = asking.then(() => {
+      if (current) board.update(current, { state: "needs_input", pending: { req } });
+      return promptPermission(req).finally(() => { if (current) board.update(current, { state: "working", pending: null }); });
     });
     asking = p.catch(() => {});
     return p;
   };
+
+  // ── tasks: every turn is one; `&` runs one in the background ──
+  // Background transitions are announced above the prompt when idle, and
+  // held until the next prompt while a turn streams or a question is open.
+  const notes = [];
+  const flushNotes = () => { while (notes.length) log(notes.shift()); };
+  const announce = (s) => {
+    notes.push(s);
+    if (busy || questioning || !rl) return;
+    process.stdout.write("\r\x1b[2K");
+    flushNotes();
+    prompt();
+  };
+  let current = null; // the foreground task
+  const board = createTaskBoard({
+    onChange: (t, before) => {
+      if (!t.background || before == null) return;
+      const id = ash(`#${t.id}`);
+      if (t.state === "needs_input") announce(`${amber("●")} ${id} needs input: ${t.pending?.req?.title ?? "an answer"} ${ash(`— /tasks ${t.id} to answer`)}`);
+      else if (t.state === "completed") {
+        const first = String(t.result ?? "").trim().split("\n")[0];
+        announce(`${acid("✓")} ${id} completed${first ? `: ${dim(first.length > 90 ? `${first.slice(0, 89)}…` : first)}` : ""} ${ash(`— /tasks ${t.id}`)}`);
+      } else if (t.state === "failed") announce(`${danger("✗")} ${id} failed: ${t.error} ${ash(`— /tasks ${t.id}`)}`);
+      else if (t.state === "stopped") announce(`${ash("■")} ${id} stopped`);
+    },
+  });
+  const trackEvent = (t, e, jobs) => {
+    if (e.type === "waiting") board.update(t, { activity: e.depth ? `${e.agent} · sending to c0mpute` : "sending to c0mpute" });
+    else if (e.type === "status") {
+      const key = `${e.agent}@${e.depth}`;
+      const job = jobs.get(key) ?? {};
+      jobs.set(key, job);
+      if (e.status.node) job.node = e.status.node;
+      if (e.status.stage === "writing" && job.writingSince == null) job.writingSince = Date.now();
+      const label = statusLabel(e.status, job, { promptTokens: e.promptTokens, agent: e.depth ? e.agent : null });
+      if (label) board.update(t, { activity: label });
+    } else if (e.type === "tool_start") {
+      const title = e.depth ? `[${e.agent}] ${e.title}` : e.title;
+      board.note(t, `● ${title}`);
+      board.update(t, { activity: title });
+    } else if (e.type === "tool_end" && !e.result.ok) {
+      board.note(t, `  ⎿ ${String(e.result.output ?? "").split("\n")[0].slice(0, 200)}`);
+    } else if (e.type === "error") board.note(t, `  ⎿ ${e.error}`);
+  };
+  const finishTask = (t, res) => {
+    if (res?.error === "interrupted") board.update(t, { state: "stopped", activity: "interrupted", result: res.text || null });
+    else if (res?.error && res.error !== "step limit") board.update(t, { state: "failed", error: res.error, result: res.text || null });
+    else board.update(t, { state: "completed", activity: "done", result: res?.text ?? "" });
+  };
+  const liveBackground = () => board.tasks.filter((t) => t.background && (t.state === "working" || t.state === "needs_input"));
+
+  function runBackground(agent, content) {
+    const t = board.add({ title: content, agent: agent.name, background: true, cwd: session.cwd });
+    const controller = new AbortController();
+    t.controller = controller;
+    // Its own view of the session: launch cwd, own todos, and permission
+    // prompts that park the task as Needs input instead of grabbing the prompt.
+    // Usage, the always-allow list and the live permission mode stay shared.
+    const sub = Object.create(session);
+    sub.cwd = session.cwd;
+    sub.todos = [];
+    sub.ask = (req) => new Promise((resolve) => board.update(t, { state: "needs_input", pending: { req, resolve } }));
+    const jobs = new Map();
+    const asLead = agent === lead;
+    runAgent({ session: sub, agent, messages: [{ role: "user", content }], depth: asLead ? 0 : 1, signal: controller.signal, onEvent: (e) => trackEvent(t, e, jobs) })
+      .then((res) => finishTask(t, res), (e) => board.update(t, { state: "failed", error: String(e?.message || e) }));
+    log(`${acid("◐")} ${ash(`#${t.id}`)} running in the background${asLead ? "" : ` as @${agent.name}`} ${ash("— /tasks to watch it")}`);
+    return t;
+  }
+
+  function stopTask(t) {
+    if (t.state !== "working" && t.state !== "needs_input") return false;
+    t.controller?.abort();
+    if (t.pending?.resolve) { t.pending.resolve("no"); }
+    return true;
+  }
+
+  async function tasksCommand(args) {
+    const [verb, ...rest] = args;
+    if (!verb || verb === "list" || verb === "ls") {
+      const others = readTasks().filter((x) => x.pid !== process.pid);
+      renderTasks([...board.tasks, ...others], log, { showPid: true });
+      return;
+    }
+    if (verb === "clear") { const n = board.clearFinished(); log(ok(`cleared ${n} finished task${n === 1 ? "" : "s"}`)); return; }
+    if (verb === "stop" || verb === "kill" || verb === "cancel") {
+      const t = board.find(rest[0]);
+      if (!t) { log(err(`no task #${rest[0] ?? ""} in this session — /tasks`)); return; }
+      if (t === current) { log(ash("  that's the turn in front of you: esc stops it")); return; }
+      log(stopTask(t) ? ok(`stopping #${t.id}`) : ash(`  #${t.id} is already ${t.state}`));
+      return;
+    }
+    const t = board.find(verb);
+    if (!t) {
+      const other = readTasks().find((x) => x.id === verb.replace(/^#/, ""));
+      if (other) { log(ash(`  #${other.id} belongs to another session (pid ${other.pid}): ${other.state} · ${other.title}`)); return; }
+      log(err(`no task #${verb} — /tasks lists them`));
+      return;
+    }
+    const icon = { needs_input: amber("●"), working: acid("◐"), completed: acid("✓"), failed: danger("✗"), stopped: ash("■") }[t.state];
+    log(`${icon} ${ash(`#${t.id}`)} ${bone(t.title)}`);
+    log(`  ${ash("state")} ${t.state.replace("_", " ")}   ${ash("agent")} ${t.agent}   ${ash("cwd")} ${t.cwd}`);
+    for (const l of t.log.slice(-15)) log(`  ${dim(l)}`);
+    if (t.state === "working") log(`  ${ash("⎿")}  ${dim(t.activity)}`);
+    if (t.error) log(`  ${danger(t.error)}`);
+    if (t.result) { log(`${acid("●")} ${bone("result")}`); log(t.result); }
+    if (t.state === "needs_input" && t.pending?.resolve) {
+      const { req, resolve } = t.pending;
+      const answer = await promptPermission(req);
+      board.update(t, { state: "working", pending: null, activity: `answered: ${answer}` });
+      resolve(answer);
+    }
+  }
 
   const session = createSession({ provider, model: cfg.model, cwd: opts.cwd || process.cwd(), permissionMode: opts.mode || cfg.permissionMode || "ask", ask: askPermission });
   const lead = opts.agent ? findAgent(opts.agent, { cwd: session.cwd }) : LEAD_AGENT;
@@ -408,8 +549,10 @@ async function repl({ cfg, opts, write }) {
   let messages = [];
 
   const prompt = () => {
+    flushNotes();
     const mode = session.permissionMode === "ask" ? "" : `${amber(`⏵⏵ ${MODE_LABEL[session.permissionMode]}`)} `;
-    rl.setPrompt(`${mode}${acid(">")} `);
+    const live = liveSummary(board.tasks);
+    rl.setPrompt(`${live ? `${ash("[")}${live}${ash("]")} ` : ""}${mode}${acid(">")} `);
     rl.prompt(true);
   };
   let lastInt = 0;
@@ -436,20 +579,29 @@ async function repl({ cfg, opts, write }) {
     busy = new AbortController();
     renderer.reset();
     const started = Date.now();
+    const task = board.add({ title: content, agent: agent.name, background: false, cwd: session.cwd });
+    current = task;
+    const jobs = new Map();
+    const onEvent = (e) => { trackEvent(task, e, jobs); renderer.event(e); };
     let res;
     try {
       if (asSub) {
-        res = await runAgent({ session, agent, messages: [{ role: "user", content }], depth: 1, signal: busy.signal, onEvent: (e) => renderer.event(e) });
+        res = await runAgent({ session, agent, messages: [{ role: "user", content }], depth: 1, signal: busy.signal, onEvent });
         renderer.finish();
         if (res.text) { log(`${acid("●")} ${bone(`[${agent.name}]`)}`); log(res.text); }
       } else {
         messages.push({ role: "user", content });
-        res = await runAgent({ session, agent, messages, signal: busy.signal, onEvent: (e) => renderer.event(e) });
+        res = await runAgent({ session, agent, messages, signal: busy.signal, onEvent });
         renderer.finish();
       }
+    } catch (e) {
+      res = { error: String(e?.message || e) };
+      throw e;
     } finally {
       busy = null;
+      current = null;
       spinner.stop();
+      finishTask(task, res);
     }
     if (res?.error === "interrupted") log(amber("  ⎿ interrupted · what should c0mpute do instead?"));
     else if (res?.error && res.error !== "step limit") log(err(res.error));
@@ -503,11 +655,30 @@ async function repl({ cfg, opts, write }) {
       finally { busy = null; }
     },
     agents: (args) => agentsCommand(args),
+    tasks: (args) => tasksCommand(args),
+    bg: (args) => background(args.join(" ")),
   };
+
+  function background(text) {
+    const m = text.trim().match(/^@([a-z0-9-]+)\s*([\s\S]*)$/i);
+    const agent = m ? findAgent(m[1], { cwd: session.cwd }) : lead;
+    const task = (m ? m[2] : text).trim();
+    if (!agent) { log(err(`no agent named "${m[1]}" — /agents to list them`)); return; }
+    if (!task) { log(err("usage: & [@agent] <task>")); return; }
+    runBackground(agent, task);
+  }
 
   async function agentsCommand(args) {
     const [verb, ...rest] = args;
-    if (!verb || verb === "list") { renderAgentList(loadAgents({ cwd: session.cwd }), log); return; }
+    if (!verb || verb === "list") {
+      // Like Claude Code's agents view: what's running and what needs you first.
+      log(bone("Tasks"));
+      renderTasks([...board.tasks, ...readTasks().filter((x) => x.pid !== process.pid)], (l) => log(`  ${l}`), { showPid: true });
+      log("");
+      renderAgentList(loadAgents({ cwd: session.cwd }), log);
+      return;
+    }
+    if (verb === "tasks") { await tasksCommand(rest); return; }
     if (verb === "show" || verb === "rm" || verb === "dirs" || verb === "remove") {
       if (verb === "rm" || verb === "remove") {
         const a = findAgent(rest[0], { cwd: session.cwd });
@@ -610,6 +781,7 @@ async function repl({ cfg, opts, write }) {
   }
 
   // The loop.
+  let exitWarned = false;
   prompt();
   for await (const raw of rl) {
     const line = raw.trim();
@@ -618,10 +790,23 @@ async function repl({ cfg, opts, write }) {
     try {
       if (line.startsWith("/")) {
         const [c, ...args] = line.slice(1).split(/\s+/);
-        if (c === "exit" || c === "quit" || c === "q") break;
+        if (c === "exit" || c === "quit" || c === "q") {
+          const live = liveBackground();
+          if (live.length && !exitWarned) {
+            exitWarned = true;
+            log(warn(`${live.length} background task${live.length === 1 ? " is" : "s are"} still running — /exit again to stop ${live.length === 1 ? "it" : "them"}`));
+            log("");
+            prompt();
+            continue;
+          }
+          break;
+        }
+        exitWarned = false;
         const fn = commands[c.toLowerCase()];
         if (fn) await fn(args);
         else log(err(`unknown command /${c} — /help`));
+      } else if (line.startsWith("&")) {
+        background(line.slice(1));
       } else if (line.startsWith("@")) {
         const m = line.match(/^@([a-z0-9-]+)\s*([\s\S]*)$/i);
         const a = m && findAgent(m[1], { cwd: session.cwd });
@@ -639,6 +824,7 @@ async function repl({ cfg, opts, write }) {
     prompt();
   }
   spinner.stop();
+  for (const t of liveBackground()) { stopTask(t); board.update(t, { state: "stopped", activity: "session ended" }); }
   process.stdin.off("keypress", onKey);
   rl.close();
   log(ash("bye 🤘"));
