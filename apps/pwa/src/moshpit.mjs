@@ -1042,6 +1042,10 @@ export async function recordsForName(input) {
     label: parsed.label,
     name_registered: resolution.name_registered,
     target: resolution.target,
+    // The c0mpute site the name points at, or null. Records alone cannot say
+    // this: a c0mpute name usually publishes nothing, and without it the zone
+    // reads as empty when the name is in fact served by the c0mpute edge.
+    c0mpute: resolution.c0mpute ?? null,
     records: await listRecords(parsed.tld, parsed.label),
   };
 }
@@ -1156,7 +1160,7 @@ export async function listRecordNames(userId, { like = null, exact = "", limit =
     : `n.user_id = ?`;
   const params = like ? [userId, like] : [userId];
   return all(
-    `SELECT n.tld, n.label, n.target,
+    `SELECT n.tld, n.label, n.target, n.c0mpute_site,
             (SELECT COUNT(*) FROM moshpit_records r WHERE r.tld = n.tld AND r.label = n.label) AS record_count
      FROM moshpit_names n
      WHERE ${where}
