@@ -251,3 +251,108 @@ test("records: resolve stays cheap unless the caller asks for the set", skip, as
   const full = await json("/api/moshpit/resolve?name=name00.eggs&records=1");
   assert.deepEqual(full.body.records, [{ type: "AAAA", value: V6, ttl: 300 }]);
 });
+
+/* ---- the c0mpute site on a name ---- */
+
+const SITE = "53021d6e8d5a0e1aac48";
+const EDGE = "edge.example.net";
+
+/** Run `fn` with a c0mpute edge configured (or none), restoring whatever was there. */
+async function withEdge(fn, edge = EDGE) {
+  const saved = process.env.MOSHPIT_C0MPUTE_EDGE;
+  if (edge) process.env.MOSHPIT_C0MPUTE_EDGE = edge;
+  else delete process.env.MOSHPIT_C0MPUTE_EDGE;
+  try { return await fn(); } finally {
+    if (saved === undefined) delete process.env.MOSHPIT_C0MPUTE_EDGE;
+    else process.env.MOSHPIT_C0MPUTE_EDGE = saved;
+  }
+}
+
+test("records: every name offers a c0mpute site field", skip, async () => {
+  const { get } = await app();
+  const html = panel((await get("/pit/records?q=name10.eggs")).html);
+  assert.match(html, /action="\/pit\/records\/c0mpute"/);
+  assert.match(html, /name="site"/);
+  assert.doesNotMatch(html, /Clear c0mpute site/, "nothing to clear on a name with no site");
+});
+
+test("records: saving a c0mpute site shows it, links the gateway and repoints the name", skip, async () => {
+  await withEdge(async () => {
+    const { get, post, json } = await app();
+
+    const saved = await post("/pit/records/c0mpute", { name: "name11.eggs", site: ` ${SITE.toUpperCase()} `, q: "name11.eggs" });
+    assert.equal(saved.status, 302);
+    const back = params(saved.location);
+    assert.match(back.get("ok") ?? "", /name11\.eggs .*53021d6e8d5a0e1aac48 by edge\.example\.net/);
+    assert.equal(back.get("q"), "name11.eggs", "the filter was dropped on the way back");
+
+    const html = panel((await get("/pit/records?q=name11.eggs")).html);
+    assert.match(html, /c0mpute site: <a[^>]*href="https:\/\/gateway\.c0mpute\.com\/s\/53021d6e8d5a0e1aac48\/"/);
+    assert.match(html, /served by <span class="mono">edge\.example\.net<\/span>/);
+    assert.match(html, /resolves to <span class="acid">edge\.example\.net<\/span>/, "the card shows the stored target, not where it goes");
+    assert.match(html, /Clear c0mpute site/);
+    assert.match(html, /A, AAAA or CNAME records/, "the page does not say what records do in this mode");
+
+    // The same thing the CLI and resolvers see.
+    const resolved = await json("/api/moshpit/resolve?name=name11.eggs");
+    assert.equal(resolved.body.c0mpute, SITE);
+    assert.equal(resolved.body.target, EDGE);
+
+    // And the records API carries it, so an empty zone is not read as parked.
+    const records = await json("/api/moshpit/records?name=name11.eggs");
+    assert.equal(records.body.c0mpute, SITE);
+    assert.equal(records.body.edge, EDGE);
+    assert.deepEqual(records.body.records, []);
+  });
+});
+
+test("records: without an edge the site is stored and the page says nothing serves it", skip, async () => {
+  await withEdge(async () => {
+    const { get, post, json } = await app();
+    const saved = await post("/pit/records/c0mpute", { name: "name12.eggs", site: SITE });
+    assert.match(params(saved.location).get("ok") ?? "", /No c0mpute edge is configured/);
+    const html = panel((await get("/pit/records?q=name12.eggs")).html);
+    assert.match(html, /nothing serves it yet/);
+    const records = await json("/api/moshpit/records?name=name12.eggs");
+    assert.equal(records.body.c0mpute, SITE);
+    assert.equal(records.body.edge, null);
+  }, null);
+});
+
+test("records: a c0mpute site beside an address record is called out", skip, async () => {
+  await withEdge(async () => {
+    const { get, post } = await app();
+    await post("/pit/records", { name: "name13.eggs", type: "AAAA", value: V6 });
+    await post("/pit/records/c0mpute", { name: "name13.eggs", site: SITE });
+    const html = panel((await get("/pit/records?q=name13.eggs")).html);
+    assert.match(html, /also publishes AAAA/);
+  });
+});
+
+test("records: clearing the c0mpute site takes it off", skip, async () => {
+  await withEdge(async () => {
+    const { get, post, json } = await app();
+    await post("/pit/records/c0mpute", { name: "name14.eggs", site: SITE });
+    const cleared = await post("/pit/records/c0mpute", { name: "name14.eggs", site: "" });
+    assert.match(params(cleared.location).get("ok") ?? "", /no longer points at a c0mpute site/);
+
+    const html = panel((await get("/pit/records?q=name14.eggs")).html);
+    assert.doesNotMatch(html, /Clear c0mpute site/);
+    assert.match(html, /nothing published · parked/, "a cleared name with no target is parked again");
+    const records = await json("/api/moshpit/records?name=name14.eggs");
+    assert.equal(records.body.c0mpute, null);
+    assert.equal(records.body.edge, null);
+  });
+});
+
+test("records: a bad site id is refused, and nobody else's name can be pointed", skip, async () => {
+  const { post, json } = await app();
+
+  const bad = await post("/pit/records/c0mpute", { name: "name15.eggs", site: "not-a-site" });
+  assert.match(params(bad.location).get("err") ?? "", /20 hex/);
+  assert.equal((await json("/api/moshpit/resolve?name=name15.eggs")).body.c0mpute, null);
+
+  const theirs = await post("/pit/records/c0mpute", { name: "secret.theirs", site: SITE });
+  assert.match(params(theirs.location).get("err") ?? "", /do not own/);
+  assert.equal((await json("/api/moshpit/resolve?name=secret.theirs")).body.c0mpute, null);
+});

@@ -187,7 +187,7 @@ const page = (opts) => shellPage({ ...opts, tracker: config.crawlproofSite });
 import { shortLinkUrl } from "../lib/moshpit-links.mjs";
 import { caEnabled, caMaterial } from "../lib/moshpit-ca.mjs";
 import { getNameCertificate, issueNameCertificate, listNameCertificates } from "../lib/moshpit-certs.mjs";
-import { c0mputeEdgeHost } from "../lib/moshpit-c0mpute.mjs";
+import { c0mputeEdgeHost, effectiveC0mputeTarget } from "../lib/moshpit-c0mpute.mjs";
 
 export const moshpitRouter = Router();
 
@@ -880,6 +880,13 @@ moshpitRouter.get("/api/moshpit/records", async (req, res) => {
     resolved: found.resolved,
     name_registered: found.name_registered,
     target: found.target,
+    // A name pointed at a c0mpute site usually publishes no records at all, and
+    // an empty list read alone says "parked" when the name is in fact served.
+    // `c0mpute` is the site id (null for every other name); `edge` is the host
+    // that serves it, null while no edge is configured and the site is only
+    // stored.
+    c0mpute: found.c0mpute,
+    edge: found.c0mpute ? c0mputeEdgeHost() : null,
     records: found.records.map((r) => ({
       type: r.type, value: r.value, ttl: r.ttl, ...(r.priority === null ? {} : { priority: r.priority }),
     })),
@@ -2925,7 +2932,10 @@ const PIT_CSS = `
 .pit-btn-x{background:transparent;border:1px solid var(--line-2);border-radius:6px;color:var(--dim);
   font-family:var(--mono);font-size:.7rem;padding:5px 9px;cursor:pointer}
 .pit-btn-x:hover{border-color:var(--danger);color:var(--danger)}
-.pit-empty{font-family:var(--mono);font-size:.74rem;color:var(--faint);margin:10px 0 0}`;
+.pit-empty{font-family:var(--mono);font-size:.74rem;color:var(--faint);margin:10px 0 0}
+.pit-c0{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+.pit-c0 .pit-rec-add{margin-top:8px;padding-top:0;border-top:0}
+.pit-c0-on{font-family:var(--mono);font-size:.82rem;margin:0;word-break:break-all}`;
 
 /**
  * The tab strip: the endings you hold, the ones you can buy from, and how to
@@ -3547,8 +3557,72 @@ const addRecordRow = (req, name, ctx, { type = "AAAA", value = "", ttl = "", pri
  * is nothing published yet — so hiding it behind "names with records" would
  * leave the page blank for exactly the person who came to fill it.
  */
+/**
+ * The c0mpute half of a name's card: which c0mpute site serves it, and the
+ * form that sets or clears it.
+ *
+ * One field, the site id. The copies of the site live on c0mpute hosting nodes
+ * (d1sks), but which nodes is c0mpute's business, not the name's: any c0mpute
+ * gateway serves any site, so the id is all the registry needs.
+ *
+ * Writes through setNameC0mpute, the function behind
+ * PUT /api/moshpit/tlds/:tld/names/c0mpute and `moshcode name c0mpute`, so the
+ * page cannot drift from the CLI.
+ */
+const C0MPUTE_GATEWAY = "https://gateway.c0mpute.com";
+
+const c0mputeBlock = (req, label, site, records, ctx) => {
+  const edge = c0mputeEdgeHost();
+  // What the bridge and the DoH server actually do (src/dns.mjs addressAnswer):
+  // an address question is answered from published A/AAAA records first, then a
+  // CNAME, and only then by following the target, which is where the edge is.
+  // So these records shadow the c0mpute site for every Moshpit resolver.
+  const shadowing = records.filter((r) => r.type === "A" || r.type === "AAAA" || r.type === "CNAME");
+  const action = `<input type="hidden" name="name" value="${esc(label)}">${csrfInput(req)}${whereYouWere(ctx)}`;
+  const status = site
+    ? `<p class="pit-c0-on">c0mpute site: <a class="acid mono" href="${C0MPUTE_GATEWAY}/s/${esc(site)}/"
+         rel="noopener" target="_blank">${esc(site)}</a> ${
+        edge ? `<span class="dim">(served by <span class="mono">${esc(edge)}</span>)</span>`
+          : `<span class="dim">(stored; no c0mpute edge is configured, so nothing serves it yet)</span>`}</p>
+       <p class="pit-hint">While a c0mpute site is set, the name resolves to
+         ${edge ? `<span class="mono">${esc(edge)}</span>` : "the c0mpute edge"}, which holds a Moshpit
+         certificate for it and fetches the site from healthy c0mpute gateways. Moshpit resolvers still
+         answer an address question from A, AAAA or CNAME records published here before they follow the
+         edge, so remove those or visitors reach them instead of the site. MX and TXT records keep working.
+         Setting a target with <span class="mono">moshcode name point</span> clears the site.</p>${
+        shadowing.length && edge ? `
+       <p class="pit-msg err" style="margin:8px 0 0">This name also publishes ${
+          [...new Set(shadowing.map((r) => r.type))].join(", ")}: Moshpit resolvers answer with
+         ${shadowing.length === 1 ? "that record" : "those records"}, not the c0mpute edge.</p>` : ""}`
+    : `<p class="pit-hint">Serve this name from a static site on c0mpute: paste the 20-character site id
+         <span class="mono">c0mpute hosting publish</span> printed. The name then resolves to the c0mpute
+         edge instead of its stored target.</p>`;
+  return `
+  <div class="pit-c0" data-c0mpute>
+    ${status}
+    <form method="post" action="/pit/records/c0mpute" class="pit-rec-add">
+      ${action}
+      <input class="value" name="site" value="" autocomplete="off" spellcheck="false" required
+             pattern="\\s*(?:site=)?[0-9a-fA-F]{20}\\s*|.*/s/[0-9a-fA-F]{20}/?\\s*"
+             placeholder="${site ? "another c0mpute site id" : "c0mpute site id, e.g. 53021d6e8d5a0e1aac48"}"
+             aria-label="c0mpute site id" title="20 hex characters, as printed by c0mpute hosting publish">
+      <button class="btn acid" type="submit">${site ? "Change" : "Save"}</button>
+    </form>${site ? `
+    <form method="post" action="/pit/records/c0mpute" style="margin-top:6px">
+      ${action}
+      <input type="hidden" name="site" value="">
+      <button class="pit-btn-x" type="submit" aria-label="Stop serving ${esc(label)} from c0mpute">Clear c0mpute site</button>
+    </form>` : ""}
+  </div>`;
+};
+
 const recordCard = (req, name, records, target, ctx) => {
   const label = `${name.label}.${name.tld}`;
+  const site = name.c0mpute_site || null;
+  // What resolvers are told, not the stored column: a c0mpute site wins over a
+  // stored target while an edge is configured, and the card should say where
+  // the name actually goes.
+  target = effectiveC0mputeTarget({ target, site });
   const rows = records.map((r) => `
     <tr>
       <td class="rtype">${r.type}</td>
@@ -3568,7 +3642,7 @@ const recordCard = (req, name, records, target, ctx) => {
     </tr>`).join("");
 
   return `
-<div class="pit-rec${records.length ? "" : " empty"}">
+<div class="pit-rec${records.length || site ? "" : " empty"}">
   <div class="pit-rec-head">
     <h3 class="acid">${esc(label)}</h3>
     <span class="mono faint" style="font-size:.7rem">${
@@ -3586,8 +3660,11 @@ const recordCard = (req, name, records, target, ctx) => {
     <summary>as a zone file</summary>
     <div class="pit-pre">${esc(records.map((r) => zoneLine(label, r)).join("\n"))}</div>
   </details>` : `
-  <p class="pit-empty">No records yet — an AAAA pointing at the box that serves it is the usual first one.</p>`}
+  <p class="pit-empty">No records yet — ${site
+    ? "none needed, the c0mpute site below serves this name."
+    : "an AAAA pointing at the box that serves it is the usual first one."}</p>`}
   ${addRecordRow(req, label, ctx)}
+  ${c0mputeBlock(req, label, site, records, ctx)}
 </div>`;
 };
 
@@ -3758,6 +3835,11 @@ curl -X POST ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
 # read them back — no key needed, DNS is public
 curl ${esc(config.pitOrigin)}/api/moshpit/records?name=blue.eggs
 
+# serve the name from a c0mpute site ("site":"" clears it)
+curl -X PUT ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/names/c0mpute \\
+  -H "authorization: Bearer $MOSH_KEY" -H 'content-type: application/json' \\
+  -d '{"label":"blue","site":"53021d6e8d5a0e1aac48"}'
+
 # withdraw one
 curl -X DELETE ${esc(config.pitOrigin)}/api/moshpit/tlds/eggs/records \\
   -H "authorization: Bearer $MOSH_KEY" -H 'content-type: application/json' \\
@@ -3792,6 +3874,30 @@ moshpitRouter.post("/pit/records", requireAuth, async (req, res) => {
   backToRecords(req, res, {
     ok: `${parsed.label}.${parsed.tld} now publishes ${record.type} ${record.value}${
       record.priority === null || record.priority === undefined ? "" : ` (priority ${record.priority})`}.`,
+  });
+});
+
+/**
+ * Set or clear the c0mpute site on a name, from the records tab.
+ *
+ * The same write as PUT /api/moshpit/tlds/:tld/names/c0mpute (setNameC0mpute),
+ * behind a form so an owner does not need the CLI for it. An empty `site`
+ * clears it.
+ */
+moshpitRouter.post("/pit/records/c0mpute", requireAuth, async (req, res) => {
+  const parsed = parseMoshpitName(req.body?.name);
+  if (!parsed) return backToRecords(req, res, { err: "which name? that is not one." });
+  const name = `${parsed.label}.${parsed.tld}`;
+  const raw = String(req.body?.site ?? "").trim();
+
+  const result = await setNameC0mpute({ tld: parsed.tld, label: parsed.label, userId: req.user.id, site: raw });
+  if (!result.ok) return backToRecords(req, res, { err: result.error || "could not set that c0mpute site" });
+  if (!result.site) return backToRecords(req, res, { ok: `${name} no longer points at a c0mpute site.` });
+  const edge = c0mputeEdgeHost();
+  backToRecords(req, res, {
+    ok: edge
+      ? `${name} is now served from c0mpute site ${result.site} by ${edge}.`
+      : `${name} points at c0mpute site ${result.site}. No c0mpute edge is configured yet, so nothing serves it until one is.`,
   });
 });
 
