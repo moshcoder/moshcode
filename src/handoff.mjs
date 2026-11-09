@@ -44,6 +44,11 @@ import path from "node:path";
 import { ENGINES, openSession, resolveEngine } from "./engines.mjs";
 import { UNREADABLE, isReadable, listSessions, readSession } from "./transcript.mjs";
 import * as openfleet from "./openfleet.mjs";
+import { isC0mputeAgent } from "./c0agent-defs.mjs";
+import { redact, addHits, countHits } from "./redact.mjs";
+import {
+  DEFAULT_BUDGET, DEFAULT_VERIFY_TIMEOUT_MS, buildBrief, checksFor, collectEvidence, estimateTokens, runChecks, verdict,
+} from "./handoff-brief.mjs";
 
 /**
  * The format version, as it appears in every file this writes.
@@ -52,7 +57,7 @@ import * as openfleet from "./openfleet.mjs";
  * because a reader is allowed to refuse a major it does not know, which is the
  * only way a twelfth engine can join without reading this source file.
  */
-export const PORTABLE_TRANSCRIPT_VERSION = "0.1";
+export const PORTABLE_TRANSCRIPT_VERSION = "0.2";
 
 /** How many messages a handoff carries by default, newest kept. */
 export const DEFAULT_MAX_MESSAGES = 200;
@@ -87,6 +92,12 @@ export const SEEDS = {
   // `omp [MESSAGES]`, verified on 18.x. A message prefixed with `@` would be
   // read as a file, and the seed never starts with one.
   omp: { argv: (text) => [text] },
+  // moshcode's own coding agent on the c0mpute network (`moshcode agents
+  // c0mpute`). Not an ENGINES entry because there is no binary: it runs in
+  // this process, so there is no argv limit and the brief goes in whole rather
+  // than as a pointer, which saves a 9B model a read-tool round trip that costs
+  // a minute on a CPU node. Its prompts are read by network peers.
+  c0mpute: { argv: (text) => [text], inProcess: true },
 
   // The refusals. Every one of these engines does take a prompt, and every one
   // of them takes it HEADLESSLY: `kimi -p`, `mimo run`, `aider --message`, the
@@ -107,7 +118,10 @@ export const SEEDS = {
 export const sources = () => Object.keys(ENGINES).filter((key) => isReadable(key));
 
 /** Engines a handoff can launch. */
-export const targets = () => Object.keys(ENGINES).filter((key) => SEEDS[key]?.argv);
+export const targets = () => [...Object.keys(ENGINES).filter((key) => SEEDS[key]?.argv), "c0mpute"];
+
+/** What a c0mpute handoff launches: moshcode itself. */
+const C0MPUTE_TARGET = { name: "c0mpute", bin: "moshcode agents c0mpute" };
 
 const iso = (ms) => (ms == null ? null : new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z"));
 
@@ -140,6 +154,14 @@ export function handoffId(from, to, now = Date.now()) {
 export function buildTranscript(session, { max = DEFAULT_MAX_MESSAGES, to, now = Date.now(), version = "" } = {}) {
   const all = session.messages || [];
   const kept = max > 0 && all.length > max ? all.slice(-max) : all;
+  // Every carried word goes through redaction, with no flag to skip it: this
+  // file is read by another engine, and with c0mpute by other people's nodes.
+  const hits = {};
+  const messages = kept.map((m) => {
+    const clean = redact(m.text);
+    addHits(hits, clean.hits);
+    return { role: m.role, at: iso(m.at), text: clean.text };
+  });
   return {
     portable_transcript: PORTABLE_TRANSCRIPT_VERSION,
     generated: {
@@ -156,8 +178,9 @@ export function buildTranscript(session, { max = DEFAULT_MAX_MESSAGES, to, now =
       messages: all.length,
       dropped: all.length - kept.length,
     },
-    messages: kept.map((m) => ({ role: m.role, at: iso(m.at), text: m.text })),
+    messages,
     changes: (session.changes || []).map((file) => ({ path: file, action: "written" })),
+    redactions: { total: countHits(hits), kinds: hits },
   };
 }
 
@@ -169,12 +192,20 @@ export function buildTranscript(session, { max = DEFAULT_MAX_MESSAGES, to, now =
  * has already happened on disk, so the tree is the truth and the transcript is
  * the account of how it got that way.
  */
-export function seedPrompt(doc, file) {
+export function seedPrompt(doc, file, brief = null) {
   const s = doc.source;
   const lines = [
     `You are continuing a conversation that was running in ${s.engine}.`,
-    `Read ${file} first. It is a moshcode portable transcript, version ${doc.portable_transcript}.`,
-    `It holds ${doc.messages.length} messages${s.dropped ? ` (the newest of ${s.messages})` : ""} and a list of the files that were changed.`,
+    ...(brief
+      ? [
+        `Read ${brief} first: a short handoff brief whose facts are tagged [user], [agent-reported], [observed] or [inferred].`,
+        `Open ${file} only if the brief is not enough. It is a moshcode portable transcript, version ${doc.portable_transcript},`,
+        `holding ${doc.messages.length} messages${s.dropped ? ` (the newest of ${s.messages})` : ""}.`,
+      ]
+      : [
+        `Read ${file} first. It is a moshcode portable transcript, version ${doc.portable_transcript}.`,
+        `It holds ${doc.messages.length} messages${s.dropped ? ` (the newest of ${s.messages})` : ""} and a list of the files that were changed.`,
+      ]),
     "The files were already written. The working tree is the real state, so read it before you edit anything.",
     "Pick up where the transcript stops.",
   ];
@@ -190,6 +221,16 @@ export function writeTranscript(doc, id, { env = process.env } = {}) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, `${id}.json`);
   fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+  return file;
+}
+
+/** Write the brief beside the transcript, 0600 for the same reason. */
+export function writeBrief(text, id, { env = process.env } = {}) {
+  const dir = handoffDir(env);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `${id}.md`);
+  fs.writeFileSync(file, text, { mode: 0o600 });
   fs.chmodSync(file, 0o600);
   return file;
 }
@@ -260,16 +301,36 @@ export function recordHandoff({ from, to, id, session, transcript, cwd, messages
 
 /** `--flag value` and bare flags, with an error rather than a silent default. */
 export function parseHandoff(tokens = []) {
-  const out = { from: null, to: null, session: null, cwd: null, max: DEFAULT_MAX_MESSAGES, dryRun: false, json: false };
+  const out = {
+    from: null, to: null, session: null, cwd: null, max: DEFAULT_MAX_MESSAGES, dryRun: false, json: false,
+    budget: null, verify: [], verifyTimeoutMs: DEFAULT_VERIFY_TIMEOUT_MS,
+  };
   const positional = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     if (t === "--json") out.json = true;
     else if (t === "--dry-run") out.dryRun = true;
-    else if (t === "--session" || t === "--cwd" || t === "--max") {
+    // `--verify` alone is auto; `--verify auto|none`; a command is
+    // `--verify="pnpm test"` so it can never swallow an engine name.
+    else if (t === "--verify") {
+      if (tokens[i + 1] === "auto" || tokens[i + 1] === "none") out.verify.push(tokens[++i]);
+      else out.verify.push("auto");
+    } else if (t.startsWith("--verify=")) {
+      const value = t.slice("--verify=".length).trim();
+      if (!value) return { error: "--verify= needs a command, or use --verify for auto" };
+      out.verify.push(value);
+    } else if (t === "--session" || t === "--cwd" || t === "--max" || t === "--budget" || t === "--verify-timeout") {
       const value = tokens[i + 1];
       if (value == null || value.startsWith("-")) return { error: `${t} needs a value` };
-      if (t === "--max") {
+      if (t === "--budget") {
+        const n = Number(value);
+        if (!Number.isSafeInteger(n) || n < 400) return { error: "--budget must be a whole number of tokens, 400 or more" };
+        out.budget = n;
+      } else if (t === "--verify-timeout") {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return { error: "--verify-timeout must be a number of seconds" };
+        out.verifyTimeoutMs = Math.round(n * 1000);
+      } else if (t === "--max") {
         const n = Number(value);
         if (!Number.isSafeInteger(n) || n < 1) return { error: "--max must be a whole number of messages" };
         out.max = n;
@@ -295,6 +356,13 @@ const list = (names) => names.join(", ");
 export function planHandoff({ from, to }) {
   const source = resolveEngine(from);
   if (!source) return { error: `unknown engine "${from}". try: ${list(Object.keys(ENGINES))}` };
+  if (isC0mputeAgent(to)) {
+    const [fromKey] = source;
+    if (!isReadable(fromKey)) {
+      return { error: `${fromKey} cannot be handed off from: ${UNREADABLE[fromKey] || "moshcode cannot read its transcripts"}. readable: ${list(sources())}` };
+    }
+    return { from: fromKey, to: "c0mpute", engine: C0MPUTE_TARGET, seed: SEEDS.c0mpute };
+  }
   const target = resolveEngine(to);
   if (!target) return { error: `unknown engine "${to}". try: ${list(Object.keys(ENGINES))}` };
   const [fromKey] = source;
@@ -327,6 +395,9 @@ export async function handoffCommand(tokens = [], {
   env = process.env,
   now = () => Date.now(),
   launch = openSession,
+  launchC0mpute = defaultLaunchC0mpute,
+  evidenceOf = collectEvidence,
+  check = runChecks,
   version = "",
 } = {}) {
   const parsed = parseHandoff(tokens);
@@ -347,8 +418,36 @@ export async function handoffCommand(tokens = [], {
   const at = now();
   const id = handoffId(plan.from, plan.to, at);
   const doc = buildTranscript(session, { max: parsed.max, to: plan.to, now: at, version });
+  const workDir = session.cwd && fs.existsSync(session.cwd) ? session.cwd : cwd;
+
+  // Evidence and checks: what moshcode can see for itself, as opposed to what
+  // the transcript says happened. Both are optional in the sense that a
+  // directory with no git and no checks still hands off; neither is optional
+  // in the sense of being skippable when it is there.
+  const evidence = await evidenceOf(workDir, { since: session.start ?? null }).catch(() => null);
+  const checkList = checksFor(parsed.verify, workDir);
+  if (parsed.verify.length && !parsed.verify.every((v) => v === "none") && !checkList.length) {
+    write(`· --verify found no checks in ${workDir} (no package.json scripts, Cargo.toml, go.mod or Makefile test)`);
+  }
+  if (checkList.length && !parsed.json) write(`· running ${checkList.length} check${checkList.length === 1 ? "" : "s"}: ${checkList.map((c) => c.label).join(", ")}`);
+  const checkHits = {};
+  const checks = checkList.length
+    ? await check(checkList, { cwd: workDir, timeoutMs: parsed.verifyTimeoutMs, hits: checkHits })
+    : [];
+  addHits(doc.redactions.kinds, checkHits);
+  doc.redactions.total = countHits(doc.redactions.kinds);
+  if (evidence) doc.evidence = evidence;
+  if (checks.length) doc.checks = checks.map(({ label, command, code, timedOut, ms }) => ({ label, command, code, timed_out: timedOut, ms }));
+
   const file = writeTranscript(doc, id, { env });
-  const prompt = seedPrompt(doc, file);
+  const budget = parsed.budget || DEFAULT_BUDGET;
+  const briefText = buildBrief(doc, { evidence, checks, budget, transcriptFile: file });
+  const brief = writeBrief(briefText, id, { env });
+  // c0mpute runs in this process, so it can take the brief itself; every
+  // other engine gets one line pointing at it (argv and pane limits, above).
+  const prompt = plan.seed.inProcess
+    ? `You are continuing work that was running in ${doc.source.engine}. The handoff brief follows; the full transcript is ${file} if you need it.\n\n${briefText}`
+    : seedPrompt(doc, file, brief);
   const argv = plan.seed.argv(prompt);
 
   const fleet = recordHandoff({
@@ -359,8 +458,14 @@ export async function handoffCommand(tokens = [], {
   if (parsed.json) {
     write(JSON.stringify({
       handoff: id, from: plan.from, to: plan.to, transcript: file,
+      brief, brief_tokens: estimateTokens(briefText), budget,
       session: doc.source, messages: doc.messages.length, changes: doc.changes.length,
-      fleet, argv: [plan.engine.bin, ...argv], launched: !parsed.dryRun,
+      redactions: doc.redactions.total,
+      evidence: evidence ? { branch: evidence.branch, head: evidence.head, uncommitted: evidence.status.length, commits: evidence.commits.length } : null,
+      checks: checks.map((c) => ({ label: c.label, command: c.command, code: c.code, timed_out: c.timedOut, verdict: verdict(c) })),
+      fleet,
+      argv: plan.seed.inProcess ? ["moshcode", "agents", "c0mpute", "-C", workDir, "<brief>"] : [plan.engine.bin, ...argv],
+      launched: !parsed.dryRun,
     }, null, 2));
   } else {
     // Say what was picked before anything starts, because the session was
@@ -369,13 +474,24 @@ export async function handoffCommand(tokens = [], {
     write(`· ${plan.from} session ${session.id}`);
     write(`  ${doc.messages.length} message${doc.messages.length === 1 ? "" : "s"}${doc.source.dropped ? ` of ${doc.source.messages}` : ""}, ${span}`);
     write(`  ${doc.changes.length} file${doc.changes.length === 1 ? "" : "s"} changed, in ${doc.source.cwd || cwd}`);
+    if (evidence) {
+      write(`  git ${evidence.branch || "?"} at ${evidence.head || "?"}: ${evidence.status.length} uncommitted, ${evidence.commits.length} commit${evidence.commits.length === 1 ? "" : "s"} since the session started`);
+    }
+    for (const c of checks) write(`  check ${c.command}: ${verdict(c)}`);
+    if (doc.redactions.total) {
+      write(`  ${doc.redactions.total} secret${doc.redactions.total === 1 ? "" : "s"} redacted (${Object.entries(doc.redactions.kinds).map(([k, n]) => `${k} ${n}`).join(", ")})`);
+    }
+    write(`· brief ${brief} (~${estimateTokens(briefText)} of ${budget} tokens)`);
     write(`· transcript ${file}`);
     write(`· fleet ${fleet.fleet}: ${fleet.member} under ${fleet.parent}`);
+    if (plan.seed.inProcess) write("· c0mpute sends prompts to network peers: the brief is redacted, but it is still your code conversation");
     write(parsed.dryRun
-      ? `· dry run, not launching: ${plan.engine.bin} ${argv.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`
+      ? `· dry run, not launching: ${plan.seed.inProcess ? `moshcode agents c0mpute -C ${workDir} <brief>` : `${plan.engine.bin} ${argv.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`}`
       : `· handing it to ${plan.to}`);
   }
   if (parsed.dryRun) return 0;
+
+  if (plan.seed.inProcess) return (await launchC0mpute(prompt, { cwd: workDir })) || 0;
 
   // Plain defaults, never the agent-mode flags. A handoff moves a
   // conversation; it does not also decide that the next engine may skip its
@@ -389,6 +505,12 @@ export async function handoffCommand(tokens = [], {
     return 1;
   }
   return result.code || 0;
+}
+
+/** Open the c0mpute agent REPL in `cwd` with the brief as its first turn. */
+async function defaultLaunchC0mpute(prompt, { cwd }) {
+  const { c0agentMain } = await import("./c0agent-repl.mjs");
+  return c0agentMain(["-C", cwd, "--", prompt]);
 }
 
 /** The sessions a handoff could pick, for anything that wants to offer a choice. */

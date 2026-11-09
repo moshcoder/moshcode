@@ -315,7 +315,7 @@ export function summaryOf(output) {
  * Run a process to completion without blocking the loop, which is what lets
  * one moshcode drive many workers. Output past CAPTURE_BYTES keeps its tail.
  */
-export function runProcess(bin, args, { cwd, env = process.env, timeoutMs = 0, shell = false } = {}) {
+export function runProcess(bin, args, { cwd, env = process.env, timeoutMs = 0, shell = false, onData = null } = {}) {
   return new Promise((resolve) => {
     let out = "", errText = "", timedOut = false, settled = false;
     const keep = (buf, chunk) => { const s = buf + chunk; return s.length > CAPTURE_BYTES ? s.slice(-CAPTURE_BYTES) : s; };
@@ -329,8 +329,9 @@ export function runProcess(bin, args, { cwd, env = process.env, timeoutMs = 0, s
     // The whole process group: a test runner's children die with it.
     const kill = () => { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } } };
     const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; kill(); }, timeoutMs) : null;
-    child.stdout.on("data", (c) => { out = keep(out, c.toString()); });
-    child.stderr.on("data", (c) => { errText = keep(errText, c.toString()); });
+    // `onData` sees every byte, including what the capture cap later drops.
+    child.stdout.on("data", (c) => { const s = c.toString(); if (onData) onData(s); out = keep(out, s); });
+    child.stderr.on("data", (c) => { const s = c.toString(); if (onData) onData(s); errText = keep(errText, s); });
     const done = (result) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); resolve(result); };
     child.on("error", (error) => done({ code: null, signal: null, stdout: out, stderr: errText, error: String(error.message || error), timedOut }));
     child.on("close", (code, signal) => done({ code, signal, stdout: out, stderr: errText, error: null, timedOut }));

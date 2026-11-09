@@ -65,6 +65,9 @@ One JSON document, UTF-8, written to `~/.moshcode/handoffs/<id>.json` with mode
 | `changes` | array | yes | files the source session wrote. May be empty. |
 | `changes[].path` | string | yes | absolute path as the engine recorded it. |
 | `changes[].action` | string | yes | `written`. More verbs may be added; a reader must tolerate one it does not know. |
+| `redactions` | object | no (0.2) | `{ total, kinds }`: how many secrets were replaced with `[redacted:<kind>]`, by kind. Never the secrets. |
+| `evidence` | object | no (0.2) | what git showed when the handoff ran: `branch`, `head`, `status` (porcelain lines), `untracked`, `diffstat`, `commits` since the session started. Absent outside a repository. |
+| `checks` | array | no (0.2) | checks moshcode ran (`--verify`): `label`, `command`, `code` (null if it never started), `timed_out`, `ms`. |
 
 ## Rules
 
@@ -94,9 +97,33 @@ conversation without checking it.
 with a line reading `… (clipped)`. Clipping one message does not change
 `source.messages` or `source.dropped`.
 
+**Secrets do not travel.** Every message, and the output of every check, is
+redacted before it is written: private key blocks, JWTs, credentials in URLs,
+bearer tokens, the key shapes of the common providers (Anthropic, OpenAI,
+GitHub, Slack, AWS, Google, Stripe, npm, c0mpute), and `NAME=value` where the
+name says it is a secret. There is no flag to turn this off.
+
 **An empty `messages` array is invalid.** A conversation with nothing in it is
 not a short conversation, it is a failed read, and a writer must refuse rather
 than emit one.
+
+## The brief
+
+Beside every transcript is `<id>.md`, the brief, and that is what the target
+engine is told to read first. It is built without a model, from the redacted
+transcript, the `evidence` and the `checks`, inside `--budget` tokens (4000 by
+default, estimated as characters / 4). Every fact carries where it came from:
+
+| tag | source |
+|---|---|
+| `[user]` | the operator's own words: the session's first request (the goal) and the most recent ones |
+| `[agent-reported]` | the previous engine's last message, which is a claim and may be wrong |
+| `[observed]` | git state and check exit codes, which moshcode saw itself |
+| `[inferred]` | moshcode's reading of the above, such as "failing checks come first" |
+
+The full transcript stays the record. The brief is the cheap first read, which
+is where a handoff saves tokens: the next engine reads about 4000 tokens, not
+200 messages, and opens the transcript only if it needs to.
 
 ## What is fed to the target engine
 
@@ -116,7 +143,14 @@ where the transcript stops.
 ```
 
 That keeps one code path for every target engine, and it means the transcript
-can be as long as the disk allows.
+can be as long as the disk allows. Since 0.2 the seed names the brief first and
+the transcript second.
+
+The exception is `c0mpute`, moshcode's own agent on the c0mpute network. It runs
+inside moshcode, so it has no argv limit and is given the brief itself as its
+first turn. A small model on a CPU node takes a minute per tool call, and
+reading a file it could have been handed is one call too many. Its prompts are
+read by the network peers that run them, which is why redaction is not optional.
 
 ## Which engines can read and write it
 
@@ -137,6 +171,7 @@ is short and honest.
 | mimocode | no | no, `run` prints one answer and exits |
 | aider | no, its history is rendered prose with no turn markers | no, `--message` runs one exchange and exits |
 | openagents | no, it launches engines and holds no conversation | no, same reason |
+| c0mpute | no, it keeps no session log yet | yes, in process, the brief as its first turn |
 
 A refusal here is always by name and always with the reason. An engine that
 cannot be read is not an engine with nothing to say, and an engine that answers
@@ -144,7 +179,8 @@ one prompt headlessly is not an engine that can receive a conversation.
 
 ## Versioning
 
-`0.1` is the first version. A minor bump adds optional fields and a reader that
+`0.1` is the first version. `0.2` adds the optional `redactions`, `evidence`
+and `checks` fields. A minor bump adds optional fields and a reader that
 does not know them must ignore them. A major bump may change or remove a
 required field, and a reader that does not know the major must refuse the file
 rather than read what it recognises.

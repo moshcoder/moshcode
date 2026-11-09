@@ -233,7 +233,7 @@ test("a --session that matches nothing refuses rather than falling back to the n
 
 test("every engine is either seedable or refused by name, and none is left out", () => {
   const seedable = targets();
-  assert.deepEqual(seedable, ["opencode", "privacycode", "claude", "codex", "gemini", "qwen", "omp"]);
+  assert.deepEqual(seedable, ["opencode", "privacycode", "claude", "codex", "gemini", "qwen", "omp", "c0mpute"]);
   for (const [key, seed] of Object.entries(SEEDS)) {
     assert.ok(seed.argv || seed.unsupported, `${key} is neither seedable nor refused`);
     assert.ok(!(seed.argv && seed.unsupported), `${key} is both`);
@@ -297,7 +297,7 @@ test("the seed is one line, because a pane submits a prompt on the first newline
   const prompt = seedPrompt(doc, "/tmp/h.json");
   assert.ok(!prompt.includes("\n"), "a newline in the seed submits it early");
   assert.match(prompt, /\/tmp\/h\.json/);
-  assert.match(prompt, /portable transcript, version 0\.1/);
+  assert.match(prompt, /portable transcript, version 0\.2/);
   assert.match(prompt, /working tree is the real state/);
 });
 
@@ -327,7 +327,7 @@ test("the command writes the transcript and builds the launch, without launching
     assert.equal(result.transcript, path.join(home, ".moshcode", "handoffs", `${result.handoff}.json`));
 
     const doc = JSON.parse(fs.readFileSync(result.transcript, "utf8"));
-    assert.equal(doc.portable_transcript, "0.1");
+    assert.equal(doc.portable_transcript, "0.2");
     assert.equal(doc.messages.length, 4);
     // A whole conversation about someone's code is not world-readable.
     assert.equal(fs.statSync(result.transcript).mode & 0o077, 0);
