@@ -17,6 +17,7 @@ import { organizationsRouter } from "./routes/organizations.mjs";
 import { mcpRouter } from "./routes/mcp.mjs";
 import { mcpOAuthBrowserRouter, mcpOAuthMachineRouter } from "./routes/mcp-oauth.mjs";
 import { pagesRouter } from "./routes/pages.mjs";
+import { legalRouter } from "./routes/legal.mjs";
 import { settingsSyncRouter } from "./routes/settings-sync.mjs";
 import { moshpitRouter } from "./routes/moshpit.mjs";
 import { socialsRouter } from "./routes/socials.mjs";
@@ -99,6 +100,7 @@ app.use(mcpRouter);
 app.use(csrfGuard);
 
 // routes
+app.use(legalRouter);     // /privacy, /terms
 app.use(authRouter);      // GET / (+ /auth/login|register|logout)
 app.use(passkeyRouter);
 app.use(coinpayRouter);
