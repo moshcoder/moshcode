@@ -123,6 +123,6 @@ export function appBar(user, balance, csrf = "") {
 
 export const footer = `<footer><div class="wrap foot">
   <div class="brand" style="font-size:.9rem"><span class="mark" style="width:18px;height:18px;font-size:.75rem">M</span>MOSHCODE</div>
-  <div style="display:flex;gap:20px;flex-wrap:wrap"><a href="https://moshcode.sh">moshcode.sh</a><a href="/">Approvals</a><a href="/sessions">Sessions</a><a href="/pit">The pit</a><a href="/settings">Settings</a><a href="/invites">Invites</a><a href="/redeem">Redeem a code</a></div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap"><a href="https://moshcode.sh">moshcode.sh</a><a href="/">Approvals</a><a href="/sessions">Sessions</a><a href="/pit">The pit</a><a href="/settings">Settings</a><a href="/invites">Invites</a><a href="/redeem">Redeem a code</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>
   <div class="metal">no bugs, only <b>features</b>. 🤘</div>
 </div></footer>`;
