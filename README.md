@@ -221,6 +221,28 @@ Inside a session:
 | `/model`, `/models` | switch the model (saved), list what nodes serve |
 | `/todos`, `/compact`, `/clear`, `/cost`, `/key`, `/cwd` | checklist, shrink context, fresh chat, usage, key, directory |
 
+The session also takes every command c0mpute.com/chat does, out of the box. Media
+jobs run in the background (keep working; `/tasks` shows them) and save to
+`./c0mpute-media/`:
+
+| | |
+|---|---|
+| `/image <prompt>` | a picture from a c0mpute CPU worker (also `/img`, `/draw`) |
+| `/video <prompt> [--model wan2.2-ti2v-5b]` | a short clip (also `/clip`, `/vid`) |
+| `/music <style> [lyrics: …]` | a song; lyrics add vocals (also `/song`) |
+| `/album <idea>` | a band, 8 named songs with lyrics, cover art, all in a zip (also `/lp`) |
+| `/promo <url> [pixar\|anime\|claymation\|flat] [vertical]` | a promo video of a site with narration and music |
+| `/push hosting <name>` · `ls` · `rm <name>` | publish the session's media and transcript as a site on the c0mpute network |
+| `/connect hosting [node]` | list your hosting nodes, or pick the one `/push` uses |
+| `/plugin add <url\|name>` · `ls` · `on`/`off`/`rm <name>` | chat plugins (remote MCP servers) on your c0mpute.com account |
+| `/login` | sign in to c0mpute.com |
+
+With no sign-in, media runs on the open network with your `ik_live_` key (or the
+free tier). After `/login` (or `c0mpute chat login` on the same machine, or
+`C0MPUTE_CHAT_KEY=c0k_…`) it runs on your c0mpute.com account, and `/push`,
+`/connect` and `/plugin` work. In print mode a media line waits for the result and
+prints the saved paths: `moshcode agents c0mpute -p "/image a red bicycle"`.
+
 The lead agent can call `task` to hand a self-contained job to a subagent. Several
 `task` calls in one reply run in parallel. Subagents start with a fresh
 conversation, their own system prompt and their own tool list, and cannot spawn

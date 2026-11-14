@@ -23,6 +23,8 @@ import {
   ALL_TOOLS, READ_ONLY_TOOLS, agentDirs, findAgent, loadAgents, normalizeTool, removeAgent, renderAgentFile, saveAgent, validName,
 } from "./c0agent-defs.mjs";
 import { createTaskBoard, liveSummary, readTasks, renderTasks, tasksFile } from "./c0agent-tasks.mjs";
+import { chatKeyConfig, parseChatCommand } from "./c0chat-commands.mjs";
+import { CHAT_HELP_ROWS, createChatHandler, runChatPrint } from "./c0chat-handler.mjs";
 import { acid, amber, ash, bone, danger, dim, err, info, ok, warn } from "./ui.mjs";
 
 const MODES = ["ask", "auto-edit", "plan"];
@@ -345,6 +347,10 @@ async function readStdin() {
 }
 
 async function runPrint(prompt, { cfg, opts }) {
+  // The c0mpute chat's own commands (/image, /music, /album, /promo, /video,
+  // /push, …) run as they do in the chat, not through the model.
+  const chatCmd = parseChatCommand(prompt);
+  if (chatCmd) return runChatPrint(chatCmd, { cfg, cwd: opts.cwd || process.cwd() });
   const provider = await createProvider(cfg);
   const mode = opts.mode || "ask";
   const session = createSession({
@@ -472,6 +478,7 @@ async function repl({ cfg, opts, write }) {
     completer: (line) => {
       if (shiftTab) { shiftTab = false; return [[], line]; }
       const words = ["/agents", "/tasks", "/bg", "/model", "/models", "/permissions", "/todos", "/compact", "/clear", "/cost", "/key", "/cwd", "/exit", "/help",
+        "/image", "/video", "/music", "/album", "/promo", "/push", "/connect", "/plugin", "/login",
         ...loadAgents({ cwd: session.cwd }).map((a) => `@${a.name}`)];
       const last = line.split(/\s+/).pop();
       const hits = words.filter((w) => w.startsWith(last));
@@ -629,6 +636,25 @@ async function repl({ cfg, opts, write }) {
   const lead = opts.agent ? findAgent(opts.agent, { cwd: session.cwd }) : LEAD_AGENT;
   if (!lead) { write(err(`no agent named "${opts.agent}"`)); rl.close(); return 1; }
   let messages = [];
+  // What the c0mpute chat commands need: a transcript for /push's page and
+  // every media result this session made.
+  const transcript = [];
+  const media = [];
+  const chatHandle = createChatHandler({
+    cfg,
+    cwd: () => session.cwd,
+    log: (l) => log(l),
+    board,
+    transcript,
+    media,
+    pushNode: () => { try { return JSON.parse(fs.readFileSync(configFile(), "utf8")).pushNode ?? null; } catch { return null; } },
+    status: (l) => spinner.label(l),
+    foreground: async (fn) => {
+      busy = new AbortController();
+      spinner.start("working…");
+      try { return await fn(busy.signal); } finally { spinner.stop(); busy = null; }
+    },
+  });
 
   const prompt = () => {
     flushNotes();
@@ -654,6 +680,7 @@ async function repl({ cfg, opts, write }) {
   log(`  ${ash("key")}   ${cfg.apiKey ? `${cfg.apiKey.slice(0, 8)}… ${ash(`(${cfg.keySource})`)}` : amber("none: free tier, 10 prompts a day — /key ik_live_… to add one")}`);
   log(`  ${ash("prompts and tool output go to the peer node that takes each job; keep secrets out")}`);
   if (session.permissionMode === "yolo") log(`  ${warn("permissions bypassed: every edit and command runs without asking")}`);
+  { const chat = chatKeyConfig(); log(`  ${ash("media")} /image /music /album /promo /video ${ash(chat.key ? "· c0mpute.com account (/push, /plugin ready)" : "· /login for /push, /connect, /plugin")}`); }
   log(`  ${ash("/help for commands · /agents for subagents · @agent to run one")}`);
   log("");
 
@@ -675,6 +702,7 @@ async function repl({ cfg, opts, write }) {
         messages.push({ role: "user", content });
         res = await runAgent({ session, agent, messages, signal: busy.signal, onEvent });
         renderer.finish();
+        transcript.push({ role: "user", content }, ...(res?.text ? [{ role: "assistant", content: res.text }] : []));
       }
     } catch (e) {
       res = { error: String(e?.message || e) };
@@ -693,7 +721,13 @@ async function repl({ cfg, opts, write }) {
   };
 
   const commands = {
-    help: () => { for (const [c, d] of HELP) log(`  ${acid(c.padEnd(22))} ${ash(d)}`); },
+    help: () => {
+      for (const [c, d] of HELP) log(`  ${acid(c.padEnd(22))} ${ash(d)}`);
+      log("");
+      log(bone("  c0mpute chat commands"));
+      for (const [c, d] of CHAT_HELP_ROWS) log(`  ${acid(c)}\n      ${ash(d)}`);
+      log(ash("  anything else is a task for the agent"));
+    },
     clear: () => { messages = []; session.todos = []; log(ok("new conversation")); },
     cost: () => log(`  ${session.usage.calls} model calls · ~${session.usage.inputTokens.toLocaleString()} in / ~${session.usage.outputTokens.toLocaleString()} out tokens ${ash("(estimated)")}`),
     todos: () => (session.todos.length ? renderTodos(session.todos, log) : log(ash("  no todos"))),
@@ -904,7 +938,11 @@ async function repl({ cfg, opts, write }) {
     if (item.queued) { process.stdout.write("\r\x1b[2K"); log(`${acid(">")} ${line.length > 100 ? `${line.slice(0, 100)}…` : line}`); }
     appendHistory(line);
     try {
-      if (line.startsWith("/")) {
+      const chatCmd = line.startsWith("@") || line.startsWith("&") ? null : parseChatCommand(line);
+      if (chatCmd) {
+        exitWarned = false;
+        try { await chatHandle(chatCmd); } catch (e) { spinner.stop(); log(err(String(e?.message || e))); }
+      } else if (line.startsWith("/")) {
         const [c, ...args] = line.slice(1).split(/\s+/);
         if (c === "exit" || c === "quit" || c === "q") {
           const live = liveBackground();
