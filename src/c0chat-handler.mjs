@@ -205,7 +205,9 @@ export async function runChatPrint(parsed, { cfg, cwd }) {
     const { backend, run } = await handle(parsed);
     errLog(ash(`${LABEL[parsed.media]} on ${backend.name}…`));
     let last = "";
-    const r = await run(controller.signal, (l) => { if (l && l !== last) { last = l; errLog(dim(`  ${l}`)); } });
+    // A queued job's line only changes its m:ss timer: print it when the words change.
+    const key = (l) => String(l).replace(/\b\d+:\d\d\b/g, "");
+    const r = await run(controller.signal, (l) => { if (l && key(l) !== last) { last = key(l); errLog(dim(`  ${l}`)); } });
     for (const f of r.files) process.stdout.write(`${f.path}\n`);
     errLog(ok(r.summary));
     return 0;
