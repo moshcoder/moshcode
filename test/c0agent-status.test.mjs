@@ -56,3 +56,11 @@ test("statusLabel is honest about the one-piece c0mpute network path", () => {
   assert.match(statusLabel({ stage: "started" }, job, { promptTokens: 1000 }), /handed to another node/);
   assert.match(statusLabel({ stage: "started" }, { node: "provider@bonita", starts: 2 }, { promptTokens: 10 }), /^handed to bonita/);
 });
+
+test("the permission prompt does not repeat the tool line it follows", async () => {
+  const { permissionHeader, previewLines } = await import("../src/c0agent-repl.mjs");
+  assert.equal(permissionHeader("Bash(ping x)", "Bash(ping x)"), false);
+  assert.equal(permissionHeader("[explore] Bash(ls)", null), true);
+  assert.deepEqual(previewLines("ping compute-host", "Bash(ping compute-host)"), []);
+  assert.deepEqual(previewLines("+ added\n- removed", "Edit(a.js)"), ["+ added", "- removed"]);
+});

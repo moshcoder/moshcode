@@ -128,6 +128,18 @@ export function fitSpinnerLabel(label, suffix, columns) {
   return chars.length <= room ? label : `${chars.slice(0, room - 1).join("")}…`;
 }
 
+/** Whether the permission prompt needs its own "● <title>" line. */
+export function permissionHeader(header, justPrinted) {
+  return header !== justPrinted;
+}
+
+/** Preview lines for the permission prompt, minus a lone line that only repeats the title. */
+export function previewLines(preview, title) {
+  const lines = String(preview ?? "").split("\n").slice(0, 24);
+  if (lines.length === 1 && lines[0].trim() && String(title ?? "").includes(lines[0].trim())) return [];
+  return lines;
+}
+
 /** A spinner on one line of stderr that steps aside whenever real output prints. */
 function createSpinner(stream = process.stderr) {
   const frames = ["✻", "✳", "✢", "·", "✢", "✳"];
@@ -211,12 +223,15 @@ export function statusLabel(status, job, { promptTokens = 0, agent = null, now =
 function createRenderer({ out, log, spinner, quiet = false }) {
   let atLineStart = true;
   let wroteText = false;
+  let lastToolTitle = null;
   const line = (s) => { spinner.stop(); if (!atLineStart) { out("\n"); atLineStart = true; } log(s); };
   const jobs = new Map(); // agent@depth -> {node, writingSince}
   return {
     reset() { wroteText = false; },
     get wroteText() { return wroteText; },
     finish() { spinner.stop(); if (!atLineStart) { out("\n"); atLineStart = true; } },
+    /** Title of the top-level tool call just printed (the permission prompt skips repeating it). */
+    takeLastToolTitle() { const t = lastToolTitle; lastToolTitle = null; return t; },
     event(e) {
       if (e.type === "waiting") {
         jobs.set(`${e.agent}@${e.depth}`, {});
@@ -256,6 +271,7 @@ function createRenderer({ out, log, spinner, quiet = false }) {
       if (e.type === "tool_start") {
         if (e.depth) line(`  ${ash("⎿")}  ${dim(`[${e.agent}]`)} ${dim(e.title)}`);
         else line(`${acid("●")} ${bone(e.title)}`);
+        lastToolTitle = e.depth ? null : e.title;
         return;
       }
       if (e.type === "tool_end") {
@@ -440,9 +456,11 @@ async function repl({ cfg, opts, write }) {
   };
   const promptPermission = async (req) => {
     spinner.stop();
-    log("");
-    log(`${amber("●")} ${bone(req.agent && req.agent !== "c0mpute" ? `[${req.agent}] ${req.title}` : req.title)}`);
-    for (const l of String(req.preview).split("\n").slice(0, 24)) {
+    const header = req.agent && req.agent !== "c0mpute" ? `[${req.agent}] ${req.title}` : req.title;
+    // tool_start already printed "● <title>" right above: saying it again
+    // (and the command again as its preview) showed every call 2-3 times.
+    if (permissionHeader(header, renderer.takeLastToolTitle())) { log(""); log(`${amber("●")} ${bone(header)}`); }
+    for (const l of previewLines(req.preview, req.title)) {
       log(`  ${l.startsWith("+ ") ? acid(l) : l.startsWith("- ") ? danger(l) : dim(l)}`);
     }
     const a = (await question(`  ${bone("Allow?")} ${ash("[y]es · [a]lways for this session · [n]o, or type what to do instead")} `)).trim();
