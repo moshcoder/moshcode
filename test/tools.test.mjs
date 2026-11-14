@@ -259,6 +259,21 @@ fs.writeFileSync(process.env.NPM_CAPTURE, JSON.stringify(process.argv.slice(2)))
   ]);
 });
 
+test("REA is a workflow tool installed by its own script, without the interactive setup", () => {
+  for (const name of ["rea", "REA", "rea-agents", "rea.tools", "reverse-engineer"]) {
+    assert.deepEqual(resolveTool(name), ["rea", TOOLS.rea], name);
+  }
+  assert.equal(TOOLS.rea.bin, "rea");
+  assert.equal(TOOLS.rea.install.cmd, "bash");
+  const script = TOOLS.rea.install.args.at(-1);
+  assert.match(script, /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/morluto\/rea\/main\/install\.sh \| bash /);
+  // Without it the installer ends in `rea setup` on the TTY, which hangs the pit.
+  assert.match(script, /bash -s -- --no-setup$/);
+  assert.equal(TOOLS.rea.upgrade, undefined);
+  assert.deepEqual(toolUpgradeSpec(TOOLS.rea), TOOLS.rea.install);
+  assert.match(toolList(), /REA/);
+});
+
 test("install mcpjam delegates to the official npm package", async () => {
   const root = tempDir("moshcode-install-mcpjam-");
   const nativeBin = path.join(root, "bin");
