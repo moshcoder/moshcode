@@ -22,7 +22,8 @@ import {
 import {
   ALL_TOOLS, READ_ONLY_TOOLS, agentDirs, findAgent, loadAgents, normalizeTool, removeAgent, renderAgentFile, saveAgent, validName,
 } from "./c0agent-defs.mjs";
-import { createTaskBoard, liveSummary, readTasks, renderTasks, tasksFile } from "./c0agent-tasks.mjs";
+import { createTaskBoard, liveSummary, readTaskContext, readTasks, renderTaskContext, renderTasks, taskItems, tasksFile } from "./c0agent-tasks.mjs";
+import { pickList, viewLines } from "./c0agent-picker.mjs";
 import { chatKeyConfig, parseChatCommand } from "./c0chat-commands.mjs";
 import { CHAT_HELP_ROWS, createChatHandler, runChatPrint } from "./c0chat-handler.mjs";
 import { acid, amber, ash, bone, danger, dim, err, info, ok, warn } from "./ui.mjs";
@@ -300,10 +301,85 @@ function createRenderer({ out, log, spinner, quiet = false }) {
   };
 }
 
+// ─── browsing tasks (arrow keys, live view) ──────────────────────────────────
+
+const isLive = (t) => t?.state === "working" || t?.state === "needs_input";
+const canBrowse = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
+
+/** Other sessions' tasks with the live activity their context file carries. */
+export function othersWithActivity(list, { file } = {}) {
+  return list.map((t) => {
+    if (!isLive(t)) return t;
+    const ctx = readTaskContext(t, file ? { file } : undefined);
+    return ctx?.activity ? { ...t, activity: ctx.activity } : t;
+  });
+}
+
+/**
+ * Open one task full screen: prompt, conversation, progress and result,
+ * following the end while it runs. `find()` re-reads the task (its state
+ * moves while you watch); `contextFor(t)` builds what to show. Resolves
+ * "back" | "answer" | "stop".
+ */
+export function viewTask(t, { find = () => t, contextFor, canAnswer = () => false, canStop = () => false } = {}) {
+  const cur = () => find() ?? t;
+  const keys = {};
+  const help = [];
+  if (canAnswer(cur())) { keys.return = "answer"; keys.a = "answer"; help.push("enter answer"); }
+  if (canStop(cur())) { keys.x = "stop"; help.push("x stop"); }
+  return viewLines({
+    title: `Task #${t.id}`,
+    getLines: () => {
+      const c = cur();
+      const ctx = contextFor(c) ?? {};
+      return renderTaskContext({ ...c, ...ctx, state: c.state, activity: ctx.activity ?? c.activity, pendingTitle: c.pending?.req?.title ?? c.pendingTitle });
+    },
+    live: () => isLive(cur()),
+    keys,
+    help: help.join(" · "),
+  });
+}
+
+/**
+ * /tasks as a list you move through: enter opens a task (live while it
+ * runs), x stops one. `act(action, task)` handles "answer" and "stop";
+ * returning "exit" from it leaves the browser.
+ */
+export async function browseTasks({ getTasks, contextFor, find, canAnswer, canStop, act = async () => {}, title = "Tasks", startId = null, openFirst = null }) {
+  let start = startId;
+  let open = openFirst;
+  for (;;) {
+    let t = open;
+    open = null;
+    if (!t) {
+      const r = await pickList({ title, getItems: () => taskItems(getTasks()), keys: { x: "stop" }, help: "x stop", startId: start });
+      if (!r) return;
+      start = r.item.id;
+      t = r.item.task;
+      if (r.action === "stop") { if ((await act("stop", t)) === "exit") return; continue; }
+    } else start = `${t.pid}-${t.id}`;
+    const res = await viewTask(t, { find: () => find(t), contextFor, canAnswer, canStop });
+    if (res === "answer" || res === "stop") { if ((await act(res, find(t) ?? t)) === "exit") return; }
+  }
+}
+
 // ─── management (no session needed) ──────────────────────────────────────────
 
 export function manageAgents(args, { write = (l) => console.log(l), cwd = process.cwd(), file = tasksFile() } = {}) {
   const [verb = "list", name] = args;
+  if (verb === "tasks" && name !== "clear") {
+    const all = () => readTasks({ file });
+    const find = (t) => all().find((x) => x.id === t.id && x.pid === t.pid) ?? null;
+    const contextFor = (t) => readTaskContext(t, { file });
+    if (name) {
+      const t = all().find((x) => x.id === name.replace(/^#/, ""));
+      if (!t) { write(err(`no task #${name.replace(/^#/, "")} — moshcode agents c0mpute tasks lists them`)); return 1; }
+      if (!canBrowse()) { for (const l of renderTaskContext({ ...t, ...(contextFor(t) ?? {}) })) write(l); return 0; }
+      return viewTask(t, { find: () => find(t), contextFor }).then(() => 0);
+    }
+    // Another terminal can follow tasks this way while a session runs them.
+    if (canBrowse() && all().length) return browseTasks({ getTasks: () => othersWithActivity(all(), { file }), contextFor, find }).then(() => 0);
+  }
   if (verb === "tasks") {
     if (name === "clear") {
       const all = readTasks({ file });
@@ -387,7 +463,7 @@ const HELP = [
   ["/agents", "list agents · new · show <n> · edit <n> · rm <n> · run <n> <task>"],
   ["@<agent> <task>", "run one subagent directly"],
   ["& [@agent] <task>", "run a task in the background (also /bg)"],
-  ["/tasks", "every task by state · /tasks <id> · stop <id> · clear"],
+  ["/tasks", "every task: ↑↓ to pick, enter to read it (live while it runs) · /tasks <id> · stop <id> · clear"],
   ["/model [name]", "show or switch the model (saved)"],
   ["/models", "models c0mpute serves right now"],
   ["/permissions [mode]", "ask · auto-edit · plan (shift-tab cycles)"],
@@ -544,6 +620,8 @@ async function repl({ cfg, opts, write }) {
     },
   });
   const trackEvent = (t, e, jobs) => {
+    if (e.type === "text" && !e.depth) { board.stream(t, e.text); return; }
+    if (e.type === "turn_end" && !e.depth) board.stream(t, null);
     if (e.type === "waiting") board.update(t, { activity: e.depth ? `${e.agent} · sending to c0mpute` : "sending to c0mpute" });
     else if (e.type === "status") {
       const key = `${e.agent}@${e.depth}`;
@@ -570,7 +648,7 @@ async function repl({ cfg, opts, write }) {
   const liveBackground = () => board.tasks.filter((t) => t.background && (t.state === "working" || t.state === "needs_input"));
 
   function runBackground(agent, content) {
-    const t = board.add({ title: content, agent: agent.name, background: true, cwd: session.cwd });
+    const t = board.add({ title: content, prompt: content, agent: agent.name, background: true, cwd: session.cwd });
     const controller = new AbortController();
     t.controller = controller;
     // Its own view of the session: launch cwd, own todos, and permission
@@ -582,7 +660,9 @@ async function repl({ cfg, opts, write }) {
     sub.ask = (req) => new Promise((resolve) => board.update(t, { state: "needs_input", pending: { req, resolve } }));
     const jobs = new Map();
     const asLead = agent === lead;
-    runAgent({ session: sub, agent, messages: [{ role: "user", content }], depth: asLead ? 0 : 1, signal: controller.signal, onEvent: (e) => trackEvent(t, e, jobs) })
+    const convo = [{ role: "user", content }];
+    board.attach(t, convo);
+    runAgent({ session: sub, agent, messages: convo, depth: asLead ? 0 : 1, signal: controller.signal, onEvent: (e) => trackEvent(t, e, jobs) })
       .then((res) => finishTask(t, res), (e) => board.update(t, { state: "failed", error: String(e?.message || e) }));
     log(`${acid("◐")} ${ash(`#${t.id}`)} running in the background${asLead ? "" : ` as @${agent.name}`} ${ash("— /tasks to watch it")}`);
     return t;
@@ -595,8 +675,48 @@ async function repl({ cfg, opts, write }) {
     return true;
   }
 
+  // The browser owns the screen and keyboard; background announcements wait.
+  const browse = async (opts = {}) => {
+    questioning += 1;
+    try {
+      await browseTasks({
+        getTasks: () => [...board.tasks, ...othersWithActivity(readTasks().filter((x) => x.pid !== process.pid))],
+        find: (t) => (t.pid === process.pid ? board.find(t.id) : readTasks().find((x) => x.id === t.id && x.pid === t.pid)) ?? null,
+        contextFor: (t) => (t.pid === process.pid ? board.contextOf(t) : readTaskContext(t)),
+        canAnswer: (t) => t.pid === process.pid && t.state === "needs_input" && Boolean(t.pending?.resolve),
+        canStop: (t) => t.pid === process.pid && isLive(t) && t !== current,
+        act: async (action, t) => {
+          if (action === "stop") {
+            if (t.pid !== process.pid) return null;
+            stopTask(t);
+            return null;
+          }
+          return "exit"; // answer: back to the prompt, then ask
+        },
+        ...opts,
+      });
+    } finally { questioning -= 1; }
+    process.stdout.write("\r\x1b[2K");
+  };
+  const answerAfterBrowse = async () => {
+    // A task left Needs input after browsing gets its question now.
+    const t = board.tasks.find((x) => x.state === "needs_input" && x.pending?.resolve && x.answerNext);
+    if (t) await tasksCommand([t.id]); // answerNext set: tasksCommand asks instead of reopening the viewer
+  };
+
   async function tasksCommand(args) {
     const [verb, ...rest] = args;
+    if ((!verb || verb === "list" || verb === "ls") && canBrowse()) {
+      await browse({
+        act: async (action, t) => {
+          if (action === "stop") { if (t.pid === process.pid) stopTask(t); return null; }
+          t.answerNext = true;
+          return "exit";
+        },
+      });
+      await answerAfterBrowse();
+      return;
+    }
     if (!verb || verb === "list" || verb === "ls") {
       const others = readTasks().filter((x) => x.pid !== process.pid);
       renderTasks([...board.tasks, ...others], log, { showPid: true });
@@ -613,10 +733,24 @@ async function repl({ cfg, opts, write }) {
     const t = board.find(verb);
     if (!t) {
       const other = readTasks().find((x) => x.id === verb.replace(/^#/, ""));
-      if (other) { log(ash(`  #${other.id} belongs to another session (pid ${other.pid}): ${other.state} · ${other.title}`)); return; }
+      if (other && canBrowse()) { await browse({ openFirst: other }); return; }
+      if (other) { for (const l of renderTaskContext({ ...other, ...(readTaskContext(other) ?? {}) })) log(l); return; }
       log(err(`no task #${verb} — /tasks lists them`));
       return;
     }
+    // `/tasks <id>` on a terminal: the task full screen (live while it runs).
+    if (canBrowse() && !t.answerNext) {
+      await browse({
+        openFirst: t,
+        act: async (action, x) => {
+          if (action === "stop") { stopTask(x); return null; }
+          x.answerNext = true;
+          return "exit";
+        },
+      });
+      if (!(t.answerNext && t.state === "needs_input" && t.pending?.resolve)) { t.answerNext = false; return; }
+    }
+    t.answerNext = false;
     const icon = { needs_input: amber("●"), working: acid("◐"), completed: acid("✓"), failed: danger("✗"), stopped: ash("■") }[t.state];
     log(`${icon} ${ash(`#${t.id}`)} ${bone(t.title)}`);
     log(`  ${ash("state")} ${t.state.replace("_", " ")}   ${ash("agent")} ${t.agent}   ${ash("cwd")} ${t.cwd}`);
@@ -688,17 +822,20 @@ async function repl({ cfg, opts, write }) {
     busy = new AbortController();
     renderer.reset();
     const started = Date.now();
-    const task = board.add({ title: content, agent: agent.name, background: false, cwd: session.cwd });
+    const task = board.add({ title: content, prompt: content, agent: agent.name, background: false, cwd: session.cwd });
     current = task;
     const jobs = new Map();
     const onEvent = (e) => { trackEvent(task, e, jobs); renderer.event(e); };
     let res;
     try {
       if (asSub) {
-        res = await runAgent({ session, agent, messages: [{ role: "user", content }], depth: 1, signal: busy.signal, onEvent });
+        const convo = [{ role: "user", content }];
+        board.attach(task, convo);
+        res = await runAgent({ session, agent, messages: convo, depth: 1, signal: busy.signal, onEvent });
         renderer.finish();
         if (res.text) { log(`${acid("●")} ${bone(`[${agent.name}]`)}`); log(res.text); }
       } else {
+        board.attach(task, messages, messages.length);
         messages.push({ role: "user", content });
         res = await runAgent({ session, agent, messages, signal: busy.signal, onEvent });
         renderer.finish();
@@ -788,6 +925,46 @@ async function repl({ cfg, opts, write }) {
 
   async function agentsCommand(args) {
     const [verb, ...rest] = args;
+    if ((!verb || verb === "list") && canBrowse()) {
+      // Like Claude Code's agents view: tasks first (enter follows one live),
+      // then every agent (enter shows its definition, e edits it).
+      questioning += 1;
+      let start = null;
+      try {
+        for (;;) {
+          const tasks = () => [...board.tasks, ...othersWithActivity(readTasks().filter((x) => x.pid !== process.pid))];
+          const agents = loadAgents({ cwd: session.cwd });
+          const r = await pickList({
+            title: "Agents",
+            startId: start,
+            keys: { e: "edit", x: "stop" },
+            help: "e edit agent · x stop task",
+            getItems: () => [
+              ...taskItems(tasks()),
+              { header: "Agents" },
+              ...agents.map((a) => ({ id: `agent:${a.name}`, agent: a, label: `${acid(a.name)} ${ash(`· ${a.source}`)} ${dim(toolsLabel(a.tools))}${a.model ? ` ${ash("·")} ${dim(a.model)}` : ""}`, sub: ash(a.description.length > 110 ? `${a.description.slice(0, 107)}…` : a.description) })),
+            ],
+          });
+          if (!r) break;
+          start = r.item.id;
+          if (r.item.task) {
+            const t = r.item.task;
+            if (r.action === "stop") { if (t.pid === process.pid && t !== current) stopTask(t); continue; }
+            if (r.action !== "open") continue;
+            questioning -= 1;
+            try { await tasksCommand([t.id]); } finally { questioning += 1; }
+            continue;
+          }
+          const a = r.item.agent;
+          if (r.action === "edit") { questioning -= 1; try { await agentsCommand(["edit", a.name]); } finally { questioning += 1; } continue; }
+          if (r.action === "open") {
+            await viewLines({ title: `Agent ${a.name}`, getLines: () => [ash(a.file || `${a.source} agent`), "", ...renderAgentFile(a).split("\n")] });
+          }
+        }
+      } finally { questioning -= 1; }
+      process.stdout.write("\r\x1b[2K");
+      return;
+    }
     if (!verb || verb === "list") {
       // Like Claude Code's agents view: what's running and what needs you first.
       log(bone("Tasks"));
