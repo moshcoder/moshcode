@@ -112,6 +112,22 @@ function renderTodos(todos, write) {
   }
 }
 
+/**
+ * The spinner line's label, cut so the whole line fits `columns`. A line wider
+ * than the terminal wraps, `\r` then returns only to the last row, and every
+ * redraw leaves a copy of the label behind (2026-11-14: a ~120-char "reading
+ * the prompt" label printed again and again on a narrower terminal).
+ */
+export function fitSpinnerLabel(label, suffix, columns) {
+  const cols = Number(columns) || 80;
+  // frame + space + label + space + suffix, and one spare column so the
+  // cursor never sits past the edge.
+  const room = cols - 1 - 2 - 1 - [...suffix].length;
+  const chars = [...label];
+  if (room <= 1) return "";
+  return chars.length <= room ? label : `${chars.slice(0, room - 1).join("")}…`;
+}
+
 /** A spinner on one line of stderr that steps aside whenever real output prints. */
 function createSpinner(stream = process.stderr) {
   const frames = ["✻", "✳", "✢", "·", "✢", "✳"];
@@ -123,7 +139,9 @@ function createSpinner(stream = process.stderr) {
   const draw = () => {
     if (!tty) return;
     const secs = Math.round((Date.now() - started) / 1000);
-    stream.write(`\r\x1b[2K${acid(frames[i++ % frames.length])} ${label} ${ash(`(${secs}s · esc to interrupt)`)}`);
+    const suffix = `(${secs}s · esc to interrupt)`;
+    const fitted = fitSpinnerLabel(label, suffix, stream.columns);
+    stream.write(`\r\x1b[2K${acid(frames[i++ % frames.length])} ${fitted} ${ash(suffix)}`);
   };
   return {
     start(text) {
@@ -165,7 +183,18 @@ export function statusLabel(status, job, { promptTokens = 0, agent = null, now =
       // queue AND it reading the prompt (minutes on a CPU node).
       return `${who}${node} has the job · waiting for the first token (queue + reading ~${kTokens(promptTokens)} prompt tokens)`;
     case "started":
-      return `${who}${node} is reading the prompt (~${kTokens(promptTokens)} tokens; a CPU node can take minutes)`;
+      // Infernet's relay to the c0mpute network answers in one piece: no
+      // tokens arrive until the whole reply is done, so say that rather than
+      // "reading the prompt" for minutes. A second `started` means the job
+      // was handed to another node (the first one was too slow).
+      if (/c0mpute network/i.test(job.node ?? "")) {
+        return job.starts > 1
+          ? `${who}network was slow · handed to another node · reply arrives in one piece`
+          : `${who}a c0mpute node is on it (~${kTokens(promptTokens)} tokens) · reply arrives in one piece, CPU nodes take 1-5 min`;
+      }
+      return job.starts > 1
+        ? `${who}handed to ${node} · reading the prompt (~${kTokens(promptTokens)} tokens)`
+        : `${who}${node} is reading the prompt (~${kTokens(promptTokens)} tokens; a CPU node can take minutes)`;
     case "writing": {
       const secs = (now - (job.writingSince ?? now)) / 1000;
       const rate = secs >= 2 ? ` · ${(status.tokens / secs).toFixed(1)} tok/s` : "";
@@ -201,6 +230,7 @@ function createRenderer({ out, log, spinner, quiet = false }) {
         jobs.set(key, job);
         const s = e.status;
         if (s.node) job.node = s.node;
+        if (s.stage === "started") job.starts = (job.starts ?? 0) + 1;
         if (s.stage === "writing" && job.writingSince == null) job.writingSince = Date.now();
         const label = statusLabel(s, job, { promptTokens: e.promptTokens, agent: e.depth ? e.agent : null });
         if (!label) return;
@@ -462,6 +492,7 @@ async function repl({ cfg, opts, write }) {
       const job = jobs.get(key) ?? {};
       jobs.set(key, job);
       if (e.status.node) job.node = e.status.node;
+      if (e.status.stage === "started") job.starts = (job.starts ?? 0) + 1;
       if (e.status.stage === "writing" && job.writingSince == null) job.writingSince = Date.now();
       const label = statusLabel(e.status, job, { promptTokens: e.promptTokens, agent: e.depth ? e.agent : null });
       if (label) board.update(t, { activity: label });

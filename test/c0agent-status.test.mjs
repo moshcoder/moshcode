@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shortNode, statusLabel } from "../src/c0agent-repl.mjs";
+import { fitSpinnerLabel, shortNode, statusLabel } from "../src/c0agent-repl.mjs";
 
 test("shortNode drops the account and the node hash", () => {
   assert.equal(shortNode("anthony@profullstack-dev-vienna:e98c6ec2"), "profullstack-dev-vienna");
@@ -35,4 +35,24 @@ test("runAgent forwards provider status as status events", async () => {
   const status = events.filter((e) => e.type === "status").map((e) => e.status.stage);
   assert.deepEqual(status, ["queued", "started", "writing"]);
   assert.ok(events.find((e) => e.type === "waiting").promptTokens > 0);
+});
+
+test("the spinner line never wraps (a wrapped line repeats on every redraw)", () => {
+  const label = "c0mpute network is reading the prompt (~1.0k tokens; a CPU node can take minutes)";
+  const suffix = "(19s · esc to interrupt)";
+  for (const cols of [40, 80, 100, 200]) {
+    const line = `✻ ${fitSpinnerLabel(label, suffix, cols)} ${suffix}`;
+    assert.ok([...line].length < cols, `${cols}: ${line.length}`);
+  }
+  assert.equal(fitSpinnerLabel(label, suffix, 200), label);
+  assert.match(fitSpinnerLabel(label, suffix, 80), /…$/);
+  assert.equal(fitSpinnerLabel(label, suffix, undefined).length <= 80, true);
+});
+
+test("statusLabel is honest about the one-piece c0mpute network path", () => {
+  const job = { node: "c0mpute network", starts: 1 };
+  assert.match(statusLabel({ stage: "started" }, job, { promptTokens: 1000 }), /reply arrives in one piece, CPU nodes take 1-5 min/);
+  job.starts = 2;
+  assert.match(statusLabel({ stage: "started" }, job, { promptTokens: 1000 }), /handed to another node/);
+  assert.match(statusLabel({ stage: "started" }, { node: "provider@bonita", starts: 2 }, { promptTokens: 10 }), /^handed to bonita/);
 });
