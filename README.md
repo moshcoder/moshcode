@@ -215,7 +215,7 @@ Inside a session:
 | | |
 |---|---|
 | `/agents` | tasks and agents in one list (↑↓, enter opens, `e` edits an agent); `new` (drafted by c0mpute or by hand), `show`, `edit`, `rm`, `run <name> <task>` |
-| `/tasks` | every task, ↑↓ to pick; enter opens its full context (prompt, conversation, tool results, progress, result), live while it runs; enter on a Needs input task answers it, `x` stops one |
+| `/tasks` | every task, ↑↓ to pick; → or enter opens its full context (prompt, conversation, tool results, progress, result), live while it runs, ← goes back; enter on a Needs input task answers it, `x` stops one |
 | `& <task>` | run a task in the background; `moshcode agents c0mpute tasks` follows tasks from another terminal |
 | `@<agent> <task>` | run one subagent directly |
 | shift-tab | cycle permission mode: ask, accept edits, plan (read-only) |
