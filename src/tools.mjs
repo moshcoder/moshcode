@@ -203,6 +203,29 @@ export const TOOLS = {
     bin: "qc",
     install: { cmd: "npm", args: ["install", "-g", "@profullstack/qryptchat"] },
   },
+  rea: {
+    desc: "REA — reverse engineer anything with agents: app behavior, web bundles, Electron, APKs, native binaries (CLI + MCP)",
+    bin: "rea",
+    // morluto/rea, MIT, npm `rea-agents`. Its own installer rather than a bare
+    // `npm i -g`: it checks REA's narrow Node floor (22.23.4+, 24.22.1+ or
+    // 26.12.1+) up front with a fix-it message, pins the exact latest release
+    // tag, installs with `--prefix ~/.local` on Linux so no sudo is needed, and
+    // verifies `rea --version` matches. It re-resolves the latest release every
+    // run, so the install is also the upgrade.
+    //
+    // --no-setup is not optional here, for the same reason swamp sets
+    // SWAMP_NONINTERACTIVE: when a TTY is around the script ends by launching
+    // the interactive `rea setup` (Hopper, agent skills), and an install
+    // started from the pit has no one to answer it. Run `moshcode rea setup`
+    // afterwards.
+    install: {
+      cmd: "bash",
+      args: [
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/morluto/rea/main/install.sh | bash -s -- --no-setup",
+      ],
+    },
+  },
   secrets: {
     desc: "LogicSRC — end-to-end-encrypted team credential sharing (login, teams, credentials)",
     // The passthrough target is the `logicsrc` binary; the moshcode command is
@@ -583,6 +606,8 @@ export const TOOL_ALIASES = {
   "digitalocean": "doctl", do: "doctl",
   // The binary, the domain, and the repo name (profullstack/qrypt-chat).
   qc: "qryptchat", "qrypt.chat": "qryptchat", "qrypt-chat": "qryptchat", qrypt: "qryptchat",
+  // The npm package name, the site, and the spelled-out name.
+  "rea-agents": "rea", "rea.tools": "rea", "reverse-engineer": "rea",
 };
 
 /** Resolve a name or alias to `[key, tool]`, or null. */

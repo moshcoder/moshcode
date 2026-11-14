@@ -1041,6 +1041,28 @@ The binary is `qc`, and `qc`, `qrypt.chat` and `qrypt-chat` all resolve to this
 entry, so `moshcode qc send …` and `/tools install qrypt.chat` work as well.
 In the pit, `/qc` and `/qryptchat` are the same command.
 
+### REA — reverse engineer anything with agents
+
+[REA](https://rea.tools) ([morluto/rea](https://github.com/morluto/rea), MIT)
+takes an app apart from the outside in: browser and Electron captures, web
+bundles, APKs, WASM, and native binaries through Hopper, Ghidra, Rizin or GDB,
+every answer backed by recorded Evidence. One CLI, and the same commands as an
+MCP server for a coding agent.
+
+```sh
+moshcode install rea              # upstream install.sh --no-setup (Node 22.23.4+ / 24.22.1+)
+
+moshcode rea setup                # agents, skills and optional providers (Hopper etc.)
+moshcode rea doctor               # what is ready and what is missing
+moshcode rea analyze ./SomeApp    # overview of an app
+moshcode rea mcp add              # register REA as an MCP server
+```
+
+The install skips the installer's interactive `rea setup` so it also works from
+the pit; run `setup` once yourself. `rea-agents`, `rea.tools` and
+`reverse-engineer` resolve to this entry. Upgrading re-runs the installer, which
+always fetches the latest release.
+
 ### CrawlProof — what the fleet costs and what it returns
 
 [CrawlProof](https://crawlproof.com) knows who arrived on your sites and what
