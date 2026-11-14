@@ -463,7 +463,7 @@ const HELP = [
   ["/agents", "list agents · new · show <n> · edit <n> · rm <n> · run <n> <task>"],
   ["@<agent> <task>", "run one subagent directly"],
   ["& [@agent] <task>", "run a task in the background (also /bg)"],
-  ["/tasks", "every task: ↑↓ to pick, enter to read it (live while it runs) · /tasks <id> · stop <id> · clear"],
+  ["/tasks", "every task: ↑↓ to pick, → or enter to read it (live while it runs), ← back · /tasks <id> · stop <id> · clear"],
   ["/model [name]", "show or switch the model (saved)"],
   ["/models", "models c0mpute serves right now"],
   ["/permissions [mode]", "ask · auto-edit · plan (shift-tab cycles)"],

@@ -3,7 +3,7 @@
 // so the conversation's scrollback is untouched, and both take the keyboard
 // from readline while open and hand it back on exit.
 //
-//   pickList   ↑/↓ (j/k), PgUp/PgDn, Home/End, enter opens, extra letter keys,
+//   pickList   ↑/↓ (j/k), PgUp/PgDn, Home/End, enter or → opens, extra letter keys,
 //              esc/q goes back. Items are re-read every second, so a running
 //              task's state updates in place.
 //   viewLines  a scrollable page that follows the end while you are at the
@@ -104,7 +104,7 @@ export function pickList({ title, getItems, keys = {}, help = "", input = proces
       if (selRow >= top + height) top = selRow - height + 2;
       top = Math.max(0, Math.min(top, Math.max(0, rows.length - height)));
       const view = rows.slice(top, top + height).map((r) => r.text);
-      const footer = ash(`↑↓ move · enter open${help ? ` · ${help}` : ""} · esc back${rows.length > height ? ` · ${top + 1}-${Math.min(rows.length, top + height)}/${rows.length}` : ""}`);
+      const footer = ash(`↑↓ move · → or enter open${help ? ` · ${help}` : ""} · ← back${rows.length > height ? ` · ${top + 1}-${Math.min(rows.length, top + height)}/${rows.length}` : ""}`);
       output.write(`\x1b[H\x1b[2J${bone(title)}\r\n${view.join("\r\n")}\r\n${footer}`);
     };
     const move = (d) => {
@@ -124,7 +124,7 @@ export function pickList({ title, getItems, keys = {}, help = "", input = proces
     const onKey = (s, key) => {
       const k = keyName(s, key);
       if (key?.ctrl && k === "c") return finish(null);
-      if (k === "escape" || k === "q") return finish(null);
+      if (k === "escape" || k === "q" || k === "left" || k === "backspace" || k === "h") return finish(null);
       if (k === "up" || k === "k") return move(-1);
       if (k === "down" || k === "j") return move(1);
       if (k === "pageup") return move(-10);
@@ -132,7 +132,7 @@ export function pickList({ title, getItems, keys = {}, help = "", input = proces
       if (k === "home") return move(-1e9);
       if (k === "end") return move(1e9);
       const item = selectable().find((x) => x.id === selId);
-      if ((k === "return" || k === "enter") && item) return finish({ action: "open", item });
+      if ((k === "return" || k === "enter" || k === "right" || k === "l") && item) return finish({ action: "open", item });
       if (keys[k] && item) return finish({ action: keys[k], item });
     };
     output.write(ALT_ON);
@@ -169,7 +169,7 @@ export function viewLines({ title, getLines, live = () => false, keys = {}, help
       const view = rows.slice(top, top + height());
       const pos = rows.length > height() ? ` · ${Math.round(((top + view.length) / rows.length) * 100)}%` : "";
       const liveTag = live() ? (follow ? " · live, following" : " · live (G to follow)") : "";
-      const footer = ash(`↑↓ PgUp/PgDn g/G scroll${help ? ` · ${help}` : ""} · esc back${liveTag}${pos}`);
+      const footer = ash(`↑↓ PgUp/PgDn g/G scroll${help ? ` · ${help}` : ""} · ← back${liveTag}${pos}`);
       output.write(`\x1b[H\x1b[2J${bone(title)}\r\n${view.join("\r\n")}${"\r\n".repeat(Math.max(0, height() - view.length))}\r\n${footer}`);
     };
     const scroll = (d) => { top = Math.max(0, Math.min(maxTop(), top + d)); follow = top >= maxTop(); draw(); };
@@ -183,7 +183,7 @@ export function viewLines({ title, getLines, live = () => false, keys = {}, help
     const onKey = (s, key) => {
       const k = keyName(s, key);
       if (key?.ctrl && k === "c") return finish("back");
-      if (k === "escape" || k === "q" || k === "left") return finish("back");
+      if (k === "escape" || k === "q" || k === "left" || k === "backspace" || k === "h") return finish("back");
       if (k === "up" || k === "k") return scroll(-1);
       if (k === "down" || k === "j") return scroll(1);
       if (k === "pageup" || (k === "b" && !keys.b)) return scroll(-(height() - 1));

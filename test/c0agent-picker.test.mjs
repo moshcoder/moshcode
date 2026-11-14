@@ -57,6 +57,13 @@ test("pickList: arrows move over headers, enter opens, extra keys act, esc backs
   p = pickList({ title: "Tasks", getItems: () => items, input: term.input, output: term.output, refreshMs: 10_000 });
   term.press("escape");
   assert.equal(await p, null);
+  // → opens like enter, ← goes back like esc
+  p = pickList({ title: "Tasks", getItems: () => items, input: term.input, output: term.output, refreshMs: 10_000, startId: "b" });
+  term.press("right");
+  assert.equal((await p).item.id, "b");
+  p = pickList({ title: "Tasks", getItems: () => items, input: term.input, output: term.output, refreshMs: 10_000 });
+  term.press("left");
+  assert.equal(await p, null);
 });
 
 test("viewLines follows the end of a live page and stops following when you scroll up", async () => {
@@ -74,7 +81,7 @@ test("viewLines follows the end of a live page and stops following when you scro
   term.press("g", { s: "G", shift: true });
   assert.match(term.last(), /following/);
   liveNow = false;
-  term.press("escape");
+  term.press("left");
   assert.equal(await p, "back");
 });
 
