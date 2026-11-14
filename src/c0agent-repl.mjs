@@ -147,7 +147,11 @@ function createSpinner(stream = process.stderr) {
   let label = "";
   let started = 0;
   let i = 0;
+  let wanted = false; // running, maybe held
+  let held = false; // the user is typing a queued message: don't redraw over it
   const tty = stream.isTTY;
+  const run = () => { if (!timer) { draw(); timer = setInterval(draw, 120); } };
+  const halt = () => { if (timer) { clearInterval(timer); timer = null; if (tty) stream.write("\r\x1b[2K"); } };
   const draw = () => {
     if (!tty) return;
     const secs = Math.round((Date.now() - started) / 1000);
@@ -158,19 +162,23 @@ function createSpinner(stream = process.stderr) {
   return {
     start(text) {
       label = text;
-      if (timer) return;
+      if (wanted) return;
+      wanted = true;
       started = Date.now();
-      draw();
-      timer = setInterval(draw, 120);
+      if (!held) run();
     },
     label(text) { label = text; },
     stop() {
-      if (!timer) return;
-      clearInterval(timer);
-      timer = null;
-      if (tty) stream.write("\r\x1b[2K");
+      wanted = false;
+      halt();
     },
-    get active() { return Boolean(timer); },
+    /** Pause redraws while the user types (true), resume them (false). */
+    hold(on) {
+      held = Boolean(on);
+      if (held) halt();
+      else if (wanted) run();
+    },
+    get active() { return wanted; },
   };
 }
 
@@ -411,9 +419,30 @@ async function repl({ cfg, opts, write }) {
   const provider = await createProvider(cfg);
   let busy = null; // AbortController of the running turn
   const spinner = createSpinner();
-  const out = (s) => process.stdout.write(s);
-  const log = (s) => process.stdout.write(`${s}\n`);
+  // While a turn runs, the user may be typing the next message on the
+  // `queue >` line. Output then clears that line, prints, and redraws it, so
+  // neither the spinner nor the agent's output eats what they typed.
+  let typing = false;
+  let rlRef = null;
+  const redrawInput = () => { if (typing && rlRef) rlRef.prompt(true); };
+  const out = (s) => {
+    if (!typing) { process.stdout.write(s); return; }
+    process.stdout.write(`\r\x1b[2K${s}${s.endsWith("\n") ? "" : "\n"}`);
+    redrawInput();
+  };
+  const log = (s) => {
+    if (!typing) { process.stdout.write(`${s}\n`); return; }
+    process.stdout.write(`\r\x1b[2K${s}\n`);
+    redrawInput();
+  };
   const renderer = createRenderer({ out, log, spinner });
+  const startTyping = () => {
+    if (typing || !busy) return;
+    typing = true;
+    spinner.hold(true);
+    rlRef.setPrompt(`${ash("queue")} ${acid(">")} `);
+    rlRef.prompt(true);
+  };
 
   readline.emitKeypressEvents(process.stdin);
   // Registered before readline's own listener, so shift-tab can tell the
@@ -422,6 +451,9 @@ async function repl({ cfg, opts, write }) {
   const onKey = (_s, key) => {
     if (!key) return;
     if (key.name === "escape" && busy) { busy.abort(); return; }
+    // A printable key while a turn runs: open the `queue >` line first.
+    if (busy && !questioning && !key.ctrl && !key.meta && key.name !== "return" && key.name !== "enter"
+      && typeof key.sequence === "string" && key.sequence.length === 1 && key.sequence >= " ") startTyping();
     if (key.name === "tab" && key.shift) {
       shiftTab = true;
       if (busy) return;
@@ -446,6 +478,7 @@ async function repl({ cfg, opts, write }) {
       return [hits.length ? hits : [], last];
     },
   });
+  rlRef = rl;
 
   // One question at a time: parallel subagents can each want permission.
   let asking = Promise.resolve();
@@ -649,7 +682,9 @@ async function repl({ cfg, opts, write }) {
     } finally {
       busy = null;
       current = null;
+      typing = false;
       spinner.stop();
+      spinner.hold(false);
       finishTask(task, res);
     }
     if (res?.error === "interrupted") log(amber("  ⎿ interrupted · what should c0mpute do instead?"));
@@ -829,12 +864,44 @@ async function repl({ cfg, opts, write }) {
     log("");
   }
 
-  // The loop.
+  // The loop. Lines typed while a turn runs are queued and say so; they run
+  // in order once the turn ends (readline's own iterator buffered them too,
+  // but silently, so it looked like typing did nothing).
+  const inbox = [];
+  let wake = null;
+  let closed = false;
+  rl.on("line", (raw) => {
+    const queued = Boolean(busy);
+    if (queued) {
+      typing = false;
+      const text = raw.trim();
+      process.stdout.write("\r\x1b[2K");
+      if (text) {
+        log(`  ${ash("⎿")}  ${ash(`queued (${inbox.filter((x) => x.queued).length + 1}): ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`)}`);
+      }
+      spinner.hold(false);
+      if (!text) return;
+    }
+    inbox.push({ raw, queued });
+    wake?.();
+  });
+  rl.on("close", () => { closed = true; wake?.(); });
+  const nextLine = async () => {
+    for (;;) {
+      if (inbox.length) return inbox.shift();
+      if (closed) return null;
+      await new Promise((r) => { wake = r; });
+      wake = null;
+    }
+  };
+
   let exitWarned = false;
   prompt();
-  for await (const raw of rl) {
-    const line = raw.trim();
+  for (let item = await nextLine(); item; item = await nextLine()) {
+    const line = item.raw.trim();
     if (!line) { prompt(); continue; }
+    // The empty prompt is already on this line: replace it with the echo.
+    if (item.queued) { process.stdout.write("\r\x1b[2K"); log(`${acid(">")} ${line.length > 100 ? `${line.slice(0, 100)}…` : line}`); }
     appendHistory(line);
     try {
       if (line.startsWith("/")) {
