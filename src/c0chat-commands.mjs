@@ -369,24 +369,39 @@ const audioExt = (type) => (type.includes("wav") ? "wav" : type.includes("flac")
  * `record` is what /push later needs; throws on failure. `onStatus(line)`
  * hears every progress line.
  */
-export async function runMediaJob({ kind, body, prompt, backend, outDir, onStatus = () => {}, signal, fetchImpl = globalThis.fetch, sleep = sleepFor, now = Date.now }) {
+/**
+ * `resume` ({ id, poll, startedAt? }) picks up a job an earlier session
+ * started (moshcode was updated or closed while it ran): no new POST, it polls
+ * the same job. `onStarted({ id, poll })` fires once the network has the job,
+ * so the caller can save it for exactly that.
+ */
+export async function runMediaJob({ kind, body, prompt, backend, outDir, onStatus = () => {}, onStarted = () => {}, resume = null, signal, fetchImpl = globalThis.fetch, sleep = sleepFor, now = Date.now }) {
   if (!KINDS.includes(kind)) throw new Error(`unknown media kind ${kind}`);
   const headers = { "content-type": "application/json", accept: "application/json" };
   if (backend.key) headers.authorization = `Bearer ${backend.key}`;
   const abs = (p) => (/^https?:\/\//i.test(p) ? p : `${backend.base}${p.startsWith("/") ? "" : "/"}${p}`);
   const get = (p) => fetchImpl(abs(p), { headers: backend.key ? { authorization: `Bearer ${backend.key}` } : {}, signal });
 
-  onStatus(`sending to ${backend.name}`);
-  const startRes = await fetchImpl(abs(backend.paths[kind]), { method: "POST", headers, body: JSON.stringify(body), signal });
-  const started = await jsonOf(startRes);
-  if (startRes.status !== 202 && startRes.status !== 200) throw new Error(errorText(startRes.status, started));
-  const id = str(started?.id, 100);
-  const poll = str(started?.poll, 300) || (id ? `${backend.paths[kind]}/${id}` : null);
-  if (!id || !poll) throw new Error("the network did not return a job id");
-  if (kind === "album" && started?.limited && typeof started.tracks === "number") onStatus(`only ${started.tracks} free songs left today, so this album has ${started.tracks} tracks`);
+  let id;
+  let poll;
+  if (resume?.id && resume?.poll) {
+    id = str(resume.id, 100);
+    poll = str(resume.poll, 300);
+    onStatus(`picking the job back up on ${backend.name} (${id.slice(0, 8)})`);
+  } else {
+    onStatus(`sending to ${backend.name}`);
+    const startRes = await fetchImpl(abs(backend.paths[kind]), { method: "POST", headers, body: JSON.stringify(body), signal });
+    const started = await jsonOf(startRes);
+    if (startRes.status !== 202 && startRes.status !== 200) throw new Error(errorText(startRes.status, started));
+    id = str(started?.id, 100);
+    poll = str(started?.poll, 300) || (id ? `${backend.paths[kind]}/${id}` : null);
+    if (!id || !poll) throw new Error("the network did not return a job id");
+    if (kind === "album" && started?.limited && typeof started.tracks === "number") onStatus(`only ${started.tracks} free songs left today, so this album has ${started.tracks} tracks`);
+    onStarted({ id, poll });
+  }
 
   fs.mkdirSync(outDir, { recursive: true });
-  const t0 = now();
+  const t0 = Number.isFinite(resume?.startedAt) ? resume.startedAt : now();
   let last = {};
   let wait = 1500;
   for (;;) {

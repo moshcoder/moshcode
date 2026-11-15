@@ -54,7 +54,7 @@ export function readTaskContext(t, { file = tasksFile() } = {}) {
   try { return JSON.parse(fs.readFileSync(contextPath(contextDir(file), t), "utf8")); } catch { return null; }
 }
 
-function pidAlive(pid) {
+export function pidAlive(pid) {
   if (!pid) return false;
   if (pid === process.pid) return true;
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
@@ -192,6 +192,7 @@ export function createTaskBoard({ file = tasksFile(), pid = process.pid, now = (
       return c;
     },
     save,
+    file,
   };
   return board;
 }
