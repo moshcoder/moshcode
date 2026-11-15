@@ -221,3 +221,27 @@ test("deviceLogin polls until the browser approves and returns the c0k_ key", as
   assert.equal(calls.filter((c) => c.key === "POST /api/v1/cli/token").length, 2);
   assert.equal(calls[0].init.headers.authorization, undefined);
 });
+
+test("runMediaJob reports the job id once the network has it, and a resume polls that job without a new POST", async () => {
+  const dir = tmp();
+  const first = fakeFetch({
+    "POST /api/chat/image": { status: 202, json: { id: ID, status: "pending", poll: `/api/chat/image/${ID}` } },
+    [`GET /api/chat/image/${ID}`]: { status: 200, body: "PNG1", type: "image/png" },
+  });
+  const started = [];
+  await runMediaJob({ kind: "image", body: { prompt: "p" }, prompt: "p", backend: infernet, outDir: dir, onStarted: (j) => started.push(j), fetchImpl: first.impl, sleep: noSleep });
+  assert.deepEqual(started, [{ id: ID, poll: `/api/chat/image/${ID}` }]);
+
+  // A later session: same job, no POST at all.
+  const later = fakeFetch({ [`GET /api/chat/image/${ID}`]: [{ status: 202, json: { stage: "queued" } }, { status: 200, body: "PNG2", type: "image/png" }] });
+  const lines = [];
+  const again = [];
+  const r = await runMediaJob({
+    kind: "image", body: null, prompt: "p", backend: infernet, outDir: dir, onStatus: (l) => lines.push(l), onStarted: (j) => again.push(j),
+    resume: { id: ID, poll: `/api/chat/image/${ID}` }, fetchImpl: later.impl, sleep: noSleep,
+  });
+  assert.ok(later.calls.every((c) => c.key.startsWith("GET ")));
+  assert.equal(again.length, 0);
+  assert.ok(lines[0].startsWith("picking the job back up"));
+  assert.equal(fs.readFileSync(r.files[0].path, "utf8"), "PNG2");
+});

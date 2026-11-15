@@ -670,6 +670,7 @@ async function repl({ cfg, opts, write }) {
 
   function stopTask(t) {
     if (t.state !== "working" && t.state !== "needs_input") return false;
+    t.userStopped = true; // a later session must not pick a stopped media job back up
     t.controller?.abort();
     if (t.pending?.resolve) { t.pending.resolve("no"); }
     return true;
@@ -789,6 +790,11 @@ async function repl({ cfg, opts, write }) {
       try { return await fn(busy.signal); } finally { spinner.stop(); busy = null; }
     },
   });
+
+  // Media jobs an ended session left running carry on here (see resumeOrphans).
+  try {
+    for (const { from, to } of chatHandle.resumeOrphans?.() ?? []) log(`${ash(`#${from}`)} ${ash("→")} ${ash(`#${to}`)} ${ash("picked back up: the network kept the job while moshcode was away")}`);
+  } catch { /* never block the session on this */ }
 
   const prompt = () => {
     flushNotes();

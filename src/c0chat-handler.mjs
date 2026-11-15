@@ -9,6 +9,7 @@ import {
   CHAT_HELP, PLUGIN_HELP, chatApi, chatKeyConfig, collectPushFiles, deviceLogin, mediaBackend, runMediaJob,
 } from "./c0chat-commands.mjs";
 import { acid, amber, ash, bone, danger, dim, err, ok, warn } from "./ui.mjs";
+import { pidAlive, readTasks } from "./c0agent-tasks.mjs";
 
 const LABEL = { image: "image", video: "video", music: "song", album: "album", promo: "promo video" };
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -29,13 +30,15 @@ export function createChatHandler(ctx) {
   const outDir = () => path.join(ctx.cwd(), "c0mpute-media");
   const rel = (p) => { const r = path.relative(ctx.cwd(), p); return r.startsWith("..") ? p : r; };
 
-  function mediaTask(parsed) {
+  function mediaTask(parsed, { resume = null, resumedFrom = null } = {}) {
     const backend = mediaBackend(ctx.cfg, chat());
     const title = `/${parsed.media} ${parsed.prompt}`.slice(0, 200);
     ctx.transcript.push({ role: "user", content: title });
     const turn = ctx.transcript.length - 1;
+    let onStarted = () => {};
     const run = (signal, onStatus) => runMediaJob({
       kind: parsed.media, body: parsed.body, prompt: parsed.prompt, backend, outDir: outDir(), onStatus, signal, fetchImpl,
+      resume, onStarted: (job) => onStarted(job),
     }).then((r) => {
       ctx.media.push({ ...r.record, turn });
       const lines = [`saved ${r.files.map((f) => rel(f.path)).join(", ")}`, r.summary];
@@ -46,7 +49,17 @@ export function createChatHandler(ctx) {
     const t = ctx.board.add({ title, agent: `c0mpute ${LABEL[parsed.media]}`, background: true, cwd: ctx.cwd() });
     const controller = new AbortController();
     t.controller = controller;
-    ctx.board.update(t, { activity: `sending to ${backend.name}` });
+    // The network's job id, saved the moment it exists: a later session
+    // (after `moshcode update self`, a closed terminal) polls the same job
+    // instead of losing it. The job itself keeps running server-side.
+    const remember = (job) => {
+      ctx.board.update(t, { remote: { kind: parsed.media, id: job.id, poll: job.poll, base: backend.base, startedAt: job.startedAt ?? Date.now() } });
+      ctx.board.save?.();
+    };
+    onStarted = remember;
+    if (resume) remember({ ...resume });
+    if (resumedFrom) ctx.board.note(t, `picked up from #${resumedFrom} after its session ended`);
+    ctx.board.update(t, { activity: resume ? `picking the job back up on ${backend.name}` : `sending to ${backend.name}` });
     let lastLine = "";
     run(controller.signal, (line) => {
       if (!line || line === lastLine) return;
@@ -172,7 +185,39 @@ export function createChatHandler(ctx) {
     });
   }
 
-  return async function handle(parsed) {
+  /**
+   * Media jobs a session that has since ended (update, closed terminal) left
+   * running: the network still has them, so poll them here. Each is picked up
+   * once; tasks a live session owns, or that finished, are left alone.
+   */
+  function resumeOrphans({ alive = pidAlive } = {}) {
+    if (!ctx.board?.file) return [];
+    const all = readTasks({ file: ctx.board.file, alive });
+    // Taken: owned by a live session, or already finished (by whichever session).
+    const held = new Set(all.filter((t) => t.remote?.id && (alive(t.pid) || t.state === "completed" || t.state === "failed")).map((t) => t.remote.id));
+    for (const t of ctx.board.tasks) if (t.remote?.id) held.add(t.remote.id);
+    const picked = [];
+    for (const old of all) {
+      const r = old.remote;
+      if (!r?.id || !r.poll || old.pid === process.pid || alive(old.pid) || old.userStopped) continue;
+      if (old.state === "completed" || old.state === "failed" || held.has(r.id) || !LABEL[r.kind]) continue;
+      const backend = mediaBackend(ctx.cfg, chat());
+      if (r.base && backend.base !== r.base) {
+        log(ash(`  #${old.id} ran on ${r.base}; this session talks to ${backend.base}, so it is not picked up`));
+        continue;
+      }
+      held.add(r.id);
+      const prompt = String(old.prompt ?? old.title ?? "").replace(new RegExp(`^/${r.kind}\\s+`), "");
+      const t = mediaTask({ media: r.kind, prompt, body: null }, { resume: { id: r.id, poll: r.poll, startedAt: r.startedAt }, resumedFrom: old.id });
+      if (t?.id) {
+        old.pickedUp = t.id;
+        picked.push({ from: old.id, to: t.id });
+      }
+    }
+    return picked;
+  }
+
+  const handle = async function handle(parsed) {
     switch (parsed.kind) {
       case "usage": log(ash(`  ${parsed.message}`)); return null;
       case "media": return mediaTask(parsed);
@@ -183,6 +228,8 @@ export function createChatHandler(ctx) {
       default: return null;
     }
   };
+  handle.resumeOrphans = resumeOrphans;
+  return handle;
 }
 
 export const CHAT_HELP_ROWS = CHAT_HELP;
