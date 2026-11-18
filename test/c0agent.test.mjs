@@ -330,3 +330,35 @@ test("write: content aliases and object content are written; a write with nothin
   assert.match(r.output, /content \(string\) is required/);
   assert.equal(asked, 1, "refused before the approval prompt");
 });
+
+// moshcode 0.128.2 live: qwen replied `<ls>{"path": "."}</ls>` and the turn
+// ended with the call printed as text and nothing run.
+test("parseToolCalls: a tag named after the tool is a call", () => {
+  const reply = 'I\'m here! Let me check on our threat analysis agent project.\n\n<ls>{"path": "."}</ls>';
+  assert.deepEqual(parseToolCalls(reply), [{ name: "ls", input: { path: "." } }]);
+  assert.equal(visibleText(reply), "I'm here! Let me check on our threat analysis agent project.");
+});
+
+test("parseToolCalls: bare tags with attributes, aliases, self-closing and unclosed JSON", () => {
+  assert.deepEqual(parseToolCalls('<read path="src/a.js"/>'), [{ name: "read", input: { path: "src/a.js" } }]);
+  assert.deepEqual(parseToolCalls("<bash>ls -la</bash>"), [{ name: "bash", input: { command: "ls -la" } }]);
+  assert.deepEqual(parseToolCalls('<Shell>{"command": "pwd"}</Shell>'), [{ name: "bash", input: { command: "pwd" } }]);
+  assert.deepEqual(parseToolCalls('<grep>{"pattern": "TODO"}'), [{ name: "grep", input: { pattern: "TODO" } }]);
+  assert.deepEqual(
+    parseToolCalls('<ls>{"path": "src"}</ls>\n<read>{"path": "package.json"}</read>'),
+    [{ name: "ls", input: { path: "src" } }, { name: "read", input: { path: "package.json" } }],
+  );
+});
+
+test("parseToolCalls: prose that only looks like a tag stays prose", () => {
+  assert.deepEqual(parseToolCalls("Use <find out> to check, then read the docs."), []);
+  assert.deepEqual(parseToolCalls("open the <readme> file"), []);
+});
+
+test("createStreamFilter hides a bare tool tag", () => {
+  let out = "";
+  const f = createStreamFilter((t) => { out += t; });
+  for (const chunk of ["Checking.\n\n<l", 's>{"path"', ': "."}</l', "s> done"]) f.push(chunk);
+  f.end();
+  assert.equal(out, "Checking.\n\n done");
+});
