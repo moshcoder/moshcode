@@ -302,3 +302,31 @@ test("routing: the names that mean the c0mpute agent, and CLI flags", () => {
   assert.equal(parseArgs(["fix", "the", "agents"]).manage, null);
   assert.equal(describeCall({ name: "task", input: { agent: "explore", prompt: "find x" } }), "Task(explore: find x)");
 });
+
+test("write: a JSON file body under a path attribute is the file, not the arguments", () => {
+  const [call] = parseToolCalls('<tool name="write" path="package.json">{"name": "demo", "version": "1.0.0"}</tool>');
+  assert.equal(call.name, "write");
+  assert.equal(call.input.path, "package.json");
+  assert.equal(call.input.content, '{"name": "demo", "version": "1.0.0"}');
+  const [strict] = parseToolCalls('<tool name="write">{"path": "a.txt", "content": "hi"}</tool>');
+  assert.deepEqual(strict.input, { path: "a.txt", content: "hi" });
+});
+
+test("write: content aliases and object content are written; a write with nothing to write never asks", async () => {
+  const dir = tmp();
+  let asked = 0;
+  const session = createSession({ cwd: dir, ask: async () => { asked++; return "always"; } });
+  const ctx = { tools: ALL_TOOLS };
+  let r = await runTool(session, { name: "write", input: { file_path: "a.txt", contents: "hello\n" } }, ctx);
+  assert.equal(r.ok, true, r.output);
+  assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "hello\n");
+  r = await runTool(session, { name: "write", input: { path: "p.json", content: { name: "demo" } } }, ctx);
+  assert.equal(r.ok, true, r.output);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "p.json"), "utf8")), { name: "demo" });
+  assert.equal(asked, 1);
+  session.allowed.clear();
+  r = await runTool(session, { name: "write", input: { path: "b.txt" } }, ctx);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /content \(string\) is required/);
+  assert.equal(asked, 1, "refused before the approval prompt");
+});
