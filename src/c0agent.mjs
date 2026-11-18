@@ -780,7 +780,11 @@ export async function runAgent({ session, agent = LEAD_AGENT, messages, depth = 
       );
     } catch (e) {
       if (signal?.aborted) return { text: last, toolUses, error: "interrupted" };
-      const error = String(e?.message || e);
+      // network_busy: the network's queue already retried 3 times. Say so
+      // plainly ("Network is busy. Run a node or wait.") and end the turn.
+      const error = e?.code === "network_busy" && e.userMessage
+        ? `${e.userMessage}${e.runANode ? ` (${e.runANode})` : ""}`
+        : String(e?.message || e);
       onEvent({ type: "error", error, agent: agent.name, depth });
       return { text: last, toolUses, error };
     }

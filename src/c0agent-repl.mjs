@@ -227,6 +227,11 @@ export function statusLabel(status, job, { promptTokens = 0, agent = null, now =
       const rate = secs >= 2 ? ` · ${(status.tokens / secs).toFixed(1)} tok/s` : "";
       return `${who}${node} writing · ${status.tokens} token${status.tokens === 1 ? "" : "s"}${rate}`;
     }
+    case "waiting":
+      // The network's queue put the job back: no node had a free slot.
+      return status.position && status.maxRequeues
+        ? `${who}no free node · back in the queue (#${status.position}, try ${status.requeues} of ${status.maxRequeues})`
+        : `${who}${status.message ?? "no free node · back in the queue"}`;
     case "retry":
       return `${who}${status.model ?? "model"} unavailable (${status.reason}); trying the next model`;
     default:
