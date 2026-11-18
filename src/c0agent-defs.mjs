@@ -7,7 +7,7 @@
 //   name: code-reviewer
 //   description: Reviews a diff for bugs. Use after any change.
 //   tools: read, grep, glob        (omit for every tool)
-//   model: qwen2.5:7b              (omit, or "inherit", for the session's model)
+//   model: qwen3:4b                (omit, or "inherit", for the session's model)
 //   ---
 //   You are a careful reviewer…
 //

@@ -191,6 +191,9 @@ export function shortNode(name) {
   return String(name).replace(/^[^@\s]+@/, "").replace(/:[0-9a-f]{6,}$/i, "");
 }
 
+/** "eriktonon/qwen3.8-uncensored:9b" -> "qwen3.8-uncensored:9b" */
+export const shortModel = (m) => String(m).replace(/^.*\//, "");
+
 const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /**
@@ -198,7 +201,8 @@ const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
  * statuses said (node, when writing began) so a later one can use it.
  */
 export function statusLabel(status, job, { promptTokens = 0, agent = null, now = Date.now() } = {}) {
-  const who = agent ? `${agent} · ` : "";
+  // Always say which model is running: the fallback chain can silently swap it.
+  const who = `${agent ? `${agent} · ` : ""}${job.model ? `${shortModel(job.model)} · ` : ""}`;
   const node = shortNode(job.node);
   switch (status.stage) {
     case "queued":
@@ -212,7 +216,7 @@ export function statusLabel(status, job, { promptTokens = 0, agent = null, now =
       // was handed to another node (the first one was too slow).
       if (/c0mpute network/i.test(job.node ?? "")) {
         return job.starts > 1
-          ? `${who}network was slow · handed to another node · reply arrives in one piece`
+          ? `${who}first node failed · handed to another node · reply arrives in one piece`
           : `${who}a c0mpute node is on it (~${kTokens(promptTokens)} tokens) · reply arrives in one piece, CPU nodes take 1-5 min`;
       }
       return job.starts > 1
@@ -256,6 +260,7 @@ function createRenderer({ out, log, spinner, quiet = false }) {
         jobs.set(key, job);
         const s = e.status;
         if (s.node) job.node = s.node;
+        if (s.model) job.model = s.model;
         if (s.stage === "started") job.starts = (job.starts ?? 0) + 1;
         if (s.stage === "writing" && job.writingSince == null) job.writingSince = Date.now();
         const label = statusLabel(s, job, { promptTokens: e.promptTokens, agent: e.depth ? e.agent : null });
@@ -628,6 +633,7 @@ async function repl({ cfg, opts, write }) {
       const job = jobs.get(key) ?? {};
       jobs.set(key, job);
       if (e.status.node) job.node = e.status.node;
+      if (e.status.model) job.model = e.status.model;
       if (e.status.stage === "started") job.starts = (job.starts ?? 0) + 1;
       if (e.status.stage === "writing" && job.writingSince == null) job.writingSince = Date.now();
       const label = statusLabel(e.status, job, { promptTokens: e.promptTokens, agent: e.depth ? e.agent : null });
