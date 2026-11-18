@@ -70,3 +70,11 @@ test("statusLabel names the model that is actually running", () => {
   assert.match(statusLabel({ stage: "queued" }, job), /^qwen3\.8-uncensored:9b · dev-vienna has the job/);
   assert.match(statusLabel({ stage: "queued" }, job, { agent: "explore" }), /^explore · qwen3\.8-uncensored:9b · dev-vienna/);
 });
+
+test("statusLabel shows a requeue with its queue position", () => {
+  const job = { model: "eriktonon/qwen3.8-uncensored:9b" };
+  assert.equal(
+    statusLabel({ stage: "waiting", position: 2, requeues: 1, maxRequeues: 3 }, job),
+    "qwen3.8-uncensored:9b · no free node · back in the queue (#2, try 1 of 3)",
+  );
+});
