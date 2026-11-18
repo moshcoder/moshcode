@@ -64,3 +64,9 @@ test("the permission prompt does not repeat the tool line it follows", async () 
   assert.deepEqual(previewLines("ping compute-host", "Bash(ping compute-host)"), []);
   assert.deepEqual(previewLines("+ added\n- removed", "Edit(a.js)"), ["+ added", "- removed"]);
 });
+
+test("statusLabel names the model that is actually running", () => {
+  const job = { node: "anthony@dev-vienna:abcdef12", model: "eriktonon/qwen3.8-uncensored:9b" };
+  assert.match(statusLabel({ stage: "queued" }, job), /^qwen3\.8-uncensored:9b · dev-vienna has the job/);
+  assert.match(statusLabel({ stage: "queued" }, job, { agent: "explore" }), /^explore · qwen3\.8-uncensored:9b · dev-vienna/);
+});

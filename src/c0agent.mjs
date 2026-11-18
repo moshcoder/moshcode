@@ -33,8 +33,7 @@ import { ALL_TOOLS, BUILTIN_AGENTS, loadAgents, normalizeTool } from "./c0agent-
 export const DEFAULT_BASE_URL = "https://infernetprotocol.com";
 /** The house models, best first. Every Infernet node pulls these. */
 export const HOUSE_MODELS = [
-  "huihui_ai/qwen3.5-abliterated:9b",
-  "qwen2.5:7b",
+  "eriktonon/qwen3.8-uncensored:9b",
   "qwen3:4b",
   "gemma3:4b",
 ];
