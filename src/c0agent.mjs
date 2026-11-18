@@ -179,6 +179,9 @@ export function parseToolCalls(text) {
     delete attrs.name;
     const body = block.body.trim();
     let input = looseJson(body);
+    // `<tool name="write" path="package.json">{...}</tool>`: a JSON body under a
+    // path attribute is the file being written, not the call's arguments.
+    if (input && name === "write" && attrs.path && !hasWriteContent(input)) input = null;
     if (!input) {
       input = { ...attrs };
       if (body && PRIMARY_ARG[name] && input[PRIMARY_ARG[name]] == null) input[PRIMARY_ARG[name]] = body;
@@ -205,12 +208,39 @@ export function parseToolCalls(text) {
   return inferred ? [{ name: inferred, input: bare }] : [];
 }
 
+const CONTENT_KEYS = ["content", "contents", "file_text", "text", "data", "body", "code"];
+const PATH_KEYS = ["path", "file_path", "filePath", "filename", "file"];
+
+function hasWriteContent(input) {
+  return CONTENT_KEYS.some((k) => input[k] != null);
+}
+
+/**
+ * The `{ path, content }` a write means, whatever the model called them.
+ * Models send `contents`, `file_text` or `text`, and hand a JSON file over as
+ * an object; all of those are a file to write, not a missing argument.
+ */
+export function normalizeWriteInput(input = {}) {
+  const out = { ...input };
+  if (out.path == null) {
+    const k = PATH_KEYS.find((key) => typeof input[key] === "string");
+    if (k) out.path = input[k];
+  }
+  if (out.content == null) {
+    const k = CONTENT_KEYS.find((key) => input[key] != null);
+    if (k) out.content = input[k];
+  }
+  if (out.content != null && typeof out.content === "object") out.content = `${JSON.stringify(out.content, null, 2)}\n`;
+  else if (typeof out.content === "number" || typeof out.content === "boolean") out.content = String(out.content);
+  return out;
+}
+
 /** Which tool a bare arguments object belongs to, when its keys say so unambiguously. */
 export function inferTool(args) {
   const k = new Set(Object.keys(args));
   if (k.has("command")) return "bash";
   if (k.has("path") && (k.has("old") || k.has("old_string"))) return "edit";
-  if (k.has("path") && k.has("content")) return "write";
+  if (PATH_KEYS.some((p) => k.has(p)) && ["content", "contents", "file_text"].some((c) => k.has(c))) return "write";
   if (k.has("agent") && k.has("prompt")) return "task";
   if (k.has("items")) return "todo";
   if (k.has("pattern") && /[*?]/.test(String(args.pattern)) && !k.has("glob")) return "glob";
@@ -385,10 +415,18 @@ function runShell(command, { cwd, signal, timeoutMs }) {
 
 /** Run one tool. Always resolves `{ ok, output }`; a thrown error is a failed result. */
 export async function runTool(session, call, ctx = {}) {
-  const { name, input = {} } = call;
+  const { name } = call;
+  let { input = {} } = call;
   try {
     if (call.error) return { ok: false, output: `${call.error}. tools: ${ctx.tools.join(", ")}` };
     if (!ctx.tools.includes(name)) return { ok: false, output: `${name} is not available to this agent. tools: ${ctx.tools.join(", ")}` };
+    if (name === "write") {
+      // Check before asking: approving a write that cannot run is a wasted prompt.
+      input = normalizeWriteInput(input);
+      call = { ...call, input };
+      if (typeof input.path !== "string" || !input.path) return { ok: false, output: 'path is required: <tool name="write">{"path": "a.txt", "content": "..."}</tool>' };
+      if (typeof input.content !== "string") return { ok: false, output: `content (string) is required: <tool name="write">{"path": "${input.path}", "content": "..."}</tool>` };
+    }
     const gate = needsApproval(session, call);
     if (gate === "deny") return { ok: false, output: `${name} is blocked in plan mode: reply with your plan instead.` };
     if (gate === "ask") {
