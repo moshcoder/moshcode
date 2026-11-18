@@ -26,7 +26,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { ALL_TOOLS, BUILTIN_AGENTS, loadAgents, normalizeTool } from "./c0agent-defs.mjs";
+import { ALL_TOOLS, BUILTIN_AGENTS, TOOL_ALIASES, loadAgents, normalizeTool } from "./c0agent-defs.mjs";
 
 // ─── config ──────────────────────────────────────────────────────────────────
 
@@ -101,6 +101,28 @@ export async function listModels({ fetchImpl = globalThis.fetch } = {}) {
 /** The argument a bare (non-JSON) tool body means, per tool. */
 const PRIMARY_ARG = { read: "path", write: "path", ls: "path", bash: "command", glob: "pattern", grep: "pattern", task: "prompt" };
 
+/** Tool names a model may use as the tag itself: `<ls>{"path": "."}</ls>`. */
+const BARE_TAG = Object.keys(TOOL_ALIASES).join("|");
+
+/**
+ * Rewrite `<ls>{...}</ls>`, `<read path="a.js"/>` and the like into our
+ * `<tool name="ls">` form. Small models (qwen 7B/9B) often name the tag after
+ * the tool instead of writing <tool name=...>; without this the reply printed
+ * the call as text and the turn ended with nothing run. A tag only counts when
+ * it is closed by its own name, self-closed, or opens straight onto a JSON
+ * body, so prose like "<find out>" stays prose.
+ */
+export function canonicalToolTags(text) {
+  const src = String(text ?? "");
+  const open = new RegExp(`<(${BARE_TAG})\\b([^>]*?)(\\/?)>`, "gi");
+  return src.replace(open, (whole, tag, attrs, self, at) => {
+    const rest = src.slice(at + whole.length);
+    const closed = new RegExp(`</${tag}\\s*>`, "i").test(rest);
+    if (!self && !closed && !/^\s*\{/.test(rest)) return whole;
+    return `<tool name="${normalizeTool(tag)}"${attrs}${self ? "/" : ""}>`;
+  }).replace(new RegExp(`</(${BARE_TAG})\\s*>`, "gi"), "</tool>");
+}
+
 /** Drop a reasoning model's visible thinking, closed or cut off. */
 export function stripThink(text) {
   return String(text ?? "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<think>[\s\S]*$/i, "");
@@ -168,7 +190,7 @@ function toolBlocks(src) {
  * been given yet, so parsing stops there.
  */
 export function parseToolCalls(text) {
-  let src = stripThink(text);
+  let src = canonicalToolTags(stripThink(text));
   const fake = src.search(/<tool_result\b/i);
   if (fake >= 0) src = src.slice(0, fake);
   const calls = [];
@@ -251,7 +273,7 @@ export function inferTool(args) {
 
 /** What the user sees of a reply: no thinking, no tool calls. */
 export function visibleText(text) {
-  let src = stripThink(text);
+  let src = canonicalToolTags(stripThink(text));
   const fake = src.search(/<tool_result\b/i);
   if (fake >= 0) src = src.slice(0, fake);
   return src.replace(/<tool\b[^>]*?(\/>|>[\s\S]*?(<\/tool\s*>|(?=<tool\b)|$))/gi, "").replace(/\n{3,}/g, "\n\n").trim();
@@ -264,8 +286,8 @@ export function visibleText(text) {
  */
 export function createStreamFilter(emit, { onThinking = () => {} } = {}) {
   let pending = "";
-  let inside = null; // "think" | "tool" | "tool_result"
-  const open = /<(think|tool_result|tool)\b/i;
+  let inside = null; // "think" | "tool" | "tool_result" | a bare tool tag ("ls", "read", ...)
+  const open = new RegExp(`<(think|tool_result|tool|${BARE_TAG})\\b`, "i");
   const pump = () => {
     for (;;) {
       if (!inside) {
@@ -285,7 +307,7 @@ export function createStreamFilter(emit, { onThinking = () => {} } = {}) {
       }
       const close = new RegExp(`</${inside}\\s*>`, "i");
       const c = pending.match(close);
-      const selfClose = inside === "tool" ? pending.match(/^<tool\b[^>]*\/>/i) : null;
+      const selfClose = inside === "think" || inside === "tool_result" ? null : pending.match(new RegExp(`^<${inside}\\b[^>]*\\/>`, "i"));
       if (selfClose) { pending = pending.slice(selfClose[0].length); inside = null; continue; }
       if (!c) return;
       pending = pending.slice(c.index + c[0].length);

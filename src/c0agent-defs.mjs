@@ -33,7 +33,7 @@ import path from "node:path";
 export const ALL_TOOLS = ["read", "write", "edit", "bash", "glob", "grep", "ls", "todo", "task"];
 export const READ_ONLY_TOOLS = ["read", "glob", "grep", "ls"];
 
-const TOOL_ALIASES = {
+export const TOOL_ALIASES = {
   read: "read", view: "read", cat: "read",
   write: "write", create: "write",
   edit: "edit", multiedit: "edit", str_replace: "edit", replace: "edit",
