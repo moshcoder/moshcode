@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { createPasteJoiner, oneLine, PASTE_OFF, PASTE_ON } from "./c0agent-paste.mjs";
 import { spawnSync } from "node:child_process";
 import {
   LEAD_AGENT, c0mputeConfig, compactConversation, configFile, createProvider, createSession,
@@ -540,8 +541,20 @@ async function repl({ cfg, opts, write }) {
   // Registered before readline's own listener, so shift-tab can tell the
   // completer (which readline also runs for shift-tab) to stand down.
   let shiftTab = false;
+  const paste = createPasteJoiner();
   const onKey = (_s, key) => {
     if (!key) return;
+    paste.key(key.name);
+    if (key.name === "paste-end") {
+      // Say the block is waiting, then redraw the prompt with its last line.
+      setImmediate(() => {
+        const n = paste.held + (rl.line ? 1 : 0);
+        if (!paste.held) return;
+        process.stdout.write(`\r\x1b[2K${ash(`  [${n} lines pasted · Enter sends them as one message]`)}\n`);
+        rl.prompt(true);
+      });
+      return;
+    }
     if (key.name === "escape" && busy) { busy.abort(); return; }
     // A printable key while a turn runs: open the `queue >` line first.
     if (busy && !questioning && !key.ctrl && !key.meta && key.name !== "return" && key.name !== "enter"
@@ -572,6 +585,12 @@ async function repl({ cfg, opts, write }) {
     },
   });
   rlRef = rl;
+  // Bracketed paste, so a pasted block arrives as one message (see
+  // c0agent-paste.mjs). Off again on the way out, or the shell would get the
+  // markers around everything pasted into it afterwards.
+  const bracketed = Boolean(process.stdout.isTTY);
+  const pasteOff = () => { if (bracketed) process.stdout.write(PASTE_OFF); };
+  if (bracketed) { process.stdout.write(PASTE_ON); process.once("exit", pasteOff); }
 
   // One question at a time: parallel subagents can each want permission.
   let asking = Promise.resolve();
@@ -817,7 +836,7 @@ async function repl({ cfg, opts, write }) {
   let lastInt = 0;
   rl.on("SIGINT", () => {
     if (busy) { busy.abort(); return; }
-    if (rl.line) { rl.write(null, { ctrl: true, name: "u" }); return; }
+    if (rl.line || paste.held) { paste.clear(); rl.write(null, { ctrl: true, name: "u" }); return; }
     if (Date.now() - lastInt < 1500) { rl.close(); return; }
     lastInt = Date.now();
     log(ash("\n(press ^C again to exit)"));
@@ -1098,14 +1117,16 @@ async function repl({ cfg, opts, write }) {
   const inbox = [];
   let wake = null;
   let closed = false;
-  rl.on("line", (raw) => {
+  rl.on("line", (ended) => {
+    const raw = paste.line(ended);
+    if (raw === null) return; // part of a paste: sent whole with the next Enter
     const queued = Boolean(busy);
     if (queued) {
       typing = false;
       const text = raw.trim();
       process.stdout.write("\r\x1b[2K");
       if (text) {
-        log(`  ${ash("⎿")}  ${ash(`queued (${inbox.filter((x) => x.queued).length + 1}): ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`)}`);
+        log(`  ${ash("⎿")}  ${ash(`queued (${inbox.filter((x) => x.queued).length + 1}): ${oneLine(text, 80)}`)}`);
       }
       spinner.hold(false);
       if (!text) return;
@@ -1129,7 +1150,7 @@ async function repl({ cfg, opts, write }) {
     const line = item.raw.trim();
     if (!line) { prompt(); continue; }
     // The empty prompt is already on this line: replace it with the echo.
-    if (item.queued) { process.stdout.write("\r\x1b[2K"); log(`${acid(">")} ${line.length > 100 ? `${line.slice(0, 100)}…` : line}`); }
+    if (item.queued) { process.stdout.write("\r\x1b[2K"); log(`${acid(">")} ${oneLine(line)}`); }
     appendHistory(line);
     try {
       const chatCmd = line.startsWith("@") || line.startsWith("&") ? null : parseChatCommand(line);
@@ -1174,6 +1195,7 @@ async function repl({ cfg, opts, write }) {
   spinner.stop();
   for (const t of liveBackground()) { stopTask(t); board.update(t, { state: "stopped", activity: "session ended" }); }
   process.stdin.off("keypress", onKey);
+  pasteOff();
   rl.close();
   log(ash("bye 🤘"));
   return 0;
