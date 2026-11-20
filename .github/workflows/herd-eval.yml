@@ -84,12 +84,20 @@ jobs:
         if: steps.creds.outputs.have == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ENGINES: ${{ inputs.engines || 'claude' }}
+          THRESHOLD: ${{ inputs.threshold || '0.8' }}
         run: |
+          if [[ ! "$ENGINES" =~ ^[A-Za-z0-9._:,\ -]+$ ]]; then
+            echo "::error title=herd eval::invalid engines input"; exit 1
+          fi
+          if [[ ! "$THRESHOLD" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+            echo "::error title=herd eval::invalid threshold input"; exit 1
+          fi
           set +e
           node bin/moshcode.mjs herd eval \
             --dataset evals/moshcode.jsonl \
-            --engines "${{ inputs.engines || 'claude' }}" \
-            --threshold "${{ inputs.threshold || '0.8' }}" \
+            --engines "$ENGINES" \
+            --threshold "$THRESHOLD" \
             --json > eval.json
           code=$?
           set -e
