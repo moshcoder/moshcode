@@ -178,6 +178,7 @@ import {
   verifyTwin,
 } from "../moshpit.mjs";
 import { config } from "../config.mjs";
+import { appSitemapXml, isAppHost, robotsTxt } from "../lib/crawl-hosts.mjs";
 
 /**
  * Every page this router draws carries the Moshpit crawlproof tag. A proxied
@@ -1117,18 +1118,9 @@ function nameHead(resolution) {
  * else's site reached through us and is not ours to get indexed under this
  * host, so only the name's own page is offered.
  */
-moshpitRouter.get("/robots.txt", (_req, res) => {
-  res.type("text/plain").send(`User-agent: *
-Allow: /$
-Allow: /pit
-Allow: /n/
-Disallow: /api/
-Disallow: /app
-Disallow: /settings
-Disallow: /sessions
-
-Sitemap: ${config.pitOrigin}/sitemap.xml
-`);
+moshpitRouter.get("/robots.txt", (req, res) => {
+  // The app host points at its own sitemap; the pit (and anything else) at the pit's.
+  res.type("text/plain").send(robotsTxt(isAppHost(req.get("host"), config) ? config.origin : config.pitOrigin));
 });
 
 /**
@@ -1138,7 +1130,9 @@ Sitemap: ${config.pitOrigin}/sitemap.xml
  * something, and a sitemap that lags the registry is worse than none — it
  * advertises URLs that did not exist yet and omits the ones that do.
  */
-moshpitRouter.get("/sitemap.xml", async (_req, res) => {
+moshpitRouter.get("/sitemap.xml", async (req, res) => {
+  // app.moshcode.sh lists its own signed-out pages; the names belong to the pit.
+  if (isAppHost(req.get("host"), config)) return res.type("application/xml").send(appSitemapXml(config.origin));
   const [names, tlds] = await Promise.all([listAllNames(), listTlds({ limit: 5000 })]);
 
   // Endings are listed now that `/n/<ending>` is a page rather than a 400 — an
